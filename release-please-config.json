@@ -7,20 +7,63 @@
   "always-update": true,
   "bootstrap-sha": "3cc6219c6b7a10d3b8c21a77774fbbf00372ece4",
   "changelog-sections": [
-    { "type": "feat", "section": "New" },
-    { "type": "fix", "section": "Fixed" },
-    { "type": "perf", "section": "Faster" },
-    { "type": "docs", "section": "Documentation" },
-    { "type": "revert", "section": "Reverted" },
-    { "type": "refactor", "section": "Refactored", "hidden": true },
-    { "type": "chore", "section": "Chores", "hidden": true },
-    { "type": "test", "section": "Tests", "hidden": true },
-    { "type": "build", "section": "Build", "hidden": true },
-    { "type": "ci", "section": "CI", "hidden": true }
+    {
+      "type": "feat",
+      "section": "New"
+    },
+    {
+      "type": "fix",
+      "section": "Fixed"
+    },
+    {
+      "type": "perf",
+      "section": "Faster"
+    },
+    {
+      "type": "docs",
+      "section": "Documentation"
+    },
+    {
+      "type": "revert",
+      "section": "Reverted"
+    },
+    {
+      "type": "refactor",
+      "section": "Refactored",
+      "hidden": true
+    },
+    {
+      "type": "chore",
+      "section": "Chores",
+      "hidden": true
+    },
+    {
+      "type": "test",
+      "section": "Tests",
+      "hidden": true
+    },
+    {
+      "type": "build",
+      "section": "Build",
+      "hidden": true
+    },
+    {
+      "type": "ci",
+      "section": "CI",
+      "hidden": true
+    }
   ],
   "packages": {
     ".": {
-      "extra-files": [{ "type": "json", "path": "packages/create-escalay/package.json", "jsonpath": "$.version" }]
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "packages/create-escalay/package.json",
+          "jsonpath": "$.version"
+        }
+      ]
     }
-  }
+  },
+  "pull-request-header": "Merging this pull request releases the version below: it is tagged, published to npm, checked from the registry, and then announced.",
+  "pull-request-footer": "Edit nothing here by hand; it is rewritten whenever main changes."
 }
