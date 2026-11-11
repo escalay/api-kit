@@ -5,7 +5,7 @@
  *   /app, /app/*   the app: a file of that name when there is one, else `index.html`, so deep links open the app
  *   moved paths    the app's addresses from before it moved under /app, and `/?query` deep links, redirect there
  * Files at the top of `dir` (the landing's script and styles, a plain viewer's `app.js`) are served as they are.
- * Single sign-on gates only `/app` (Access `ONLY_PATHS`); the app's data calls carry its cookie, so the browser never
+ * Single sign-on gates only `/app` (the only paths Access covers, with the OAuth approval pages); the app's data calls carry its cookie, so the browser never
  * holds an API key. `frontDoorOpen` lists what the API's auth must leave open: the page files, never data.
  *
  * The pages' own scripts and stylesheets are linked with `?v=<content hash>`, so a CDN or browser that keeps static

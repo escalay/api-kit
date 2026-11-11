@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * kit: copy the kit's modules into an app (shadcn-style), then keep them in step with the kit.
+ * kit: copy the kit's parts into an app (shadcn-style), then keep them in step with the kit.
  * The app owns the copies; `kit.json` beside them records the kit version and the hash of every file as copied, so
  * `diff` can tell your edits from the kit's changes and `update` never overwrites an edit without `--force`.
- * `--web-dir` (relative to `--dir`, remembered in kit.json) puts the browser modules in their own folder, still
+ * `--web-dir` (relative to `--dir`, remembered in kit.json) puts the browser parts in their own folder, still
  * tracked by the one kit.json (as `@web/<file>`).
  *
- *   kit list                                  modules, what they need, which are installed
+ *   kit list                                  parts, what they need, which are installed
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
- *   kit update [module…] [--dir src/kit] [--force]
+ *   kit update [part…] [--dir src/kit] [--force]
  *   kit doctor [--dir src/kit] [--adopt]      missing files, edited files, parts behind this kit; exits 1 with a fix per line
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
  *   kit init <dir> [--preset api] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--yes]

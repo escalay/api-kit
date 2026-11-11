@@ -72,7 +72,7 @@ describe('vector search', () => {
     expect(fetched).toEqual(['https://assets.example.com/fox.png'])
     expect(await keysOf(await json('http://localhost/files/fox.png'))).toEqual(['logo:fox', 'logo:fox2'])
     expect(fetched).toEqual(['https://assets.example.com/fox.png'])
-    for (const refused of ['https://evil.example.org/x.png', 'http://assets.example.com/x.png', 'http://192.168.2.1/', 'file:///etc/passwd']) expect((await json(refused)).status).toBe(400)
+    for (const refused of ['https://evil.example.org/x.png', 'http://assets.example.com/x.png', 'http://192.168.0.1/', 'file:///etc/passwd']) expect((await json(refused)).status).toBe(400)
     expect(fetched).toHaveLength(1)
     expect((await json('data:image/png;base64,bm90IGFuIGltYWdl')).status).toBe(400)
     const text = new FormData()

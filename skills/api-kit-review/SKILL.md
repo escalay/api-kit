@@ -45,7 +45,7 @@ If a check is absent from the tests, add it (`src/kit/testing/README.md`) before
    or tool list.
 3. `GET /openapi.json` is OpenAPI 3.1. An unknown query parameter on any route answers 400 and names the valid ones.
 4. A list follows `_links.next` to the end. An unknown id answers 404 with a `detail` that says what to do next.
-5. `POST /mcp` with `tools/list` returns every tool, each with `_meta["api-kit/route"]`.
+5. `POST /mcp` with `tools/list` returns every tool; each carries its route in `_meta["api-kit/route"]` (a tool without one needs `route` set).
 
 ## 4. The agent test
 
