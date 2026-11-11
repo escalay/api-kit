@@ -1,0 +1,156 @@
+name: Release
+
+# One workflow for any pnpm repo that publishes to npm: nothing here names a package. docs/releasing.md explains it.
+# npm's trusted publisher is tied to this file name.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      # Keeps the release pull request current; once that is merged, tags the commit and drafts the GitHub release
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: npm
+    permissions:
+      # Attach the tarballs to the GitHub release and publish it
+      contents: write
+      # npm trusted publishing and provenance: no npm token exists
+      id-token: write
+    env:
+      TAG: ${{ needs.release-please.outputs.tag }}
+      VERSION: ${{ needs.release-please.outputs.version }}
+      PACK_DIR: /tmp/release-packages
+      REGISTRY: https://registry.npmjs.org
+      # The package document an install reads
+      PACKUMENT: 'Accept: application/vnd.npm.install-v1+json'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Before setup-node: its pnpm cache needs pnpm on the PATH
+      - run: corepack enable
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      - name: npm is new enough for trusted publishing
+        run: |
+          need=11.5.1
+          have="$(npm --version)"
+          if [ "$(printf '%s\n' "$need" "$have" | sort -V | head -n 1)" != "$need" ]; then
+            echo "::error::npm $have is older than $need, which trusted publishing needs. Put a Node version that ships npm $need or newer in .node-version."
+            exit 1
+          fi
+
+      # pnpm writes real versions where package.json says `workspace:`, and visits a package before the ones that depend on it
+      - name: Pack every public package
+        run: |
+          rm -rf "$PACK_DIR" && mkdir -p "$PACK_DIR"
+          # The quoted script runs once per package, where its variables are read
+          # shellcheck disable=SC2016
+          pnpm --recursive --include-workspace-root --workspace-concurrency=1 exec bash -eo pipefail -c '
+            [ "$(jq -r ".private // false" package.json)" = true ] && exit 0
+            # Into a folder of its own: the tarball there is this package, whatever its scripts print
+            into="$(mktemp -d)"
+            pnpm pack --pack-destination "$into"
+            for packed in "$into"/*.tgz; do
+              mv "$packed" "$PACK_DIR/"
+              echo "$PACK_DIR/$(basename "$packed")" >> "$PACK_DIR/order.txt"
+            done
+          '
+          if [ ! -s "$PACK_DIR/order.txt" ]; then
+            echo "::error::No public package to publish: every package.json here says \"private\": true."
+            exit 1
+          fi
+          cat "$PACK_DIR/order.txt"
+
+      # A version the registry already has is skipped, so a failed run can be run again
+      - name: Publish to npm
+        run: |
+          mapfile -t tarballs < "$PACK_DIR/order.txt"
+          for tarball in "${tarballs[@]}"; do
+            name="$(tar -xOf "$tarball" package/package.json | jq -r .name)"
+            version="$(tar -xOf "$tarball" package/package.json | jq -r .version)"
+            if curl -fsS -H "$PACKUMENT" "$REGISTRY/${name/\//%2F}" 2>/dev/null | jq -e --arg v "$version" '.versions[$v]' > /dev/null; then
+              echo "$name@$version is already on npm: skipped"
+              continue
+            fi
+            npm publish "$tarball" --access public --provenance
+          done
+
+      # npm can hold a new version back for some minutes: wait until an install would really get it
+      - name: Wait until npm serves every package
+        run: |
+          served() {
+            local tarball
+            tarball="$(curl -fsS -H "$PACKUMENT" "$REGISTRY/${1/\//%2F}" 2>/dev/null | jq -r --arg v "$2" '.versions[$v].dist.tarball // empty')" || return 1
+            [ -n "$tarball" ] && curl -fsSI -o /dev/null "$tarball" 2>/dev/null
+          }
+          mapfile -t tarballs < "$PACK_DIR/order.txt"
+          deadline=$((SECONDS + 1200))
+          for tarball in "${tarballs[@]}"; do
+            name="$(tar -xOf "$tarball" package/package.json | jq -r .name)"
+            version="$(tar -xOf "$tarball" package/package.json | jq -r .version)"
+            until served "$name" "$version"; do
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "::error::npm still does not serve $name@$version after 20 minutes. It was published, so look at https://www.npmjs.com/package/$name and, once the version is there, run the failed jobs again: nothing is published twice."
+                exit 1
+              fi
+              echo "waiting for $name@$version"
+              sleep 15
+            done
+            echo "$name@$version is served"
+          done
+
+      - name: Install it the way a stranger would
+        run: |
+          if [ -x scripts/release-smoke.sh ]; then
+            scripts/release-smoke.sh "$VERSION"
+          else
+            echo "no executable scripts/release-smoke.sh: skipped"
+          fi
+
+      - name: Attach the tarballs and publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t tarballs < "$PACK_DIR/order.txt"
+          gh release upload "$TAG" "${tarballs[@]}" --clobber
+          gh release edit "$TAG" --draft=false --latest
