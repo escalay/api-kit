@@ -10,6 +10,8 @@
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
  *   kit update [module…] [--dir src/kit] [--force]
+ *   kit doctor [--dir src/kit] [--adopt]      missing files, edited files, parts behind this kit; exits 1 with a fix per line
+ *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
  *   kit init <dir> [--title "My API"] [--runtime both|cloudflare|node] [--bare]  a new app: features/, the kit in
  *                                             src/kit, tests; Node (server.ts, a container) and/or Workers (worker.ts, D1)
  *   kit feature <plural-name> [--app .]       a new feature folder (schema, repo, routes, handlers, tools), listed
@@ -58,7 +60,9 @@ const flags = new Set(rest.filter((arg) => arg.startsWith('--') && !arg.includes
 const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ?? rest.find((arg) => arg.startsWith(`${flag}=`))?.slice(flag.length + 1)
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
-const names = rest.filter((arg, index) => !arg.startsWith('--') && rest[index - 1] !== '--dir' && rest[index - 1] !== '--web-dir')
+/** Flags that take the next argument as their value, so it is never read as a name. */
+const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out'])
+const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 const lockPath = join(dir, 'kit.json')
 
@@ -143,6 +147,37 @@ const statusOf = (lock, expected) =>
     const state = local === null ? 'missing' : recorded === null ? 'new in kit' : kit === null ? 'dropped by kit' : edited && changed ? 'both changed' : edited ? 'you edited' : changed ? 'kit changed' : 'unchanged'
     return { file, state, edited, changed }
   })
+
+/** The part a recorded file came with (`index.ts` is the kit's own). */
+const partOf = (key, modules) => modules.find((name) => REGISTRY[name].files.includes(sourceOf(key))) ?? 'kit'
+
+/** One line per thing wrong with the copy, each saying how to fix it. */
+const findingsOf = (lock) => {
+  const statuses = statusOf(lock, expectedFiles(lock.modules, lock.webDir))
+  const behind = [...new Set(statuses.filter(({ state }) => ['kit changed', 'both changed', 'new in kit', 'dropped by kit'].includes(state)).map(({ file }) => partOf(file, lock.modules)))]
+  return [
+    ...statuses.filter(({ state }) => state === 'missing').map(({ file }) => `missing  ${file}: \`kit update --dir ${dirArg}\` writes it again`),
+    ...statuses.filter(({ edited }) => edited).map(({ file }) => `edited   ${file}: yours to keep; \`kit diff --dir ${dirArg} --patch\` shows the change, \`kit update --dir ${dirArg} --force\` takes the kit's`),
+    ...behind.map((part) => `behind   ${part} was copied from kit ${lock.version} and kit ${VERSION} changed it: \`kit diff --dir ${dirArg} --patch\`, then \`kit update --dir ${dirArg}\``),
+    ...(lock.version !== VERSION && !behind.length ? [`behind   kit.json says kit ${lock.version}, this is ${VERSION} with the same files: \`kit update --dir ${dirArg}\` records it`] : []),
+  ]
+}
+
+/** Writes kit.json for parts that were copied without one (the shadcn CLI): every part whose files are all on disk. */
+const adopt = () => {
+  if (existsSync(lockPath)) fail(`${dirArg} already has a kit.json; \`kit doctor --dir ${dirArg}\` checks it`)
+  const found = Object.keys(REGISTRY).filter((name) => REGISTRY[name].files.every((file) => existsSync(join(dir, file))))
+  if (!found.length) fail(`no parts in ${dirArg}; \`kit add <part> --dir ${dirArg}\` copies one, \`kit list\` names them`)
+  const modules = withRequired(found)
+  const expected = expectedFiles(modules)
+  const index = join(dir, 'index.ts')
+  if (expected['index.ts'] && !existsSync(index)) writeFileSync(index, expected['index.ts'])
+  // The kit's hashes, not the disk's: a file that already differs shows as edited instead of passing as the kit's
+  writeLock(modules, Object.fromEntries(Object.entries(expected).map(([file, text]) => [file, sha(text)])))
+  console.log(`Adopted ${found.join(', ')} in ${dirArg} as kit ${VERSION}`)
+  const absent = modules.filter((name) => !found.includes(name))
+  if (absent.length) console.log(`Recorded ${absent.join(', ')} too (they are required): \`kit update --dir ${dirArg}\` copies them`)
+}
 
 // ---- Generators: a new app, a new feature ----
 
@@ -341,6 +376,17 @@ const commands = {
     if (!flags.has('--bare')) addFeature(root, 'notes')
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'} with kit ${VERSION} (${modules.join(', ')})`)
     console.log(`Next: cd ${relative(process.cwd(), root)} && pnpm install${runtime === 'node' ? '' : ' && pnpm migrations'} && pnpm test && pnpm dev`)
+  },
+
+  adopt,
+
+  doctor: () => {
+    if (flags.has('--adopt') && !existsSync(lockPath)) adopt()
+    const lock = readLock()
+    const findings = lock ? findingsOf(lock) : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
+    for (const finding of findings) console.log(finding)
+    console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}: ${lock.modules.join(', ')}`)
+    process.exitCode = findings.length ? 1 : 0
   },
 
   feature: () => {

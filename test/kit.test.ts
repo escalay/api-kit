@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -367,6 +367,7 @@ describe('discovery', () => {
 })
 
 describe('the copy-in CLI', () => {
+  const KIT_VERSION: string = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')).version
   const cli = (cwd: string, ...args: string[]) => spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), ...args], { cwd, encoding: 'utf8' })
 
   it('writes the guide folder as a module that serves the same guide (for Workers)', async () => {
@@ -422,6 +423,76 @@ describe('the copy-in CLI', () => {
     cli(app, 'update', '--dir', 'kit', '--force')
     expect(await readFile(join(app, 'kit/core/hal.ts'), 'utf8')).not.toBe('// mine\n')
     expect(cli(app, 'add', 'nope', '--dir', 'kit').stderr).toContain('no module "nope"')
+  })
+
+  it('checks a copy against its record: missing, edited and behind, each with its fix, and exits 1', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    expect(cli(app, 'doctor').stdout).toContain('`kit adopt --dir src/kit`')
+    expect(cli(app, 'doctor').status).toBe(1)
+    cli(app, 'add', 'pagination')
+    const clean = cli(app, 'doctor')
+    expect([clean.status, clean.stdout]).toEqual([0, `src/kit matches kit ${KIT_VERSION}: core, pagination\n`])
+    await writeFile(join(app, 'src/kit/core/hal.ts'), '// mine\n')
+    await rm(join(app, 'src/kit/core/kv.ts'))
+    const lock = JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8'))
+    await writeFile(join(app, 'src/kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1', files: { ...lock.files, 'pagination/index.ts': 'older' } }))
+    const sick = cli(app, 'doctor')
+    expect(sick.status).toBe(1)
+    expect(sick.stdout.trim().split('\n')).toEqual([
+      'missing  core/kv.ts: `kit update --dir src/kit` writes it again',
+      "edited   core/hal.ts: yours to keep; `kit diff --dir src/kit --patch` shows the change, `kit update --dir src/kit --force` takes the kit's",
+      // The file on disk no longer matches what the older kit wrote, and the kit moved on: both, so update keeps it
+      "edited   pagination/index.ts: yours to keep; `kit diff --dir src/kit --patch` shows the change, `kit update --dir src/kit --force` takes the kit's",
+      `behind   pagination was copied from kit 0.0.1 and kit ${KIT_VERSION} changed it: \`kit diff --dir src/kit --patch\`, then \`kit update --dir src/kit\``,
+      '4 to fix in src/kit',
+    ])
+    cli(app, 'update', '--force')
+    expect(cli(app, 'doctor').status).toBe(0)
+    // Only the version is behind: update records it
+    await writeFile(join(app, 'src/kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1' }))
+    expect(cli(app, 'doctor').stdout).toContain(`behind   kit.json says kit 0.0.1, this is ${KIT_VERSION} with the same files`)
+  })
+
+  it('adopts parts copied by the shadcn CLI: writes the record from what is on disk', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    const registry = JSON.parse(await readFile(join(import.meta.dirname, '..', 'registry.json'), 'utf8'))
+    // What `shadcn add escalay/api-kit/pagination` leaves: each file at its target, no kit.json, no index.ts
+    const shadcnAdd = async (name: string) => {
+      for (const file of registry.items.find((item: { name: string }) => item.name === name).files) {
+        const target = join(app, file.target.replace('~/', ''))
+        await mkdir(join(target, '..'), { recursive: true })
+        await writeFile(target, await readFile(join(import.meta.dirname, '..', file.path), 'utf8'))
+      }
+    }
+    expect(cli(app, 'adopt').stderr).toContain('no parts in src/kit')
+    await shadcnAdd('core')
+    await shadcnAdd('pagination')
+    await shadcnAdd('mcp')
+    await writeFile(join(app, 'src/kit/core/hal.ts'), '// mine\n')
+    const adopted = cli(app, 'doctor', '--adopt')
+    expect(adopted.stdout).toContain(`Adopted core, pagination, mcp in src/kit as kit ${KIT_VERSION}`)
+    // An edit made before adopting is still an edit, not the kit's text
+    expect(adopted.stdout).toMatch(/^edited   core\/hal\.ts/m)
+    expect(adopted.status).toBe(1)
+    const lock = JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8'))
+    expect(lock).toMatchObject({ source: '@escalay/kit', version: KIT_VERSION, modules: ['core', 'pagination', 'mcp'] })
+    expect(await readFile(join(app, 'src/kit/index.ts'), 'utf8')).toContain("export * from './pagination/index.js'")
+    expect(cli(app, 'adopt').stderr).toContain('already has a kit.json')
+    cli(app, 'update', '--force')
+    expect(cli(app, 'doctor').status).toBe(0)
+    // A part whose required part is not on disk is recorded with it; doctor names the missing files
+    const lone = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    const loneAdd = cli(lone, 'add', 'pagination')
+    expect(loneAdd.status).toBe(0)
+    await rm(join(lone, 'src/kit/kit.json'))
+    await rm(join(lone, 'src/kit/core'), { recursive: true })
+    expect(cli(lone, 'adopt').stdout).toContain('Recorded core too (they are required)')
+    expect(cli(lone, 'doctor').stdout).toContain('missing  core/api.ts')
+  })
+
+  it('never reads a flag’s value as a name', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    expect(cli(app, 'add', '--dir', 'kit', 'core').stdout).toContain(`Copied core (kit ${KIT_VERSION}) into kit`)
   })
 
   it('puts vector search beside the server kit and the browser modules in the app’s frontend, without a server index', async () => {
