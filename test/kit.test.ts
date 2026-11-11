@@ -537,17 +537,31 @@ describe('the copy-in CLI', () => {
     }
   }, 120_000)
 
-  it('builds the browser modules as shadcn items, and the committed r/ is current', async () => {
-    const out = await mkdtemp(join(tmpdir(), 'kit-r-'))
-    expect(cli(out, 'registry', '--dir', '.').status).toBe(0)
+  it('lists every part in the shadcn registry, with every file it has and nothing that is missing', async () => {
     const kitDir = join(import.meta.dirname, '..')
-    for (const name of ['registry', 'search-client', 'search-react', 'vector-search-ui', 'boards-client', 'boards-react']) expect(await readFile(join(out, `${name}.json`), 'utf8')).toBe(await readFile(join(kitDir, 'r', `${name}.json`), 'utf8'))
-    const block = JSON.parse(await readFile(join(out, 'vector-search-ui.json'), 'utf8'))
-    expect(block).toMatchObject({ type: 'registry:block', dependencies: ['react'], registryDependencies: ['button', 'input', '@escalay/search-react'], files: [{ path: 'src/vector-search-block.tsx', type: 'registry:component' }] })
-    expect(block.files[0].content).toContain("from '@/hooks/search-react'")
-    const hooks = JSON.parse(await readFile(join(out, 'search-react.json'), 'utf8'))
-    expect(hooks).toMatchObject({ type: 'registry:hook', registryDependencies: ['@escalay/search-client'] })
-    expect(hooks.files[0].content).toContain("from '@/lib/search-client'")
+    const registry = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8'))
+    expect(registry).toMatchObject({ $schema: 'https://ui.shadcn.com/schema/registry.json', name: 'escalay', homepage: 'https://github.com/escalay/api-kit' })
+    type Item = { name: string; type: string; registryDependencies?: string[]; files: { path: string; type: string; target: string }[] }
+    const items: Item[] = registry.items
+    const names = items.map((item) => item.name)
+    const listed = new Set(items.flatMap((item) => item.files.map((file) => file.path)))
+    // Every folder under src/ is a part of its name; browser/ holds one part per file
+    const folders = (await readdir(join(kitDir, 'src'), { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+    expect(folders.filter((folder) => folder !== 'browser' && !names.includes(folder))).toEqual([])
+    const onDisk = (await readdir(join(kitDir, 'src'), { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath, entry.name).slice(kitDir.length + 1))
+    expect(onDisk.filter((path) => path !== 'src/index.ts' && !listed.has(path))).toEqual([])
+    for (const item of items) {
+      expect(item.type, item.name).toBe('registry:item')
+      for (const file of item.files) {
+        expect(existsSync(join(kitDir, file.path)), file.path).toBe(true)
+        // Universal items: an explicit target under src/kit, the same place `kit add` writes
+        expect(file, file.path).toMatchObject({ type: 'registry:file', target: file.path.replace(/^src\//, '~/src/kit/') })
+      }
+      // A part needs other parts by their GitHub address; a bare name is shadcn's own
+      for (const needed of item.registryDependencies ?? []) expect(needed.startsWith('escalay/api-kit/') ? names.includes(needed.slice('escalay/api-kit/'.length)) : ['button', 'input'].includes(needed), `${item.name} → ${needed}`).toBe(true)
+    }
+    const block = items.find((item) => item.name === 'vector-search-ui')!
+    expect(block.registryDependencies).toEqual(['button', 'input', 'escalay/api-kit/search-react'])
   })
 })
 

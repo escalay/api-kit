@@ -3,7 +3,7 @@
  * dropped or picked picture, a look/meaning/both switch, a live status line and a results grid. The app renders each
  * result (`renderResult`), so cards stay its own. Copy it, restyle it or skip it: the hooks carry all the logic.
  *
- * Install: `pnpm dlx shadcn@latest add @escalay/vector-search-ui` (README: registry setup), or `kit add
+ * Install: `npx shadcn add escalay/api-kit/vector-search-ui`, or `kit add
  * vector-search-ui --dir src/components/vector-search`. Needs the shadcn `button` and `input` (Radix or Base UI alike).
  *
  * @example

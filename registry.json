@@ -1,233 +1,512 @@
 {
-  "$comment": "The modules an app copies with `kit add`. Files live in src/; `requires` pulls other modules in; versions are the ranges the kit is tested with. `web` modules run in the browser and go to the app's frontend (`--dir src/components/vector-search`); `cli.mjs registry` also builds them as shadcn items in r/.",
-  "modules": {
-    "core": {
-      "description": "createAgentApi: OpenAPI 3.1 + Scalar docs, HAL links, problem+json, API keys + Access, ETags and Cache-Control, Idempotency-Key and rate limits, discovery (api-catalog, Link headers, robots.txt, Markdown for agents), a key-value store type; an OAuth server plugs in from the `oauth` module",
-      "files": [
-        "core/api.ts",
-        "core/auth.ts",
-        "core/cache.ts",
-        "core/discovery.ts",
-        "core/guards.ts",
-        "core/hal.ts",
-        "core/kv.ts",
-        "core/problem.ts",
-        "core/README.md"
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "escalay",
+  "homepage": "https://github.com/escalay/api-kit",
+  "items": [
+    {
+      "name": "core",
+      "type": "registry:item",
+      "title": "Core",
+      "description": "createAgentApi: OpenAPI 3.1 + Scalar docs, HAL links, problem+json, API keys + Access, ETags and Cache-Control, Idempotency-Key and rate limits, discovery (api-catalog, Link headers, robots.txt, Markdown for agents), a key-value store type; an OAuth server plugs in from the `oauth` part",
+      "dependencies": [
+        "hono@^4.13.14",
+        "@hono/zod-openapi@^1.6.3",
+        "zod@^4.6.7",
+        "jose@^6.2.14",
+        "@scalar/hono-api-reference@^0.12.17"
       ],
-      "dependencies": {
-        "hono": "^4.13.14",
-        "@hono/zod-openapi": "^1.6.3",
-        "zod": "^4.6.7",
-        "jose": "^6.2.14",
-        "@scalar/hono-api-reference": "^0.12.17"
-      }
+      "files": [
+        {
+          "path": "src/core/api.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/api.ts"
+        },
+        {
+          "path": "src/core/auth.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/auth.ts"
+        },
+        {
+          "path": "src/core/cache.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/cache.ts"
+        },
+        {
+          "path": "src/core/discovery.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/discovery.ts"
+        },
+        {
+          "path": "src/core/guards.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/guards.ts"
+        },
+        {
+          "path": "src/core/hal.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/hal.ts"
+        },
+        {
+          "path": "src/core/kv.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/kv.ts"
+        },
+        {
+          "path": "src/core/problem.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/problem.ts"
+        },
+        {
+          "path": "src/core/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/core/README.md"
+        }
+      ]
     },
-    "db": {
+    {
+      "name": "db",
+      "type": "registry:item",
+      "title": "Database",
       "description": "The app's database through Drizzle: `openDb` (node:sqlite, Turso/libSQL, or any async Drizzle SQLite database), `migrate` (each feature's steps, recorded in `kit_migrations`), `testDb`; `dbGuardStore` (idempotency and rate limits shared by every instance)",
+      "dependencies": [
+        "drizzle-orm@^0.45.4"
+      ],
+      "registryDependencies": [
+        "escalay/api-kit/core"
+      ],
       "files": [
-        "db/index.ts",
-        "db/guards.ts",
-        "db/README.md"
-      ],
-      "requires": [
-        "core"
-      ],
-      "dependencies": {
-        "drizzle-orm": "^0.45.4"
-      }
+        {
+          "path": "src/db/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/db/index.ts"
+        },
+        {
+          "path": "src/db/guards.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/db/guards.ts"
+        },
+        {
+          "path": "src/db/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/db/README.md"
+        }
+      ]
     },
-    "oauth": {
+    {
+      "name": "oauth",
+      "type": "registry:item",
+      "title": "OAuth server",
       "description": "The app as its own OAuth server: metadata, `/oauth/*`, agent registration (auth.md), ES256 tokens; `createOAuth`, `dbOAuthStore`, `memoryOAuthStore`, `generateOAuthKey`",
-      "files": [
-        "oauth/index.ts",
-        "oauth/schema.ts",
-        "oauth/store.ts",
-        "oauth/README.md"
+      "registryDependencies": [
+        "escalay/api-kit/core",
+        "escalay/api-kit/db"
       ],
-      "requires": [
-        "core",
-        "db"
+      "files": [
+        {
+          "path": "src/oauth/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/oauth/index.ts"
+        },
+        {
+          "path": "src/oauth/schema.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/oauth/schema.ts"
+        },
+        {
+          "path": "src/oauth/store.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/oauth/store.ts"
+        },
+        {
+          "path": "src/oauth/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/oauth/README.md"
+        }
       ]
     },
-    "pagination": {
+    {
+      "name": "pagination",
+      "type": "registry:item",
+      "title": "Pagination",
       "description": "Cursor pages and sorting: limitQuery, cursorQuery, sortQuery, pageOf, pageSchema",
-      "files": [
-        "pagination/index.ts",
-        "pagination/README.md"
+      "registryDependencies": [
+        "escalay/api-kit/core"
       ],
-      "requires": [
-        "core"
+      "files": [
+        {
+          "path": "src/pagination/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/pagination/index.ts"
+        },
+        {
+          "path": "src/pagination/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/pagination/README.md"
+        }
       ]
     },
-    "guide": {
+    {
+      "name": "guide",
+      "type": "registry:item",
+      "title": "Agent guide",
       "description": "The agent guide from Markdown templates (llms.txt, agents/, skills/), its generated parts (endpoints, tools, playbooks, how to get unstuck) and the skills discovery index",
-      "files": [
-        "guide/guide.ts",
-        "guide/reference.ts",
-        "guide/README.md"
+      "registryDependencies": [
+        "escalay/api-kit/core"
       ],
-      "requires": [
-        "core"
+      "files": [
+        {
+          "path": "src/guide/guide.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/guide/guide.ts"
+        },
+        {
+          "path": "src/guide/reference.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/guide/reference.ts"
+        },
+        {
+          "path": "src/guide/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/guide/README.md"
+        }
       ]
     },
-    "mcp": {
+    {
+      "name": "mcp",
+      "type": "registry:item",
+      "title": "MCP server",
       "description": "An MCP server (2026-07-28) over the app's own routes: tools, resources, prompts, skills, and its Server Card",
+      "dependencies": [
+        "@modelcontextprotocol/server@^2.4.0"
+      ],
+      "registryDependencies": [
+        "escalay/api-kit/core"
+      ],
       "files": [
-        "mcp/index.ts",
-        "mcp/README.md"
+        {
+          "path": "src/mcp/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/mcp/index.ts"
+        },
+        {
+          "path": "src/mcp/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/mcp/README.md"
+        }
       ],
-      "requires": [
-        "core"
-      ],
-      "entry": true,
-      "dependencies": {
-        "@modelcontextprotocol/server": "^2.4.0"
+      "meta": {
+        "entry": true
       }
     },
-    "a2a": {
+    {
+      "name": "a2a",
+      "type": "registry:item",
+      "title": "A2A",
       "description": "A2A 1.0 over the MCP tools: the Agent Card at /.well-known/agent-card.json and a JSON-RPC endpoint (SendMessage, GetTask, ListTasks, CancelTask) whose skills are tools",
+      "registryDependencies": [
+        "escalay/api-kit/mcp"
+      ],
       "files": [
-        "a2a/index.ts",
-        "a2a/README.md"
+        {
+          "path": "src/a2a/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/a2a/index.ts"
+        },
+        {
+          "path": "src/a2a/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/a2a/README.md"
+        }
       ],
-      "requires": [
-        "mcp"
-      ],
-      "entry": true
+      "meta": {
+        "entry": true
+      }
     },
-    "vectors": {
+    {
+      "name": "vectors",
+      "type": "registry:item",
+      "title": "Vectors",
       "description": "Gemini Embedding 2 through OpenRouter: look (image) and meaning (text) vectors, append-only ledgers that never pay twice, budgets and spend caps, nearest and standouts search (sharp, for pictures only)",
       "files": [
-        "vectors/index.ts",
-        "vectors/README.md"
+        {
+          "path": "src/vectors/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/vectors/index.ts"
+        },
+        {
+          "path": "src/vectors/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/vectors/README.md"
+        }
       ],
-      "optionalDependencies": {
-        "sharp": "^0.34.5"
+      "meta": {
+        "optionalDependencies": {
+          "sharp": "^0.34.5"
+        }
       }
     },
-    "vector-search": {
+    {
+      "name": "vector-search",
+      "type": "registry:item",
+      "title": "Vector search",
       "description": "Search by words, by picture and by likeness over the vectors: three documented routes (rate-limited where they cost) and the MCP tools that call them",
+      "registryDependencies": [
+        "escalay/api-kit/vectors",
+        "escalay/api-kit/mcp"
+      ],
       "files": [
-        "vector-search/index.ts",
-        "vector-search/README.md"
+        {
+          "path": "src/vector-search/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/vector-search/index.ts"
+        },
+        {
+          "path": "src/vector-search/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/vector-search/README.md"
+        }
       ],
-      "requires": [
-        "vectors",
-        "mcp"
-      ],
-      "entry": true
-    },
-    "web": {
-      "description": "The front door: a public landing page at /, the browser app under /app behind the sign-in, old addresses redirected, and the paths auth must leave open",
-      "files": [
-        "web/index.ts",
-        "web/README.md"
-      ],
-      "requires": [
-        "core"
-      ],
-      "dependencies": {
-        "@hono/node-server": "^2.1.5"
+      "meta": {
+        "entry": true
       }
     },
-    "boards": {
+    {
+      "name": "web",
+      "type": "registry:item",
+      "title": "Front door",
+      "description": "The front door: a public landing page at /, the browser app under /app behind the sign-in, old addresses redirected, and the paths auth must leave open",
+      "dependencies": [
+        "@hono/node-server@^2.1.5"
+      ],
+      "registryDependencies": [
+        "escalay/api-kit/core"
+      ],
+      "files": [
+        {
+          "path": "src/web/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/web/index.ts"
+        },
+        {
+          "path": "src/web/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/web/README.md"
+        }
+      ]
+    },
+    {
+      "name": "boards",
+      "type": "registry:item",
+      "title": "Boards",
       "description": "The owner's collections of the app's items: boards with notes in SQLite, their routes (idempotent saves, where an item is saved, optional suggestions) and MCP tools",
+      "registryDependencies": [
+        "escalay/api-kit/db",
+        "escalay/api-kit/mcp"
+      ],
       "files": [
-        "boards/index.ts",
-        "boards/handlers.ts",
-        "boards/refs.ts",
-        "boards/repo.ts",
-        "boards/routes.ts",
-        "boards/schema.ts",
-        "boards/tools.ts",
-        "boards/README.md"
+        {
+          "path": "src/boards/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/boards/index.ts"
+        },
+        {
+          "path": "src/boards/handlers.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/boards/handlers.ts"
+        },
+        {
+          "path": "src/boards/refs.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/boards/refs.ts"
+        },
+        {
+          "path": "src/boards/repo.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/boards/repo.ts"
+        },
+        {
+          "path": "src/boards/routes.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/boards/routes.ts"
+        },
+        {
+          "path": "src/boards/schema.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/boards/schema.ts"
+        },
+        {
+          "path": "src/boards/tools.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/boards/tools.ts"
+        },
+        {
+          "path": "src/boards/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/boards/README.md"
+        }
       ],
-      "requires": [
-        "db",
-        "mcp"
-      ],
-      "entry": true
+      "meta": {
+        "entry": true
+      }
     },
-    "testing": {
+    {
+      "name": "testing",
+      "type": "registry:item",
+      "title": "Testing",
       "description": "Checks for an app's tests: lintOpenApi, guideRoutes, guideGaps, toolRoutes",
+      "registryDependencies": [
+        "escalay/api-kit/guide"
+      ],
       "files": [
-        "testing/index.ts",
-        "testing/README.md"
+        {
+          "path": "src/testing/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/testing/index.ts"
+        },
+        {
+          "path": "src/testing/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/testing/README.md"
+        }
       ],
-      "requires": [
-        "guide"
-      ],
-      "entry": true
+      "meta": {
+        "entry": true
+      }
     },
-    "search-client": {
+    {
+      "name": "search-client",
+      "type": "registry:item",
+      "title": "Search client",
       "description": "Browser, no framework: a typed client for vector-search's routes, a controller for one search's state (debounced, cancelling), paste and drop of pictures",
       "files": [
-        "browser/search-client.ts",
-        "browser/README.md"
+        {
+          "path": "src/browser/search-client.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/search-client.ts"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
       ],
-      "entry": true,
-      "web": true
+      "meta": {
+        "entry": true,
+        "web": true
+      }
     },
-    "search-react": {
+    {
+      "name": "search-react",
+      "type": "registry:item",
+      "title": "Search hooks",
       "description": "Browser, React: useVectorSearch, usePictureInput, useSimilar over search-client; headless, each app draws its own UI",
+      "dependencies": [
+        "react"
+      ],
+      "registryDependencies": [
+        "escalay/api-kit/search-client"
+      ],
       "files": [
-        "browser/search-react.ts",
-        "browser/README.md"
+        {
+          "path": "src/browser/search-react.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/search-react.ts"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
       ],
-      "requires": [
-        "search-client"
-      ],
-      "entry": true,
-      "web": true,
-      "peerDependencies": {
-        "react": ">=18"
+      "meta": {
+        "entry": true,
+        "web": true
       }
     },
-    "vector-search-ui": {
+    {
+      "name": "vector-search-ui",
+      "type": "registry:item",
+      "title": "Vector search block",
       "description": "Browser, React + shadcn: an optional search block (field with a picture chip, look/meaning switch, results grid) over search-react",
+      "dependencies": [
+        "react"
+      ],
+      "registryDependencies": [
+        "button",
+        "input",
+        "escalay/api-kit/search-react"
+      ],
       "files": [
-        "browser/vector-search-block.tsx",
-        "browser/README.md"
+        {
+          "path": "src/browser/vector-search-block.tsx",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/vector-search-block.tsx"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
       ],
-      "requires": [
-        "search-react"
-      ],
-      "entry": true,
-      "web": true,
-      "peerDependencies": {
-        "react": ">=18"
-      },
-      "shadcn": {
-        "registryDependencies": [
-          "button",
-          "input"
-        ]
+      "meta": {
+        "entry": true,
+        "web": true
       }
     },
-    "boards-client": {
+    {
+      "name": "boards-client",
+      "type": "registry:item",
+      "title": "Boards client",
       "description": "Browser, no framework: a typed client for the board routes",
       "files": [
-        "browser/boards-client.ts",
-        "boards/refs.ts",
-        "browser/README.md"
+        {
+          "path": "src/browser/boards-client.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/boards-client.ts"
+        },
+        {
+          "path": "src/boards/refs.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/boards/refs.ts"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
       ],
-      "entry": true,
-      "web": true
+      "meta": {
+        "entry": true,
+        "web": true
+      }
     },
-    "boards-react": {
+    {
+      "name": "boards-react",
+      "type": "registry:item",
+      "title": "Boards hooks",
       "description": "Browser, React: useBoards, useItemBoards over boards-client (headless)",
+      "dependencies": [
+        "react"
+      ],
+      "registryDependencies": [
+        "escalay/api-kit/boards-client"
+      ],
       "files": [
-        "browser/boards-react.ts",
-        "browser/README.md"
+        {
+          "path": "src/browser/boards-react.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/boards-react.ts"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
       ],
-      "requires": [
-        "boards-client"
-      ],
-      "entry": true,
-      "web": true,
-      "peerDependencies": {
-        "react": ">=18"
+      "meta": {
+        "entry": true,
+        "web": true
       }
     }
-  }
+  ]
 }

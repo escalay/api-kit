@@ -10,7 +10,6 @@
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
  *   kit update [module…] [--dir src/kit] [--force]
- *   kit registry [--dir r]                   rebuild r/*.json, the browser modules as shadcn registry items
  *   kit init <dir> [--title "My API"] [--runtime both|cloudflare|node] [--bare]  a new app: features/, the kit in
  *                                             src/kit, tests; Node (server.ts, a container) and/or Workers (worker.ts, D1)
  *   kit feature <plural-name> [--app .]       a new feature folder (schema, repo, routes, handlers, tools), listed
@@ -27,7 +26,22 @@ import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const KIT = dirname(fileURLToPath(import.meta.url))
-const REGISTRY = JSON.parse(readFileSync(join(KIT, 'registry.json'), 'utf8')).modules
+const REPO = 'escalay/api-kit'
+const rangeOf = (dependency) => [dependency.slice(0, dependency.lastIndexOf('@')), dependency.slice(dependency.lastIndexOf('@') + 1)]
+/** registry.json is a shadcn registry; a part's requires are its dependencies on this repo, a dependency without a range is a peer. */
+const REGISTRY = Object.fromEntries(
+  JSON.parse(readFileSync(join(KIT, 'registry.json'), 'utf8')).items.map((item) => [
+    item.name,
+    {
+      description: item.description,
+      files: item.files.map((file) => file.path.replace(/^src\//, '')),
+      requires: (item.registryDependencies ?? []).filter((name) => name.startsWith(`${REPO}/`)).map((name) => name.slice(REPO.length + 1)),
+      dependencies: Object.fromEntries((item.dependencies ?? []).filter((dependency) => dependency.lastIndexOf('@') > 0).map(rangeOf)),
+      entry: item.meta?.entry,
+      web: item.meta?.web,
+    },
+  ]),
+)
 const VERSION = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8')).version
 const SOURCE = '@escalay/kit'
 
@@ -92,38 +106,6 @@ const expectedFiles = (modules, webDir) => {
   if (modules.some((name) => !REGISTRY[name].entry)) files['index.ts'] = indexFor(modules)
   return files
 }
-
-// ---- shadcn registry items ----
-
-const ITEM_SCHEMA = 'https://ui.shadcn.com/schema/registry-item.json'
-const fileTypeOf = (file) => (file.endsWith('.tsx') ? 'registry:component' : file.endsWith('-react.ts') ? 'registry:hook' : 'registry:lib')
-const baseOf = (file) => file.split('/').pop()
-const homeOf = (file) => ({ 'registry:component': '@/components', 'registry:hook': '@/hooks', 'registry:lib': '@/lib' })[fileTypeOf(file)]
-
-/**
- * Each browser module as a shadcn registry item (`r/<module>.json`): files placed by type (lib, hooks, components),
- * their imports of each other rewritten to those aliases, the modules they require as `@escalay/…` dependencies.
- */
-const registryItems = () =>
-  Object.entries(REGISTRY)
-    .filter(([, module]) => module.web)
-    .map(([name, module]) => {
-      const content = (file) =>
-        upstreamOf(file).replace(/from '\.\.?\/(?:[\w-]+\/)*([\w-]+)(?:\.js)?'/g, (_match, imported) => {
-          const target = Object.values(REGISTRY).flatMap((other) => other.files).find((other) => baseOf(other).replace(/\.tsx?$/, '') === imported)
-          return `from '${homeOf(target)}/${imported}'`
-        })
-      return {
-        $schema: ITEM_SCHEMA,
-        name,
-        type: module.files.some((file) => file.endsWith('.tsx')) ? 'registry:block' : fileTypeOf(module.files.find((file) => /\.tsx?$/.test(file))),
-        title: name.split('-').map((word) => word[0].toUpperCase() + word.slice(1)).join(' '),
-        description: module.description,
-        ...(module.peerDependencies ? { dependencies: Object.keys(module.peerDependencies) } : {}),
-        registryDependencies: [...(module.shadcn?.registryDependencies ?? []), ...(module.requires ?? []).map((required) => `@escalay/${required}`)],
-        files: module.files.filter((file) => /\.tsx?$/.test(file)).map((file) => ({ path: `src/${baseOf(file)}`, type: fileTypeOf(file), content: content(file) })),
-      }
-    })
 
 /** kit.json, with web-dir keys from kit 0.10–1.0.1 (`web/<file>`) read as `@web/<file>`. */
 const readLock = () => {
@@ -308,14 +290,6 @@ const commands = {
     const out = resolve(process.cwd(), valueOf('--out') ?? 'src/guide.gen.ts')
     if (!existsSync(from)) fail(`no guide folder at ${relative(process.cwd(), from)}; pass --from <dir>`)
     console.log(`Wrote ${writeGuideModule(from, out)} guide files to ${relative(process.cwd(), out)}`)
-  },
-
-  registry: () => {
-    const out = rest.some((arg) => arg.startsWith('--dir')) ? dir : join(KIT, 'r')
-    mkdirSync(out, { recursive: true })
-    for (const item of registryItems()) writeFileSync(join(out, `${item.name}.json`), JSON.stringify(item, null, 2) + '\n')
-    writeFileSync(join(out, 'registry.json'), JSON.stringify({ $schema: 'https://ui.shadcn.com/schema/registry.json', name: 'escalay', homepage: 'https://github.com/escalay/api-kit', items: registryItems().map(({ $schema, ...item }) => ({ ...item, files: item.files.map(({ content, ...file }) => file) })) }, null, 2) + '\n')
-    console.log(`Wrote ${registryItems().length} shadcn items to ${relative(process.cwd(), out) || '.'}`)
   },
 
   diff: () => {
