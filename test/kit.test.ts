@@ -642,6 +642,24 @@ describe('the copy-in CLI', () => {
   })
 })
 
+describe('the skills', () => {
+  it('each has a name, says when to use it, stays short and names the command that checks its rule', async () => {
+    const dir = join(import.meta.dirname, '..', 'skills')
+    const names = (await readdir(dir)).sort()
+    expect(names).toEqual(['api-kit-build', 'api-kit-feature', 'api-kit-review'])
+    for (const name of names) {
+      const text = await readFile(join(dir, name, 'SKILL.md'), 'utf8')
+      const [, frontmatter = ''] = text.match(/^---\n([\s\S]*?)\n---\n/) ?? []
+      expect(frontmatter, name).toContain(`name: ${name}\n`)
+      expect(frontmatter, name).toMatch(/^description: Use when /m)
+      expect(text.split('\n').length, name).toBeLessThanOrEqual(150)
+      expect(text, name).toMatch(/`pnpm test|`npx @escalay\/kit doctor`/)
+      // Only commands the CLI has
+      for (const [, command] of text.matchAll(/npx @escalay\/kit ([a-z]+)/g)) expect(['list', 'add', 'diff', 'update', 'doctor', 'adopt', 'init', 'feature', 'guide'], `${name}: ${command}`).toContain(command)
+    }
+  })
+})
+
 describe('guards', () => {
   const post = (app: Awaited<ReturnType<typeof sampleApi>>['app'], body: object, key?: string) =>
     app.request('/api/v1/notes', { method: 'POST', headers: { ...auth, 'content-type': 'application/json', ...(key ? { 'idempotency-key': key } : {}) }, body: JSON.stringify(body) })
