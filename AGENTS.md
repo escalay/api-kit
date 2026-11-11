@@ -43,6 +43,9 @@ what `feature` generates): `schema.ts` (Drizzle tables + migration steps) · `re
 | `cli.mjs` | `add`, `list`, `diff`, `update`, `doctor`, `adopt`, `init`, `feature`, `guide` (the guide folder as a module for Workers; must write exactly `guideModuleSource`) (plain JS: it runs from `npx` without a build). Reads the parts from `registry.json`. Copies mirror `src/`'s folders; `--web-dir` puts the browser files in their own folder under the same `kit.json`. `kit.json` is the lock: a sha256 per file as the kit wrote it; `doctor` reports missing, edited and behind, `adopt` writes it for parts the shadcn CLI copied |
 | `packages/create-escalay` | `npm create escalay <name>`: hands its arguments to `init` |
 | `scripts/starter-check.mjs` | `pnpm test:starter`: scaffolds an app in the OS temp folder, installs it, runs its typecheck and tests (CI runs it) |
+| `scripts/release-check.mjs` | `pnpm release:check`: read-only; clean tree on `main`, one version across the public packages, what each tarball holds, whether the version is on npm, whether npm trusts `release.yml`. Generic: it ships in `npm-release` |
+| `scripts/release-smoke.sh` | what `release.yml` runs after publishing: `npm create escalay@<version>`, install, test |
+| `.github/workflows/release.yml`, `release-please-config.json`, `.release-please-manifest.json` | the release: release-please keeps the release pull request, then the publish job. The workflow names no package, because `npm-release` installs this same file in other repos |
 | `skills/` | `api-kit-build`, `api-kit-feature`, `api-kit-review`, installed with `npx skills add escalay/api-kit`; a test checks their frontmatter, length and commands |
 | `templates/runtime-cloudflare` | what `init --runtime cloudflare|both` adds: `worker.ts`, `wrangler.jsonc`, `scripts/migrations.ts`, the workerd test project |
 | `templates/app`, `templates/feature` | what `init` and `feature` copy, `__placeholders__` filled from the name (`namesOf` in `cli.mjs`). Never typechecked or tested in place: the generator test in `test/kit.test.ts` makes an app under `test/.generated/`, typechecks it and runs its tests |
@@ -55,7 +58,7 @@ what `feature` generates): `schema.ts` (Drizzle tables + migration steps) · `re
 ## Commands
 
 `pnpm install` · `pnpm test` (both projects: `node`, and `workers` inside workerd; one alone: `--project <name>`) ·
-`pnpm typecheck` (Node, browser, Workers) · `pnpm test:starter` (needs the network) · `pnpm exec wrangler dev -c test/workers/wrangler.jsonc` (the probe app,
+`pnpm typecheck` (Node, browser, Workers) · `pnpm test:starter` (needs the network) · `pnpm release:check` (needs the network) · `pnpm exec wrangler dev -c test/workers/wrangler.jsonc` (the probe app,
 for a look at the kit on Workers by hand)
 
 ## Using it from another repo
@@ -70,12 +73,19 @@ for a look at the kit on Workers by hand)
 
 ## Releasing
 
+[`docs/releasing.md`](docs/releasing.md) is the standard; nothing is bumped, tagged or published by hand.
+
 1. Change, test, update `docs/STANDARD.md` when a rule changes, and `registry.json` when a part's files or
    dependencies change (a test fails when a file under `src/` is not listed).
-2. Bump `version` in `package.json` (the CLI stamps it into each app's `kit.json`) and in
-   `packages/create-escalay/package.json`, commit, tag `vX.Y.Z` (`-a -m`), push with the tag. Publish with
-   `pnpm publish -r` (it rewrites `workspace:^`).
-3. Apps take it with `diff` + `update` deliberately; nothing follows `main`.
+2. Open a pull request whose title is a Conventional Commit that reads well in release notes (CI checks it), and
+   squash-merge it.
+3. Merge the release pull request (`chore(main): release X.Y.Z`) to publish: it bumps `package.json` (the CLI
+   stamps that version into each app's `kit.json`) and `packages/create-escalay/package.json` together, and
+   `release.yml` publishes both to npm, then runs `scripts/release-smoke.sh`.
+4. `pnpm release:check` on `main` when something looks off. The trusted publishers, set once per package:
+   `npm trust github @escalay/kit --file release.yml --repo escalay/api-kit --env npm --allow-publish` and the
+   same for `create-escalay`.
+5. Apps take it with `diff` + `update` deliberately; nothing follows `main`.
 
 ## Rules
 
