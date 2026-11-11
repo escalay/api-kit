@@ -615,11 +615,31 @@ describe('the copy-in CLI', () => {
     }
   }, 120_000)
 
+  it('keeps root items out of the kit folder: list names them, add points at the shadcn CLI, adopt and doctor never see them', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    expect(cli(app, 'list').stdout).toContain('at the repo root: npx shadcn add escalay/api-kit/npm-release')
+    const refused = cli(app, 'add', 'npm-release')
+    expect([refused.status, refused.stderr]).toEqual([1, 'kit: "npm-release" goes to the repo root, not into src/kit: `npx shadcn add escalay/api-kit/npm-release`\n'])
+    expect(existsSync(join(app, 'src/kit'))).toBe(false)
+    // What the shadcn CLI leaves at the root is no part: nothing to adopt, and a kit beside it stays clean
+    const kitDir = join(import.meta.dirname, '..')
+    const registry = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8'))
+    for (const file of registry.items.find((item: { name: string }) => item.name === 'npm-release').files) {
+      const target = join(app, file.target.replace('~/', ''))
+      await mkdir(join(target, '..'), { recursive: true })
+      await writeFile(target, await readFile(join(kitDir, file.path), 'utf8'))
+    }
+    expect(cli(app, 'adopt').stderr).toContain('no parts in src/kit')
+    cli(app, 'add', 'pagination')
+    const clean = cli(app, 'doctor')
+    expect([clean.status, clean.stdout]).toEqual([0, `src/kit matches kit ${KIT_VERSION}: core, pagination\n`])
+  })
+
   it('lists every part in the shadcn registry, with every file it has and nothing that is missing', async () => {
     const kitDir = join(import.meta.dirname, '..')
     const registry = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8'))
     expect(registry).toMatchObject({ $schema: 'https://ui.shadcn.com/schema/registry.json', name: 'escalay', homepage: 'https://github.com/escalay/api-kit' })
-    type Item = { name: string; type: string; registryDependencies?: string[]; files: { path: string; type: string; target: string }[] }
+    type Item = { name: string; type: string; registryDependencies?: string[]; files: { path: string; type: string; target: string }[]; meta?: { root?: boolean } }
     const items: Item[] = registry.items
     const names = items.map((item) => item.name)
     const listed = new Set(items.flatMap((item) => item.files.map((file) => file.path)))
@@ -632,14 +652,67 @@ describe('the copy-in CLI', () => {
       expect(item.type, item.name).toBe('registry:item')
       for (const file of item.files) {
         expect(existsSync(join(kitDir, file.path)), file.path).toBe(true)
-        // Universal items: an explicit target under src/kit, the same place `kit add` writes
-        expect(file, file.path).toMatchObject({ type: 'registry:file', target: file.path.replace(/^src\//, '~/src/kit/') })
+        // Universal items: an explicit target under src/kit, the same place `kit add` writes; a root item's files go
+        // anywhere in the repo but there, and come from outside src/
+        if (!item.meta?.root) expect(file, file.path).toMatchObject({ type: 'registry:file', target: file.path.replace(/^src\//, '~/src/kit/') })
+        else {
+          expect(file, file.path).toMatchObject({ type: 'registry:file', target: expect.stringMatching(/^~\/(?!src\/kit\/)[\w.-]+(\/[\w.-]+)*$/) })
+          expect(file.path.startsWith('src/'), file.path).toBe(false)
+        }
       }
       // A part needs other parts by their GitHub address; a bare name is shadcn's own
       for (const needed of item.registryDependencies ?? []) expect(needed.startsWith('escalay/api-kit/') ? names.includes(needed.slice('escalay/api-kit/'.length)) : ['button', 'input'].includes(needed), `${item.name} → ${needed}`).toBe(true)
     }
+    expect(items.filter((item) => item.meta?.root).map((item) => item.name)).toEqual(['npm-release'])
     const block = items.find((item) => item.name === 'vector-search-ui')!
     expect(block.registryDependencies).toEqual(['button', 'input', 'escalay/api-kit/search-react'])
+  })
+})
+
+describe('the npm-release item', () => {
+  const kitDir = join(import.meta.dirname, '..')
+  const read = (path: string) => readFile(join(kitDir, path), 'utf8')
+
+  it('installs the workflow this repo releases with, the check, the standard and a blank release-please setup', async () => {
+    const registry = JSON.parse(await read('registry.json'))
+    const item = registry.items.find((entry: { name: string }) => entry.name === 'npm-release')
+    expect(Object.fromEntries(item.files.map((file: { path: string; target: string }) => [file.target, file.path]))).toEqual({
+      // One source: the file that releases this repo is the file other repos get
+      '~/.github/workflows/release.yml': '.github/workflows/release.yml',
+      '~/release-please-config.json': 'templates/npm-release/release-please-config.json',
+      '~/.release-please-manifest.json': 'templates/npm-release/release-please-manifest.json',
+      '~/scripts/release-check.mjs': 'scripts/release-check.mjs',
+      '~/docs/releasing.md': 'docs/releasing.md',
+    })
+    expect(item.dependencies ?? []).toEqual([])
+    expect(item.registryDependencies ?? []).toEqual([])
+  })
+
+  it('ships nothing that names this repo’s packages or its history', async () => {
+    const names = await Promise.all(['package.json', 'packages/create-escalay/package.json'].map(async (path) => JSON.parse(await read(path)).name))
+    for (const path of ['.github/workflows/release.yml', 'scripts/release-check.mjs', 'templates/npm-release/release-please-config.json']) {
+      const text = await read(path)
+      for (const name of [...names, 'api-kit', 'escalay']) expect(text.includes(name), `${path} names ${name}`).toBe(false)
+    }
+    expect(JSON.parse(await read('templates/npm-release/release-please-manifest.json'))).toEqual({ '.': '0.0.0' })
+  })
+
+  it('gives other repos the release notes headings this repo uses, without its bootstrap commit or extra files', async () => {
+    const [own, template] = await Promise.all(['release-please-config.json', 'templates/npm-release/release-please-config.json'].map(async (path) => JSON.parse(await read(path))))
+    expect(own.packages['.']['extra-files']).toEqual([{ type: 'json', path: 'packages/create-escalay/package.json', jsonpath: '$.version' }])
+    const { 'bootstrap-sha': bootstrap, packages, ...shared } = own
+    expect(bootstrap).toMatch(/^[0-9a-f]{40}$/)
+    expect(template).toEqual({ ...shared, packages: { '.': {} } })
+    expect(template['changelog-sections'].filter((section: { hidden?: boolean }) => !section.hidden)).toEqual([
+      { type: 'feat', section: 'New' },
+      { type: 'fix', section: 'Fixed' },
+      { type: 'perf', section: 'Faster' },
+      { type: 'docs', section: 'Documentation' },
+      { type: 'revert', section: 'Reverted' },
+    ])
+    // The manifest and every published package agree, or the release pull request would bump them apart
+    const manifest = JSON.parse(await read('.release-please-manifest.json'))
+    for (const path of ['package.json', 'packages/create-escalay/package.json']) expect(JSON.parse(await read(path)).version, path).toBe(manifest['.'])
   })
 })
 

@@ -6,7 +6,7 @@
  * `--web-dir` (relative to `--dir`, remembered in kit.json) puts the browser parts in their own folder, still
  * tracked by the one kit.json (as `@web/<file>`).
  *
- *   kit list                                  parts, what they need, which are installed
+ *   kit list                                  parts, what they need, which are installed; then the root items
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
  *   kit update [part…] [--dir src/kit] [--force]
@@ -32,8 +32,12 @@ const KIT = dirname(fileURLToPath(import.meta.url))
 const REPO = 'escalay/api-kit'
 const rangeOf = (dependency) => [dependency.slice(0, dependency.lastIndexOf('@')), dependency.slice(dependency.lastIndexOf('@') + 1)]
 /** registry.json is a shadcn registry; a part's requires are its dependencies on this repo, a dependency without a range is a peer. */
+const ITEMS = JSON.parse(readFileSync(join(KIT, 'registry.json'), 'utf8')).items
+/** Root items (`meta.root`) are repo setup the shadcn CLI installs at the repo root: not parts, so `add`, `adopt` and `doctor` never see them. */
+const ROOT_ITEMS = ITEMS.filter((item) => item.meta?.root)
+const shadcnAdd = (name) => `npx shadcn add ${REPO}/${name}`
 const REGISTRY = Object.fromEntries(
-  JSON.parse(readFileSync(join(KIT, 'registry.json'), 'utf8')).items.map((item) => [
+  ITEMS.filter((item) => !item.meta?.root).map((item) => [
     item.name,
     {
       description: item.description,
@@ -73,6 +77,7 @@ const lockPath = join(dir, 'kit.json')
 const withRequired = (wanted) => {
   const all = new Set()
   const visit = (name) => {
+    if (ROOT_ITEMS.some((item) => item.name === name)) fail(`"${name}" goes to the repo root, not into ${dirArg}: \`${shadcnAdd(name)}\``)
     if (!REGISTRY[name]) fail(`no module "${name}". Modules: ${Object.keys(REGISTRY).join(', ')}`)
     if (all.has(name)) return
     for (const required of REGISTRY[name].requires ?? []) visit(required)
@@ -291,6 +296,7 @@ const commands = {
       const needs = [...(module.requires ?? []), ...Object.keys(module.dependencies ?? {})]
       console.log(`${installed.has(name) ? '●' : '○'} ${name.padEnd(11)} ${module.description}${needs.length ? `\n  ${''.padEnd(11)} needs: ${needs.join(', ')}` : ''}`)
     }
+    for (const { name, description } of ROOT_ITEMS) console.log(`◇ ${name.padEnd(11)} ${description}\n  ${''.padEnd(11)} at the repo root: ${shadcnAdd(name)}`)
   },
 
   add: () => {

@@ -507,6 +507,42 @@
         "entry": true,
         "web": true
       }
+    },
+    {
+      "name": "npm-release",
+      "type": "registry:item",
+      "title": "npm release",
+      "description": "Releases of an npm package with no manual step: release-please keeps a release pull request, merging it publishes every public package from GitHub Actions with npm trusted publishing and provenance, waits until npm serves them and publishes the GitHub release; with a read-only release check and the standard that explains it. For any pnpm repo; its files go to the repo root",
+      "files": [
+        {
+          "path": ".github/workflows/release.yml",
+          "type": "registry:file",
+          "target": "~/.github/workflows/release.yml"
+        },
+        {
+          "path": "templates/npm-release/release-please-config.json",
+          "type": "registry:file",
+          "target": "~/release-please-config.json"
+        },
+        {
+          "path": "templates/npm-release/release-please-manifest.json",
+          "type": "registry:file",
+          "target": "~/.release-please-manifest.json"
+        },
+        {
+          "path": "scripts/release-check.mjs",
+          "type": "registry:file",
+          "target": "~/scripts/release-check.mjs"
+        },
+        {
+          "path": "docs/releasing.md",
+          "type": "registry:file",
+          "target": "~/docs/releasing.md"
+        }
+      ],
+      "meta": {
+        "root": true
+      }
     }
   ]
 }
