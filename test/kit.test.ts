@@ -720,14 +720,14 @@ describe('the skills', () => {
   it('each has a name, says when to use it, stays short and names the command that checks its rule', async () => {
     const dir = join(import.meta.dirname, '..', 'skills')
     const names = (await readdir(dir)).sort()
-    expect(names).toEqual(['api-kit-build', 'api-kit-feature', 'api-kit-review'])
+    expect(names).toEqual(['api-kit-build', 'api-kit-feature', 'api-kit-review', 'npm-release'])
     for (const name of names) {
       const text = await readFile(join(dir, name, 'SKILL.md'), 'utf8')
       const [, frontmatter = ''] = text.match(/^---\n([\s\S]*?)\n---\n/) ?? []
       expect(frontmatter, name).toContain(`name: ${name}\n`)
       expect(frontmatter, name).toMatch(/^description: Use when /m)
       expect(text.split('\n').length, name).toBeLessThanOrEqual(150)
-      expect(text, name).toMatch(/`pnpm test|`npx @escalay\/kit doctor`/)
+      expect(text, name).toMatch(/`pnpm test|`npx @escalay\/kit doctor`|^pnpm release:check/m)
       // Only commands the CLI has
       for (const [, command] of text.matchAll(/npx @escalay\/kit ([a-z]+)/g)) expect(['list', 'add', 'diff', 'update', 'doctor', 'adopt', 'init', 'feature', 'guide'], `${name}: ${command}`).toContain(command)
     }

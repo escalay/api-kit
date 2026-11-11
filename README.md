@@ -130,12 +130,14 @@ npx skills add escalay/api-kit
 | [`api-kit-build`](skills/api-kit-build/SKILL.md) | start a new API, move an app onto the kit, take a newer kit |
 | [`api-kit-feature`](skills/api-kit-feature/SKILL.md) | add a feature folder: schema, repo, routes, handlers, tools, tests |
 | [`api-kit-review`](skills/api-kit-review/SKILL.md) | check an API is agent-ready: the commands to run and what a failure means |
+| [`npm-release`](skills/npm-release/SKILL.md) | set up or run releases of any npm package from GitHub Actions, or find out why one failed |
 
 ## Releases
 
 Merging a pull request is the only manual step. Its title, a Conventional Commit, becomes a line of the release
 notes; merging the release pull request publishes `@escalay/kit` and `create-escalay` to npm from GitHub Actions,
 with provenance and no npm token. How it works, and how to set it up in another repo:
-[docs/releasing.md](docs/releasing.md). `pnpm release:check` says whether a release is ready.
+[docs/releasing.md](docs/releasing.md). `pnpm release:check` says whether a release is ready, and
+`npx shadcn add escalay/api-kit/npm-release` copies the setup into another repo.
 
 Working on the kit itself: [AGENTS.md](AGENTS.md). Licence: [MIT](LICENSE).
