@@ -1,0 +1,5 @@
+# Packages that ship prebuilt binaries as optional packages: nothing to build, so pnpm skips their scripts
+allowBuilds:
+  esbuild: false
+  workerd: false
+  sharp: false

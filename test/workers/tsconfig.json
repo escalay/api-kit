@@ -1,0 +1,6 @@
+{
+  "$comment": "The workerd test project: Workers types, with Node's for what nodejs_compat provides",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node"] },
+  "include": ["./**/*.ts", "../../src/**/*.ts"]
+}

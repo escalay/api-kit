@@ -1,0 +1,233 @@
+{
+  "$comment": "The modules an app copies with `kit add`. Files live in src/; `requires` pulls other modules in; versions are the ranges the kit is tested with. `web` modules run in the browser and go to the app's frontend (`--dir src/components/vector-search`); `cli.mjs registry` also builds them as shadcn items in r/.",
+  "modules": {
+    "core": {
+      "description": "createAgentApi: OpenAPI 3.1 + Scalar docs, HAL links, problem+json, API keys + Access, ETags and Cache-Control, Idempotency-Key and rate limits, discovery (api-catalog, Link headers, robots.txt, Markdown for agents), a key-value store type; an OAuth server plugs in from the `oauth` module",
+      "files": [
+        "core/api.ts",
+        "core/auth.ts",
+        "core/cache.ts",
+        "core/discovery.ts",
+        "core/guards.ts",
+        "core/hal.ts",
+        "core/kv.ts",
+        "core/problem.ts",
+        "core/README.md"
+      ],
+      "dependencies": {
+        "hono": "^4.13.14",
+        "@hono/zod-openapi": "^1.6.3",
+        "zod": "^4.6.7",
+        "jose": "^6.2.14",
+        "@scalar/hono-api-reference": "^0.12.17"
+      }
+    },
+    "db": {
+      "description": "The app's database through Drizzle: `openDb` (node:sqlite, Turso/libSQL, or any async Drizzle SQLite database), `migrate` (each feature's steps, recorded in `kit_migrations`), `testDb`; `dbGuardStore` (idempotency and rate limits shared by every instance)",
+      "files": [
+        "db/index.ts",
+        "db/guards.ts",
+        "db/README.md"
+      ],
+      "requires": [
+        "core"
+      ],
+      "dependencies": {
+        "drizzle-orm": "^0.45.4"
+      }
+    },
+    "oauth": {
+      "description": "The app as its own OAuth server: metadata, `/oauth/*`, agent registration (auth.md), ES256 tokens; `createOAuth`, `dbOAuthStore`, `memoryOAuthStore`, `generateOAuthKey`",
+      "files": [
+        "oauth/index.ts",
+        "oauth/schema.ts",
+        "oauth/store.ts",
+        "oauth/README.md"
+      ],
+      "requires": [
+        "core",
+        "db"
+      ]
+    },
+    "pagination": {
+      "description": "Cursor pages and sorting: limitQuery, cursorQuery, sortQuery, pageOf, pageSchema",
+      "files": [
+        "pagination/index.ts",
+        "pagination/README.md"
+      ],
+      "requires": [
+        "core"
+      ]
+    },
+    "guide": {
+      "description": "The agent guide from Markdown templates (llms.txt, agents/, skills/), its generated parts (endpoints, tools, playbooks, how to get unstuck) and the skills discovery index",
+      "files": [
+        "guide/guide.ts",
+        "guide/reference.ts",
+        "guide/README.md"
+      ],
+      "requires": [
+        "core"
+      ]
+    },
+    "mcp": {
+      "description": "An MCP server (2026-07-28) over the app's own routes: tools, resources, prompts, skills, and its Server Card",
+      "files": [
+        "mcp/index.ts",
+        "mcp/README.md"
+      ],
+      "requires": [
+        "core"
+      ],
+      "entry": true,
+      "dependencies": {
+        "@modelcontextprotocol/server": "^2.4.0"
+      }
+    },
+    "a2a": {
+      "description": "A2A 1.0 over the MCP tools: the Agent Card at /.well-known/agent-card.json and a JSON-RPC endpoint (SendMessage, GetTask, ListTasks, CancelTask) whose skills are tools",
+      "files": [
+        "a2a/index.ts",
+        "a2a/README.md"
+      ],
+      "requires": [
+        "mcp"
+      ],
+      "entry": true
+    },
+    "vectors": {
+      "description": "Gemini Embedding 2 through OpenRouter: look (image) and meaning (text) vectors, append-only ledgers that never pay twice, budgets and spend caps, nearest and standouts search (sharp, for pictures only)",
+      "files": [
+        "vectors/index.ts",
+        "vectors/README.md"
+      ],
+      "optionalDependencies": {
+        "sharp": "^0.34.5"
+      }
+    },
+    "vector-search": {
+      "description": "Search by words, by picture and by likeness over the vectors: three documented routes (rate-limited where they cost) and the MCP tools that call them",
+      "files": [
+        "vector-search/index.ts",
+        "vector-search/README.md"
+      ],
+      "requires": [
+        "vectors",
+        "mcp"
+      ],
+      "entry": true
+    },
+    "web": {
+      "description": "The front door: a public landing page at /, the browser app under /app behind the sign-in, old addresses redirected, and the paths auth must leave open",
+      "files": [
+        "web/index.ts",
+        "web/README.md"
+      ],
+      "requires": [
+        "core"
+      ],
+      "dependencies": {
+        "@hono/node-server": "^2.1.5"
+      }
+    },
+    "boards": {
+      "description": "The owner's collections of the app's items: boards with notes in SQLite, their routes (idempotent saves, where an item is saved, optional suggestions) and MCP tools",
+      "files": [
+        "boards/index.ts",
+        "boards/handlers.ts",
+        "boards/refs.ts",
+        "boards/repo.ts",
+        "boards/routes.ts",
+        "boards/schema.ts",
+        "boards/tools.ts",
+        "boards/README.md"
+      ],
+      "requires": [
+        "db",
+        "mcp"
+      ],
+      "entry": true
+    },
+    "testing": {
+      "description": "Checks for an app's tests: lintOpenApi, guideRoutes, guideGaps, toolRoutes",
+      "files": [
+        "testing/index.ts",
+        "testing/README.md"
+      ],
+      "requires": [
+        "guide"
+      ],
+      "entry": true
+    },
+    "search-client": {
+      "description": "Browser, no framework: a typed client for vector-search's routes, a controller for one search's state (debounced, cancelling), paste and drop of pictures",
+      "files": [
+        "browser/search-client.ts",
+        "browser/README.md"
+      ],
+      "entry": true,
+      "web": true
+    },
+    "search-react": {
+      "description": "Browser, React: useVectorSearch, usePictureInput, useSimilar over search-client; headless, each app draws its own UI",
+      "files": [
+        "browser/search-react.ts",
+        "browser/README.md"
+      ],
+      "requires": [
+        "search-client"
+      ],
+      "entry": true,
+      "web": true,
+      "peerDependencies": {
+        "react": ">=18"
+      }
+    },
+    "vector-search-ui": {
+      "description": "Browser, React + shadcn: an optional search block (field with a picture chip, look/meaning switch, results grid) over search-react",
+      "files": [
+        "browser/vector-search-block.tsx",
+        "browser/README.md"
+      ],
+      "requires": [
+        "search-react"
+      ],
+      "entry": true,
+      "web": true,
+      "peerDependencies": {
+        "react": ">=18"
+      },
+      "shadcn": {
+        "registryDependencies": [
+          "button",
+          "input"
+        ]
+      }
+    },
+    "boards-client": {
+      "description": "Browser, no framework: a typed client for the board routes",
+      "files": [
+        "browser/boards-client.ts",
+        "boards/refs.ts",
+        "browser/README.md"
+      ],
+      "entry": true,
+      "web": true
+    },
+    "boards-react": {
+      "description": "Browser, React: useBoards, useItemBoards over boards-client (headless)",
+      "files": [
+        "browser/boards-react.ts",
+        "browser/README.md"
+      ],
+      "requires": [
+        "boards-client"
+      ],
+      "entry": true,
+      "web": true,
+      "peerDependencies": {
+        "react": ">=18"
+      }
+    }
+  }
+}

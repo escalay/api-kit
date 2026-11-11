@@ -1,0 +1,9 @@
+// The Worker the kit's workerd test project runs in: the bindings an app on Cloudflare gets (D1 as DB)
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "api-kit-test",
+  "main": "worker.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [{ "binding": "DB", "database_name": "kit-test", "database_id": "00000000-0000-0000-0000-000000000000" }]
+}

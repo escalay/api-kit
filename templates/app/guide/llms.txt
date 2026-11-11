@@ -1,0 +1,11 @@
+# __title__
+
+> __title__: an agent-ready API. Send `Authorization: Bearer <key>` on every call; MCP clients connect to `/mcp`.
+
+## Endpoints
+
+{{api.endpoints}}
+
+## MCP tools
+
+{{mcp.tools}}

@@ -1,0 +1,6 @@
+allowBuilds:
+  esbuild: false
+  # Prebuilt libvips binaries come as optional packages; nothing to compile
+  sharp: false
+  # Prebuilt per-platform binaries come as optional packages, like esbuild
+  workerd: false

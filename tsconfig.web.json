@@ -1,0 +1,35 @@
+{
+  "$comment": "The browser modules (search client, React hooks, the shadcn block) as a React app compiles them; the shadcn imports resolve to the stand-ins in test/shadcn.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "types": [],
+    "paths": {
+      "@/components/ui/*": [
+        "./test/shadcn/*"
+      ],
+      "@/lib/utils": [
+        "./test/shadcn/utils.ts"
+      ]
+    },
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": [
+    "src/browser/*", "src/boards/refs.ts",
+    "test/shadcn/*",
+    "test/search-ui.test.tsx",
+    "test/boards-ui.test.tsx"
+  ]
+}
