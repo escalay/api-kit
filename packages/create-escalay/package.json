@@ -1,0 +1,25 @@
+{
+  "name": "create-escalay",
+  "version": "1.7.0",
+  "type": "module",
+  "description": "Start an agent-ready API from the Escalay kit: `npm create escalay my-api`.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/escalay/api-kit.git",
+    "directory": "packages/create-escalay"
+  },
+  "homepage": "https://github.com/escalay/api-kit#readme",
+  "bin": {
+    "create-escalay": "./index.mjs"
+  },
+  "files": [
+    "index.mjs"
+  ],
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "dependencies": {
+    "@escalay/kit": "workspace:^"
+  }
+}

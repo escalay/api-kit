@@ -1,3 +1,6 @@
+packages:
+  - .
+  - packages/*
 allowBuilds:
   esbuild: false
   # Prebuilt libvips binaries come as optional packages; nothing to compile

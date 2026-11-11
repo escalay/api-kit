@@ -545,8 +545,14 @@ describe('the copy-in CLI', () => {
     await rm(parent, { recursive: true, force: true })
     await mkdir(parent, { recursive: true })
     try {
-      const made = cli(parent, 'init', 'demo-api', '--title', 'Demo API')
+      // The way `npm create escalay demo-api` starts: create-escalay hands its arguments to `init`; flags may come first
+      const made = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'packages/create-escalay/index.mjs'), '--preset', 'api', '--yes', '--title', 'Demo API', 'demo-api'], { cwd: parent, encoding: 'utf8' })
       expect(made.status, made.stderr).toBe(0)
+      expect(existsSync(join(parent, 'api'))).toBe(false)
+      const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
+      expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
+      expect(existsSync(join(parent, 'box'))).toBe(false)
+      expect(cli(parent, 'init', 'box', '--preset', 'blog').stderr).toContain('--preset is one of api, selfhosted')
       expect(cli(parent, 'feature', 'reading-lists', '--app', 'demo-api').status).toBe(0)
       expect(cli(parent, 'feature', 'reading-lists', '--app', 'demo-api').stderr).toContain('already exists')
       expect(cli(parent, 'feature', 'Bad_Name', '--app', 'demo-api').stderr).toContain('plural kebab-case')

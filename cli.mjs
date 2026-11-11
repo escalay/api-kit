@@ -12,8 +12,9 @@
  *   kit update [module…] [--dir src/kit] [--force]
  *   kit doctor [--dir src/kit] [--adopt]      missing files, edited files, parts behind this kit; exits 1 with a fix per line
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
- *   kit init <dir> [--title "My API"] [--runtime both|cloudflare|node] [--bare]  a new app: features/, the kit in
- *                                             src/kit, tests; Node (server.ts, a container) and/or Workers (worker.ts, D1)
+ *   kit init <dir> [--preset api] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--yes]
+ *                                             a new app: features/, the kit in src/kit, tests; Node (server.ts, a
+ *                                             container) and/or Workers (worker.ts, D1). It never asks; --yes is accepted
  *   kit feature <plural-name> [--app .]       a new feature folder (schema, repo, routes, handlers, tools), listed
  *   kit guide [--from guide] [--out src/guide.gen.ts]  the guide folder as a module (GUIDE_FILES), for Workers
  *
@@ -190,6 +191,8 @@ const KIT_DEV = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8')).devD
 const WORKERS_DEV = Object.fromEntries(['wrangler', '@cloudflare/vitest-plugin', '@cloudflare/workers-types'].map((name) => [name, KIT_DEV[name]]))
 /** The runtimes an app can run on: `node` (server.ts, a container), `cloudflare` (worker.ts, D1), or `both`. */
 const RUNTIMES = ['both', 'cloudflare', 'node']
+/** The starting combinations: `api` is the kit's parts for an API with one example feature. */
+const PRESETS = ['api', 'selfhosted']
 const scriptsFor = (runtime) => {
   const node = { dev: 'tsx watch src/server.ts', start: 'tsx src/server.ts' }
   const workers = {
@@ -345,6 +348,9 @@ const commands = {
   init: () => {
     const [target] = names
     if (!target) fail('name the folder: init <dir>')
+    const preset = valueOf('--preset') ?? 'api'
+    if (preset === 'selfhosted') fail('the selfhosted preset arrives with escalay/selfhost-kit; use --preset api')
+    if (!PRESETS.includes(preset)) fail(`--preset is one of ${PRESETS.join(', ')}`)
     const root = resolve(process.cwd(), target)
     if (existsSync(root) && readdirSync(root).length) fail(`${target} is not empty`)
     const name = basename(root)
