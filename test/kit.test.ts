@@ -581,7 +581,8 @@ describe('the copy-in CLI', () => {
         expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
       }
       // Node and workerd: the generated tests, the guide module current, D1 brought up by migrations/, MCP on Workers
-      const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8' })
+      // Plain output: CI asks for colour, which would sit between the words matched below
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
       expect(tests.stdout).toMatch(/Tests\s+9 passed/)
 
