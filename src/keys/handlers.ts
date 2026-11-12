@@ -16,7 +16,8 @@ const NO_STORE = { 'cache-control': 'no-store' }
  */
 export const holderOf = (caller: Caller | undefined, fixedKeys: string[]) => {
   if (caller?.kind === 'key' && fixedKeys.includes(caller.name)) return caller.name
-  if (caller?.kind === 'person') return caller.email
+  // A member of a team may not; a person with no role (an app without a team) keeps today's rights
+  if (caller?.kind === 'person' && caller.role !== 'member') return caller.email
   throw new ProblemError('forbidden', { detail: 'Only a key set in the deployment (API_KEYS) or a signed-in person can make or revoke keys. Keys made through the API and OAuth tokens cannot: ask the owner.' })
 }
 
@@ -41,7 +42,7 @@ export const keyHandlers = (repo: KeysRepo, { path, mePath, fixedKeys, keyPrefix
     const fixed = caller.kind === 'key' && fixedKeys.includes(name)
     const stored = caller.kind === 'key' && !fixed ? await repo.named(name) : undefined
     return c.json(
-      { kind: caller.kind, name, keyId: stored?.id ?? null, canManageKeys: caller.kind === 'person' || fixed, _links: linksOf(originOf(c), { self: mePath, ...(stored ? { key: `${path}/${stored.id}` } : {}) }) },
+      { kind: caller.kind, name, keyId: stored?.id ?? null, canManageKeys: fixed || (caller.kind === 'person' && caller.role !== 'member'), role: caller.kind === 'person' ? (caller.role ?? null) : null, _links: linksOf(originOf(c), { self: mePath, ...(stored ? { key: `${path}/${stored.id}` } : {}) }) },
       200,
       NO_STORE,
     )
