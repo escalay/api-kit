@@ -7,6 +7,9 @@
  *   Any other agent follows `/auth.md` (agent registration, anonymous or by email): it registers at `/agent/identity`,
  *   asks for a claim at `/agent/identity/claim`, hands the owner a 6-digit code to type at `/oauth/claim`, and polls
  *   the token endpoint until the owner has; it gets a refresh token with its first access token.
+ *   A device or CLI without a browser uses the device authorization grant (RFC 8628): it asks
+ *   `/oauth/device_authorization` for a code like `BDKM-QXTW`, the owner types it at `/oauth/device`, and the device
+ *   polls the token endpoint.
  * Access tokens are ES256 JWTs (one hour) signed with the app's key and checked against a revocation list on every
  * request; refresh tokens (30 days, rotated on each use; a used one sent again revokes every refresh token of that
  * sign-in), codes and registrations live in the app's store as hashes. Nothing is granted before a person approves: an
@@ -37,6 +40,14 @@ const REGISTRATION_TTL = 24 * HOUR
 const CLAIM_TTL = 600
 const CLAIM_GRANT = 'urn:workos:agent-auth:grant-type:claim'
 const JWT_BEARER = 'urn:ietf:params:oauth:grant-type:jwt-bearer'
+const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
+const DEVICE_TTL = 600
+const DEVICE_INTERVAL = 5
+/** Wrong device codes a signed-in person may type in a window before the page refuses for the rest of it. */
+const DEVICE_TRIES = 5
+const DEVICE_TRIES_WINDOW = 600
+/** No vowels (no words), nothing that reads as another letter or a digit (RFC 8628 §6.1). */
+const USER_CODE_ALPHABET = 'BCDFGHJKLMNPQRSTVWXZ'
 
 export type OAuthConfig = {
   /** Shown on the consent page and in the metadata (`resource_name`). */
@@ -60,6 +71,12 @@ const token = (prefix: string) => `${prefix}_${randomBytes(24).toString('base64u
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
 const escape = (text: string) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`)
+const deviceUserCode = () => {
+  const letters = Array.from({ length: 8 }, () => USER_CODE_ALPHABET[randomInt(USER_CODE_ALPHABET.length)]).join('')
+  return `${letters.slice(0, 4)}-${letters.slice(4)}`
+}
+/** A typed code as stored: case, dashes and spaces don't matter. */
+const userCodeKey = (typed: string) => sha(typed.toUpperCase().replace(/[^A-Z]/g, ''))
 
 /** A fresh ES256 signing key as a private JWK JSON string, for the app's secrets. */
 export const generateOAuthKey = async () => {
@@ -149,7 +166,8 @@ export const createOAuth = (config: OAuthConfig) => {
     scopes_supported: [...SCOPES],
     response_types_supported: ['code'],
     response_modes_supported: ['query'],
-    grant_types_supported: ['authorization_code', 'refresh_token', JWT_BEARER, CLAIM_GRANT],
+    device_authorization_endpoint: `${origin}/oauth/device_authorization`,
+    grant_types_supported: ['authorization_code', 'refresh_token', DEVICE_GRANT, JWT_BEARER, CLAIM_GRANT],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none'],
     revocation_endpoint_auth_methods_supported: ['none'],
@@ -214,6 +232,17 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
    time: keep only the newest; sending a used one again revokes them all). Within a day of the claim, the assertion
    works too: \`grant_type=${JWT_BEARER}&assertion=…\`.
 
+## C. A device or CLI without a browser (RFC 8628)
+
+1. Register once: \`POST ${origin}/oauth/register\` with \`{"client_name": "…", "grant_types": ["${DEVICE_GRANT}"]}\`
+   (no redirect_uris needed). Keep the \`client_id\`.
+2. \`POST ${origin}/oauth/device_authorization\` with \`client_id=…&scope=read%20write\`. You get a \`device_code\`
+   (keep it to yourself), a \`user_code\` like \`BDKM-QXTW\`, the \`verification_uri\` and an \`interval\`.
+3. Show the owner the \`verification_uri\` and the \`user_code\` (or the \`verification_uri_complete\`). They sign
+   in, type it and approve.
+4. Poll \`POST ${origin}/oauth/token\` with \`grant_type=${DEVICE_GRANT}&device_code=…&client_id=…\` every
+   \`interval\` seconds. Success returns an access token and a \`refresh_token\`.
+
 ## Using the token
 
 \`Authorization: Bearer <access_token>\` on \`/api\` and \`/mcp\`. Scopes: \`read\` (everything you can GET) and \`write\`
@@ -222,7 +251,8 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
 | Error | Means |
 |---|---|
 | \`authorization_pending\` | the owner hasn't approved yet; keep polling at \`interval\` |
-| \`expired_token\` | the 10-minute code window passed; ask for a new claim |
+| \`slow_down\` | you polled faster than \`interval\`; wait the new \`interval\` (5 seconds more) from now on |
+| \`expired_token\` | the 10-minute code window passed; ask for a new claim or device code |
 | \`invalid_grant\` | the code, refresh token or assertion is used, expired or revoked; start again (a refresh token sent twice revokes its whole sign-in) |
 | \`access_denied\` | the owner said no |
 `
@@ -239,14 +269,18 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
 
     // RFC 7591: a public client registers itself; registering grants nothing until the owner approves a request
     app.post('/oauth/register', async (c) => {
-      const body = (await c.req.json().catch(() => ({}))) as { redirect_uris?: unknown; client_name?: unknown; token_endpoint_auth_method?: unknown }
+      const body = (await c.req.json().catch(() => ({}))) as { redirect_uris?: unknown; client_name?: unknown; grant_types?: unknown; token_endpoint_auth_method?: unknown }
       const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris.filter((uri): uri is string => typeof uri === 'string') : []
-      if (!uris.length || !uris.every(redirectAllowed)) return oauthError(c, 400, 'invalid_redirect_uri', 'Send redirect_uris: https URLs, or http on localhost for apps on this machine.')
+      // A device client has no browser to come back to: it may register without redirect_uris
+      const device = Array.isArray(body.grant_types) && body.grant_types.includes(DEVICE_GRANT)
+      if (uris.length ? !uris.every(redirectAllowed) : !device)
+        return oauthError(c, 400, 'invalid_redirect_uri', `Send redirect_uris: https URLs, or http on localhost for apps on this machine. A device without a browser sends grant_types: ["${DEVICE_GRANT}"] instead.`)
       const name = typeof body.client_name === 'string' && body.client_name.trim() ? body.client_name.trim().slice(0, 80) : 'An unnamed client'
       const clientId = token('client')
       const issuedAt = now()
       await store.put('client', clientId, { name, redirectUris: uris }, issuedAt + CLIENT_TTL)
-      return c.json({ client_id: clientId, client_id_issued_at: issuedAt, client_name: name, redirect_uris: uris, grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' }, 201, { 'cache-control': 'no-store' })
+      const grantTypes = [...(uris.length ? ['authorization_code'] : []), 'refresh_token', ...(device ? [DEVICE_GRANT] : [])]
+      return c.json({ client_id: clientId, client_id_issued_at: issuedAt, client_name: name, redirect_uris: uris, grant_types: grantTypes, response_types: uris.length ? ['code'] : [], token_endpoint_auth_method: 'none' }, 201, { 'cache-control': 'no-store' })
     })
 
     const authorizeParams = async (c: Context, params: Record<string, string>) => {
@@ -376,6 +410,89 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
       return c.html(page('Approved', `<h1>Approved</h1><p>${escape(String(registration.name))} can now use ${escape(config.name)}. You can close this page.</p>`))
     })
 
+    // RFC 8628: a device without a browser gets a code for the owner to type, then polls the token endpoint
+    app.post('/oauth/device_authorization', async (c) => {
+      const body = await bodyOf(c)
+      const client = body.client_id ? await store.get('client', body.client_id) : null
+      if (!client) return oauthError(c, 401, 'invalid_client', 'This client is not registered here (or its registration expired). Register at /oauth/register first.')
+      const scopes = (body.scope || SCOPES.join(' ')).split(' ').filter((scope) => (SCOPES as readonly string[]).includes(scope))
+      if (!scopes.length) return oauthError(c, 400, 'invalid_scope', `Ask for any of: ${SCOPES.join(', ')}.`)
+      const origin = originOf(c)
+      const deviceCode = token('dc')
+      let userCode = deviceUserCode()
+      while (await store.get('device-user', userCodeKey(userCode))) userCode = deviceUserCode()
+      const expiresAt = now() + DEVICE_TTL
+      // Kept a window past its expiry, so a late poll hears expired_token rather than an unknown code
+      await store.put('device', sha(deviceCode), { client: body.client_id!, name: String(client.name), scopes, status: 'pending', expiresAt, interval: DEVICE_INTERVAL, polledAt: 0 }, expiresAt + DEVICE_TTL)
+      await store.put('device-user', userCodeKey(userCode), { device: sha(deviceCode) }, expiresAt)
+      return c.json(
+        { device_code: deviceCode, user_code: userCode, verification_uri: `${origin}/oauth/device`, verification_uri_complete: `${origin}/oauth/device?user_code=${userCode}`, expires_in: DEVICE_TTL, interval: DEVICE_INTERVAL },
+        200,
+        { 'cache-control': 'no-store' },
+      )
+    })
+
+    const deviceForm = (typed: string, note: string) => page('Connect a device', `<h1>Connect a device</h1><p>${note}</p>
+<form method="post" action="/oauth/device"><input name="user_code" value="${escape(typed)}" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="9" required aria-label="Code" style="width:14ch"><button>Continue</button></form>`)
+
+    /** The signed-in person allowed to approve, or the page that says why not. */
+    const deviceApprover = async (c: Context) => {
+      const owner = await config.owner(c)
+      if (!owner) return { refused: c.html(page('Sign in first', '<h1>Sign in first</h1><p>Open this page in the browser where you are signed in to this site, then type the code.</p>'), 401) }
+      if (config.owners?.length && !config.owners.some((one) => one.toLowerCase() === owner.toLowerCase())) return { refused: c.html(page('Not allowed', '<h1>Not allowed</h1><p>Only the owner of this service can connect a device.</p>'), 403) }
+      return { owner }
+    }
+
+    /** The waiting device a typed code names; a miss counts against the person typing, 5 in 10 minutes. */
+    const deviceFor = async (c: Context, owner: string, typed: string) => {
+      const triesKey = sha(owner.toLowerCase())
+      const tries = await store.get('device-tries', triesKey)
+      if (tries && Number(tries.count) >= DEVICE_TRIES) return { refused: c.html(page('Too many tries', '<h1>Too many tries</h1><p>Wait ten minutes, then type the code again.</p>'), 429) }
+      const entry = await store.get('device-user', userCodeKey(typed))
+      const record = entry ? await store.get('device', String(entry.device)) : null
+      if (!entry || !record || record.status !== 'pending' || now() >= Number(record.expiresAt)) {
+        const until = Number(tries?.until ?? now() + DEVICE_TRIES_WINDOW)
+        await store.put('device-tries', triesKey, { count: Number(tries?.count ?? 0) + 1, until }, until)
+        return { refused: c.html(deviceForm(typed, 'That code doesn’t match a device waiting here. Check it, or ask the device for a new one.'), 400) }
+      }
+      return { record, deviceKey: String(entry.device) }
+    }
+
+    const deviceConsent = (record: Record<string, unknown>, typed: string, owner: string) => {
+      const what = (record.scopes as string[]).includes('write') ? 'read everything and make changes' : 'read everything'
+      const code = typed.toUpperCase().replace(/[^A-Z]/g, '')
+      return page(`Allow ${record.name}?`, `<h1>Allow <strong>${escape(String(record.name))}</strong> to use ${escape(config.name)}?</h1>
+<p>It will be able to ${what} as you (${escape(owner)}), until you revoke it. Allow it only if the device in front of you shows <code>${code.slice(0, 4)}-${code.slice(4)}</code>.</p>
+<form method="post" action="/oauth/device"><input type="hidden" name="user_code" value="${code}"><button name="decision" value="allow">Allow</button><button class="quiet" name="decision" value="deny">Deny</button></form>`)
+    }
+
+    // The code page: behind the single sign-on, like the consent page; ?user_code= (verification_uri_complete) fills it in
+    app.get('/oauth/device', async (c) => {
+      const approver = await deviceApprover(c)
+      if ('refused' in approver) return approver.refused
+      const typed = c.req.query('user_code') ?? ''
+      if (!typed) return c.html(deviceForm('', `Type the code your device or agent shows to let it use ${escape(config.name)}.`))
+      const found = await deviceFor(c, approver.owner, typed)
+      if ('refused' in found) return found.refused
+      return c.html(deviceConsent(found.record, typed, approver.owner))
+    })
+
+    app.post('/oauth/device', async (c) => {
+      const site = c.req.header('sec-fetch-site')
+      if (site && site !== 'same-origin') return c.html(page('Not allowed', '<h1>Not allowed</h1><p>Approve from the page this site showed you, signed in.</p>'), 403)
+      const approver = await deviceApprover(c)
+      if ('refused' in approver) return approver.refused
+      const body = await bodyOf(c)
+      const found = await deviceFor(c, approver.owner, body.user_code ?? '')
+      if ('refused' in found) return found.refused
+      if (body.decision !== 'allow' && body.decision !== 'deny') return c.html(deviceConsent(found.record, body.user_code ?? '', approver.owner))
+      // Single use: the typed code is gone either way, and the device's code goes when it collects the answer
+      await store.delete('device-user', userCodeKey(body.user_code ?? ''))
+      await store.put('device', found.deviceKey, { ...found.record, status: body.decision === 'allow' ? 'approved' : 'denied', owner: approver.owner }, Number(found.record.expiresAt) + DEVICE_TTL)
+      if (body.decision === 'deny') return c.html(page('Denied', `<h1>Denied</h1><p>${escape(String(found.record.name))} gets nothing. You can close this page.</p>`))
+      return c.html(page('Approved', `<h1>Approved</h1><p>${escape(String(found.record.name))} can now use ${escape(config.name)}; it picks up its token within seconds. You can close this page.</p>`))
+    })
+
     app.post('/oauth/token', async (c) => {
       const body = await bodyOf(c)
       const origin = originOf(c)
@@ -417,6 +534,32 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
           const assertion = await sign({ sub: held.registration, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued), identity_assertion: assertion, assertion_expires: new Date((now() + REGISTRATION_TTL) * 1000).toISOString() }, 200, { 'cache-control': 'no-store' })
         }
+        case DEVICE_GRANT: {
+          const key = sha(body.device_code ?? '')
+          const record = body.device_code ? await store.get('device', key) : null
+          if (!record || record.client !== body.client_id) return oauthError(c, 400, 'invalid_grant', 'This device_code is unknown or belongs to another client_id: start again at /oauth/device_authorization.')
+          const keepUntil = Number(record.expiresAt) + DEVICE_TTL
+          if (now() >= Number(record.expiresAt)) {
+            await store.delete('device', key)
+            return oauthError(c, 400, 'expired_token', 'The code expired before the owner approved it: start again at /oauth/device_authorization.')
+          }
+          if (record.status === 'denied') {
+            await store.delete('device', key)
+            return oauthError(c, 400, 'access_denied', 'The owner said no.')
+          }
+          if (record.status === 'approved') {
+            await store.delete('device', key)
+            const issued = { client: String(record.client), name: String(record.name), owner: String(record.owner), scopes: record.scopes as string[] }
+            return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
+          }
+          const interval = Number(record.interval)
+          if (now() - Number(record.polledAt) < interval) {
+            await store.put('device', key, { ...record, interval: interval + 5, polledAt: now() }, keepUntil)
+            return oauthError(c, 400, 'slow_down', `Polled sooner than ${interval} seconds after the last poll: wait ${interval + 5} seconds between polls from now on.`, { interval: interval + 5 })
+          }
+          await store.put('device', key, { ...record, polledAt: now() }, keepUntil)
+          return oauthError(c, 400, 'authorization_pending', 'The owner hasn’t approved the code yet: poll again after `interval` seconds.')
+        }
         case JWT_BEARER: {
           const { publicKey } = await ready
           const { payload } = await jwtVerify(body.assertion ?? '', publicKey, { issuer: origin, algorithms: ['ES256'] }).catch(() => ({ payload: null }))
@@ -426,7 +569,7 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
           return c.json(await issue(origin, { client: String(payload!.sub), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES] }), 200, { 'cache-control': 'no-store' })
         }
         default:
-          return oauthError(c, 400, 'unsupported_grant_type', `grant_type must be one of: authorization_code, refresh_token, ${JWT_BEARER}, ${CLAIM_GRANT}.`)
+          return oauthError(c, 400, 'unsupported_grant_type', `grant_type must be one of: authorization_code, refresh_token, ${DEVICE_GRANT}, ${JWT_BEARER}, ${CLAIM_GRANT}.`)
       }
     })
 

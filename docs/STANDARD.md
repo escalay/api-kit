@@ -135,14 +135,18 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 - **Agents that get their own token (optional, `oauth.ts`):** the app is its own OAuth server. MCP clients follow the
   401's `resource_metadata` to `/.well-known/oauth-protected-resource[/mcp]`, register (RFC 7591, public clients), and
   send the owner to `/oauth/authorize` (code + PKCE S256); other agents follow `/auth.md` (anonymous or by email),
-  and the owner types the agent's 6-digit code at `/oauth/claim`. Both approval pages sit behind Access and check the
+  and the owner types the agent's 6-digit code at `/oauth/claim`; a CLI or device without a browser uses the device
+  authorization grant (RFC 8628: `POST /oauth/device_authorization`, a `XXXX-XXXX` code with no vowels for the owner
+  to type at `/oauth/device`, 10 minutes, single use, hashes only, 5 wrong codes per person per 10 minutes, then it
+  polls the token endpoint and hears `authorization_pending`, `slow_down`, `expired_token` or `access_denied`). The
+  approval pages sit behind Access and check the
   signed-in person again; **nothing is granted before a person approves** (an unclaimed registration has no scopes).
   Tokens: ES256 JWTs for an hour (`OAUTH_SIGNING_KEY`, a private JWK in your secret store), checked against a revocation list
   on every request. Refresh tokens (30 days, MCP clients and claimed agents alike) rotate on each use and are kept only as
   hashes; a used one sent again revokes every refresh token of that sign-in, and so does revoking any of them. Scopes: `read` for safe methods, `write` for the rest; the relay endpoints (`/mcp`, `/a2a`,
   `auth.relay`) need only `read`, since each call they make reaches a route that checks its own scope. In Access, only
-  `/oauth/authorize` and `/oauth/claim` stay gated; `/oauth/register|token|revoke`, `/agent/identity*`, `/auth.md` and
-  `/.well-known/*` bypass it.
+  `/oauth/authorize`, `/oauth/claim` and `/oauth/device` stay gated; `/oauth/register|token|revoke|device_authorization`,
+  `/agent/identity*`, `/auth.md` and `/.well-known/*` bypass it.
 
 ## 8. Caching
 
