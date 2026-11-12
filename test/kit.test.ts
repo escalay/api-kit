@@ -955,6 +955,28 @@ describe('people through Cloudflare Access', () => {
     return app
   }
 
+  it('takes keys the service stores itself beside the ones it was started with', async () => {
+    const stored = mintApiKey('st')
+    const asked: string[] = []
+    const app = createAgentApi({
+      title: 'Sample',
+      version: '1.0.0',
+      description: 'A sample catalog.',
+      tags: [],
+      auth: { realm: 'sample', keys: parseApiKeys(`tester:${hash}`), storedKeys: async (h) => (asked.push(h), h === stored.hash ? 'made-by-api' : undefined) },
+    })
+    app.get('/api/v1/me', (c) => c.json(c.get('caller' as never)))
+    const me = (key: string) => app.request('/api/v1/me', { headers: { authorization: `Bearer ${key}` } })
+    expect(await (await me(stored.key)).json()).toEqual({ kind: 'key', name: 'made-by-api' })
+    expect(await (await me(key)).json()).toEqual({ kind: 'key', name: 'tester' })
+    expect((await me('st_revoked')).status).toBe(401)
+    // A key from the start list is never looked up, nor is anything shaped like a token
+    asked.length = 0
+    await me(key)
+    await me('a.b.c')
+    expect(asked).toEqual([])
+  })
+
   it('lets a browser in with the Access cookie, the same token as the header', async () => {
     const app = people()
     expect(await (await app.request('/api/v1/me', { headers: { cookie: 'CF_Authorization=good' } })).json()).toEqual({ kind: 'person', email: 'me@example.com' })
