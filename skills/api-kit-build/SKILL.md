@@ -6,12 +6,13 @@ description: Use when starting a new HTTP API that agents should use without hel
 # Build an API on the kit
 
 The kit (`escalay/api-kit`) is a set of **parts** an app copies in and owns: `core`, `db`, `oauth`, `guide`, `mcp`,
-`testing`, and more (`npx @escalay/kit list`). A **preset** is a starting combination; `api` is the only one today.
+`testing`, and more (`npx @escalay/kit list`). A **preset** is a starting combination: `api`, or `app` for an API with a browser app beside it.
 Each part's rules travel with it in `src/kit/<part>/README.md`; the full standard is the kit's `docs/STANDARD.md`.
 
 ## A new API
 
-1. `npm create escalay my-api` (add `-- --runtime node` or `cloudflare`; the default is both).
+1. `npm create escalay my-api` (add `-- --runtime node` or `cloudflare`; the default is both). For a tool people
+   also open in a browser: `-- --preset app` (Cloudflare only; `web/` served under `/app` by the same Worker).
    Done when `cd my-api && pnpm install && pnpm test` passes.
 2. Read `AGENTS.md` in the new app, then `src/kit/core/README.md`, `db`, `mcp` and `testing`.
 3. `pnpm dev`, then open `/docs`, `/llms.txt` and `/mcp`. The example `notes` feature shows the shape.
