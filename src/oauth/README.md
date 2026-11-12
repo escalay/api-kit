@@ -25,5 +25,8 @@ const app = createAgentApi({ …, oauth })                   // mounts /oauth/*,
 
 - The signing key lives in the app's secrets, never in the repo; rotating it signs everyone out.
 - `owner` decides who may approve: behind Cloudflare Access, `accessOwner(access)` (the signed-in email).
+- Refresh tokens last 30 days and rotate on each use; MCP clients and claimed agents both get one. Only their hashes
+  are kept. A used token sent again revokes every refresh token of that sign-in (its family), as does revoking any
+  one of them; access tokens already out run to their hour.
 - Keep the OAuth paths open (`OAUTH_OPEN_PATHS`); `createAgentApi` does it when `oauth` is set, private mode included.
 - Standard: `docs/STANDARD.md` §7.

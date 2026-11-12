@@ -146,6 +146,52 @@ describe('OAuth for agents', () => {
     expect(again.access_token).toBeTruthy()
   })
 
+  it('gives a claimed agent a refresh token that rotates, and revokes the sign-in when a used one comes back', async () => {
+    const { app, oauth } = await sampleApi()
+    const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+    const attemptToken = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
+    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attemptToken, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    const granted = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))).json()
+    expect(granted.refresh_token).toMatch(/^rt_/)
+
+    const refresh = (token: string) => app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: token }))
+    const first = await (await refresh(granted.refresh_token)).json()
+    expect(first).toMatchObject({ token_type: 'Bearer', scope: 'read write' })
+    expect(first.refresh_token).not.toBe(granted.refresh_token)
+    expect((await app.request('/api/v1/things', { headers: { authorization: `Bearer ${first.access_token}` } })).status).toBe(200)
+    const second = await (await refresh(first.refresh_token)).json()
+    expect(second.refresh_token).toBeTruthy()
+
+    // A used token sent again (stolen, or a retry): refused, and so is the newest one of the same sign-in
+    const replay = await (await refresh(first.refresh_token)).json()
+    expect(replay).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+    expect((await (await refresh(second.refresh_token)).json()).error).toBe('invalid_grant')
+
+    // Another sign-in of the same agent is untouched by that, and the owner's kill switch ends it too
+    const other = await (await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: granted.identity_assertion }))).json()
+    expect(other.access_token).toBeTruthy()
+    const registration2 = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER }))).json()
+    const attempt2 = new URL(registration2.claim.verification_uri).searchParams.get('claim_attempt_token')!
+    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attempt2, user_code: registration2.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    const granted2 = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration2.claim_token }))).json()
+    await oauth.revokeClient(registration2.registration_id)
+    expect((await refresh(granted2.refresh_token)).status).toBe(400)
+  })
+
+  it('revokes the whole sign-in when a refresh token is revoked, and still rotates a token stored before families', async () => {
+    const store = memoryOAuthStore()
+    const oauth = createOAuth({ name: 'Sample', signingKey: await generateOAuthKey(), store, owner: async () => null })
+    const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys('') }, oauth })
+    const legacy = 'rt_from-an-older-kit'
+    await store.put('refresh', createHash('sha256').update(legacy).digest('hex'), { client: 'c1', name: 'Old', owner: OWNER, scopes: ['read'] }, Math.floor(Date.now() / 1000) + 3600)
+    const rotated = await (await app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: legacy }))).json()
+    expect(rotated).toMatchObject({ scope: 'read', refresh_token: expect.stringMatching(/^rt_/) })
+    // Revoking any token of the sign-in, even a used one, ends its newest
+    expect((await app.request('/oauth/revoke', form({ token: legacy }))).status).toBe(200)
+    const next = await (await app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: rotated.refresh_token }))).json()
+    expect(next.error).toBe('invalid_grant')
+  })
+
   it('lets the owner revoke an agent outright', async () => {
     const { app, oauth } = await sampleApi()
     const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER }))).json()

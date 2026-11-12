@@ -6,10 +6,11 @@
  *   and refresh with rotating refresh tokens.
  *   Any other agent follows `/auth.md` (agent registration, anonymous or by email): it registers at `/agent/identity`,
  *   asks for a claim at `/agent/identity/claim`, hands the owner a 6-digit code to type at `/oauth/claim`, and polls
- *   the token endpoint until the owner has.
+ *   the token endpoint until the owner has; it gets a refresh token with its first access token.
  * Access tokens are ES256 JWTs (one hour) signed with the app's key and checked against a revocation list on every
- * request; refresh tokens, codes and registrations live in the app's store. Nothing is granted before a person
- * approves: an unclaimed registration can't get a token.
+ * request; refresh tokens (30 days, rotated on each use; a used one sent again revokes every refresh token of that
+ * sign-in), codes and registrations live in the app's store as hashes. Nothing is granted before a person approves: an
+ * unclaimed registration can't get a token.
  *
  * @example
  * const oauth = createOAuth({ name: 'Cookbook', signingKey: env.OAUTH_SIGNING_KEY, store, owner: (c) => ownerOf(c) })
@@ -52,6 +53,7 @@ export type OAuthConfig = {
 }
 
 export type TokenCaller = { kind: 'agent'; name: string; scopes: string[]; owner: string }
+type Grant = { client: string; name: string; owner: string; scopes: string[] }
 
 const now = () => Math.floor(Date.now() / 1000)
 const token = (prefix: string) => `${prefix}_${randomBytes(24).toString('base64url')}`
@@ -116,9 +118,10 @@ export const createOAuth = (config: OAuthConfig) => {
     return { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL, scope: grant.scopes.join(' ') }
   }
 
-  const refreshFor = async (grant: { client: string; name: string; owner: string; scopes: string[] }) => {
+  /** A new refresh token in a family: every token rotated from one sign-in shares it, so a replay can revoke them all. */
+  const refreshFor = async (grant: Grant, family = randomBytes(12).toString('base64url')) => {
     const refresh = token('rt')
-    await store.put('refresh', sha(refresh), grant, now() + REFRESH_TTL)
+    await store.put('refresh', sha(refresh), { ...grant, family, used: false }, now() + REFRESH_TTL)
     return refresh
   }
 
@@ -206,8 +209,10 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
    Only ${config.owners?.length ? 'the owner' : 'a person who can sign in to this site'} can complete it.
 3. Give the owner the \`verification_uri\` and the 6-digit \`user_code\` in one message. They sign in and type the code.
 4. Poll \`POST ${origin}/oauth/token\` with \`grant_type=${CLAIM_GRANT}&claim_token=…\` every \`interval\` seconds
-   (\`authorization_pending\` until they do). Success returns an access token and an \`identity_assertion\`.
-5. When the access token expires, exchange the assertion: \`grant_type=${JWT_BEARER}&assertion=…\`.
+   (\`authorization_pending\` until they do). Success returns an access token, a \`refresh_token\` and an \`identity_assertion\`.
+5. When the access token expires, refresh it: \`grant_type=refresh_token&refresh_token=…\` (30 days, a new one each
+   time: keep only the newest; sending a used one again revokes them all). Within a day of the claim, the assertion
+   works too: \`grant_type=${JWT_BEARER}&assertion=…\`.
 
 ## Using the token
 
@@ -218,7 +223,7 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
 |---|---|
 | \`authorization_pending\` | the owner hasn't approved yet; keep polling at \`interval\` |
 | \`expired_token\` | the 10-minute code window passed; ask for a new claim |
-| \`invalid_grant\` | the code, refresh token or assertion is used, expired or revoked; start again |
+| \`invalid_grant\` | the code, refresh token or assertion is used, expired or revoked; start again (a refresh token sent twice revokes its whole sign-in) |
 | \`access_denied\` | the owner said no |
 `
 
@@ -386,11 +391,20 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
         }
         case 'refresh_token': {
-          const held = body.refresh_token ? await store.get('refresh', sha(body.refresh_token)) : null
-          if (!held || (await store.get('revoked-client', String(held.client)))) return oauthError(c, 400, 'invalid_grant', 'This refresh token is used, expired or revoked: authorize again.')
-          await store.delete('refresh', sha(body.refresh_token!))
-          const issued = held as { client: string; name: string; owner: string; scopes: string[] }
-          return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
+          const key = sha(body.refresh_token ?? '')
+          const held = body.refresh_token ? await store.get('refresh', key) : null
+          if (!held) return oauthError(c, 400, 'invalid_grant', 'This refresh token is expired, revoked or unknown: authorize again.')
+          // Rows from before families carry none: the token's own hash starts one
+          const family = String(held.family ?? key)
+          if (held.used) {
+            await store.put('revoked-family', family, {}, now() + REFRESH_TTL)
+            return oauthError(c, 400, 'invalid_grant', 'This refresh token was already used, so every refresh token from this sign-in is revoked: authorize again.')
+          }
+          if ((await store.get('revoked-family', family)) || (await store.get('revoked-client', String(held.client)))) return oauthError(c, 400, 'invalid_grant', 'This refresh token is revoked: authorize again.')
+          // Kept as used, not deleted, so a replay is recognised for as long as the newest token of its family lives
+          await store.put('refresh', key, { ...held, used: true }, now() + REFRESH_TTL)
+          const issued = { client: String(held.client), name: String(held.name), owner: String(held.owner), scopes: held.scopes as string[] }
+          return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued, family) }, 200, { 'cache-control': 'no-store' })
         }
         case CLAIM_GRANT: {
           const held = body.claim_token ? await store.get('claim-token', sha(body.claim_token)) : null
@@ -401,7 +415,7 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
           await store.delete('claim-token', sha(body.claim_token!))
           const issued = { client: String(held.registration), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES] }
           const assertion = await sign({ sub: held.registration, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
-          return c.json({ ...(await issue(origin, issued)), identity_assertion: assertion, assertion_expires: new Date((now() + REGISTRATION_TTL) * 1000).toISOString() }, 200, { 'cache-control': 'no-store' })
+          return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued), identity_assertion: assertion, assertion_expires: new Date((now() + REGISTRATION_TTL) * 1000).toISOString() }, 200, { 'cache-control': 'no-store' })
         }
         case JWT_BEARER: {
           const { publicKey } = await ready
@@ -421,7 +435,10 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
       const body = await bodyOf(c)
       const value = body.token ?? ''
       const refresh = await store.get('refresh', sha(value))
-      if (refresh) await store.delete('refresh', sha(value))
+      if (refresh) {
+        await store.put('revoked-family', String(refresh.family ?? sha(value)), {}, now() + REFRESH_TTL)
+        await store.delete('refresh', sha(value))
+      }
       const { publicKey } = await ready
       const { payload } = await jwtVerify(value, publicKey, { issuer: originOf(c), algorithms: ['ES256'] }).catch(() => ({ payload: null }))
       if (typeof payload?.jti === 'string') await store.delete('access', payload.jti)
