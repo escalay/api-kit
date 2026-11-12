@@ -8,21 +8,24 @@ const name = z
   .regex(/^[a-z0-9][a-z0-9-]{0,39}$/)
   .openapi({ description: 'Who or what holds the key, in lowercase letters, digits and hyphens: one key per app, machine or person.', example: 'billing-app' })
 
-export const KeySchema = z
+/** keySchemaOf is the `Key` resource, its examples starting the way this app's keys do. */
+export const keySchemaOf = (keyPrefix = 'ak') =>
+  z
   .object({
     id: z.string().openapi({ example: 'key_0mh2k1x9zabcdefghjk' }),
     name: z.string(),
-    start: z.string().openapi({ description: 'The key’s first characters, to tell keys apart.', example: 'ak_Xk3p' }),
+    start: z.string().openapi({ description: 'The key’s first characters, to tell keys apart.', example: `${keyPrefix}_Xk3p` }),
     createdAt: z.string(),
     createdBy: z.string().openapi({ description: 'The key or person that made it.' }),
     lastUsedAt: z.string().nullable().openapi({ description: 'When it was last used, to the hour. Null: never.' }),
     _links: LinksSchema,
   })
-  .openapi('Key', { description: 'A key that opens this API.' })
+  .openapi('Key', { description: 'A key that opens this API. Every key sees and changes everything any key can.' })
 
-export const keyRoutes = ({ path, mePath, tag }: { path: string; mePath: string; tag: string }) => {
+export const keyRoutes = ({ path, mePath, tag, keyPrefix = 'ak' }: { path: string; mePath: string; tag: string; keyPrefix?: string }) => {
+  const KeySchema = keySchemaOf(keyPrefix)
   const NewKeySchema = KeySchema.extend({
-    key: z.string().openapi({ description: 'The key itself, shown only in this answer: only its hash is kept. Send it as `Authorization: Bearer <key>`.', example: 'ak_Xk3p…' }),
+    key: z.string().openapi({ description: 'The key itself, shown only in this answer: only its hash is kept. Send it as `Authorization: Bearer <key>`.', example: `${keyPrefix}_Xk3p…` }),
   }).openapi('NewKey', { description: 'A key just made, with the key itself, shown this once.' })
   const KeyListSchema = z
     .object({
@@ -78,7 +81,7 @@ export const keyRoutes = ({ path, mePath, tag }: { path: string; mePath: string;
       operationId: 'createKey',
       tags: [tag],
       summary: 'Make an API key',
-      description: 'Makes a key for one app, machine or person, and returns it once. Give each holder its own and revoke it when they are done. Only a key set in the deployment (`API_KEYS`) or a signed-in person can make keys: a key made here cannot make another, and neither can an OAuth token.',
+      description: 'Makes a key for one app, machine or person, and returns it once. Every key sees and changes everything any key can, so give each holder its own and revoke it when they are done. Only a key set in the deployment (`API_KEYS`) or a signed-in person can make keys: a key made here cannot make another, and neither can an OAuth token.',
       request: { body: { required: true, content: { 'application/json': { schema: KeyInputSchema } } } },
       responses: { 201: { content: { [HAL_JSON]: { schema: NewKeySchema } }, description: 'The key, shown this once.' }, ...problemResponses(400, 401, 403, 409, 422) },
     }),
