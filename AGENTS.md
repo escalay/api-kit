@@ -37,6 +37,7 @@ what `feature` generates): `schema.ts` (Drizzle tables + migration steps) · `re
 | `src/testing/index.ts` | `lintOpenApi`, `guideRoutes`, `guideGaps`, `toolRoutes`, `toolsRun` |
 | `src/vectors/index.ts` | Gemini Embedding 2 via OpenRouter: `createEmbedder`, ledgers (`embedMissing`, `readLedger`), `vectorSpace`, `nearest`, `standouts`; `hashOf` must stay byte-compatible with the ledgers already paid for (test pins it) |
 | `src/vector-search/index.ts` | `registerVectorSearch` (words, picture, likeness routes), `vectorSearchTools` |
+| `src/telemetry/` | `telemetry({ product, schemaVersion, version, url, collect })` → `register` (`GET`/`PATCH /api/telemetry`), `sendDaily` (for the scheduled handler), `bodyOf`; `countRange`, `dayRange`, `coarseReport`; `telemetryTools` |
 | `src/web/index.ts` | the front door: `serveFrontDoor`, `frontDoorOpen` |
 | `src/boards/` | `registerBoards` (the owner's collections in SQLite), `boardTools`; browser: `src/browser/boards-client.ts`, `src/browser/boards-react.ts`; `src/boards/refs.ts` (`boardRef`, `parseBoardRef`) is copied with both `boards` and `boards-client` |
 | `src/browser/search-client.ts`, `src/browser/search-react.ts`, `src/browser/vector-search-block.tsx` | browser parts (`meta.web` in `registry.json`): headless client and controller, React hooks, the optional shadcn block. Typechecked by `tsconfig.web.json` (bundler resolution, `erasableSyntaxOnly`); the block's shadcn imports resolve to `test/shadcn/` stand-ins |
@@ -54,7 +55,8 @@ what `feature` generates): `schema.ts` (Drizzle tables + migration steps) · `re
 | `templates/app/skills.sh.json` | points `npx skills add <repository>` at `guide/skills/`; without it the installer stops at `.agents/skills/` and offers only developer skills |
 | `templates/app/guide/skills/__name__`, `templates/app/agents-skills` | the two places for a product's skills: the skill it ships to its users' agents, and (copied to `.agents/skills/`, with `.claude/skills` linked to it by `init`) the skills for developing the repository |
 | `templates/app`, `templates/feature` | what `init` and `feature` copy, `__placeholders__` filled from the name (`namesOf` in `cli.mjs`). Never typechecked or tested in place: the generator test in `test/kit.test.ts` makes an app under `test/.generated/`, typechecks it and runs its tests |
-| `test/a2a.test.ts`, `test/oauth.test.ts` | the A2A card and methods; OAuth flows, scopes and metadata |
+| `test/a2a.test.ts`, `test/oauth.test.ts` | the A2A card and methods; OAuth flows (code + PKCE, refresh families, agent claim, device grant), scopes and metadata |
+| `test/telemetry.test.ts` | the usage report: the body sent, the daily schedule, every switch, coarse values only, routes and tool |
 | `test/kit.test.ts` | a sample API through every rule, discovery, the generated guide, the CLI (add, diff, update, doctor, adopt, init), the registry (every part and file listed), the skills, an MCP round trip |
 | `test/workers/` | the `workers` Vitest project, run inside workerd (`@cloudflare/vitest-plugin`): `worker.ts` imports the whole kit at global scope and serves a probe app over D1, so a Node-only top-level import or a random value at global scope stops it starting; `smoke.test.ts` checks it, D1 migrations and `testDb` |
 | `test/vectors.test.ts`, `test/vector-search.test.ts`, `test/web.test.ts` | ledgers and search; the search routes and tools over `test/logos-fixture.ts`; the front door |

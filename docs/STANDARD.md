@@ -387,3 +387,19 @@ The owner's own collections of a catalog's items (`boards.ts`, `boards-client.ts
 - Agents get `list_boards`, `create_board`, `get_board`, `save_to_board`, `remove_from_board` (and
   `board_suggestions`). Browsers use the headless client and hooks; the UI is the app's.
 
+## 18. Usage reports
+
+A product people deploy for themselves may report its use once a day (`telemetry` part), and only so:
+
+- One `POST <collector>/v1/<product>` a UTC day at most, never in the first 24 hours after the first run, with
+  exactly `{ "schema": <n>, "instance": "<random v4 UUID>", "version": "1.2.3", "report": { … } }` and a 5 second
+  timeout. The instance is made on the first run and names nothing else; the product is in the path, not the body.
+- The report holds **coarse ranges and booleans, never ids or text**: counts as `0`, `1-10`, `11-100`, `101-1k`,
+  `1k-10k`, `10k+` (`countRange`), days as `0`, `1-7`, `8-30`, `31-90`, `91-365`, `365+` (`dayRange`). Anything else
+  is dropped before sending.
+- Off when `DO_NOT_TRACK=1` or `TELEMETRY=off` is set, or the owner switched it off (`PATCH /api/telemetry`
+  `{ enabled }`, owner only). `GET /api/telemetry` shows whether it is on, why, and exactly the body it would send;
+  agents get it as `get_telemetry`.
+- It runs from the app's scheduled handler (`sendDaily`), is tried at most once a day even when the collector is
+  down, and never throws into the app. The collector may answer `{ "latest": "<version>" }`; the app keeps and shows it.
+- The product's README and setup say that it reports, what, and how to switch it off.

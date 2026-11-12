@@ -108,6 +108,7 @@ The full standard: [docs/STANDARD.md](docs/STANDARD.md). Why the layout is what 
 | `web` | the front door: a public `/` or none, the browser app under `/app` | [web](src/web/README.md) |
 | `keys` | API keys made and revoked through the app's own API beside `API_KEYS`, `GET /api/me`, their MCP tools | [keys](src/keys/README.md) |
 | `boards` | the owner's collections of items with notes; `boardRef` / `parseBoardRef`; the reference feature shape | [boards](src/boards/README.md) |
+| `telemetry` | a daily anonymous usage report (coarse ranges only) to the product's collector, the owner's switch, `GET /api/telemetry` showing exactly what is sent | [telemetry](src/telemetry/README.md) |
 | `testing` | `lintOpenApi`, `guideRoutes`, `guideGaps`, `toolRoutes`, `toolsRun` | [testing](src/testing/README.md) |
 | `search-client`, `search-react`, `vector-search-ui`, `boards-client`, `boards-react` | the browser side: typed clients, headless hooks, an optional shadcn block | [browser](src/browser/README.md) |
 
