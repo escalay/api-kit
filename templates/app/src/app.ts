@@ -10,7 +10,7 @@
 import { FEATURES } from './features/index.js'
 import { GUIDE_FILES } from './guide.gen.js'
 import { accessOwner, createAgentApi, createOAuth, dbGuardStore, dbOAuthStore, parseApiKeys, serveGuide, type Db } from './kit/index.js'
-import { inProcess, mcpServerFactory, mountMcp } from './kit/mcp/index.js'
+import { guideSkills, inProcess, mcpServerFactory, mountMcp } from './kit/mcp/index.js'
 
 export type Env = { API_KEYS?: string; OAUTH_SIGNING_KEY?: string; ACCESS_TEAM?: string; ACCESS_AUD?: string; PUBLIC_HOST?: string }
 
@@ -34,8 +34,10 @@ export const createApp = async ({ db, env }: { db: Db; env: Env }) => {
   })
   for (const feature of FEATURES) await feature.register(app, { db })
   // guide/ as a module (`pnpm guide` writes it), so it serves the same on Workers, which can't read a folder
-  serveGuide(app, { files: GUIDE_FILES, vars: () => ({}), full: ['llms.txt'] })
-  const factory = mcpServerFactory({ info: { name: '__name__', title: '__title__', version: VERSION }, instructions: '__title__: read the guide at /llms.txt first.', tools: TOOLS, callApi: inProcess(app) })
+  serveGuide(app, { files: GUIDE_FILES, vars: () => ({}), full: ['llms.txt', 'skills/*'] })
+  // The product's own skills (guide/skills/), offered over MCP too: as skills, and each playbook as a prompt
+  const { prompts, skills } = await guideSkills({ files: GUIDE_FILES })
+  const factory = mcpServerFactory({ info: { name: '__name__', title: '__title__', version: VERSION }, instructions: '__title__: read the guide at /llms.txt first.', tools: TOOLS, prompts, skills, callApi: inProcess(app) })
   mountMcp(app, { factory, allowedHostnames: [env.PUBLIC_HOST ?? 'localhost', 'localhost', '127.0.0.1'] })
   return app
 }

@@ -189,6 +189,11 @@
           "target": "~/src/kit/mcp/index.ts"
         },
         {
+          "path": "src/mcp/skills.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/mcp/skills.ts"
+        },
+        {
           "path": "src/mcp/README.md",
           "type": "registry:file",
           "target": "~/src/kit/mcp/README.md"

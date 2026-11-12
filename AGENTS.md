@@ -33,6 +33,7 @@ what `feature` generates): `schema.ts` (Drizzle tables + migration steps) · `re
 | `src/guide/reference.ts` | the generated guide parts: endpoints from the spec, tools with their routes, playbooks, how to get unstuck |
 | `src/a2a/index.ts` | A2A 1.0 over the MCP tools: `mountA2A` (Agent Card + JSON-RPC `/a2a`), `agentCard` |
 | `src/mcp/index.ts` | MCP 2026-07-28 over the routes: `mcpTool`, `mcpResource`, `mcpServerFactory`, `inProcess`, `overHttp`, `mountMcp` (+ Server Card) |
+| `src/mcp/skills.ts` | `guideSkills`: the guide's skill folders as the factory's skills and prompts, one prompt per playbook |
 | `src/testing/index.ts` | `lintOpenApi`, `guideRoutes`, `guideGaps`, `toolRoutes`, `toolsRun` |
 | `src/vectors/index.ts` | Gemini Embedding 2 via OpenRouter: `createEmbedder`, ledgers (`embedMissing`, `readLedger`), `vectorSpace`, `nearest`, `standouts`; `hashOf` must stay byte-compatible with the ledgers already paid for (test pins it) |
 | `src/vector-search/index.ts` | `registerVectorSearch` (words, picture, likeness routes), `vectorSearchTools` |
@@ -46,10 +47,11 @@ what `feature` generates): `schema.ts` (Drizzle tables + migration steps) · `re
 | `scripts/release-check.mjs` | `pnpm release:check`: read-only; clean tree on `main`, one version across the public packages, what each tarball holds, whether the version is on npm, whether npm trusts `release.yml`. Generic: it ships in `npm-release` |
 | `scripts/release-smoke.sh` | what `release.yml` runs after publishing: `npm create escalay@<version>`, install, test |
 | `.github/workflows/release.yml`, `release-please-config.json`, `.release-please-manifest.json` | the release: release-please keeps the release pull request, then the publish job. The workflow names no package, because `npm-release` installs this same file in other repos |
-| `skills/` | `api-kit-build`, `api-kit-feature`, `api-kit-review`, `npm-release` (releases, for any npm package repo), installed with `npx skills add escalay/api-kit`; a test checks their frontmatter, length and commands |
+| `skills/` | `api-kit-build`, `api-kit-feature`, `api-kit-review`, `api-kit-skills` (writing a product's own skills from tests of what agents get wrong), `npm-release` (releases, for any npm package repo), installed with `npx skills add escalay/api-kit`; a test checks their frontmatter, length and commands |
 | `templates/npm-release` | the blank release-please config and manifest `npm-release` installs; a test keeps the config equal to this repo's, minus its bootstrap commit and extra files |
 | `templates/runtime-cloudflare` | what `init --runtime cloudflare|both` adds: `worker.ts`, `wrangler.jsonc`, `scripts/migrations.ts`, the workerd test project |
 | `templates/preset-app` | what `init --preset app` adds (Cloudflare only): the browser app in `web/` (React, TanStack Router and Query, Tailwind), `index.html`, `vite.config.ts` (Vite with Cloudflare's plugin runs and builds both sides), `tsconfig.web.json`. Its files are kept formatted with the app's `oxfmtrc.json`. What it changes in shared files is lines marked `// preset:app` or `<!-- preset:app -->` in `templates/app` and `templates/runtime-cloudflare` (`init` keeps a marked line only in an app that has that preset or runtime) |
+| `templates/app/guide/skills/__name__`, `templates/app/agents-skills` | the two places for a product's skills: the skill it ships to its users' agents, and (copied to `.agents/skills/`, with `.claude/skills` linked to it by `init`) the skills for developing the repository |
 | `templates/app`, `templates/feature` | what `init` and `feature` copy, `__placeholders__` filled from the name (`namesOf` in `cli.mjs`). Never typechecked or tested in place: the generator test in `test/kit.test.ts` makes an app under `test/.generated/`, typechecks it and runs its tests |
 | `test/a2a.test.ts`, `test/oauth.test.ts` | the A2A card and methods; OAuth flows, scopes and metadata |
 | `test/kit.test.ts` | a sample API through every rule, discovery, the generated guide, the CLI (add, diff, update, doctor, adopt, init), the registry (every part and file listed), the skills, an MCP round trip |
