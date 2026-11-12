@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/escalay/api-kit/compare/v1.9.0...v1.10.0) (2026-11-12)
+
+
+### New
+
+* every app ships its own skills, served over MCP and installable ([#6](https://github.com/escalay/api-kit/issues/6)) ([e1a188a](https://github.com/escalay/api-kit/commit/e1a188ae95521c8a797a05ca8e86fdf94aa164b3))
+
 ## [1.9.0](https://github.com/escalay/api-kit/compare/v1.8.0...v1.9.0) (2026-11-12)
 
 
