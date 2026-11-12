@@ -370,6 +370,53 @@
       }
     },
     {
+      "name": "keys",
+      "type": "registry:item",
+      "title": "API keys",
+      "description": "API keys made and revoked through the app's own API beside `API_KEYS` (hashes only, first characters, maker, last use), `GET /api/me`, and the MCP tools; only deployment keys and signed-in people manage keys",
+      "registryDependencies": [
+        "escalay/api-kit/db",
+        "escalay/api-kit/mcp"
+      ],
+      "files": [
+        {
+          "path": "src/keys/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/index.ts"
+        },
+        {
+          "path": "src/keys/handlers.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/handlers.ts"
+        },
+        {
+          "path": "src/keys/repo.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/repo.ts"
+        },
+        {
+          "path": "src/keys/routes.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/routes.ts"
+        },
+        {
+          "path": "src/keys/schema.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/schema.ts"
+        },
+        {
+          "path": "src/keys/tools.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/tools.ts"
+        },
+        {
+          "path": "src/keys/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/README.md"
+        }
+      ]
+    },
+    {
       "name": "testing",
       "type": "registry:item",
       "title": "Testing",

@@ -97,6 +97,10 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 - **Agents and scripts:** an API key per client, `Authorization: Bearer <prefix>_<random>`. The service holds only
   hashes (`API_KEYS=laptop:<sha256>,ci:<sha256>`); the keys live in **your secret store, scoped to the app**,
   one secret per client (`API_KEY_LAPTOP`, …). Revoke = remove its line and redeploy.
+- **Keys an app makes itself (optional, `keys` module):** for a tool whose users hand out keys without a deploy,
+  `registerKeys` adds `/api/keys` (make, list, revoke; the key shown once, only its hash kept) and `/api/me` (who is
+  calling). `API_KEYS` keeps working beside them. Only a key from `API_KEYS` or a signed-in person may make or revoke
+  keys: a key made through the API cannot make another, so a leaked one can't make itself a spare.
 - **People:** Cloudflare Access SSO in front of the web pages; the app also verifies `Cf-Access-Jwt-Assertion` against
   the team's keys, so nothing reaches data without either a key or a verified person.
 - **A browser app on the same host:** on the bypassed paths Access sends no header, but the browser still sends Access's
