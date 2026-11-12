@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/escalay/api-kit/compare/v1.10.0...v1.10.1) (2026-11-12)
+
+
+### Fixed
+
+* installing from a repository offers the product's skill, not the developer ones ([#8](https://github.com/escalay/api-kit/issues/8)) ([d20f2f1](https://github.com/escalay/api-kit/commit/d20f2f1d81f801ae85d16f4098ca3b5f108f951e))
+
 ## [1.10.0](https://github.com/escalay/api-kit/compare/v1.9.0...v1.10.0) (2026-11-12)
 
 
