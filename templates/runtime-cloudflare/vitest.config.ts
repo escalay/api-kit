@@ -10,10 +10,12 @@ import { TEST_KEY } from './test/workers/key.js'
 export default defineConfig(async () => ({
   test: {
     projects: [
-      { test: { name: 'node', include: ['src/**/*.test.ts', 'test/**/*.test.ts'], exclude: ['test/workers/**', '**/node_modules/**'] } },
+      { test: { name: 'node', include: ['src/**/*.test.ts', 'test/**/*.test.ts', 'sdk/test/**/*.test.ts'], exclude: ['test/workers/**', '**/node_modules/**'] } },
       {
         plugins: [
           cloudflareTest({
+            // Tests never reach Cloudflare: a binding like AI would otherwise open a session in whatever account wrangler is logged into
+            remoteBindings: false,
             wrangler: { configPath: './wrangler.jsonc' },
             miniflare: { bindings: { API_KEYS: `tester:${createHash('sha256').update(TEST_KEY).digest('hex')}`, TEST_MIGRATIONS: await readD1Migrations('./migrations') } },
           }),
