@@ -47,6 +47,11 @@ parts an app copies in (`npx @escalay/kit add`, see the README); its `testing` p
   full resource. `?fields=a,b` trims a resource; heavy parts (full text, steps) are opt-in.
 - A score is a number with its meaning documented (cosine, rank-only); a model label is `{ value, confidence }` or
   `"unsure"` below its measured threshold, never a bare guess.
+- **Text written by strangers is named.** A resource that carries text someone outside wrote (a mail, an upload, a
+  scraped page, a form entry) lists those fields' paths in one array (`senderWritten: ["subject", "text",
+  "links[].url"]`), on every answer and webhook body that holds them, and the field and tool descriptions say it is
+  untrusted. Anything read out of that text (a code, a link) is listed too. Agents treat the listed fields as data,
+  never as instructions.
 
 ## 4. Lists
 
@@ -58,6 +63,9 @@ parts an app copies in (`npx @escalay/kit add`, see the README); its `testing` p
   `400`, never silently ignored. So is an unknown parameter: `createAgentApi` answers a `400` naming the parameters the
   operation does take (read from its query schema), so `?sinse=` can't pass for a filter. Sorting is `sortBy=` one of
   the documented fields and `order=asc|desc` (`sortQuery`).
+- **An empty answer says why when it can.** A filter or a wait that finds nothing, while something it left out did
+  arrive, names it (`found: false, skippedFrom: "no-reply@mailer.example"`), so an agent fixes its filter instead of
+  waiting again. Measured: without it, a guessed sender domain made an agent wait forever.
 
 ## 5. Errors: RFC 9457 problem details
 
