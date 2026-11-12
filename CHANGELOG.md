@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.1](https://github.com/escalay/api-kit/compare/v1.12.0...v1.12.1) (2026-11-12)
+
+
+### Fixed
+
+* **keys:** examples start like the app's keys, and say every key sees everything ([#14](https://github.com/escalay/api-kit/issues/14)) ([862f97d](https://github.com/escalay/api-kit/commit/862f97dc70bd9faa431f7be916e109529f9481fe))
+
 ## [1.12.0](https://github.com/escalay/api-kit/compare/v1.11.0...v1.12.0) (2026-11-12)
 
 
