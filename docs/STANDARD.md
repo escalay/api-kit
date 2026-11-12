@@ -174,7 +174,9 @@ fact, steps with checkable done-when criteria.
 - **Three kinds of skill, three places.** A *product skill* is for agents using the product: one folder,
   `guide/skills/<product>/`, served and installable, and free of `{{placeholders}}` when it should also install from
   the repository, because that copy is read as it is. A *developer skill* is for agents changing the repository:
-  `.agents/skills/<product>-<job>/` (`.claude/skills` links there), never served. A *kit skill* serves any product on
+  `.agents/skills/<product>-<job>/` (`.claude/skills` links there), never served, with `metadata.internal: true` in
+  its frontmatter. `skills.sh.json` at the root names `./guide/skills`, so installing from the repository offers the
+  product skill and not the developer ones (the installer would otherwise stop at `.agents/skills/`). A *kit skill* serves any product on
   the kit and lives in the kit's `skills/`. `init` makes the first two places; the kit's `api-kit-skills` skill is
   how to fill them: from a test of what agents get wrong, never from the route list.
 - **`/llms-full.txt`** is assembled from all of them in a fixed order, never written by hand.
