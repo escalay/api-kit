@@ -169,7 +169,14 @@ fact, steps with checkable done-when criteria.
   tools, costs).
 - **`skills/<name>/SKILL.md`** + `references/*.md`: a skill folder (frontmatter `name`, `description`) with one
   playbook per task: when to use, steps with exact calls, done-when, judgement rules, output, cost. Served over HTTP,
-  as MCP prompts, and through the MCP Skills extension; copy the folder into the agent's skills folder to install.
+  as MCP prompts, and through the MCP Skills extension (`guideSkills` gives the factory both). It installs with
+  `npx skills add <the deployment's address>` (through the discovery index, §14) or `npx skills add <owner>/<repo>`.
+- **Three kinds of skill, three places.** A *product skill* is for agents using the product: one folder,
+  `guide/skills/<product>/`, served and installable, and free of `{{placeholders}}` when it should also install from
+  the repository, because that copy is read as it is. A *developer skill* is for agents changing the repository:
+  `.agents/skills/<product>-<job>/` (`.claude/skills` links there), never served. A *kit skill* serves any product on
+  the kit and lives in the kit's `skills/`. `init` makes the first two places; the kit's `api-kit-skills` skill is
+  how to fill them: from a test of what agents get wrong, never from the route list.
 - **`/llms-full.txt`** is assembled from all of them in a fixed order, never written by hand.
 - Tests: `guideRoutes(files, doc)`, `guideGaps(files, vars, { doc, tools })` and `toolRoutes(tools, doc)` return
   `[]`; every example id exists in the data. `toolsRun(tools, app, args, { headers })` runs every tool with sample

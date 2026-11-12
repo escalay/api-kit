@@ -249,3 +249,5 @@ export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, all
   })
   return handler
 }
+
+export { guideSkills } from './skills.js'

@@ -63,6 +63,8 @@ src/features/index.ts    FEATURES, the one list (and the Feature shape)
 src/features/<name>/     schema.ts · repo.ts · routes.ts · handlers.ts · tools.ts · index.ts · <name>.test.ts
 src/kit/                 the copied kit (kit.json + a README per part)
 guide/                   llms.txt and agents/*.md templates; {{api.endpoints}} and {{mcp.tools}} are generated
+guide/skills/<name>/     the skill the product ships to agents that use it: served, offered over MCP, installable
+.agents/skills/          skills for developing the repository (.claude/skills links here); never served
 test/api.test.ts         every route linted, every MCP tool run (toolsRun), every guide placeholder filled
 container/entrypoint.sh  the env allowlist: the API sees only the variables it reads
 ```

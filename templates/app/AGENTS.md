@@ -30,6 +30,8 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 | `src/features/<name>/` | one feature: `schema.ts` (tables + migration steps) · `repo.ts` (the only queries) · `routes.ts` (OpenAPI contracts) · `handlers.ts` (request → repo → HAL) · `tools.ts` (MCP tools) · `index.ts` (register, tools, sample tool arguments) · `<name>.test.ts` |
 | `src/kit/` | the copied kit, owned by this app; `kit.json` records its version, and each part's `README.md` says what it is for and its rules (start with `core`, `db`, `mcp`, `testing`). Update with `diff --patch`, then `update` |
 | `guide/` | the agent guide: templates whose `{{api.endpoints}}` and `{{mcp.tools}}` are generated from the code |
+| `guide/skills/__name__/` | the skill this product ships to the agents that use it: `SKILL.md` routes, `references/<job>.md` is one playbook per job. Served at `/skills/*`, offered over MCP as skills and prompts, and installed with `npx skills add <this deployment's address>` or from the repository |
+| `.agents/skills/` | skills for developing this repository (`.claude/skills` links here). Never served |
 | `test/api.test.ts` | every route linted, every MCP tool run (`toolsRun`), every guide placeholder filled |
 | `container/entrypoint.sh` | the env allowlist: the API sees only the variables it reads | <!-- runtime:node -->
 
@@ -44,3 +46,4 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 - A new env var the API reads goes into `container/entrypoint.sh` too. <!-- runtime:node -->
 - The browser app owns `/app` and nothing else: `wrangler.jsonc` sends every other path to the Worker. It calls the API with same-origin `fetch` and holds no key. Import images and fonts from code (there is no `public/` folder), so they are built under `/app/assets/`. <!-- preset:app -->
 - `src/kit/` and generated files are left out of `pnpm lint` and `pnpm format`: the kit's copy must stay as the kit wrote it for `doctor` and `update`. What `init` and `feature` write is in the kit's long-line style, so run `pnpm format` after either.
+- A product skill holds no `{{placeholder}}`: the copy in the repository is the copy people install. Run `pnpm guide` after editing one. The kit's `api-kit-skills` skill (`npx skills add escalay/api-kit`) is how to write them: from a test of what agents get wrong, never from the route list.

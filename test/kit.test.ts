@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, readlink, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRoute, z } from '@hono/zod-openapi'
@@ -10,7 +10,7 @@ import { gunzipSync } from 'node:zlib'
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { createAgentApi, errorHandler, problemResponse, rateLimit, sortQuery, decodeCursor, originOf, fillTemplate, guideFiles, guideModuleSource, HAL_JSON, linksOf, LinksSchema, mintApiKey, pageOf, pageSchema, parseApiKeys, pathWith, problemResponses, ProblemError, serveAiCatalog, serveGuide, snapshotEtag, tarGz, wantsMarkdown } from '../src/index.js'
-import { inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp, routeOf } from '../src/mcp/index.js'
+import { guideSkills, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp, routeOf } from '../src/mcp/index.js'
 import { guideGaps, guideRoutes, lintOpenApi, toolRoutes } from '../src/testing/index.js'
 import { migrate, openDb } from '../src/db/index.js'
 import { OAUTH_MIGRATIONS } from '../src/oauth/schema.js'
@@ -572,6 +572,11 @@ describe('the copy-in CLI', () => {
       expect(await readFile(join(app, 'src/features/reading-lists/tools.ts'), 'utf8')).toContain("name: 'get_reading_list'")
       expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'testing'])
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+      // The product's own skill, the place for developer skills, and the link coding agents find them through
+      for (const path of ['guide/skills/demo-api/SKILL.md', 'guide/skills/demo-api/references/find-your-way.md', '.agents/skills/README.md']) expect(existsSync(join(app, path)), path).toBe(true)
+      expect(await readlink(join(app, '.claude/skills'))).toBe('../.agents/skills')
+      expect(await readFile(join(app, 'guide/skills/demo-api/SKILL.md'), 'utf8')).toMatch(/^---\nname: demo-api\ndescription: Use when a task needs Demo API\./)
+      expect(await readFile(join(app, 'src/guide.gen.ts'), 'utf8')).toContain('"skills/demo-api/references/find-your-way.md"')
       // Both runtimes by default: Node's server.ts and container, and Workers' worker.ts, wrangler.jsonc and D1 files
       for (const path of ['src/server.ts', 'Dockerfile', 'src/worker.ts', 'wrangler.jsonc', 'scripts/migrations.ts', 'src/guide.gen.ts', '.dev.vars.example']) expect(existsSync(join(app, path)), path).toBe(true)
       expect(JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).scripts).toMatchObject({ dev: 'tsx watch src/server.ts', 'dev:worker': 'wrangler dev', deploy: expect.stringContaining('wrangler d1 migrations apply DB --remote') })
@@ -593,7 +598,7 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+9 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+10 passed/)
 
       expect(cli(parent, 'init', 'edge-api', '--runtime', 'cloudflare').status).toBe(0)
       for (const path of ['src/server.ts', 'Dockerfile', 'container']) expect(existsSync(join(parent, 'edge-api', path)), path).toBe(false)
@@ -783,11 +788,28 @@ describe('the npm-release item', () => {
   })
 })
 
+describe('a guide\'s skills over MCP', () => {
+  it('offers each skill folder as a skill and each playbook as a prompt, from a folder or a module', async () => {
+    const files = {
+      'llms.txt': '# Apps',
+      'skills/apps/SKILL.md': '---\nname: apps\ndescription: Use when finding apps at {{origin}}.\n---\n\n# Apps\n',
+      'skills/apps/references/find-an-app.md': '# Find an app\n\nLook an app up by name, then open it.\n\n## Steps\n',
+    }
+    const { prompts, skills } = await guideSkills({ files, fill: (text) => text.replaceAll('{{origin}}', 'https://apps.test') })
+    expect(prompts.map(({ name, title, description }) => ({ name, title, description }))).toEqual([{ name: 'find-an-app', title: 'Find an app', description: 'Look an app up by name, then open it.' }])
+    expect(prompts[0]!.text({})).toContain('## Steps')
+    expect(skills).toBeDefined()
+    expect((await guideSkills({ files: new Map(Object.entries(files)) })).prompts).toHaveLength(1)
+    // A guide without a skill folder offers none, and the factory takes that as it is
+    expect(await guideSkills({ files: { 'llms.txt': '# Apps' } })).toEqual({ prompts: [], skills: undefined })
+  })
+})
+
 describe('the skills', () => {
   it('each has a name, says when to use it, stays short and names the command that checks its rule', async () => {
     const dir = join(import.meta.dirname, '..', 'skills')
     const names = (await readdir(dir)).sort()
-    expect(names).toEqual(['api-kit-build', 'api-kit-feature', 'api-kit-review', 'npm-release'])
+    expect(names).toEqual(['api-kit-build', 'api-kit-feature', 'api-kit-review', 'api-kit-skills', 'npm-release'])
     for (const name of names) {
       const text = await readFile(join(dir, name, 'SKILL.md'), 'utf8')
       const [, frontmatter = ''] = text.match(/^---\n([\s\S]*?)\n---\n/) ?? []
