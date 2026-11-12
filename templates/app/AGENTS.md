@@ -6,11 +6,13 @@ an MCP tool.
 
 ## Commands
 
-`pnpm install` · `pnpm test` · `pnpm typecheck` · `pnpm guide` (after editing `guide/`)
+`pnpm install` · `pnpm test` · `pnpm typecheck` · `pnpm lint` (oxlint) · `pnpm format` (oxfmt) · `pnpm guide` (after editing `guide/`)
 
 - `pnpm dev`: the API on Node at http://localhost:4400 (`/docs`, `/llms.txt`, `/mcp`) <!-- runtime:node -->
-- `pnpm __worker_dev__`: the Worker locally over a local D1 (`/docs`, `/llms.txt`, `/mcp`) <!-- runtime:workers -->
-- `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `wrangler d1 migrations apply`, `wrangler deploy` <!-- runtime:workers -->
+- `pnpm __worker_dev__`: the Worker locally over a local D1 (`/docs`, `/llms.txt`, `/mcp`) <!-- preset:api --> <!-- runtime:workers -->
+- `pnpm dev`: Vite runs both sides at http://localhost:5173, the browser app at `/app/` with hot reload and the Worker over a local D1 for everything else (`/docs`, `/llms.txt`, `/mcp`); `pnpm build` then `pnpm preview` serves the built result <!-- preset:app -->
+- `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:api --> <!-- runtime:workers -->
+- `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `vite build`, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:app -->
 
 A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 
@@ -23,6 +25,7 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 | `src/guide.gen.ts` | `guide/` as a module (`pnpm guide`), served the same on both runtimes; a test fails when it is older than `guide/` |
 | `migrations/`, `scripts/migrations.ts` | Workers: one D1 migration file per kit and feature step, written by `pnpm migrations`, applied at deploy | <!-- runtime:workers -->
 | `src/app.ts` | the wiring only: auth and OAuth, every feature, the guide, MCP |
+| `web/`, `index.html`, `vite.config.ts` | the browser app, served under `/app`: `main.tsx` (entry), `router.tsx`, `routes/` (one file per page, TanStack Router; `routeTree.gen.ts` is written by Vite), `styles.css` (Tailwind), tests beside the code as `*.test.tsx`. Checked by `tsconfig.web.json` | <!-- preset:app -->
 | `src/features/index.ts` | `FEATURES`, the one list of features, and the `Feature` shape |
 | `src/features/<name>/` | one feature: `schema.ts` (tables + migration steps) · `repo.ts` (the only queries) · `routes.ts` (OpenAPI contracts) · `handlers.ts` (request → repo → HAL) · `tools.ts` (MCP tools) · `index.ts` (register, tools, sample tool arguments) · `<name>.test.ts` |
 | `src/kit/` | the copied kit, owned by this app; `kit.json` records its version, and each part's `README.md` says what it is for and its rules (start with `core`, `db`, `mcp`, `testing`). Update with `diff --patch`, then `update` |
@@ -39,3 +42,5 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 - Nothing runs at global scope that Workers refuse there (random values, I/O, timers): do it in `createApp` or a handler. <!-- runtime:workers -->
 - A new secret: `wrangler secret put <NAME>`, and locally `.dev.vars` (copy `.dev.vars.example`). <!-- runtime:workers -->
 - A new env var the API reads goes into `container/entrypoint.sh` too. <!-- runtime:node -->
+- The browser app owns `/app` and nothing else: `wrangler.jsonc` sends every other path to the Worker. It calls the API with same-origin `fetch` and holds no key. Import images and fonts from code (there is no `public/` folder), so they are built under `/app/assets/`. <!-- preset:app -->
+- `src/kit/` and generated files are left out of `pnpm lint` and `pnpm format`: the kit's copy must stay as the kit wrote it for `doctor` and `update`. What `init` and `feature` write is in the kit's long-line style, so run `pnpm format` after either.

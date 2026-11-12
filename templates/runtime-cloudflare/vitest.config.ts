@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
 import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-plugin'
+import react from '@vitejs/plugin-react' // preset:app
 import { defineConfig } from 'vitest/config'
 import { TEST_KEY } from './test/workers/key.js'
 
 // Two projects, one app: `node` runs every test on Node; `workers` runs test/workers inside workerd, over D1 brought
 // up by the files in migrations/ (`pnpm migrations` writes them)
+// A third, `web`, runs the browser app's tests in happy-dom // preset:app
 export default defineConfig(async () => ({
   test: {
     projects: [
@@ -18,6 +20,7 @@ export default defineConfig(async () => ({
         ],
         test: { name: 'workers', include: ['test/workers/**/*.test.ts'], setupFiles: ['./test/workers/apply-migrations.ts'] },
       },
+      { plugins: [react()], test: { name: 'web', include: ['web/**/*.test.tsx'], environment: 'happy-dom' } }, // preset:app
     ],
   },
 }))

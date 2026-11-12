@@ -27,6 +27,8 @@ export const createApp = async ({ db, env }: { db: Db; env: Env }) => {
     tags: FEATURES.map((feature) => feature.tag),
     auth: { realm: '__name__', keys: parseApiKeys(env.API_KEYS), access },
     oauth,
+    // People who open the address land in the browser app (web/, under /app); agents asking for Markdown get the guide // preset:app
+    home: 'app', // preset:app
     // In the database, so every instance (each Worker isolate) shares Idempotency-Key answers
     guards: { store: await dbGuardStore(db) },
   })
