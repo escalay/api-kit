@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.0](https://github.com/escalay/api-kit/compare/v1.11.0...v1.12.0) (2026-11-12)
+
+
+### New
+
+* keys, kit sdk, deploy:env and core parts lifted from mailroom ([#12](https://github.com/escalay/api-kit/issues/12)) ([f5770df](https://github.com/escalay/api-kit/commit/f5770dfc93f6a7fcb2f2e9b97a718e7c383e0588))
+
 ## [1.11.0](https://github.com/escalay/api-kit/compare/v1.10.1...v1.11.0) (2026-11-12)
 
 
