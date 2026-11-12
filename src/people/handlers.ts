@@ -77,9 +77,10 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     const challenge = await repo.takeChallenge(challengeId, 'register')
     if (!challenge?.personId) throw new ProblemError('bad_request', { detail: 'This challenge expired or was used: ask for new options.' })
     const signedIn = await personOf(c, db, cookie)
-    // Not signed in: the enrolment is the proof, and it is used up here
-    if (signedIn?.id !== challenge.personId) {
-      const enrolled = enrolment ? await repo.takeChallenge(hashApiKey(enrolment), 'enrol') : undefined
+    // Not signed in: the enrolment is the proof. It is used up only once a passkey is made, so a failed try can be retried
+    const byEnrolment = signedIn?.id !== challenge.personId
+    if (byEnrolment) {
+      const enrolled = enrolment ? await repo.peekChallenge(hashApiKey(enrolment), 'enrol') : undefined
       if (enrolled?.personId !== challenge.personId) throw new ProblemError('unauthorized', { detail: 'Sign in first, or start from /setup with an enrolment.' })
     }
     const { origin, rpID } = hostOf(c)
@@ -88,6 +89,8 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     })
     if (!verified.verified || !verified.registrationInfo) throw new ProblemError('bad_request', { detail: 'The passkey could not be checked.' })
     const { credential, credentialDeviceType, credentialBackedUp } = verified.registrationInfo
+    if (byEnrolment && (await repo.takeChallenge(hashApiKey(enrolment!), 'enrol'))?.personId !== challenge.personId)
+      throw new ProblemError('unauthorized', { detail: 'This enrolment was just used: sign in with the passkey it made.' })
     await repo.addPasskey({
       id: credential.id,
       personId: challenge.personId,

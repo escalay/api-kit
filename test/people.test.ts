@@ -145,6 +145,21 @@ describe('passkeys and the session', () => {
     expect(await again.json('GET', '/api/session/passkeys')).toMatchObject({ _embedded: { passkeys: [{ name: 'Laptop', rpId: 'app.test' }] } })
   })
 
+  it('keeps the enrolment when a passkey fails to register, so the owner can try again', async () => {
+    const { browser } = await setup()
+    const owner = browser()
+    const device = await softAuthenticator()
+    const { enrolment } = await owner.json('POST', '/api/setup/claim', { code: CODE, email: 'owner@example.com' })
+    const first = await owner.json('POST', '/api/session/passkeys/register/options', { enrolment })
+    // An answer for another site (a wrong origin) fails the check
+    const failed = await owner.call('POST', '/api/session/passkeys/register/verify', { challengeId: first.challengeId, enrolment, response: await device.register(first.options, 'https://elsewhere.test') })
+    expect(failed.status).toBe(400)
+    const again = await owner.json('POST', '/api/session/passkeys/register/options', { enrolment })
+    expect(await owner.json('POST', '/api/session/passkeys/register/verify', { challengeId: again.challengeId, enrolment, response: await device.register(again.options, ORIGIN) })).toMatchObject({ signedIn: true })
+    // Once a passkey is made, the enrolment is spent
+    expect((await browser().call('POST', '/api/session/passkeys/register/options', { enrolment })).status).toBe(401)
+  })
+
   it('refuses a passkey nobody registered, and an enrolment used twice', async () => {
     const { browser, claimAsOwner } = await setup()
     await claimAsOwner()
