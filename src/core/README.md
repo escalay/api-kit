@@ -23,7 +23,7 @@ const app = createAgentApi({
 | `api.ts` | `createAgentApi`: request ids, secure headers, CORS, auth, strict query parameters (unknown ones answer 400), `Idempotency-Key` replay, `/openapi.json`, `/docs`, `/problems/{code}`, `/api/health`, the discovery it can serve alone |
 | `problem.ts` | RFC 9457: `ProblemError` (throw it), `PROBLEMS`, `problemResponses(400, 404…)` for a route's documented errors, `problemResponse` |
 | `hal.ts` | `linksOf(origin, { self, next… })`, `originOf(c)` (the public origin behind proxies), `pathWith(path, query)`, `LinksSchema`, `HAL_JSON` |
-| `auth.ts` | API keys (only hashes kept: `hashApiKey`, `mintApiKey`, `parseApiKeys`), Cloudflare Access, `authenticate`; `SCOPES`, `OAUTH_OPEN_PATHS` and the `OAuthServer` shape the oauth module fills |
+| `auth.ts` | API keys (only hashes kept: `hashApiKey`, `mintApiKey`, `parseApiKeys`; `storedKeys` for keys the app makes and revokes itself, looked up by hash after the start list), Cloudflare Access, `authenticate`; `SCOPES`, `OAUTH_OPEN_PATHS` and the `OAuthServer` shape the oauth module fills |
 | `cache.ts` | `snapshotEtag` (on Workers pass `boot: env.CF_VERSION_METADATA.id`), `CACHE` presets, `cacheControl` |
 | `guards.ts` | `idempotency` (wired for you) and `rateLimit({ policy, limit, windowSeconds, store? })` for anything that spends money; both keep state in a `GuardStore`: `memoryGuardStore()` (default, one Node process) or `dbGuardStore(db)` from `db` (every instance shares it: required on Workers), passed as `createAgentApi({ guards: { store } })` and to each `rateLimit` |
 | `discovery.ts` | api-catalog, Link headers, robots.txt with Content Signals, Markdown for agents, skills index, Server Card, `serveAiCatalog` |

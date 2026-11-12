@@ -94,6 +94,8 @@ export type AccessOptions = { team: string; audience: string; /** Replaces the J
 export type AuthOptions = {
   realm: string
   keys: Map<string, string>
+  /** Keys the service stores itself (made and revoked through its API): a key's hash → its name, or undefined. Asked after `keys`. */
+  storedKeys?: (hash: string) => Promise<string | undefined>
   access?: AccessOptions
   open?: string[]
   /** OAuth access tokens (`oauth.ts`): a JWT → its caller, or null. Keys still work beside them. */
@@ -106,12 +108,14 @@ export type AuthOptions = {
 
 const isJwt = (value: string) => /^[\w-]+\.[\w-]+\.[\w-]+$/.test(value)
 
-export const authenticate = ({ realm, keys, access, open = [], tokens, resourceMetadata, relay = [] }: AuthOptions): MiddlewareHandler => {
+export const authenticate = ({ realm, keys, storedKeys, access, open = [], tokens, resourceMetadata, relay = [] }: AuthOptions): MiddlewareHandler => {
   const verifyAccess = access?.verify ?? (access?.audience ? accessVerifier(access) : null)
   return async (c, next) => {
     if (c.req.method === 'OPTIONS' || open.some((pattern) => matches(c.req.path, pattern))) return next()
     const key = bearerOf(c)
-    const name = key ? keys.get(hashApiKey(key)) : undefined
+    const hash = key ? hashApiKey(key) : undefined
+    // An OAuth token is never a stored key: it skips the lookup
+    const name = hash ? (keys.get(hash) ?? (isJwt(key!) ? undefined : await storedKeys?.(hash))) : undefined
     if (name) {
       c.set('caller' as never, { kind: 'key', name } satisfies Caller as never)
       return next()
