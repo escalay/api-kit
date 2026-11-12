@@ -194,6 +194,8 @@ const DEV = { '@types/node': '^24.19.2', typescript: '^7.0.2', vitest: '^5.0.5' 
 /** What the Cloudflare side adds, at the versions the kit tests with. */
 const KIT_DEV = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8')).devDependencies
 const WORKERS_DEV = Object.fromEntries(['wrangler', '@cloudflare/vitest-plugin', '@cloudflare/workers-types'].map((name) => [name, KIT_DEV[name]]))
+/** The newest compatibility date the pinned workerd is sure to know: the day its types were cut (`5.20261106.1` → `2026-11-06`). Today's date fails once it is ahead of that binary. */
+const COMPATIBILITY_DATE = KIT_DEV['@cloudflare/workers-types'].replace(/^\D*\d+\.(\d{4})(\d{2})(\d{2})\..*$/, '$1-$2-$3')
 /** The runtimes an app can run on: `node` (server.ts, a container), `cloudflare` (worker.ts, D1), or `both`. */
 const RUNTIMES = ['both', 'cloudflare', 'node']
 /** The starting combinations: `api` is the kit's parts for an API with one example feature. */
@@ -363,7 +365,7 @@ const commands = {
     const title = valueOf('--title') ?? name.split(/[-_]/).map(capital).join(' ')
     const runtime = valueOf('--runtime') ?? 'both'
     if (!RUNTIMES.includes(runtime)) fail(`--runtime is one of ${RUNTIMES.join(', ')}`)
-    const vars = { __name__: name, __title__: title, __kit__: VERSION, __date__: new Date().toISOString().slice(0, 10) }
+    const vars = { __name__: name, __title__: title, __kit__: VERSION, __date__: COMPATIBILITY_DATE }
     copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (file === 'gitignore' ? '.gitignore' : file))
     if (runtime !== 'node') {
       copyTemplate(join(KIT, 'templates/runtime-cloudflare'), root, vars, (file) => (file === 'dev.vars.example' ? '.dev.vars.example' : file))
