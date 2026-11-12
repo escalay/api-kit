@@ -22,7 +22,7 @@ import { KEYS_MIGRATIONS } from './schema.js'
 
 export { holderOf } from './handlers.js'
 export { keysRepo, type KeysRepo } from './repo.js'
-export { KeySchema, keyRoutes, type KeyRoutes } from './routes.js'
+export { keyRoutes, keySchemaOf, type KeyRoutes } from './routes.js'
 export { apiKeys, KEYS_MIGRATIONS, type KeyRow } from './schema.js'
 export { keyTools } from './tools.js'
 
@@ -47,7 +47,7 @@ export const storedKeysOf = (db: Db) => keysRepo(db).nameOf
 /** Registers the key routes on the app, after migrating the keys table. Call it after `createAgentApi`. */
 export const registerKeys = async (app: OpenAPIHono, { db, fixedKeys, keyPrefix = 'ak', path = '/api/keys', mePath = '/api/me', tag = KEYS_TAG.name }: KeysConfig) => {
   await migrate(db, 'keys', KEYS_MIGRATIONS)
-  const routes = keyRoutes({ path, mePath, tag })
+  const routes = keyRoutes({ path, mePath, tag, keyPrefix })
   const handle = keyHandlers(keysRepo(db), { path, mePath, fixedKeys, keyPrefix })
   app.openapi(routes.list, handle.list)
   app.openapi(routes.me, handle.me)
