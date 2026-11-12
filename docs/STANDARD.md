@@ -362,7 +362,7 @@ Where items have pictures or prose worth searching by sense, not by keyword (`ve
 ## 16. The browser side
 
 - **Front door (`web.ts`).** `/` is a public page with no data (what the service is, how agents connect, WebMCP
-  tools if any); the browser app lives under `/app` behind Access (which gates only `/app`, `/oauth/authorize` and `/oauth/claim`);
+  tools if any); the browser app lives under `/app` behind Access (which gates only `/app`, `/oauth/authorize`, `/oauth/claim` and `/oauth/device`);
   the app's old addresses and `/?query` deep links redirect there; `frontDoorOpen` lists what auth leaves open. The
   app's calls carry Access's cookie, so the browser never holds a key.
 - **Headless first.** Search logic for browsers is `search-client.ts` (no framework: a typed client for §15's routes, a

@@ -4,16 +4,16 @@ import { mkdtemp } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, parseApiKeys, dbOAuthStore, openDb } from '../src/index.js'
+import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, parseApiKeys, dbOAuthStore, openDb, type OAuthStore } from '../src/index.js'
 
 const OWNER = 'owner@example.test'
 const ORIGIN = 'http://localhost'
 
-const sampleApi = async () => {
+const sampleApi = async (store: OAuthStore = memoryOAuthStore()) => {
   const oauth = createOAuth({
     name: 'Sample',
     signingKey: await generateOAuthKey(),
-    store: memoryOAuthStore(),
+    store,
     // The test stands in for the single sign-on: a header says who is signed in
     owner: async (c) => c.req.header('x-test-owner') ?? null,
     owners: [OWNER],
@@ -205,8 +205,8 @@ describe('OAuth for agents', () => {
       return (seconds: number) => vi.setSystemTime((at += seconds * 1000))
     }
     const signedIn = (owner = OWNER) => ({ 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': owner, 'sec-fetch-site': 'same-origin' })
-    const start = async (app: Awaited<ReturnType<typeof sampleApi>>['app'], scope = 'read write') => {
-      const registered = await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [DEVICE] }))
+    const start = async (app: Awaited<ReturnType<typeof sampleApi>>['app'], scope = 'read write', name = 'Terminal') => {
+      const registered = await app.request('/oauth/register', json({ client_name: name, grant_types: [DEVICE] }))
       expect(registered.status).toBe(201)
       const client = await registered.json()
       expect(client.grant_types).toEqual(['refresh_token', DEVICE])
@@ -246,6 +246,43 @@ describe('OAuth for agents', () => {
       // The device code is single use too
       tick(5)
       expect((await (await poll()).json()).error).toBe('invalid_grant')
+    })
+
+    it('keeps the owner’s answer when a poll lands at the same moment', async () => {
+      const tick = clock()
+      const inner = memoryOAuthStore()
+      const during: { run?: () => unknown } = {}
+      // The approval lands between a poll's read of the device row and its write
+      const store: OAuthStore = {
+        ...inner,
+        put: async (kind, id, value, expiresAt) => {
+          const run = kind === 'device' && Number(value.polledAt) > 0 ? during.run : undefined
+          during.run = undefined
+          if (run) await run()
+          return inner.put(kind, id, value, expiresAt)
+        },
+      }
+      const { app } = await sampleApi(store)
+      const { poll, decide } = await start(app)
+      during.run = () => decide('allow')
+      expect((await (await poll()).json()).error).toBe('authorization_pending')
+      tick(5)
+      expect((await (await poll()).json()).access_token).toBeTruthy()
+    })
+
+    it('keeps only hashes of device codes, user codes and refresh tokens', async () => {
+      const tick = clock()
+      const inner = memoryOAuthStore()
+      const kept: string[] = []
+      const store: OAuthStore = { ...inner, put: async (kind, id, value, expiresAt) => (kept.push(id, JSON.stringify(value)), inner.put(kind, id, value, expiresAt)) }
+      const { app } = await sampleApi(store)
+      const { device, poll, decide } = await start(app)
+      await decide('allow')
+      tick(5)
+      const tokens = await (await poll()).json()
+      const rotated = await (await app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }))).json()
+      const secrets = [device.device_code, device.user_code, device.user_code.replace('-', ''), tokens.refresh_token, rotated.refresh_token]
+      for (const secret of secrets) expect(kept.filter((entry) => entry.includes(secret)), secret).toEqual([])
     })
 
     it('says access_denied when the owner says no', async () => {

@@ -1,6 +1,6 @@
 /**
- * The service as its own OAuth authorization server, so an agent can get a token without anyone pasting a key. Two
- * ways in, both ending at a person who approves it on a page behind the site's single sign-on:
+ * The service as its own OAuth authorization server, so an agent can get a token without anyone pasting a key. Three
+ * ways in, each ending at a person who approves it on a page behind the site's single sign-on:
  *   MCP clients (claude.ai, Claude Desktop, Cursor) follow the 401's `resource_metadata` to the protected-resource
  *   metadata, register themselves (RFC 7591), send the owner to `/oauth/authorize` (authorization code + PKCE S256),
  *   and refresh with rotating refresh tokens.
@@ -205,7 +205,7 @@ export const createOAuth = (config: OAuthConfig) => {
   const authMd = (origin: string) => `# ${config.name} auth.md
 
 You are an agent. ${config.name} lets you register and get an access token, but **nothing is granted until its owner
-approves you** on a page behind their sign-in. There are two ways; pick the one your client supports.
+approves you** on a page behind their sign-in. There are three ways; pick the one your client supports.
 
 ## A. OAuth with the owner in the browser (MCP clients, apps)
 
@@ -423,7 +423,7 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
       while (await store.get('device-user', userCodeKey(userCode))) userCode = deviceUserCode()
       const expiresAt = now() + DEVICE_TTL
       // Kept a window past its expiry, so a late poll hears expired_token rather than an unknown code
-      await store.put('device', sha(deviceCode), { client: body.client_id!, name: String(client.name), scopes, status: 'pending', expiresAt, interval: DEVICE_INTERVAL, polledAt: 0 }, expiresAt + DEVICE_TTL)
+      await store.put('device', sha(deviceCode), { client: body.client_id!, name: String(client.name), scopes, expiresAt, interval: DEVICE_INTERVAL, polledAt: 0 }, expiresAt + DEVICE_TTL)
       await store.put('device-user', userCodeKey(userCode), { device: sha(deviceCode) }, expiresAt)
       return c.json(
         { device_code: deviceCode, user_code: userCode, verification_uri: `${origin}/oauth/device`, verification_uri_complete: `${origin}/oauth/device?user_code=${userCode}`, expires_in: DEVICE_TTL, interval: DEVICE_INTERVAL },
@@ -450,7 +450,7 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
       if (tries && Number(tries.count) >= DEVICE_TRIES) return { refused: c.html(page('Too many tries', '<h1>Too many tries</h1><p>Wait ten minutes, then type the code again.</p>'), 429) }
       const entry = await store.get('device-user', userCodeKey(typed))
       const record = entry ? await store.get('device', String(entry.device)) : null
-      if (!entry || !record || record.status !== 'pending' || now() >= Number(record.expiresAt)) {
+      if (!entry || !record || now() >= Number(record.expiresAt) || (await store.get('device-decision', String(entry.device)))) {
         const until = Number(tries?.until ?? now() + DEVICE_TRIES_WINDOW)
         await store.put('device-tries', triesKey, { count: Number(tries?.count ?? 0) + 1, until }, until)
         return { refused: c.html(deviceForm(typed, 'That code doesn’t match a device waiting here. Check it, or ask the device for a new one.'), 400) }
@@ -488,7 +488,8 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
       if (body.decision !== 'allow' && body.decision !== 'deny') return c.html(deviceConsent(found.record, body.user_code ?? '', approver.owner))
       // Single use: the typed code is gone either way, and the device's code goes when it collects the answer
       await store.delete('device-user', userCodeKey(body.user_code ?? ''))
-      await store.put('device', found.deviceKey, { ...found.record, status: body.decision === 'allow' ? 'approved' : 'denied', owner: approver.owner }, Number(found.record.expiresAt) + DEVICE_TTL)
+      // Its own row: the device's polls rewrite the device row, and must never write over the answer
+      await store.put('device-decision', found.deviceKey, { status: body.decision === 'allow' ? 'approved' : 'denied', owner: approver.owner }, Number(found.record.expiresAt) + DEVICE_TTL)
       if (body.decision === 'deny') return c.html(page('Denied', `<h1>Denied</h1><p>${escape(String(found.record.name))} gets nothing. You can close this page.</p>`))
       return c.html(page('Approved', `<h1>Approved</h1><p>${escape(String(found.record.name))} can now use ${escape(config.name)}; it picks up its token within seconds. You can close this page.</p>`))
     })
@@ -543,13 +544,14 @@ approves you** on a page behind their sign-in. There are two ways; pick the one 
             await store.delete('device', key)
             return oauthError(c, 400, 'expired_token', 'The code expired before the owner approved it: start again at /oauth/device_authorization.')
           }
-          if (record.status === 'denied') {
+          const decision = await store.get('device-decision', key)
+          if (decision) {
             await store.delete('device', key)
-            return oauthError(c, 400, 'access_denied', 'The owner said no.')
+            await store.delete('device-decision', key)
           }
-          if (record.status === 'approved') {
-            await store.delete('device', key)
-            const issued = { client: String(record.client), name: String(record.name), owner: String(record.owner), scopes: record.scopes as string[] }
+          if (decision?.status === 'denied') return oauthError(c, 400, 'access_denied', 'The owner said no.')
+          if (decision?.status === 'approved') {
+            const issued = { client: String(record.client), name: String(record.name), owner: String(decision.owner), scopes: record.scopes as string[] }
             return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
           }
           const interval = Number(record.interval)
