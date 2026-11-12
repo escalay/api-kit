@@ -575,6 +575,8 @@ describe('the copy-in CLI', () => {
       // The product's own skill, the place for developer skills, and the link coding agents find them through
       for (const path of ['guide/skills/demo-api/SKILL.md', 'guide/skills/demo-api/references/find-your-way.md', '.agents/skills/README.md']) expect(existsSync(join(app, path)), path).toBe(true)
       expect(await readlink(join(app, '.claude/skills'))).toBe('../.agents/skills')
+      // Installing from the repository must find the product's skill, which is not where the installer looks first
+      expect(JSON.parse(await readFile(join(app, 'skills.sh.json'), 'utf8'))).toEqual({ paths: ['./guide/skills'] })
       expect(await readFile(join(app, 'guide/skills/demo-api/SKILL.md'), 'utf8')).toMatch(/^---\nname: demo-api\ndescription: Use when a task needs Demo API\./)
       expect(await readFile(join(app, 'src/guide.gen.ts'), 'utf8')).toContain('"skills/demo-api/references/find-your-way.md"')
       // Both runtimes by default: Node's server.ts and container, and Workers' worker.ts, wrangler.jsonc and D1 files

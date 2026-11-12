@@ -41,7 +41,8 @@ serving; you only write the files and run `pnpm guide`.
 4. **Run the job again with the skill.** Same job, fresh subagent, told to load the skill first. Keep going until the
    log has no stall. A stall that remains goes into the product or the playbook, never into an excuse.
 5. **Check the doors.** `pnpm guide`, `pnpm test`, then with the app running:
-   `npx skills add http://localhost:5173 --list` must list the skill with every playbook file.
+   `npx skills add http://localhost:5173 --list` must list the skill with every playbook file, and
+   `npx skills add . --list` (the repository door, read through `skills.sh.json`) must list it and no developer skill.
 
 ## Rules for product skills
 
@@ -61,7 +62,9 @@ serving; you only write the files and run `pnpm guide`.
 - Write one only for know-how that cost a session and is not in `AGENTS.md`: how to run this product's agent test,
   how its release works, the one migration trap. `AGENTS.md` holds the rules; a skill holds a procedure.
 - Name it `<product>-<job>`. Scripts it needs are committed under `scripts/`, never left in a scratch folder.
-- It must not be offered with the product: keep it out of `guide/`.
+- It must not be offered with the product: keep it out of `guide/`, and put `metadata:` with `internal: true` in its
+  frontmatter. The installer looks in `.agents/skills/` first, so an unmarked developer skill is what
+  `npx skills add <owner>/<repo>` offers, in place of the product's.
 
 ## One bad playbook, one good one
 
