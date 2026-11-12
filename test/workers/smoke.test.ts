@@ -2,6 +2,7 @@ import { env, exports } from 'cloudflare:workers'
 import { drizzle } from 'drizzle-orm/d1'
 import { describe, expect, it } from 'vitest'
 import { migrate, openDb, type Db } from '../../src/index.js'
+import { softAuthenticator } from '../../src/testing/index.js'
 
 // worker.ts imports the whole kit at global scope, so a top-level Node-only import or a random value made at global
 // scope stops the Worker from starting and every request here fails
@@ -46,6 +47,31 @@ describe('the kit in workerd', () => {
     // A failing step leaves nothing behind: neither its statements nor its record
     await expect(migrate(db, 'broken', ['create table half (id integer); insert into missing values (1)'])).rejects.toThrow()
     expect((await env.DB.prepare("select count(*) as n from sqlite_master where name = 'half'").all<{ n: number }>()).results[0]?.n).toBe(0)
+  })
+})
+
+describe('passkeys in workerd', () => {
+  it('claims the probe, registers a passkey and signs in with it', async () => {
+    let cookie = ''
+    const call = async (path: string, body?: unknown) => {
+      const answer = await exports.default.fetch(`https://kit.test${path}`, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', ...(cookie ? { cookie } : {}) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      })
+      const set = answer.headers.get('set-cookie')
+      if (set) cookie = set.split(';')[0]!
+      return answer.json() as Promise<any>
+    }
+    const device = await softAuthenticator()
+    const { enrolment } = await call('/api/setup/claim', { code: 'PROBE-CODE', email: 'owner@example.com' })
+    const created = await call('/api/session/passkeys/register/options', { enrolment })
+    expect(await call('/api/session/passkeys/register/verify', { challengeId: created.challengeId, enrolment, response: await device.register(created.options, 'https://kit.test') })).toMatchObject({ signedIn: true })
+    expect(cookie).toMatch(/^__Host-session=/)
+    cookie = ''
+    const login = await call('/api/session/passkeys/login/options', {})
+    expect(await call('/api/session/passkeys/login/verify', { challengeId: login.challengeId, response: await device.login(login.options, 'https://kit.test') })).toMatchObject({ signedIn: true, person: { role: 'owner' } })
+    expect(await call('/api/session')).toMatchObject({ signedIn: true, person: { email: 'owner@example.com' } })
   })
 })
 

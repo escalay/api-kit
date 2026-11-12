@@ -115,6 +115,18 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   `CF_Authorization` cookie (the same signed token), and the app accepts it. Writes made with the cookie must come from
   the same site (`Sec-Fetch-Site: same-origin`, else a matching `Origin`), so other sites can't post through a login.
   The host must not bypass Access for people (no IP bypass), or they arrive without a token.
+- **The owner and the team (optional, `people` and `setup` parts):** for an app someone deploys for themselves. The
+  first person to send the deploy's `SETUP_CODE` secret to `POST /api/setup/claim` becomes the **owner** and makes a
+  **passkey** (WebAuthn, `@simplewebauthn/server`); signing in with it sets an HttpOnly cookie (`__Host-session` on
+  https, SameSite=Lax, 30 days) whose token is stored only as a SHA-256. `auth.session` checks it after keys and agent
+  tokens and before Access; a write made with it must come from the same site, as with Access's cookie. Claiming
+  **fails closed** (no secret set: 503) and is limited (5 an hour per address, 20 a day in all); a claimed deployment
+  answers the same code with 409, and a **rotated** code opens recovery for an existing owner, once. **Members** come
+  through Access: with `access.roleOf: roleOf(db)` an email that is neither listed nor of a listed domain gets 403
+  (without `roleOf`, Access works as before). Roles: `owner` does everything; `member` everything but admin (the team,
+  keys, setup, and what the app marks admin). A person with no role (an app without `people`) keeps today's rights.
+  Admin checks use `isAdmin(caller, fixedKeys)`: the owner or a key from `API_KEYS`. The last owner cannot be demoted
+  or removed, and an owner cannot remove their last passkey (409). Passkeys work only on the host they were made on.
 - **Open without auth:** `/api/health`, `/openapi.json`, `/docs`, `/llms*.txt`, `/agents/*`, `/skills/*`,
   `/problems/*` (no data). In Access, these paths and `/api/*`, `/mcp` bypass SSO; the app's key check
   guards them.
