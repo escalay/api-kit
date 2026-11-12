@@ -221,10 +221,19 @@ fact, steps with checkable done-when criteria.
   capped model keys, a read-only storage key). Values never enter a repo, doc, commit or transcript.
 - On your host as a container: the API runs with an allowlisted env (`container/entrypoint.sh`), behind Cloudflare
   Access with the bypass paths above; a separate job syncs any read-only store in.
-- **Or on Cloudflare Workers** (`init --runtime cloudflare|both`): `wrangler.jsonc` pins `account_id` (the global
+- **Or on Cloudflare Workers** (`init --runtime cloudflare|both`): `wrangler.jsonc` pins `account_id` in an app you alone deploy (the global
   wrangler login may be another account), D1 is the database, secrets go in with `wrangler secret put` (locally
   `.dev.vars`), and `pnpm run deploy` (never `pnpm deploy`, pnpm's own command) writes the guide module and the D1 migration files, applies them, then deploys.
   Deploy with a scoped token kept in the app's secrets.
+- **A browser app on Workers** (`init --preset app`): one package and one Worker. Vite with Cloudflare's plugin builds
+  the Worker from `src/` and the browser app from `web/`; the built files are the Worker's static assets, and
+  `assets.run_worker_first` leaves only `/app/` to them (`["/*", "!/app/*"]`), so every other path reaches the
+  API and an unknown one still gets a problem, never the app's page. `home: 'app'` sends `/` and `/app` to `/app/`. The dev
+  server uses `base: '/app/'`; the build writes into `app/assets/` instead, because the built folder is served from
+  the root. A repository others deploy with their own account (a template, a deploy button) leaves `account_id` out of
+  `wrangler.jsonc` and takes it from the environment instead.
+- **Lint and format:** every app has `pnpm lint` (oxlint) and `pnpm format` (oxfmt). Both leave out `src/kit/` (the
+  kit's copy must stay byte-equal for `doctor`) and generated files.
 
 ## 13. Checklist for a new API
 

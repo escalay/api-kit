@@ -14,6 +14,7 @@ const app = createAgentApi({
   auth: { realm: 'notes', keys: parseApiKeys(env.API_KEYS), access },
   oauth,                                                        // optional: createOAuth(…) from the oauth module
   private: true,                                                // optional: nothing readable without credentials, noindex
+  home: 'app',                                                  // optional: `/` sends people to the browser app at `/app/` (default: to `/docs`)
 })
 ```
 

@@ -41,8 +41,8 @@ export type AgentApiConfig = {
   corsOrigins?: string[]
   /** robots.txt: Content Signals and crawling (defaults: private, no, no, no). See `discovery.ts`. */
   discovery?: DiscoveryConfig
-  /** `docs` (default): `/` sends people to `/docs` and agents asking for Markdown to the guide. `false`: the app serves `/`. */
-  home?: 'docs' | false
+  /** `docs` (default): `/` sends people to `/docs` and agents asking for Markdown to the guide. `app`: people go to the browser app at `/app/` instead (and `/app` redirects there). `false`: the app serves `/`. */
+  home?: 'docs' | 'app' | false
   /** The service as its own OAuth server (`createOAuth`): mounted here, its tokens accepted beside keys. */
   oauth?: OAuthServer
   /** Where Idempotency-Key answers are kept (default: this process's memory). On Workers: `dbGuardStore(db)`. */
@@ -134,7 +134,7 @@ export const createAgentApi = (config: AgentApiConfig) => {
   const app = new OpenAPIHono({ defaultHook: validationHook as never })
   const home = config.home ?? 'docs'
   // Discovery is public: what exists and how to reach it, never the data
-  const discovery = ['/robots.txt', '/sitemap.xml', '/.well-known/*', '*/server-card', ...(home === 'docs' ? ['/'] : [])]
+  const discovery = ['/robots.txt', '/sitemap.xml', '/.well-known/*', '*/server-card', ...(home ? ['/'] : []), ...(home === 'app' ? ['/app'] : [])]
   const open = config.private
     ? [...PRIVATE_OPEN, ...(config.oauth ? PRIVATE_OAUTH_OPEN : []), ...(config.auth.open ?? [])]
     : ['/api/health', '/openapi.json', '/docs', '/llms.txt', '/llms-full.txt', '/agents/*', '/skills/*', '/problems/*', ...discovery, ...(config.oauth ? OAUTH_OPEN_PATHS : []), ...(config.auth.open ?? [])]
@@ -231,7 +231,9 @@ export const createAgentApi = (config: AgentApiConfig) => {
   const { sitemap, poppy } = config.private ? {} : (config.discovery ?? {})
   if (sitemap?.length) app.get('/sitemap.xml', (c) => sendPublic(c, sitemapXml(originOf(c), sitemap), 'application/xml; charset=utf-8'))
   if (poppy) app.get('/.well-known/poppy.json', (c) => sendPublic(c, JSON.stringify(poppyJson(originOf(c), poppy, Boolean(config.oauth)), null, 2), 'application/json'))
-  if (home === 'docs') app.get('/', (c) => c.redirect('/docs', 302))
+  if (home) app.get('/', (c) => c.redirect(home === 'app' ? '/app/' : '/docs', 302))
+  // The app's files are served under /app/, so the bare path is sent there too
+  if (home === 'app') app.get('/app', (c) => c.redirect('/app/', 302))
 
   return app
 }

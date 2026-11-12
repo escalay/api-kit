@@ -12,7 +12,7 @@
  *   kit update [part…] [--dir src/kit] [--force]
  *   kit doctor [--dir src/kit] [--adopt]      missing files, edited files, parts behind this kit; exits 1 with a fix per line
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
- *   kit init <dir> [--preset api] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--yes]
+ *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--yes]
  *                                             a new app: features/, the kit in src/kit, tests; Node (server.ts, a
  *                                             container) and/or Workers (worker.ts, D1). It never asks; --yes is accepted
  *   kit feature <plural-name> [--app .]       a new feature folder (schema, repo, routes, handlers, tools), listed
@@ -198,15 +198,37 @@ const WORKERS_DEV = Object.fromEntries(['wrangler', '@cloudflare/vitest-plugin',
 const COMPATIBILITY_DATE = KIT_DEV['@cloudflare/workers-types'].replace(/^\D*\d+\.(\d{4})(\d{2})(\d{2})\..*$/, '$1-$2-$3')
 /** The runtimes an app can run on: `node` (server.ts, a container), `cloudflare` (worker.ts, D1), or `both`. */
 const RUNTIMES = ['both', 'cloudflare', 'node']
-/** The starting combinations: `api` is the kit's parts for an API with one example feature. */
-const PRESETS = ['api', 'selfhosted']
-const scriptsFor = (runtime) => {
+/** The linter and formatter every new app gets, at the versions the kit tests with. */
+const LINT_DEV = Object.fromEntries(['oxlint', 'oxfmt'].map((name) => [name, KIT_DEV[name]]))
+/** What the browser app of the `app` preset adds, at the versions the kit tests with. */
+const WEB_DEPS = Object.fromEntries(['@tanstack/react-query', '@tanstack/react-router', 'react', 'react-dom'].map((name) => [name, KIT_DEV[name]]))
+const WEB_DEV = Object.fromEntries(['@cloudflare/vite-plugin', '@tailwindcss/vite', '@tanstack/router-plugin', '@testing-library/react', '@types/react', '@types/react-dom', '@vitejs/plugin-react', 'happy-dom', 'tailwindcss', 'vite'].map((name) => [name, KIT_DEV[name]]))
+/**
+ * The starting combinations: `api` is the kit's parts for an API with one example feature; `app` is that API with a
+ * browser app beside it (web/: React, TanStack Router and Query, Tailwind), built by Vite and served by one Worker.
+ */
+const PRESETS = ['api', 'app', 'selfhosted']
+const scriptsFor = (runtime, preset) => {
   const node = { dev: 'tsx watch src/server.ts', start: 'tsx src/server.ts' }
   const workers = {
     migrations: 'tsx scripts/migrations.ts',
     deploy: 'pnpm guide && pnpm migrations && wrangler d1 migrations apply DB --remote && wrangler deploy',
   }
   const typecheck = runtime === 'node' ? 'tsc --noEmit' : 'tsc --noEmit && tsc --noEmit -p test/workers/tsconfig.json'
+  const lint = { lint: 'oxlint', format: 'oxfmt' }
+  // The app preset: Vite runs and builds both sides (the Worker through Cloudflare's plugin), and wrangler deploys the build
+  if (preset === 'app')
+    return {
+      dev: 'vite',
+      build: 'vite build',
+      preview: 'vite preview',
+      guide: 'tsx scripts/guide.ts',
+      migrations: workers.migrations,
+      deploy: 'pnpm guide && pnpm migrations && vite build && wrangler d1 migrations apply DB --remote && wrangler deploy',
+      test: 'vitest run',
+      typecheck: `${typecheck} && tsc --noEmit -p tsconfig.web.json`,
+      ...lint,
+    }
   return {
     ...(runtime === 'cloudflare' ? { dev: 'wrangler dev' } : node),
     ...(runtime === 'both' ? { 'dev:worker': 'wrangler dev' } : {}),
@@ -214,6 +236,7 @@ const scriptsFor = (runtime) => {
     ...(runtime === 'node' ? {} : workers),
     test: 'vitest run',
     typecheck,
+    ...lint,
   }
 }
 
@@ -363,32 +386,36 @@ const commands = {
     if (existsSync(root) && readdirSync(root).length) fail(`${target} is not empty`)
     const name = basename(root)
     const title = valueOf('--title') ?? name.split(/[-_]/).map(capital).join(' ')
-    const runtime = valueOf('--runtime') ?? 'both'
+    const runtime = valueOf('--runtime') ?? (preset === 'app' ? 'cloudflare' : 'both')
     if (!RUNTIMES.includes(runtime)) fail(`--runtime is one of ${RUNTIMES.join(', ')}`)
+    if (preset === 'app' && runtime !== 'cloudflare') fail('the app preset runs on Cloudflare Workers; leave --runtime out or use --runtime cloudflare')
     const vars = { __name__: name, __title__: title, __kit__: VERSION, __date__: COMPATIBILITY_DATE }
-    copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (file === 'gitignore' ? '.gitignore' : file))
+    copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (['gitignore', 'oxlintrc.json', 'oxfmtrc.json'].includes(file) ? `.${file}` : file))
     if (runtime !== 'node') {
       copyTemplate(join(KIT, 'templates/runtime-cloudflare'), root, vars, (file) => (file === 'dev.vars.example' ? '.dev.vars.example' : file))
       mkdirSync(join(root, 'migrations'), { recursive: true })
     }
+    if (preset === 'app') copyTemplate(join(KIT, 'templates/preset-app'), root, vars)
     if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container']) rmSync(join(root, path), { recursive: true, force: true })
-    // AGENTS.md lines marked for one runtime stay only in apps that run on it
-    const keeps = { node: runtime !== 'cloudflare', workers: runtime !== 'node' }
-    const agents = join(root, 'AGENTS.md')
-    writeFileSync(agents, readFileSync(agents, 'utf8').split('\n').flatMap((line) => {
-      const marked = line.match(/^(.*) <!-- runtime:(node|workers) -->$/)
-      return !marked ? [line] : keeps[marked[2]] ? [marked[1]] : []
-    }).join('\n').replaceAll('__worker_dev__', runtime === 'both' ? 'dev:worker' : 'dev'))
+    // Lines marked for one runtime or preset (`<!-- runtime:node -->`, `// preset:app`, several at a line's end) stay only in apps that have it
+    const keeps = { 'runtime:node': runtime !== 'cloudflare', 'runtime:workers': runtime !== 'node', 'preset:api': preset === 'api', 'preset:app': preset === 'app' }
+    const MARK = /^(.*?) (?:<!-- ((?:runtime|preset):\w+) -->|\/\/ ((?:runtime|preset):\w+))$/
+    const unmarked = (line) => {
+      const marked = line.match(MARK)
+      return !marked ? [line] : keeps[marked[2] ?? marked[3]] ? unmarked(marked[1]) : []
+    }
+    for (const file of ['AGENTS.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts'].map((path) => join(root, path)).filter(existsSync))
+      writeFileSync(file, readFileSync(file, 'utf8').split('\n').flatMap(unmarked).join('\n').replaceAll('__worker_dev__', runtime === 'both' ? 'dev:worker' : 'dev'))
     writeGuideModule(join(root, 'guide'), join(root, 'src/guide.gen.ts'))
     const added = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'add', ...APP_MODULES, '--dir', 'src/kit'], { cwd: root, encoding: 'utf8' })
     if (added.status !== 0) fail(`copying the kit failed: ${added.stderr}`)
     const modules = withRequired(APP_MODULES)
-    const runtimeDeps = runtime === 'cloudflare' ? {} : RUNTIME
-    const devDeps = { ...DEV, ...(runtime === 'node' ? {} : WORKERS_DEV), ...(runtime === 'cloudflare' ? { tsx: RUNTIME.tsx } : {}) }
+    const runtimeDeps = { ...(runtime === 'cloudflare' ? {} : RUNTIME), ...(preset === 'app' ? WEB_DEPS : {}) }
+    const devDeps = { ...DEV, ...LINT_DEV, ...(runtime === 'node' ? {} : WORKERS_DEV), ...(runtime === 'cloudflare' ? { tsx: RUNTIME.tsx } : {}), ...(preset === 'app' ? WEB_DEV : {}) }
     const sorted = (deps) => Object.fromEntries(Object.entries(deps).sort())
-    writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps) }, null, 2) + '\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps) }, null, 2) + '\n')
     if (!flags.has('--bare')) addFeature(root, 'notes')
-    console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'} with kit ${VERSION} (${modules.join(', ')})`)
+    console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
     console.log(`Next: cd ${relative(process.cwd(), root)} && pnpm install${runtime === 'node' ? '' : ' && pnpm migrations'} && pnpm test && pnpm dev`)
   },
 

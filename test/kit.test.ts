@@ -313,6 +313,15 @@ describe('discovery', () => {
     expect(wantsMarkdown('text/html, text/markdown')).toBe(false)
   })
 
+  it('sends people who open the address to the browser app when the app has one', async () => {
+    const withApp = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], home: 'app', auth: { realm: 'sample', keys: parseApiKeys(undefined) } })
+    const home = await withApp.request('/', { headers: { accept: 'text/html' } })
+    expect([home.status, home.headers.get('location')]).toEqual([302, '/app/'])
+    expect((await withApp.request('/app')).headers.get('location')).toBe('/app/')
+    const kept = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], home: false, auth: { realm: 'sample', keys: parseApiKeys(undefined) } })
+    expect((await kept.request('/')).status).toBe(401)
+  })
+
   it('indexes skills with digests of the exact bytes served, as a stable archive when they have references', async () => {
     const { app } = await sampleApi()
     const index = JSON.parse((await get(app, '/.well-known/agent-skills/index.json')).text)
@@ -552,7 +561,7 @@ describe('the copy-in CLI', () => {
       const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
-      expect(cli(parent, 'init', 'box', '--preset', 'blog').stderr).toContain('--preset is one of api, selfhosted')
+      expect(cli(parent, 'init', 'box', '--preset', 'blog').stderr).toContain('--preset is one of api, app, selfhosted')
       expect(cli(parent, 'feature', 'reading-lists', '--app', 'demo-api').status).toBe(0)
       expect(cli(parent, 'feature', 'reading-lists', '--app', 'demo-api').stderr).toContain('already exists')
       expect(cli(parent, 'feature', 'Bad_Name', '--app', 'demo-api').stderr).toContain('plural kebab-case')
@@ -614,6 +623,60 @@ describe('the copy-in CLI', () => {
       const typesDay = JSON.parse(await readFile(join(import.meta.dirname, '..', 'package.json'), 'utf8')).devDependencies['@cloudflare/workers-types'].match(/\.(\d{4})(\d{2})(\d{2})\./).slice(1).join('-')
       const edgeWrangler = await readFile(join(parent, 'edge-api/wrangler.jsonc'), 'utf8')
       expect(edgeWrangler).toContain(`"compatibility_date": "${typesDay}"`)
+      // Every app lints and formats with oxlint and oxfmt, the kit's copy left out
+      for (const name of ['demo-api', 'edge-api', 'box-api']) {
+        expect(JSON.parse(await readFile(join(parent, name, 'package.json'), 'utf8')).scripts).toMatchObject({ lint: 'oxlint', format: 'oxfmt' })
+        expect(JSON.parse(await readFile(join(parent, name, '.oxlintrc.json'), 'utf8')).ignorePatterns).toContain('src/kit/**')
+        expect(JSON.parse(await readFile(join(parent, name, '.oxfmtrc.json'), 'utf8')).ignorePatterns).toContain('src/kit/**')
+      }
+      // Nothing of the app preset reaches an API-only app
+      for (const text of [edgeWrangler, await readFile(join(parent, 'edge-api/src/app.ts'), 'utf8'), await readFile(join(parent, 'edge-api/vitest.config.ts'), 'utf8'), await agentsOf('edge-api')]) expect(text).not.toMatch(/preset:|"assets"|home: 'app'|plugin-react|vite build/)
+      expect(existsSync(join(parent, 'edge-api/web'))).toBe(false)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('makes an app with a browser side that typechecks and passes its tests on all three sides', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-app-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    try {
+      const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+      const refused = cli(parent, 'init', 'box', '--preset', 'app', '--runtime', 'node')
+      expect([refused.status, refused.stderr]).toEqual([1, 'kit: the app preset runs on Cloudflare Workers; leave --runtime out or use --runtime cloudflare\n'])
+      const made = cli(parent, 'init', 'desk', '--preset', 'app', '--title', 'Desk')
+      expect(made.status, made.stderr).toBe(0)
+      expect(made.stdout).toContain('for Cloudflare Workers, with a browser app in web/,')
+      const app = join(parent, 'desk')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      for (const path of ['index.html', 'vite.config.ts', 'tsconfig.web.json', 'web/main.tsx', 'web/router.tsx', 'web/routes/__root.tsx', 'web/routes/index.tsx', 'web/routeTree.gen.ts', 'web/styles.css', 'web/app.test.tsx', 'src/worker.ts', 'wrangler.jsonc']) expect(existsSync(join(app, path)), path).toBe(true)
+      for (const path of ['src/server.ts', 'Dockerfile', 'container', 'public']) expect(existsSync(join(app, path)), path).toBe(false)
+      const manifest = JSON.parse(await read('package.json'))
+      expect(manifest.scripts).toMatchObject({ dev: 'vite', build: 'vite build', deploy: expect.stringContaining('vite build && wrangler d1 migrations apply DB --remote && wrangler deploy'), typecheck: expect.stringContaining('tsconfig.web.json'), lint: 'oxlint', format: 'oxfmt' })
+      // The versions the kit tests with, so an app starts on a set that is known to work together
+      const kitDev = JSON.parse(await readFile(join(import.meta.dirname, '..', 'package.json'), 'utf8')).devDependencies
+      for (const name of ['react', '@tanstack/react-router', '@tanstack/react-query']) expect(manifest.dependencies[name], name).toBe(kitDev[name])
+      for (const name of ['vite', '@cloudflare/vite-plugin', '@vitejs/plugin-react', '@tanstack/router-plugin', 'tailwindcss', 'oxlint', 'oxfmt', 'wrangler']) expect(manifest.devDependencies[name], name).toBe(kitDev[name])
+      // The Worker leaves only /app to the built files, and sends people who open the address there
+      expect(await read('wrangler.jsonc')).toContain('"assets": { "not_found_handling": "single-page-application", "run_worker_first": ["/*", "!/app/*"] },')
+      expect(await read('wrangler.jsonc')).not.toMatch(/account_id": "[0-9a-f]/)
+      expect(await read('src/app.ts')).toContain("    home: 'app',\n")
+      expect(await read('web/routes/index.tsx')).toContain('>Desk</h1>')
+      const agents = await read('AGENTS.md')
+      expect(agents).toContain('`pnpm dev`: Vite runs both sides')
+      expect(agents).toContain('`vite build`, `wrangler d1 migrations apply`')
+      expect(agents).not.toContain('the Worker locally over a local D1 (`/docs`')
+      for (const path of ['AGENTS.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts']) expect(await read(path), path).not.toMatch(/(?:\/\/|<!--) (?:preset|runtime):|__(?:name|title|kit|date|worker_dev)__/)
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json', 'tsconfig.web.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      // Node, workerd and happy-dom: the API's tests, the Worker over D1, and the browser app's page
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+      expect(tests.stdout).toMatch(/Test Files\s+4 passed/)
     } finally {
       await rm(parent, { recursive: true, force: true })
     }

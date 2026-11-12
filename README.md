@@ -13,7 +13,7 @@ the practices travel with the copy into `src/kit/<part>/README.md`.
 |---|---|
 | **part** | one installable unit (`core`, `mcp`, `boards`); the code calls it a module |
 | **kit** | the set of parts in one repo: this one is `escalay/api-kit`, on npm as `@escalay/kit` |
-| **preset** | a starting combination of parts; `api` is the one `init` has today |
+| **preset** | a starting combination: `api` (an API), `app` (the API with a browser app beside it, on Cloudflare Workers) |
 
 ## Start a new API
 
@@ -26,6 +26,32 @@ npx @escalay/kit feature reading-lists           # a new feature folder, listed 
 `npm create escalay my-api -- --runtime node --title "My API"` passes flags on: `--runtime both|cloudflare|node`
 (default `both`), `--preset api`, `--bare` (no example feature), `--yes` (it never asks; accepted for scripts).
 `--preset selfhosted` is not built yet: it arrives with `escalay/selfhost-kit`.
+
+Every new app lints with [oxlint](https://oxc.rs/docs/guide/usage/linter) and formats with
+[oxfmt](https://oxc.rs/docs/guide/usage/formatter) (`pnpm lint`, `pnpm format`); the kit's copy in `src/kit/` and
+generated files are left out of both. What `init` and `feature` write is in the kit's long-line style: the first
+`pnpm format` rewrites it.
+
+## Start an app with a browser side
+
+```bash
+npm create escalay my-tool -- --preset app       # the API plus web/: React, TanStack Router and Query, Tailwind
+cd my-tool && pnpm install && pnpm migrations && pnpm test
+pnpm dev                                         # Vite runs both sides: the app at /app/, the API everywhere else
+pnpm run deploy                                  # guide, migrations, vite build, wrangler deploy: one Worker
+```
+
+One package, one Worker, on Cloudflare only. `src/` is the API exactly as the `api` preset makes it; `web/` is the
+browser app, built by Vite with Cloudflare's plugin and served as the Worker's static files under `/app`. The Worker
+answers every other path, so the API, the guide and MCP keep their addresses, and `/` sends people to `/app/`.
+
+```
+web/main.tsx, router.tsx   the entry and the router (base path /app)
+web/routes/                one file per page (TanStack Router file routes; routeTree.gen.ts is written by Vite)
+web/app.test.tsx           the browser app's tests, in happy-dom (a third Vitest project beside node and workers)
+vite.config.ts             both sides in one dev server and one build
+wrangler.jsonc             `assets`: only /app/ is left to the built files
+```
 
 What `init` makes:
 
