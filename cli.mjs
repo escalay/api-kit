@@ -217,6 +217,8 @@ const scriptsFor = (runtime, preset) => {
   const workers = {
     migrations: 'tsx scripts/migrations.ts',
     deploy: 'pnpm guide && pnpm migrations && wrangler d1 migrations apply DB --remote && wrangler deploy',
+    // The same, for a deployment whose account and ids live in a secret store, not the repository
+    'deploy:env': 'tsx scripts/deploy-env.ts',
   }
   const typecheck = runtime === 'node' ? 'tsc --noEmit' : 'tsc --noEmit && tsc --noEmit -p test/workers/tsconfig.json'
   const lint = { lint: 'oxlint', format: 'oxfmt' }
@@ -229,6 +231,7 @@ const scriptsFor = (runtime, preset) => {
       guide: 'tsx scripts/guide.ts',
       migrations: workers.migrations,
       deploy: 'pnpm guide && pnpm migrations && vite build && wrangler d1 migrations apply DB --remote && wrangler deploy',
+      'deploy:env': workers['deploy:env'],
       test: 'vitest run',
       typecheck: `${typecheck} && tsc --noEmit -p tsconfig.web.json`,
       ...lint,

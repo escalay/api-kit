@@ -2,4 +2,5 @@ node_modules/
 .state/
 .wrangler/
 .dev.vars
+/wrangler.deploy.jsonc
 dist/
