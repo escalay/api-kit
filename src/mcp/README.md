@@ -22,6 +22,7 @@ mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools: [getNote]
 |---|---|
 | `mcpTool`, `mcpResource` | a tool (route call + summary) and an attachable resource |
 | `routeOf`, `ROUTE_META` | a tool's route (`GET /api/v1/recipes/{id}`), published in `tools/list` as `_meta["api-kit/route"]`; set `route` on a tool whose path is built in steps |
+| `guideSkills({ files, fill })` | the guide's skill folders as the factory's `skills` and `prompts` (one prompt per playbook); `fill` renders a file first when a skill uses placeholders |
 | `mcpServerFactory` | the server: info, instructions, tools, resources, prompts, skills; `toolsTtlMs` sets how long clients cache `tools/list` (default an hour) |
 | `mountMcp` | `/mcp` (Streamable HTTP, MCP 2026-07-28 with a fallback for older clients) and the Server Card |
 | `inProcess(app)` / `overHttp(origin, key)` | how tools reach the routes: in the same process, or over HTTP for a stdio entry |

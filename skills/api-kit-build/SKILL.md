@@ -19,7 +19,9 @@ Each part's rules travel with it in `src/kit/<part>/README.md`; the full standar
 4. Replace `notes` with real features: the `api-kit-feature` skill, one feature at a time.
 5. Write the guide in `guide/`: only what the code can't know (concepts, what scores mean, real-id examples,
    playbooks). Endpoint and tool lists stay as `{{api.endpoints}}` and `{{mcp.tools}}`. Run `pnpm guide` after.
-6. Check it with the `api-kit-review` skill before anyone else uses it.
+6. Write the product's own skill in `guide/skills/<name>/` with the `api-kit-skills` skill: one playbook per job
+   people bring to it, from a test of what agents get wrong.
+7. Check it with the `api-kit-review` skill before anyone else uses it.
 
 ## An existing app
 
