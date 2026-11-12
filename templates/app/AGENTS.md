@@ -31,7 +31,8 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 | `src/kit/` | the copied kit, owned by this app; `kit.json` records its version, and each part's `README.md` says what it is for and its rules (start with `core`, `db`, `mcp`, `testing`). Update with `diff --patch`, then `update` |
 | `guide/` | the agent guide: templates whose `{{api.endpoints}}` and `{{mcp.tools}}` are generated from the code |
 | `guide/skills/__name__/` | the skill this product ships to the agents that use it: `SKILL.md` routes, `references/<job>.md` is one playbook per job. Served at `/skills/*`, offered over MCP as skills and prompts, and installed with `npx skills add <this deployment's address>` or from the repository |
-| `.agents/skills/` | skills for developing this repository (`.claude/skills` links here). Never served |
+| `.agents/skills/` | skills for developing this repository (`.claude/skills` links here). Never served, and marked `metadata.internal: true` so installing from the repository does not offer them |
+| `skills.sh.json` | tells `npx skills add <this repository>` that the product's skill is in `guide/skills/` |
 | `test/api.test.ts` | every route linted, every MCP tool run (`toolsRun`), every guide placeholder filled |
 | `container/entrypoint.sh` | the env allowlist: the API sees only the variables it reads | <!-- runtime:node -->
 
