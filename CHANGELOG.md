@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/escalay/api-kit/compare/v1.10.1...v1.11.0) (2026-11-12)
+
+
+### New
+
+* take api keys the app stores itself through storedKeys ([#10](https://github.com/escalay/api-kit/issues/10)) ([199a941](https://github.com/escalay/api-kit/commit/199a9413b7a06c992ec40c6f73bdec8e3b32138b))
+
 ## [1.10.1](https://github.com/escalay/api-kit/compare/v1.10.0...v1.10.1) (2026-11-12)
 
 
