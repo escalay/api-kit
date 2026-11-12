@@ -417,10 +417,96 @@
       ]
     },
     {
+      "name": "people",
+      "type": "registry:item",
+      "title": "People and sign-in",
+      "description": "The owner and members of a deployment: passkey sign-in with an HttpOnly session cookie (hash stored), Access members matched to the team by email or domain, roles (owner, member), the team routes and MCP tools",
+      "dependencies": [
+        "@simplewebauthn/server@^14.1.0"
+      ],
+      "registryDependencies": [
+        "escalay/api-kit/db",
+        "escalay/api-kit/mcp"
+      ],
+      "files": [
+        {
+          "path": "src/people/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/people/index.ts"
+        },
+        {
+          "path": "src/people/handlers.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/people/handlers.ts"
+        },
+        {
+          "path": "src/people/repo.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/people/repo.ts"
+        },
+        {
+          "path": "src/people/routes.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/people/routes.ts"
+        },
+        {
+          "path": "src/people/schema.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/people/schema.ts"
+        },
+        {
+          "path": "src/people/session.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/people/session.ts"
+        },
+        {
+          "path": "src/people/tools.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/people/tools.ts"
+        },
+        {
+          "path": "src/people/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/people/README.md"
+        }
+      ]
+    },
+    {
+      "name": "setup",
+      "type": "registry:item",
+      "title": "Setup",
+      "description": "Claiming a fresh deployment with the SETUP_CODE secret (fails closed, rate-limited), recovery by rotating it, and a self-checking setup checklist of the app's own steps",
+      "registryDependencies": [
+        "escalay/api-kit/people"
+      ],
+      "files": [
+        {
+          "path": "src/setup/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/setup/index.ts"
+        },
+        {
+          "path": "src/setup/routes.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/setup/routes.ts"
+        },
+        {
+          "path": "src/setup/schema.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/setup/schema.ts"
+        },
+        {
+          "path": "src/setup/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/setup/README.md"
+        }
+      ]
+    },
+    {
       "name": "testing",
       "type": "registry:item",
       "title": "Testing",
-      "description": "Checks for an app's tests: lintOpenApi, guideRoutes, guideGaps, toolRoutes",
+      "description": "Checks for an app's tests: lintOpenApi, guideRoutes, guideGaps, toolRoutes, toolsRun, and softAuthenticator (passkeys in CI)",
       "registryDependencies": [
         "escalay/api-kit/guide"
       ],
@@ -429,6 +515,11 @@
           "path": "src/testing/index.ts",
           "type": "registry:file",
           "target": "~/src/kit/testing/index.ts"
+        },
+        {
+          "path": "src/testing/authenticator.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/testing/authenticator.ts"
         },
         {
           "path": "src/testing/README.md",

@@ -21,10 +21,13 @@ const build = async (env: Env) => {
     title: 'Kit on Workers',
     version: '1.0.0',
     description: 'The kit running in workerd.',
-    tags: [{ name: 'Probe', description: 'The probe.' }],
-    auth: { realm: 'probe', keys: kit.parseApiKeys(undefined), open: ['/probe', '/probe/*', '/llms.txt', '/agents/*'] },
+    tags: [{ name: 'Probe', description: 'The probe.' }, kit.PEOPLE_TAG, kit.SETUP_TAG],
+    auth: { realm: 'probe', keys: kit.parseApiKeys(undefined), open: ['/probe', '/probe/*', '/llms.txt', '/agents/*', ...kit.PEOPLE_OPEN_PATHS, ...kit.SETUP_OPEN_PATHS], session: kit.sessionOf(db) },
     guards: { store: guards },
   })
+  // Passkeys run through @simplewebauthn/server on workerd; the code is a test value, never a real secret
+  await kit.registerPeople(app, { db, rpName: 'Probe' })
+  await kit.registerSetup(app, { db, code: 'PROBE-CODE', steps: [], guards })
   // Workers can't read a folder: the guide comes from a module, as `kit guide` writes it
   kit.serveGuide(app, { files: { 'llms.txt': '# Probe\n\nServed from {{origin}}.\n\n{{api.endpoints}}\n', 'agents/notes.md': '# Notes\n' }, vars: () => ({}), full: ['llms.txt', 'agents/*'] })
   app.use('/probe', kit.snapshotEtag(() => 'v1'))

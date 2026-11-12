@@ -30,7 +30,10 @@ export type OAuthServer = {
   resourceMetadataFor: (c: Context) => string
 }
 
-export type Caller = { kind: 'key'; name: string } | { kind: 'person'; email: string } | { kind: 'agent'; name: string; scopes: string[]; owner: string }
+/** A person's role, when the app keeps a team (`people` part): the owner may do everything, a member everything but admin. */
+export type Role = 'owner' | 'member'
+
+export type Caller = { kind: 'key'; name: string } | { kind: 'person'; email: string; role?: Role } | { kind: 'agent'; name: string; scopes: string[]; owner: string }
 
 export const hashApiKey = (key: string) => createHash('sha256').update(key).digest('hex')
 
@@ -89,7 +92,14 @@ export const accessOwner = (access: AccessOptions) => {
 const matches = (path: string, pattern: string) =>
   pattern.endsWith('*') ? path.startsWith(pattern.slice(0, -1)) : pattern.startsWith('*') ? path.endsWith(pattern.slice(1)) : path === pattern
 
-export type AccessOptions = { team: string; audience: string; /** Replaces the JWKS check, for tests. */ verify?: (token: string) => Promise<string | null> }
+export type AccessOptions = {
+  team: string
+  audience: string
+  /** Replaces the JWKS check, for tests. */
+  verify?: (token: string) => Promise<string | null>
+  /** With a team (`people` part): an email → its role, or null to refuse someone Access let through. Without it, every Access email is let in. */
+  roleOf?: (email: string) => Promise<Role | null>
+}
 
 export type AuthOptions = {
   realm: string
@@ -104,11 +114,13 @@ export type AuthOptions = {
   resourceMetadata?: string | ((c: Context) => string)
   /** Endpoints that POST but only relay to routes in-process (MCP, A2A): a token needs just `read` there, each route checks its own scope. */
   relay?: string[]
+  /** A signed-in browser session (`people` part: a passkey, then a cookie): the request → its person, or null. Asked when no Bearer is sent, before Access. */
+  session?: (c: Context) => Promise<{ email: string; role?: Role } | null>
 }
 
 const isJwt = (value: string) => /^[\w-]+\.[\w-]+\.[\w-]+$/.test(value)
 
-export const authenticate = ({ realm, keys, storedKeys, access, open = [], tokens, resourceMetadata, relay = [] }: AuthOptions): MiddlewareHandler => {
+export const authenticate = ({ realm, keys, storedKeys, access, open = [], tokens, resourceMetadata, relay = [], session }: AuthOptions): MiddlewareHandler => {
   const verifyAccess = access?.verify ?? (access?.audience ? accessVerifier(access) : null)
   return async (c, next) => {
     if (c.req.method === 'OPTIONS' || open.some((pattern) => matches(c.req.path, pattern))) return next()
@@ -128,6 +140,13 @@ export const authenticate = ({ realm, keys, storedKeys, access, open = [], token
       c.set('caller' as never, agent satisfies Caller as never)
       return next()
     }
+    const person = !key && session ? await session(c) : null
+    if (person) {
+      // The session is a cookie: like Access's, a write made with it must come from this site
+      if (!SAFE.has(c.req.method) && !sameSite(c)) return problemResponse(c, 'forbidden', { detail: 'A write signed in with the session cookie must come from this site.' })
+      c.set('caller' as never, { kind: 'person', ...person } satisfies Caller as never)
+      return next()
+    }
     const header = c.req.header('cf-access-jwt-assertion')
     const cookie = header ? undefined : getCookie(c, 'CF_Authorization')
     const assertion = header ?? cookie
@@ -135,6 +154,12 @@ export const authenticate = ({ realm, keys, storedKeys, access, open = [], token
       const email = await verifyAccess(assertion).catch(() => null)
       if (email && cookie && !SAFE.has(c.req.method) && !sameSite(c))
         return problemResponse(c, 'forbidden', { detail: 'A write signed in with the Access cookie must come from this site.' })
+      if (email && access?.roleOf) {
+        const role = await access.roleOf(email.toLowerCase())
+        if (!role) return problemResponse(c, 'forbidden', { detail: `${email} passed Cloudflare Access but is not on this deployment's team: ask its owner to add you.` })
+        c.set('caller' as never, { kind: 'person', email, role } satisfies Caller as never)
+        return next()
+      }
       if (email) {
         c.set('caller' as never, { kind: 'person', email } satisfies Caller as never)
         return next()

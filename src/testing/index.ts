@@ -160,3 +160,5 @@ export const toolsRun = async (tools: RunnableTool[], app: RequestableApp, args:
   for (const name of Object.keys(args)) if (!tools.some((tool) => tool.name === name)) failures.push(`${name}: sample arguments for a tool that doesn't exist`)
   return failures
 }
+
+export { softAuthenticator } from './authenticator.js'
