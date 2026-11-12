@@ -7,7 +7,7 @@
       "name": "core",
       "type": "registry:item",
       "title": "Core",
-      "description": "createAgentApi: OpenAPI 3.1 + Scalar docs, HAL links, problem+json, API keys + Access, ETags and Cache-Control, Idempotency-Key and rate limits, discovery (api-catalog, Link headers, robots.txt, Markdown for agents), a key-value store type; an OAuth server plugs in from the `oauth` part",
+      "description": "createAgentApi: OpenAPI 3.1 + Scalar docs, HAL links, problem+json, API keys + Access, ETags and Cache-Control, Idempotency-Key and rate limits, discovery (api-catalog, Link headers, robots.txt, Markdown for agents), a key-value store type, sortable ids (`newId`), long-poll waits (`waitFor`) and later work through a queue (`Jobs`: `queueJobs`, `memoryJobs`); an OAuth server plugs in from the `oauth` part",
       "dependencies": [
         "hono@^4.13.14",
         "@hono/zod-openapi@^1.6.3",
@@ -55,6 +55,21 @@
           "path": "src/core/problem.ts",
           "type": "registry:file",
           "target": "~/src/kit/core/problem.ts"
+        },
+        {
+          "path": "src/core/ids.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/ids.ts"
+        },
+        {
+          "path": "src/core/jobs.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/jobs.ts"
+        },
+        {
+          "path": "src/core/wait.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/wait.ts"
         },
         {
           "path": "src/core/README.md",
@@ -353,6 +368,53 @@
       "meta": {
         "entry": true
       }
+    },
+    {
+      "name": "keys",
+      "type": "registry:item",
+      "title": "API keys",
+      "description": "API keys made and revoked through the app's own API beside `API_KEYS` (hashes only, first characters, maker, last use), `GET /api/me`, and the MCP tools; only deployment keys and signed-in people manage keys",
+      "registryDependencies": [
+        "escalay/api-kit/db",
+        "escalay/api-kit/mcp"
+      ],
+      "files": [
+        {
+          "path": "src/keys/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/index.ts"
+        },
+        {
+          "path": "src/keys/handlers.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/handlers.ts"
+        },
+        {
+          "path": "src/keys/repo.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/repo.ts"
+        },
+        {
+          "path": "src/keys/routes.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/routes.ts"
+        },
+        {
+          "path": "src/keys/schema.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/schema.ts"
+        },
+        {
+          "path": "src/keys/tools.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/tools.ts"
+        },
+        {
+          "path": "src/keys/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/keys/README.md"
+        }
+      ]
     },
     {
       "name": "testing",

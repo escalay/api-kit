@@ -20,6 +20,7 @@ export default defineConfig(({ command, isPreview }) => ({
     }),
     react(),
     tailwindcss(),
-    cloudflare(),
+    // Tests and `pnpm dev` never reach Cloudflare; deploy:env builds with the config it writes (WRANGLER_CONFIG)
+    cloudflare({ remoteBindings: process.env.REMOTE_BINDINGS === '1', configPath: process.env.WRANGLER_CONFIG }),
   ],
 }))

@@ -21,11 +21,16 @@ the practices travel with the copy into `src/kit/<part>/README.md`.
 npm create escalay my-api                        # the `api` preset, with an example `notes` feature
 cd my-api && pnpm install && pnpm test && pnpm dev   # http://localhost:4400/docs, /llms.txt, /mcp
 npx @escalay/kit feature reading-lists           # a new feature folder, listed and tested
+npx @escalay/kit sdk                             # a typed TypeScript client in sdk/, a method per operation
 ```
 
 `npm create escalay my-api -- --runtime node --title "My API"` passes flags on: `--runtime both|cloudflare|node`
 (default `both`), `--preset api`, `--bare` (no example feature), `--yes` (it never asks; accepted for scripts).
 `--preset selfhosted` is not built yet: it arrives with `escalay/selfhost-kit`.
+
+On Workers, `pnpm run deploy:env` deploys with the account id, database ids and settings taken from the environment
+(a secret store's `run`), so a repository that may go public holds none of them. Every app also ships a developer
+skill, `<name>-agent-test`, for proving each route works for an agent that has never seen it.
 
 Every new app lints with [oxlint](https://oxc.rs/docs/guide/usage/linter) and formats with
 [oxfmt](https://oxc.rs/docs/guide/usage/formatter) (`pnpm lint`, `pnpm format`); the kit's copy in `src/kit/` and
@@ -91,7 +96,7 @@ The full standard: [docs/STANDARD.md](docs/STANDARD.md). Why the layout is what 
 
 | Part | What | README |
 |---|---|---|
-| `core` | `createAgentApi`: OpenAPI 3.1 + Scalar, HAL, problem+json, keys + Access, caching, Idempotency-Key, rate limits, discovery, a key-value store type | [core](src/core/README.md) |
+| `core` | `createAgentApi`: OpenAPI 3.1 + Scalar, HAL, problem+json, keys + Access, caching, Idempotency-Key, rate limits, discovery, a key-value store type; `newId`, `waitFor`, `Jobs` (a queue for later work) | [core](src/core/README.md) |
 | `db` | the app's database through Drizzle: `openDb`, `migrate` per feature, `testDb` | [db](src/db/README.md) |
 | `oauth` | the app as its own OAuth server (auth code + PKCE, agent registration via auth.md, ES256 tokens) | [oauth](src/oauth/README.md) |
 | `pagination` | cursor pages and sorting | [pagination](src/pagination/README.md) |
@@ -101,6 +106,7 @@ The full standard: [docs/STANDARD.md](docs/STANDARD.md). Why the layout is what 
 | `vectors` | Gemini Embedding 2 look and meaning vectors: ledgers that never pay twice, `nearest`, `standouts` | [vectors](src/vectors/README.md) |
 | `vector-search` | search by words, picture and likeness: three routes and their tools | [vector-search](src/vector-search/README.md) |
 | `web` | the front door: a public `/` or none, the browser app under `/app` | [web](src/web/README.md) |
+| `keys` | API keys made and revoked through the app's own API beside `API_KEYS`, `GET /api/me`, their MCP tools | [keys](src/keys/README.md) |
 | `boards` | the owner's collections of items with notes; `boardRef` / `parseBoardRef`; the reference feature shape | [boards](src/boards/README.md) |
 | `testing` | `lintOpenApi`, `guideRoutes`, `guideGaps`, `toolRoutes`, `toolsRun` | [testing](src/testing/README.md) |
 | `search-client`, `search-react`, `vector-search-ui`, `boards-client`, `boards-react` | the browser side: typed clients, headless hooks, an optional shadcn block | [browser](src/browser/README.md) |
