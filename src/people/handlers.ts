@@ -61,6 +61,8 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
       rpName,
       rpID,
       userName: person.email,
+      // What a password manager titles the saved passkey with
+      userDisplayName: person.name ?? person.email,
       userID: new TextEncoder().encode(person.id),
       attestationType: 'none',
       excludeCredentials: (await repo.passkeysOf(person.id)).filter((key) => key.rpId === rpID).map((key) => ({ id: key.id, transports: key.transports as never })),
