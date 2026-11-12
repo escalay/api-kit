@@ -13,6 +13,7 @@ an MCP tool.
 - `pnpm dev`: Vite runs both sides at http://localhost:5173, the browser app at `/app/` with hot reload and the Worker over a local D1 for everything else (`/docs`, `/llms.txt`, `/mcp`); `pnpm build` then `pnpm preview` serves the built result <!-- preset:app -->
 - `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:api --> <!-- runtime:workers -->
 - `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `vite build`, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:app -->
+- `pnpm run deploy:env`: the same for a real deployment whose settings live outside the repository: `CLOUDFLARE_ACCOUNT_ID`, `D1_<BINDING>_ID`, every `vars` entry left `""` in `wrangler.jsonc`, optional `PUBLIC_HOST`, from the environment (a secret store's `run`). It writes the git-ignored `wrangler.deploy.jsonc`, makes missing queues and deploys. A repository that may go public keeps no account id or real domain: deploy it this way <!-- runtime:workers -->
 
 A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 

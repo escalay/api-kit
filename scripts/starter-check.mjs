@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Makes one app per preset with `create-escalay` in the OS temp folder, installs it and runs its own checks: typecheck,
- * lint and tests for both. For the `app` preset also the build (its files must land under /app/assets/, the one prefix
+ * lint and tests for both, and for `api` a client made with `kit sdk`. For the `app` preset also the build (its files must land under /app/assets/, the one prefix
  * the Worker leaves to files), a dry-run deploy, and that a formatted app still takes a new feature and passes.
  */
 import { spawnSync } from 'node:child_process'
@@ -24,7 +24,10 @@ const check = (name, preset, more = []) => {
   for (const args of [['install'], ['migrations'], ['typecheck'], ['lint'], ['test'], ...more]) run('pnpm', args, app)
   return app
 }
-check('starter-api', 'api')
+const api = check('starter-api', 'api')
+// A typed client: made, generated, and every route covered from the start
+run(process.execPath, [cli, 'sdk'], api)
+for (const args of [['sdk:types'], ['typecheck'], ['lint'], ['test']]) run('pnpm', args, api)
 const app = check('starter-app', 'app', [['build'], ['exec', 'oxfmt', '--check', 'web', 'vite.config.ts', 'tsconfig.web.json', 'index.html'], ['exec', 'wrangler', 'deploy', '--dry-run']])
 const built = [...readFileSync(join(app, 'dist/client/index.html'), 'utf8').matchAll(/(?:src|href)="(\/[^"]+)"/g)].map(([, path]) => path)
 const stray = built.filter((path) => !path.startsWith('/app/assets/') || !existsSync(join(app, 'dist/client', path)))

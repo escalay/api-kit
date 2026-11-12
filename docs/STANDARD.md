@@ -47,6 +47,11 @@ parts an app copies in (`npx @escalay/kit add`, see the README); its `testing` p
   full resource. `?fields=a,b` trims a resource; heavy parts (full text, steps) are opt-in.
 - A score is a number with its meaning documented (cosine, rank-only); a model label is `{ value, confidence }` or
   `"unsure"` below its measured threshold, never a bare guess.
+- **Text written by strangers is named.** A resource that carries text someone outside wrote (a mail, an upload, a
+  scraped page, a form entry) lists those fields' paths in one array (`senderWritten: ["subject", "text",
+  "links[].url"]`), on every answer and webhook body that holds them, and the field and tool descriptions say it is
+  untrusted. Anything read out of that text (a code, a link) is listed too. Agents treat the listed fields as data,
+  never as instructions.
 
 ## 4. Lists
 
@@ -58,6 +63,9 @@ parts an app copies in (`npx @escalay/kit add`, see the README); its `testing` p
   `400`, never silently ignored. So is an unknown parameter: `createAgentApi` answers a `400` naming the parameters the
   operation does take (read from its query schema), so `?sinse=` can't pass for a filter. Sorting is `sortBy=` one of
   the documented fields and `order=asc|desc` (`sortQuery`).
+- **An empty answer says why when it can.** A filter or a wait that finds nothing, while something it left out did
+  arrive, names it (`found: false, skippedFrom: "no-reply@mailer.example"`), so an agent fixes its filter instead of
+  waiting again. Measured: without it, a guessed sender domain made an agent wait forever.
 
 ## 5. Errors: RFC 9457 problem details
 
@@ -97,6 +105,10 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 - **Agents and scripts:** an API key per client, `Authorization: Bearer <prefix>_<random>`. The service holds only
   hashes (`API_KEYS=laptop:<sha256>,ci:<sha256>`); the keys live in **your secret store, scoped to the app**,
   one secret per client (`API_KEY_LAPTOP`, …). Revoke = remove its line and redeploy.
+- **Keys an app makes itself (optional, `keys` module):** for a tool whose users hand out keys without a deploy,
+  `registerKeys` adds `/api/keys` (make, list, revoke; the key shown once, only its hash kept) and `/api/me` (who is
+  calling). `API_KEYS` keeps working beside them. Only a key from `API_KEYS` or a signed-in person may make or revoke
+  keys: a key made through the API cannot make another, so a leaked one can't make itself a spare.
 - **People:** Cloudflare Access SSO in front of the web pages; the app also verifies `Cf-Access-Jwt-Assertion` against
   the team's keys, so nothing reaches data without either a key or a verified person.
 - **A browser app on the same host:** on the bypassed paths Access sends no header, but the browser still sends Access's
