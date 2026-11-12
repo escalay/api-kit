@@ -610,6 +610,10 @@ describe('the copy-in CLI', () => {
       const nodeOnly = spawnSync(bin('tsc'), ['--noEmit', '-p', 'tsconfig.json'], { cwd: join(parent, 'box-api'), encoding: 'utf8' })
       expect(nodeOnly.status, nodeOnly.stdout).toBe(0)
       expect(cli(parent, 'init', 'odd-api', '--runtime', 'deno').stderr).toContain('--runtime is one of')
+      // The compatibility date is the pinned Workers types' day, never today: workerd refuses a date ahead of its build
+      const typesDay = JSON.parse(await readFile(join(import.meta.dirname, '..', 'package.json'), 'utf8')).devDependencies['@cloudflare/workers-types'].match(/\.(\d{4})(\d{2})(\d{2})\./).slice(1).join('-')
+      const edgeWrangler = await readFile(join(parent, 'edge-api/wrangler.jsonc'), 'utf8')
+      expect(edgeWrangler).toContain(`"compatibility_date": "${typesDay}"`)
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
