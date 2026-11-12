@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.0](https://github.com/escalay/api-kit/compare/v1.8.0...v1.9.0) (2026-11-12)
+
+
+### New
+
+* add the app preset, and oxlint and oxfmt for every new app ([#5](https://github.com/escalay/api-kit/issues/5)) ([0d3928a](https://github.com/escalay/api-kit/commit/0d3928a198df85acc810e040401f6c0430fb576e))
+
+
+### Fixed
+
+* stamp new Workers apps with a date the pinned runtime accepts ([#3](https://github.com/escalay/api-kit/issues/3)) ([174b3cf](https://github.com/escalay/api-kit/commit/174b3cf62019731cd9514358526daa21357d89c8))
+
 ## [1.8.0](https://github.com/escalay/api-kit/compare/v1.7.0...v1.8.0) (2026-11-11)
 
 
