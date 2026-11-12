@@ -42,7 +42,7 @@ export const keyHandlers = (repo: KeysRepo, { path, mePath, fixedKeys, keyPrefix
     const fixed = caller.kind === 'key' && fixedKeys.includes(name)
     const stored = caller.kind === 'key' && !fixed ? await repo.named(name) : undefined
     return c.json(
-      { kind: caller.kind, name, keyId: stored?.id ?? null, canManageKeys: caller.kind === 'person' || fixed, _links: linksOf(originOf(c), { self: mePath, ...(stored ? { key: `${path}/${stored.id}` } : {}) }) },
+      { kind: caller.kind, name, keyId: stored?.id ?? null, canManageKeys: fixed || (caller.kind === 'person' && caller.role !== 'member'), role: caller.kind === 'person' ? (caller.role ?? null) : null, _links: linksOf(originOf(c), { self: mePath, ...(stored ? { key: `${path}/${stored.id}` } : {}) }) },
       200,
       NO_STORE,
     )

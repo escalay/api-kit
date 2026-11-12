@@ -41,6 +41,7 @@ export const keyRoutes = ({ path, mePath, tag, keyPrefix = 'ak' }: { path: strin
       name: z.string().openapi({ description: 'The key’s name, the person’s email or the agent’s name.', example: 'billing-app' }),
       keyId: z.string().nullable().openapi({ description: 'For a key made through the API: its id, to revoke it.' }),
       canManageKeys: z.boolean().openapi({ description: 'Whether this caller may make and revoke keys.' }),
+      role: z.enum(['owner', 'member']).nullable().openapi({ description: 'For a person on a team (the people part): `owner` or `member`; otherwise null.', example: 'owner' }),
       _links: LinksSchema,
     })
     .openapi('Me', { description: 'Who is calling: the key, person or agent this request was made as.' })

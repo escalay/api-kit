@@ -172,6 +172,8 @@ describe('the team', () => {
     // A member uses the app but changes neither the team nor the keys
     expect((await visitor.call('POST', '/api/team', { email: 'friend@example.org' }, access('ana@example.org'))).status).toBe(403)
     expect((await visitor.call('POST', '/api/keys', { name: 'mine' }, access('ana@example.org'))).status).toBe(403)
+    expect(await visitor.json('GET', '/api/me', undefined, access('ana@example.org'))).toMatchObject({ kind: 'person', role: 'member', canManageKeys: false })
+    expect(await owner.json('GET', '/api/me')).toMatchObject({ role: 'owner', canManageKeys: true })
 
     const team = await owner.json('GET', '/api/team')
     const ownerRow = team.people.find((person: { role: string }) => person.role === 'owner')
