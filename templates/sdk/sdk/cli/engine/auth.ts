@@ -64,9 +64,12 @@ const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 
 const form = (fields: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: new URLSearchParams(fields).toString() })
 
-export const metadataOf = async (url: string, send: typeof fetch): Promise<Metadata> => {
+/** What to run to sign in to `url` again, as a command: `mailroom auth login https://mail.example.com`. */
+const loginAgain = (app: string, url: string) => `run \`${app} auth login ${url}\` again`
+
+export const metadataOf = async (url: string, send: typeof fetch, app: string): Promise<Metadata> => {
   const response = await send(`${url}/.well-known/oauth-authorization-server`, { headers: { accept: 'application/json' } }).catch(() => null)
-  if (!response?.ok) throw new CliError(`${url} offers no OAuth sign-in (no /.well-known/oauth-authorization-server): sign in with a key instead, \`auth login ${url} --with-token\` with the key on stdin`, EXIT.signIn)
+  if (!response?.ok) throw new CliError(`${url} offers no OAuth sign-in (no /.well-known/oauth-authorization-server): sign in with a key instead, \`${app} auth login ${url} --with-token\` with the key on stdin`, EXIT.signIn)
   return (await response.json()) as Metadata
 }
 
@@ -78,8 +81,8 @@ const withTokens = (profile: Profile, tokens: Tokens, now: number): Profile => (
  * the owner approves it (or says no, or the code expires).
  */
 export const deviceLogin = async ({ url, app, send, tell, sleep, signal, now }: { url: string; app: string; send: typeof fetch; tell: (text: string) => void; sleep: (ms: number) => Promise<void>; signal: AbortSignal; now: () => number }): Promise<Profile> => {
-  const metadata = await metadataOf(url, send)
-  if (!metadata.device_authorization_endpoint || !metadata.registration_endpoint) throw new CliError(`${url} has no device sign-in: sign in with a key instead (\`auth login ${url} --with-token\`)`, EXIT.signIn)
+  const metadata = await metadataOf(url, send, app)
+  if (!metadata.device_authorization_endpoint || !metadata.registration_endpoint) throw new CliError(`${url} has no device sign-in: sign in with a key instead (\`${app} auth login ${url} --with-token\`)`, EXIT.signIn)
   const registered = await send(metadata.registration_endpoint, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ client_name: `${app} CLI on ${hostname()}`, grant_types: [DEVICE_GRANT, 'refresh_token'] }) })
   if (!registered.ok) throw new CliError(`Could not register this CLI at ${url} (${registered.status})`, EXIT.signIn)
   const { client_id: clientId } = (await registered.json()) as { client_id: string }
@@ -101,36 +104,40 @@ export const deviceLogin = async ({ url, app, send, tell, sleep, signal, now }: 
       interval = (body.interval ?? interval / 1000 + 5) * 1000
       continue
     }
-    throw new CliError(body.error === 'access_denied' ? 'The owner said no.' : `Sign-in failed: ${body.error_description ?? body.error ?? polled.status}`, EXIT.signIn)
+    // The server's own words name its endpoints, for raw OAuth clients; a person here needs the command instead
+    if (body.error === 'access_denied') throw new CliError('The owner said no.', EXIT.signIn)
+    if (body.error === 'expired_token') throw new CliError(`The code expired before it was approved: ${loginAgain(app, url)}.`, EXIT.signIn)
+    if (body.error === 'invalid_grant') throw new CliError(`The server no longer knows this code: ${loginAgain(app, url)}.`, EXIT.signIn)
+    throw new CliError(`Sign-in failed (${body.error ?? polled.status}): ${loginAgain(app, url)}.`, EXIT.signIn)
   }
-  throw new CliError('The code expired before it was approved: run `auth login` again.', EXIT.signIn)
+  throw new CliError(`The code expired before it was approved: ${loginAgain(app, url)}.`, EXIT.signIn)
 }
 
 /**
  * A new access token from the profile's refresh token, under the lock. A token another process refreshed meanwhile is
  * taken as it is; `stale` is the token a server just refused, renewed even before it expires.
  */
-export const refreshProfile = async ({ store, name, send, sleep, now, stale }: { store: ProfileStore; name: string; send: typeof fetch; sleep: (ms: number) => Promise<void>; now: () => number; stale?: string }): Promise<Profile> =>
+export const refreshProfile = async ({ app, store, name, send, sleep, now, stale }: { app: string; store: ProfileStore; name: string; send: typeof fetch; sleep: (ms: number) => Promise<void>; now: () => number; stale?: string }): Promise<Profile> =>
   store.locked(async () => {
     const profiles = store.read()
     const profile = profiles.profiles[name]
-    if (!profile?.refreshToken || !profile.clientId) throw new CliError(`The sign-in for ${name} can't be renewed: run \`auth login ${profile?.url ?? '<url>'}\` again`, EXIT.signIn)
+    if (!profile?.refreshToken || !profile.clientId) throw new CliError(`The sign-in for ${name} can't be renewed: ${loginAgain(app, profile?.url ?? '<url>')}`, EXIT.signIn)
     const refused = stale !== undefined && profile.accessToken === stale
     if (!refused && profile.accessToken && profile.expiresAt && profile.expiresAt - 60_000 > now()) return profile
-    const metadata = await metadataOf(profile.url, send)
+    const metadata = await metadataOf(profile.url, send, app)
     const response = await send(metadata.token_endpoint, form({ grant_type: 'refresh_token', refresh_token: profile.refreshToken, client_id: profile.clientId }))
-    const body = (await response.json().catch(() => ({}))) as Tokens & { error_description?: string }
-    if (!response.ok) throw new CliError(`The sign-in for ${name} has ended (${body.error_description ?? response.status}): run \`auth login ${profile.url}\` again`, EXIT.signIn)
+    const body = (await response.json().catch(() => ({}))) as Tokens & { error?: string }
+    if (!response.ok) throw new CliError(`The sign-in for ${name} has ended (${body.error ?? response.status}): ${loginAgain(app, profile.url)}`, EXIT.signIn)
     const renewed = withTokens(profile, body, now())
     store.write({ ...profiles, profiles: { ...profiles.profiles, [name]: renewed } })
     return renewed
   }, sleep)
 
 /** Revokes a profile's refresh token, as far as the server lets it; signing out never fails on it. */
-export const revokeProfile = async (profile: Profile, send: typeof fetch) => {
+export const revokeProfile = async (profile: Profile, send: typeof fetch, app: string) => {
   if (!profile.refreshToken) return
   try {
-    const metadata = await metadataOf(profile.url, send)
+    const metadata = await metadataOf(profile.url, send, app)
     if (metadata.revocation_endpoint) await send(metadata.revocation_endpoint, form({ token: profile.refreshToken, ...(profile.clientId ? { client_id: profile.clientId } : {}) }))
   } catch {
     // Offline or gone: the local sign-out still happens

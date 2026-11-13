@@ -445,7 +445,8 @@ the deployment's `/mcp`, so it can't disagree with the tools.
 - **Sign-in**: `<app> auth login <url>` with a device code (RFC 8628, the `oauth` part; the CLI registers itself as a
   public client), or `--with-token` with a key on stdin; profiles per deployment in the user's config folder, mode
   0600, tokens renewed under a lock (a refresh token sent twice revokes the sign-in). `<APP>_URL`, `<APP>_API_KEY`
-  and `<APP>_PROFILE` override them.
+  and `<APP>_PROFILE` override them. A sign-in that fails or ends (an expired or unknown code, a refresh refused) says
+  the command to run, `` `<app> auth login <url>` again ``, never the OAuth endpoint the server's own error names.
 - **Commands come from the deployment**: the package carries `sdk/cli/commands.json` (`cliSnapshot`, written by
   `pnpm sdk:types`) for help before sign-in; signed in, the live `tools/list` wins, cached per profile for its `ttlMs`.
   Each listed tool and every call's result carry `_meta["api-kit/tools-hash"]` (a hash of the whole listing): an
