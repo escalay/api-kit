@@ -78,9 +78,9 @@ jobs:
       - name: actionlint
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
-          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color templates/app/github/workflows/ci.yml
+          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color templates/app/github/workflows/*.yml
       - name: zizmor
-        run: pipx run zizmor==1.32.0 --offline .github templates/app/github/workflows/ci.yml templates/app/github/dependabot.yml
+        run: pipx run zizmor==1.32.0 --offline .github templates/app/github/workflows/*.yml templates/app/github/dependabot.yml
 
   # The whole history, so a key committed and then removed is still found
   secrets:

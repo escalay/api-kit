@@ -474,6 +474,12 @@ What `init` sets up, and what an app keeps:
   (gitleaks over the whole history, `.gitleaks.toml` allowing `src/kit/kit.json`), and on pull requests `title`. Read-only
   `contents` permission, actions pinned to commit SHAs, `persist-credentials: false`, a newer push cancelling only a
   pull request's run.
+- **Security scanning, once public**: CodeQL (`codeql.yml`: `javascript-typescript` and `actions`, on main, pull
+  requests and weekly), OpenSSF Scorecard (`scorecard.yml`, published; the Scorecard API rejects results from a
+  workflow with top-level env or write permissions, or `run` steps in its job) and dependency review (CI's
+  `dependencies` job, on pull requests, failing on a high-severity vulnerability). GitHub's free plan offers code
+  scanning and dependency review on public repositories only, so each job is skipped while the repository is private
+  (`if: !github.event.repository.private`), and none is a required check.
 - **Changes**: through pull requests titled as Conventional Commits, squash-merged.
 - **The repository's settings** (`kit repo apply`, through `gh`; `kit repo check` exits 1 on drift): squash merges
   only with the title as the commit (or `--merge rebase`), auto-merge and the update-branch button on, merged branches

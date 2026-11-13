@@ -1,0 +1,35 @@
+# OpenSSF Scorecard: how the repository measures against open-source security practice, published for its badge and
+# under Security › Code scanning. Scorecard reads public repositories only, so the job is skipped while it is private.
+# Publishing makes the Scorecard API check this file's shape: no top-level env or defaults, no write permissions at
+# the top, only checkout, upload-artifact, upload-sarif and the Scorecard action as steps (no `run`). Keep it so.
+name: Scorecard
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '41 5 * * 2'
+
+permissions: read-all
+
+jobs:
+  analysis:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      security-events: write # the findings, under Security › Code scanning
+      id-token: write # proves to the Scorecard API that the results come from this repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: results.sarif
