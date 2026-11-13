@@ -677,7 +677,7 @@ describe('the copy-in CLI', () => {
       expect(kitPnpm).toMatch(/^pnpm@\d+\.\d+\.\d+$/)
       expect((await readFile(join(import.meta.dirname, '..', 'cli.mjs'), 'utf8')).match(/KIT_PACKAGE_MANAGER = '([^']+)'/)?.[1]).toBe(kitPnpm)
       for (const name of ['demo-api', 'edge-api', 'box-api']) {
-        for (const path of ['.github/dependabot.yml', '.gitleaks.toml']) expect(existsSync(join(parent, name, path)), `${name}: ${path}`).toBe(true)
+        for (const path of ['.github/dependabot.yml', '.gitleaks.toml', '.github/workflows/codeql.yml', '.github/workflows/scorecard.yml']) expect(existsSync(join(parent, name, path)), `${name}: ${path}`).toBe(true)
         expect((await readFile(join(parent, name, '.node-version'), 'utf8')).trim()).toBe(kitNode)
         // corepack in CI installs this pnpm, the one that wrote the lockfile, not whatever is newest that day
         expect(JSON.parse(await readFile(join(parent, name, 'package.json'), 'utf8')).packageManager).toBe(kitPnpm)

@@ -1,6 +1,7 @@
 # Every change, in parallel jobs: the checks (`pnpm check`) and the tests (`pnpm test`), together `pnpm gate`, which the
-# pre-push hook runs too; the workflows themselves, a secrets scan, and on pull requests
-# the title. A new push to a pull request cancels the run it replaces; a push to main always finishes.
+# pre-push hook runs too; the workflows themselves, a secrets scan, and on pull requests the title and, once the
+# repository is public, a review of new dependencies. A new push to a pull request cancels the run it replaces; a push
+# to main always finishes. codeql.yml and scorecard.yml add code scanning once the repository is public.
 name: CI
 
 on:
@@ -91,3 +92,21 @@ jobs:
             echo "::error::The title \"$TITLE\" is not a Conventional Commit, e.g. \"feat: add notes\" or \"fix(notes): keep the order\"."
             exit 1
           fi
+
+  # Dependency review: a pull request that adds a dependency with a known high-severity vulnerability fails. GitHub's
+  # free plan has it on public repositories only, so it is skipped while the repository is private
+  dependencies:
+    if: github.event_name == 'pull_request' && !github.event.repository.private
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write # the summary it leaves on a pull request that adds a vulnerable dependency
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure

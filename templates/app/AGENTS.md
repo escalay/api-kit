@@ -32,6 +32,10 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 - Deploy with `pnpm run deploy:env` from a machine that has the secrets, after the merge. <!-- runtime:workers -->
 - CI's actions are pinned to commit SHAs with the version in a comment; Dependabot moves them. A new action is pinned
   the same way, and the `workflows` job (actionlint, zizmor) must stay green.
+- Once the repository is public, CodeQL (`codeql.yml`), OpenSSF Scorecard (`scorecard.yml`) and CI's `dependencies`
+  job (dependency review) run too; while it is private they are skipped, since GitHub's free plan offers them on public
+  repositories only. None is a required check. Findings are under Security › Code scanning; fix a CodeQL alert like a
+  failing test. `scorecard.yml` publishes its results, so keep its job to the steps it has: no `run` steps or env.
 
 ## Layout
 
