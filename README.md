@@ -22,7 +22,11 @@ npm create escalay my-api                        # the `api` preset, with an exa
 cd my-api && pnpm install && pnpm format && pnpm migrations && pnpm test && pnpm dev   # http://localhost:4400/docs, /llms.txt, /mcp
 npx @escalay/kit feature reading-lists           # a new feature folder, listed and tested
 npx @escalay/kit sdk                             # a typed TypeScript client in sdk/, a method per operation
+gh repo create my-api --private --source . --push && npx @escalay/kit repo apply   # CI runs; the repository set up as §20 says
 ```
+
+Every new app is a git repository with CI (`.github/workflows/ci.yml`), monthly Dependabot, a secrets scan, a
+pre-push hook running `pnpm gate` (what CI runs), and Node and pnpm pinned; its `AGENTS.md` says how changes ship.
 
 `npm create escalay my-api -- --runtime node --title "My API"` passes flags on: `--runtime both|cloudflare|node`
 (default `both`), `--preset api`, `--bare` (no example feature), `--yes` (it never asks; accepted for scripts).
