@@ -166,7 +166,8 @@ export const cliMarkdown = ({ tools = [], resources = [], jobs = [], commands }:
     ...tools.map((tool) => ({ ...(tool.input ? cliOf(tool as ToolLike & { input: { shape: Record<string, unknown> } }) : toolCli({ name: tool.name, cli: tool.cli, keys: [] })), summary: tool.title ?? firstSentence(tool.description), tool: tool.name })),
     ...resources.flatMap((resource) => (resource.name ? [{ ...resourceCli({ name: resource.name, uriTemplate: resource.uriTemplate, cli: resource.cli }), summary: resource.title, uriTemplate: resource.uriTemplate }] : [])),
   ]
-  const order = (a: CliCommandLike, b: CliCommandLike) => (a.job && !b.job ? -1 : b.job && !a.job ? 1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+  // Jobs first in the app's own order (the sort keeps it), then the rest by name
+  const order = (a: CliCommandLike, b: CliCommandLike) => (a.job && !b.job ? -1 : b.job && !a.job ? 1 : a.job ? 0 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
   return [...listed]
     .sort(order)
     .map((command) => `- \`${command.name}${command.positional.map((key) => ` <${key}>`).join('')}\` — ${command.summary} (${command.job ? 'job' : `\`${command.tool ?? command.uriTemplate}\``})`)

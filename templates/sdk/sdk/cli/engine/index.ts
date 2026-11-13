@@ -12,7 +12,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
-import { completeArguments, GLOBAL_FLAGS, parseArguments, splitLeadingFlags, type Globals } from './args.js'
+import { completeArguments, GLOBAL_FLAGS, parseArguments, RESOURCE_FLAGS, splitLeadingFlags, type Globals } from './args.js'
 import { configDirOf, deviceLogin, profileNameOf, profileStore, refreshProfile, revokeProfile, type Profile } from './auth.js'
 import { commandsFromListing, expandTemplate, jobCommand, kebab, selectFields, type Command, type ListedTool, type Snapshot } from './commands.js'
 import { agentsHelp, commandHelp, completion, nounHelp, nounsOf, overview, paintFor } from './help.js'
@@ -241,7 +241,7 @@ export const createCli = (options: CliOptions) => {
 
   const execute = async (command: Command, tokens: string[], outer: AbortSignal) => {
     const isResource = Boolean(command.resource)
-    const parsing = isResource ? { ...command, flags: [...command.flags, { name: 'out', key: 'out', type: 'string' as const, description: 'Write the file here', required: false, multiple: false }] } : command
+    const parsing = isResource ? { ...command, flags: [...command.flags, ...Object.entries(RESOURCE_FLAGS).map(([name, flag]) => ({ name, key: name, type: flag.value ? ('string' as const) : ('boolean' as const), description: flag.about, required: false, multiple: false }))] } : command
     const { values, globals } = parseArguments(parsing, tokens)
     if (globals.help) return print(commandHelp(app, command, paint)), EXIT.ok
     const input = globals.input ? await readInput(globals.input) : {}
@@ -263,6 +263,12 @@ export const createCli = (options: CliOptions) => {
         writeFileSync(out, Buffer.from(blobs[0]!.blob!, 'base64'))
         tell(`Wrote ${out} (${blobs[0]!.mimeType ?? 'a file'})`)
       } else if (blobs.length) tell(`${blobs.length} file part${blobs.length > 1 ? 's' : ''} (${blobs.map((part) => part.mimeType).join(', ')}) left out: add --out <file> to save it`)
+      else if (out) {
+        // Only text: --out saves it instead of printing it
+        writeFileSync(out, read.text)
+        tell(`Wrote ${out}`)
+        return EXIT.ok
+      }
       if (globals.json) printJson(selectFields(read.json ?? read.contents, globals.json === true ? undefined : globals.json))
       else if (read.text) print(read.text)
       return EXIT.ok

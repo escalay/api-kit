@@ -10,7 +10,7 @@ import { CliError, EXIT } from './mcp.js'
 
 export type Globals = { json?: string[] | true; yes: boolean; dryRun: boolean; input?: string; timeout?: number; profile?: string; help: boolean }
 
-/** Flags every command takes, with whether they take a value. */
+/** Flags every command takes, with whether they take a value (the kit's `CLI_GLOBAL_FLAGS`; a kit test keeps them equal). */
 export const GLOBAL_FLAGS: Record<string, { value: boolean; about: string }> = {
   json: { value: false, about: 'Print the JSON answer; `--json id,name` keeps those fields' },
   yes: { value: false, about: 'Confirm a destructive command without asking' },
@@ -19,6 +19,11 @@ export const GLOBAL_FLAGS: Record<string, { value: boolean; about: string }> = {
   timeout: { value: true, about: 'Seconds to wait; passed to the tool when it takes a timeout' },
   profile: { value: true, about: 'The signed-in deployment to use' },
   help: { value: false, about: 'Show the arguments and examples' },
+}
+
+/** What a resource's command takes besides its template variables (the kit's `CLI_RESOURCE_FLAGS`). */
+export const RESOURCE_FLAGS: Record<string, { value: boolean; about: string }> = {
+  out: { value: true, about: 'Write the file part here' },
 }
 
 const FIELDS = /^[A-Za-z_$][\w$.-]*(,[A-Za-z_$][\w$.-]*)*$/

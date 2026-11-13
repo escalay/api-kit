@@ -30,6 +30,14 @@ export const PENDING_META = 'api-kit/pending'
 /** Commands every app's CLI has, which no tool, resource or job may be named after (or use as a noun). */
 export const CLI_BUILT_INS = ['help', 'commands', 'api', 'tool', 'doctor', 'completion', 'version'] as const
 /**
+ * The flags every command takes, and whether each takes a value (`--json` takes fields only sometimes: see the CLI's
+ * rule). The CLI engine keeps the same table in `sdk/cli/engine/args.ts`; a kit test keeps the two equal.
+ */
+export const CLI_GLOBAL_FLAGS: Readonly<Record<string, boolean>> = { json: false, yes: false, 'dry-run': false, input: true, timeout: true, profile: true, help: false }
+/** Flags a resource's command takes besides its template variables: `--out <file>` saves a file part. */
+export const CLI_RESOURCE_FLAGS: Readonly<Record<string, boolean>> = { out: true }
+
+/**
  * The built-in `auth` verbs. `auth` is shared: an app's tool may fill a free verb (`who_am_i` is `auth status`, which
  * the CLI shows with the profile it used).
  */

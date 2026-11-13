@@ -8,7 +8,8 @@ import { boardTools } from '../src/boards/index.js'
 import { vectorSearchTools } from '../src/vector-search/index.js'
 import { cliMarkdown, createAgentApi, createOAuth, fallbackCliName, hintsOf, keyTools, teamTools, telemetryTools, generateOAuthKey, HAL_JSON, linksOf, memoryOAuthStore, mintApiKey, originOf, pageOf, pageSchema, parseApiKeys, problemResponses, ProblemError, LinksSchema } from '../src/index.js'
 import { cliOf, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp } from '../src/mcp/index.js'
-import { pathKeysOf } from '../src/core/cli.js'
+import { CLI_GLOBAL_FLAGS, CLI_RESOURCE_FLAGS, pathKeysOf } from '../src/core/cli.js'
+import { GLOBAL_FLAGS, RESOURCE_FLAGS } from '../templates/sdk/sdk/cli/engine/args.js'
 import { cliGaps, cliSnapshot, guideGaps } from '../src/testing/index.js'
 import { createCli } from '../templates/sdk/sdk/cli/engine/index.js'
 import { configDirOf } from '../templates/sdk/sdk/cli/engine/auth.js'
@@ -87,9 +88,9 @@ const sampleCli = async () => {
     mcpTool({ name: 'wait_for_app', title: 'Wait for an app', description: 'An app, once it is there.', input: z.object({ app: z.string().describe('The app id.'), timeout: z.number().optional().describe('Seconds to wait.') }), route: 'GET /api/v1/apps/{id}', cli: { name: 'app wait', examples: [{ run: 'app wait a1 --timeout 5', about: 'Alpha, once it is there' }] }, call: ({ app }) => ({ path: `/api/v1/apps/${app}` }), summarize: (json) => `${json.name} is there.` }),
     mcpTool({ name: 'slow_thing', title: 'Something slow', description: 'Takes a while.', input: z.object({ timeout: z.number().optional().describe('Seconds to wait.') }), cli: { name: 'thing wait', examples: [{ run: 'thing wait --timeout 5', about: 'Waits' }] }, call: () => ({ path: '/api/v1/slow' }), summarize: () => 'Done.' }),
   ]
-  const resources = [mcpResource({ name: 'app_card', title: 'An app’s card', description: 'The app as JSON.', uriTemplate: 'sample://apps/{id}/card{?format}', cli: 'app card', read: ({ id }) => [{ path: `/api/v1/apps/${id}` }] })]
+  const resources = [mcpResource({ name: 'app_card', title: 'An app’s card', description: 'The app as JSON.', uriTemplate: 'sample://apps/{id}/card{?format}', cli: { name: 'app card', examples: [{ run: 'app card a1 --format short --out card.json', about: 'Alpha’s card, saved' }] }, read: ({ id }) => [{ path: `/api/v1/apps/${id}` }] })]
   mountMcp(app, { factory: mcpServerFactory({ info: { name: 'sample', version: '1.0.0' }, instructions: 'Find apps.', tools, resources, callApi: inProcess(app) }), allowedHostnames: ['localhost'] })
-  const snapshot = cliSnapshot({ app: 'sample', version: '1.0.0', tools, resources, jobs: [first, late] })
+  const snapshot = cliSnapshot({ app: 'sample', version: '1.0.0', tools, resources, jobs: [late, first] })
   const configDir = await mkdtemp(join(tmpdir(), 'cli-'))
 
   /** The CLI in this process: its fetch is the app's own `request`, aborted like a real one. */
@@ -101,7 +102,7 @@ const sampleCli = async () => {
       envPrefix: 'SAMPLE',
       version: '1.0.0',
       snapshot,
-      jobs: [first, late],
+      jobs: [late, first],
       fetch: (input, init) =>
         new Promise<Response>((resolve, reject) => {
           init?.signal?.addEventListener('abort', () => reject(init.signal!.reason))
@@ -122,7 +123,7 @@ describe('the command line', () => {
     const packaged = JSON.parse((await run(['commands', '--json'], { env: {} })).out)
     expect(live).toEqual(snapshot)
     expect(packaged).toEqual(snapshot)
-    expect(snapshot.commands.map((command) => command.name)).toEqual(['first', 'late', 'app card', 'app delete', 'app list', 'app tag', 'app view', 'app wait', 'auth status', 'thing wait'])
+    expect(snapshot.commands.map((command) => command.name)).toEqual(['late', 'first', 'app card', 'app delete', 'app list', 'app tag', 'app view', 'app wait', 'auth status', 'thing wait'])
     expect(snapshot.commands.find((command) => command.name === 'app tag')).toMatchObject({ tool: 'tag_app', positional: ['id'], readOnly: false, destructive: false, flags: [{ name: 'id', required: true }, { name: 'tags', type: 'string', multiple: true, required: true }, { name: 'pinned', type: 'boolean', required: false }] })
     expect(snapshot.commands.find((command) => command.name === 'app card')).toMatchObject({ resource: 'app_card', uriTemplate: 'sample://apps/{id}/card{?format}', positional: ['id'] })
   })
@@ -238,6 +239,9 @@ describe('the command line', () => {
     expect(JSON.parse((await run(['app', 'card', 'a1'])).out)).toMatchObject({ id: 'a1' })
     expect(JSON.parse((await run(['app', 'card', 'a1', '--format', 'short', '--dry-run'])).out)).toEqual({ method: 'resources/read', uri: 'sample://apps/a1/card?format=short' })
     expect(JSON.parse((await run(['app', 'card', 'a1', '--format', 'short'])).out)).toMatchObject({ id: 'a1' })
+    const saved = join(await mkdtemp(join(tmpdir(), 'out-')), 'card.json')
+    expect(await run(['app', 'card', 'a1', '--out', saved])).toEqual({ code: 0, out: '', err: `Wrote ${saved}\n` })
+    expect(JSON.parse(await readFile(saved, 'utf8'))).toMatchObject({ id: 'a1' })
     const job = await run(['first', '--verbose'])
     expect(job).toEqual({ code: 0, out: 'Alpha (a1)\n', err: 'Opening a1\n' })
     expect(JSON.parse((await run(['first', '--json', 'name'])).out)).toEqual({ name: 'Alpha' })
@@ -293,6 +297,11 @@ describe('the command line', () => {
     expect((await run(['app', 'list'], { env: {} })).code).toBe(2)
   })
 
+  it('shares its own flags with the kit’s audit, so the two can’t drift', () => {
+    expect(Object.fromEntries(Object.entries(GLOBAL_FLAGS).map(([name, flag]) => [name, flag.value]))).toEqual(CLI_GLOBAL_FLAGS)
+    expect(Object.fromEntries(Object.entries(RESOURCE_FLAGS).map(([name, flag]) => [name, flag.value]))).toEqual(CLI_RESOURCE_FLAGS)
+  })
+
   it('keeps profiles in the user’s config folder', () => {
     expect(configDirOf('sample', { XDG_CONFIG_HOME: '/xdg' }, 'linux')).toBe('/xdg/sample')
     expect(configDirOf('sample', { APPDATA: 'C:\\Users\\a\\AppData\\Roaming' }, 'win32')).toBe(join('C:\\Users\\a\\AppData\\Roaming', 'sample'))
@@ -332,12 +341,13 @@ describe('naming commands', () => {
 
   it('lists the commands for the guide as {{cli.commands}}', async () => {
     const { app, tools, resources } = await sampleCli()
-    const lines = cliMarkdown({ tools, resources, jobs: [first] }).split('\n')
-    expect(lines[0]).toBe('- `first` — The first app, opened (job)')
+    const lines = cliMarkdown({ tools, resources, jobs: [late, first] }).split('\n')
+    // Jobs first, in the app's own order
+    expect(lines.slice(0, 2)).toEqual(['- `late <how>` — Fails the way jobs fail (job)', '- `first` — The first app, opened (job)'])
     expect(lines).toContain('- `app view <id>` — Get an app (`get_app`)')
     expect(lines).toContain('- `app wait <app>` — Wait for an app (`wait_for_app`)')
     // From the snapshot, the same lines
-    expect(cliMarkdown({ commands: cliSnapshot({ tools, resources, jobs: [first] }).commands })).toBe(lines.join('\n'))
+    expect(cliMarkdown({ commands: cliSnapshot({ tools, resources, jobs: [late, first] }).commands })).toBe(lines.join('\n'))
     expect(lines).toContain('- `app card <id>` — An app’s card (`sample://apps/{id}/card{?format}`)')
     const doc = await (await app.request('/openapi.json', { headers: { authorization: `Bearer ${key}` } })).json()
     expect(guideGaps(new Map([['llms.txt', 'Commands:\n\n{{cli.commands}}\n']]), {}, { doc, tools, resources })).toEqual([])
@@ -345,7 +355,13 @@ describe('naming commands', () => {
 
   it('finds what keeps commands from being usable', async () => {
     const { tools, resources } = await sampleCli()
-    expect(cliGaps({ tools, resources, jobs: [first, late] })).toEqual([])
+    expect(cliGaps({ tools, resources, jobs: [late, first] })).toEqual([])
+    // The engine's own flags count as the engine reads them: a resource's --out, -y, --profile with its value
+    const flagged = [mcpTool({ ...base, name: 'get_one', input: z.object({ id: z.string().describe('Id.') }), cli: { name: 'one view', examples: [{ run: 'one view o1 -y --profile work --json id,name --dry-run --timeout 5 --input in.json', about: 'Every global' }] }, call: ({ id }) => ({ path: `/api/ones/${id}` }) })]
+    const raw = [mcpResource({ name: 'raw', title: 'Raw', description: 'R', uriTemplate: 's://mail/{id}/parts/{n}', cli: { name: 'mail download', examples: [{ run: 'mail download msg_4f8a1c 0 --out invoice.pdf', about: 'A part, saved' }] }, read: () => [] })]
+    expect(cliGaps({ tools: flagged, resources: raw })).toEqual([])
+    // --out is a resource's, not a tool's
+    expect(cliGaps({ tools: [mcpTool({ ...flagged[0]!, cli: { name: 'one view', examples: [{ run: 'one view o1 --out x', about: 'x' }] } })] })).toEqual(['tool get_one: the example "one view o1 --out x" uses --out, which it doesn\'t take', 'tool get_one: the example "one view o1 --out x" gives 2 bare arguments, and it takes 1'])
     const bad = [
       mcpTool({ ...base, name: 'list_things', input: z.object({ q: z.string() }), call: () => ({ path: '/api/things' }) }),
       mcpTool({ ...base, name: 'get_thing', input: z.object({ id: z.string().describe('Id.') }), cli: 'things view', call: ({ id }) => ({ path: `/api/things/${id}` }) }),
@@ -355,7 +371,7 @@ describe('naming commands', () => {
       mcpTool({ ...base, name: 'Odd', input: z.object({}), cli: { name: 'Odd', examples: [] }, call: () => ({ path: '/o' }) }),
       mcpTool({ ...base, name: 'clash', input: z.object({ json: z.boolean().describe('Raw.') }), cli: { name: 'clash view', examples: [{ run: 'clash view', about: 'x' }] }, call: () => ({ path: '/c' }) }),
     ]
-    expect(cliGaps({ tools: bad, resources: [mcpResource({ name: 'r', title: 'R', description: 'R', uriTemplate: 's://things/{id}', read: () => [] })], jobs: [first, late] })).toEqual([
+    expect(cliGaps({ tools: bad, resources: [mcpResource({ name: 'r', title: 'R', description: 'R', uriTemplate: 's://things/{id}', read: () => [] })], jobs: [late, first] })).toEqual([
       'tool list_things: no cli name (the route rule would call it "thing list"); add cli: \'<noun> <verb>\'',
       'tool list_things: the argument q has no description',
       'tool list_things: no example; add cli: { name, examples: [{ run, about }] }',

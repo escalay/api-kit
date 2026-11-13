@@ -11,7 +11,7 @@
  * expect(readFileSync('sdk/cli/commands.json', 'utf8')).toBe(`${JSON.stringify(cliSnapshot({ app: 'mailroom', version: VERSION, tools: TOOLS, resources: RESOURCES, jobs }), null, 2)}\n`)
  */
 import { z } from '@hono/zod-openapi'
-import { CLI_AUTH_VERBS, CLI_BUILT_INS, cliOf, hintsOf, resourceCli, templateVariables, type CliExample, type CliSpec, type CliTool } from '../core/cli.js'
+import { CLI_AUTH_VERBS, CLI_BUILT_INS, CLI_GLOBAL_FLAGS, CLI_RESOURCE_FLAGS, cliOf, hintsOf, resourceCli, templateVariables, type CliExample, type CliSpec, type CliTool } from '../core/cli.js'
 
 type JsonSchema = { type?: string | string[]; description?: string; enum?: unknown[]; default?: unknown; items?: JsonSchema; anyOf?: JsonSchema[]; oneOf?: JsonSchema[]; properties?: Record<string, JsonSchema>; required?: string[] }
 
@@ -135,7 +135,8 @@ const jobCommand = (job: CliJobLike): CliSnapshotCommand => ({
 export const cliSnapshot = ({ app = '', version = '', tools, resources = [], jobs = [] }: { app?: string; version?: string; tools: SnapshotTool[]; resources?: SnapshotResource[]; jobs?: CliJobLike[] }): CliSnapshot => ({
   app,
   version,
-  commands: [...jobs.map(jobCommand).sort(byName), ...[...tools.map(toolCommand), ...resources.map(resourceCommand)].sort(byName)],
+  // Jobs in the app's own order (the first is the one people meet first); the rest by name
+  commands: [...jobs.map(jobCommand), ...[...tools.map(toolCommand), ...resources.map(resourceCommand)].sort(byName)],
 })
 
 /** Nouns that end in s and are singular. */
@@ -145,8 +146,7 @@ const looksPlural = (noun: string, allowed: Set<string>) => {
   return !allowed.has(word) && !allowed.has(noun) && /[^su]s$/.test(word) && !/(ics|ss|us|is)$/.test(word)
 }
 
-/** Global flags every command takes. */
-const GLOBAL_FLAGS = new Set(['json', 'yes', 'dry-run', 'input', 'timeout', 'profile', 'help'])
+const GLOBAL_FLAGS = new Set(Object.keys(CLI_GLOBAL_FLAGS))
 
 const FIELDS = /^[A-Za-z_$][\w$.-]*(,[A-Za-z_$][\w$.-]*)*$/
 const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
@@ -162,10 +162,13 @@ const exampleGaps = (command: CliSnapshotCommand, where: string) =>
     const named = command.name.split(' ')
     if (named.some((word, index) => words[index] !== word)) return [`${where}: the example "${run}" doesn't start with "${command.name}"`]
     const flags = new Map(command.flags.map((flag) => [flag.name, flag]))
+    // The engine's own flags, with whether each takes a value: every command's, and a resource's --out
+    const own: Record<string, boolean> = { ...CLI_GLOBAL_FLAGS, ...(command.resource ? CLI_RESOURCE_FLAGS : {}) }
     const gaps: string[] = []
     let bare = 0
     for (let index = named.length; index < words.length; index++) {
       const word = words[index]!
+      if (word === '-y' || word === '-h') continue
       if (!word.startsWith('--')) {
         bare++
         continue
@@ -177,9 +180,9 @@ const exampleGaps = (command: CliSnapshotCommand, where: string) =>
         continue
       }
       const flag = flags.get(name) ?? (name.startsWith('no-') && flags.get(name.slice(3))?.type === 'boolean' ? flags.get(name.slice(3)) : undefined)
-      if (!flag && !GLOBAL_FLAGS.has(name)) gaps.push(`${where}: the example "${run}" uses --${name}, which it doesn't take`)
+      if (!flag && !(name in own)) gaps.push(`${where}: the example "${run}" uses --${name}, which it doesn't take`)
       // A flag's value is the next word, except for booleans and flags written with =
-      const takesValue = flag ? flag.type !== 'boolean' : name === 'input' || name === 'timeout' || name === 'profile'
+      const takesValue = flag ? flag.type !== 'boolean' : Boolean(own[name])
       if (takesValue && !word.includes('=')) index++
     }
     if (bare > command.positional.length) gaps.push(`${where}: the example "${run}" gives ${bare} bare arguments, and it takes ${command.positional.length}`)
