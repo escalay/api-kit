@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Makes one app per preset with `create-escalay` in the OS temp folder, installs it and runs its own checks: typecheck,
- * lint and tests for both, and for `api` a client made with `kit sdk` and its command line, built and run. For the `app` preset also the build (its files must land under /app/assets/, the one prefix
+ * Makes one app per preset with `create-escalay` in the OS temp folder, installs it and runs its own CI's checks: format,
+ * typecheck, lint, format check and tests for both, and for `api` a client made with `kit sdk` and its command line, built and run. For the `app` preset also the build (its files must land under /app/assets/, the one prefix
  * the Worker leaves to files), a dry-run deploy, and that a formatted app still takes a new feature and passes.
  */
 import { spawnSync } from 'node:child_process'
@@ -21,7 +21,8 @@ const cli = fileURLToPath(new URL('../cli.mjs', import.meta.url))
 const check = (name, preset, more = []) => {
   const app = join(parent, name)
   run(process.execPath, [create, name, '--preset', preset, '--yes'], parent)
-  for (const args of [['install'], ['migrations'], ['typecheck'], ['lint'], ['test'], ...more]) run('pnpm', args, app)
+  // What the app's own CI runs (templates/app/github/workflows/ci.yml), after the `pnpm format` init's last line asks for
+  for (const args of [['install'], ['format'], ['migrations'], ['typecheck'], ['lint'], ['exec', 'oxfmt', '--check'], ['test'], ...more]) run('pnpm', args, app)
   return app
 }
 const api = check('starter-api', 'api')

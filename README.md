@@ -19,7 +19,7 @@ the practices travel with the copy into `src/kit/<part>/README.md`.
 
 ```bash
 npm create escalay my-api                        # the `api` preset, with an example `notes` feature
-cd my-api && pnpm install && pnpm test && pnpm dev   # http://localhost:4400/docs, /llms.txt, /mcp
+cd my-api && pnpm install && pnpm format && pnpm migrations && pnpm test && pnpm dev   # http://localhost:4400/docs, /llms.txt, /mcp
 npx @escalay/kit feature reading-lists           # a new feature folder, listed and tested
 npx @escalay/kit sdk                             # a typed TypeScript client in sdk/, a method per operation
 ```
@@ -41,7 +41,7 @@ generated files are left out of both. What `init` and `feature` write is in the 
 
 ```bash
 npm create escalay my-tool -- --preset app       # the API plus web/: React, TanStack Router and Query, Tailwind
-cd my-tool && pnpm install && pnpm migrations && pnpm test
+cd my-tool && pnpm install && pnpm format && pnpm migrations && pnpm test
 pnpm dev                                         # Vite runs both sides: the app at /app/, the API everywhere else
 pnpm run deploy                                  # guide, migrations, vite build, wrangler deploy: one Worker
 ```

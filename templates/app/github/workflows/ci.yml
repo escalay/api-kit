@@ -1,0 +1,96 @@
+# Every change, in parallel jobs: the checks, the tests, the workflows themselves, a secrets scan, and on pull requests
+# the title. A new push to a pull request cancels the run it replaces; a push to main always finishes.
+name: CI
+
+on:
+  pull_request:
+    # `edited` too: a changed title is checked again
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Before setup-node: its pnpm cache needs pnpm on the PATH
+      - run: corepack enable
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - name: Everything is formatted (pnpm format fixes it)
+        run: pnpm exec oxfmt --check
+      - name: migrations/ matches every feature's steps # runtime:workers
+        run: pnpm migrations && test -z "$(git status --porcelain migrations)" # runtime:workers
+      - run: pnpm build # preset:app
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: corepack enable
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  # actionlint for mistakes, zizmor for the ways a workflow can be turned against its repository
+  workflows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+      - name: zizmor
+        run: pipx run zizmor==1.32.0 --offline .github
+
+  # The whole history, so a key committed and then removed is still found
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.24.3 git /repo --no-banner --redact --config /repo/.gitleaks.toml
+
+  title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: The pull request title is a Conventional Commit
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|perf|docs|refactor|chore|test|build|ci|revert)(\([a-z0-9./-]+\))?!?: [^ ].*$'
+          if ! [[ "$TITLE" =~ $pattern ]]; then
+            echo "::error::The title \"$TITLE\" is not a Conventional Commit, e.g. \"feat: add notes\" or \"fix(notes): keep the order\"."
+            exit 1
+          fi
