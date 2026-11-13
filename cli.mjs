@@ -23,6 +23,12 @@
  *                                             and the app's command line (sdk/cli, the package's bin)
  *   kit cli [--app .] [--bin name] [--update] the command line for an app that already has sdk/; --update takes this
  *                                             kit's engine (sdk/cli/engine) and leaves the app's bin, jobs and commands
+ *   kit button [--app .] [--repo owner/name] [--branch b [--subdir d]] [--check] [--write] [--smoke]
+ *                                             the Deploy to Cloudflare button: prints its link, Markdown and HTML; --check
+ *                                             lists what would stop a stranger's deploy (ids or account in wrangler.jsonc,
+ *                                             settings the form can't describe, migrations the deploy skips), exit 1;
+ *                                             --write puts it in README.md; --smoke deploys a copy as a stranger would,
+ *                                             checks it answers, and deletes all it made (CLOUDFLARE_API_TOKEN/_ACCOUNT_ID)
  *   kit repo [check|apply] [--app .] [--repo owner/name] [--merge squash|rebase] [--checks a,b]
  *                                             the GitHub repository set up as the standard says (§20), through `gh`:
  *                                             merges, the Actions token, security alerts, and the rules for main
@@ -35,7 +41,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -78,7 +84,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks'])
+const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 const lockPath = join(dir, 'kit.json')
@@ -543,6 +549,227 @@ const applyFinding = (repo, plan, finding) => {
   if (answer.failed) fail(`couldn't set ${finding.what} on ${repo}: ${answer.message}`)
 }
 
+// ---- The deploy button ----
+
+/** The deploy form's words for the settings every new app reads (src/app.ts `Env`); all are optional. */
+const DEPLOY_FORM = {
+  PUBLIC_HOST: { description: 'The host this Worker answers on: `<name>.<your-subdomain>.workers.dev`, or a custom domain such as `api.example.com`. MCP accepts requests for this host only.' },
+  API_KEYS: { description: 'Optional. Keys as `name:sha256` pairs, comma-separated: the hash of each key, never the key (`printf \'my-key\' | shasum -a 256`).' },
+  OAUTH_SIGNING_KEY: { description: 'Optional. Turns on OAuth sign-in for agents: an ES256 private key as JWK JSON. Make one in a clone: `pnpm exec tsx -e "import(\'./src/kit/oauth/index.ts\').then(async (m) => console.log(await m.generateOAuthKey()))"`.' },
+  ACCESS_TEAM: { description: 'Optional, with ACCESS_AUD. Your Cloudflare Access team name, to let people in through Access.' },
+  ACCESS_AUD: { description: 'Optional, with ACCESS_TEAM. The Application Audience (AUD) tag of the Access application in front of this Worker.' },
+}
+
+/** Cloudflare's Deploy to Cloudflare button: the page it opens and its badge. */
+const BUTTON_PAGE = 'https://deploy.workers.cloudflare.com/'
+const BUTTON_IMAGE = 'https://deploy.workers.cloudflare.com/button'
+/** The README block `kit button --write` keeps current. */
+const BUTTON_START = '<!-- deploy-button -->'
+const BUTTON_END = '<!-- /deploy-button -->'
+/** Bindings whose ids the button creates when the config leaves them out, by config key and the id field to leave out. */
+const PROVISIONED = { d1_databases: ['database_id', 'preview_database_id'], kv_namespaces: ['id', 'preview_id'], hyperdrive: ['id'] }
+/** Config keys Cloudflare's button documents no provisioning for: a stranger's deploy needs them made by hand. */
+const NOT_PROVISIONED = ['services', 'dispatch_namespaces', 'mtls_certificates', 'analytics_engine_datasets', 'browser', 'images', 'workflows']
+
+/** A JSONC file as data: comments and trailing commas removed, never inside a string. */
+const parseJsonc = (text) => {
+  let out = ''
+  for (let i = 0, inString = false; i < text.length; i++) {
+    const char = text[i]
+    if (inString) {
+      out += char
+      if (char === '\\') out += text[++i] ?? ''
+      else if (char === '"') inString = false
+    } else if (char === '"') {
+      inString = true
+      out += char
+    } else if (char === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++
+      out += '\n'
+    } else if (char === '/' && text[i + 1] === '*') {
+      i = text.indexOf('*/', i + 2) + 1
+    } else out += char
+  }
+  return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'))
+}
+
+/** The names a `.dev.vars.example` (dotenv) defines, which the deploy page asks for as secrets. */
+const dotenvNames = (text) => [...text.matchAll(/^\s*([A-Z][A-Z0-9_]*)\s*=/gm)].map(([, name]) => name)
+
+/**
+ * The button's link for a GitHub repository; a branch and a folder go in the repository's own URL
+ * (`…/tree/<branch>/<dir>`), which is how the button takes them.
+ */
+const buttonUrl = ({ repo, branch, dir }) => {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) fail(`--repo is owner/name, not "${repo}"`)
+  if (dir && !branch) fail('--dir needs --branch: the button reads a folder from …/tree/<branch>/<dir>')
+  const path = branch ? `/tree/${branch}${dir ? `/${dir.replace(/^\/+|\/+$/g, '')}` : ''}` : ''
+  return `${BUTTON_PAGE}?url=https://github.com/${repo}${path}`
+}
+
+/** The badge as Markdown and as HTML. */
+const buttonSnippets = (url) => ({
+  markdown: `[![Deploy to Cloudflare](${BUTTON_IMAGE})](${url})`,
+  html: `<a href="${url}"><img src="${BUTTON_IMAGE}" alt="Deploy to Cloudflare"/></a>`,
+})
+
+/** What would stop a stranger's deploy from this app folder, each with its fix; and notes that don't fail it. */
+const buttonFindings = (app) => {
+  const findings = []
+  const notes = []
+  const configPath = ['wrangler.jsonc', 'wrangler.json'].map((name) => join(app, name)).find(existsSync)
+  if (!configPath) return { findings: [{ what: 'no wrangler.jsonc', fix: 'the button deploys Workers only: start from `init --runtime cloudflare` or add a wrangler.jsonc' }], notes, config: null }
+  const config = parseJsonc(readFileSync(configPath, 'utf8'))
+  const pkg = existsSync(join(app, 'package.json')) ? JSON.parse(readFileSync(join(app, 'package.json'), 'utf8')) : {}
+  if (config.account_id) findings.push({ what: 'wrangler.jsonc pins account_id', fix: 'remove it: a stranger deploys to their own account, and `deploy:env` takes yours from CLOUDFLARE_ACCOUNT_ID' })
+  if (!config.compatibility_date) findings.push({ what: 'wrangler.jsonc has no compatibility_date', fix: 'set one (`init` uses the date of the pinned Workers types)' })
+  for (const [key, fields] of Object.entries(PROVISIONED))
+    for (const binding of config[key] ?? [])
+      for (const field of fields)
+        if (binding[field]) findings.push({ what: `${key} ${binding.binding ?? binding.database_name ?? ''} sets ${field}`, fix: `remove it: the button makes the resource in the deployer's account (and \`deploy:env\` fills yours)` })
+  for (const key of NOT_PROVISIONED) if (config[key]?.length ?? (config[key] && Object.keys(config[key]).length)) notes.push(`${key} in wrangler.jsonc: the button makes none, so a stranger sets it up by hand before deploying`)
+  const secrets = existsSync(join(app, '.dev.vars.example')) ? dotenvNames(readFileSync(join(app, '.dev.vars.example'), 'utf8')) : []
+  const blankVars = Object.entries(config.vars ?? {}).filter(([, value]) => value === '').map(([name]) => name)
+  const described = pkg.cloudflare?.bindings ?? {}
+  for (const name of [...new Set([...secrets, ...blankVars])])
+    if (!described[name]?.description?.trim()) findings.push({ what: `${name} has no description for the deploy form`, fix: `add "cloudflare": { "bindings": { "${name}": { "description": "…" } } } to package.json: what it is, and where to get its value` })
+  const migrations = (config.d1_databases ?? []).filter((database) => existsSync(join(app, database.migrations_dir ?? 'migrations')))
+  const deploy = pkg.scripts?.deploy
+  if (!deploy) findings.push({ what: 'package.json has no deploy script', fix: 'the button then runs a bare `npx wrangler deploy`: add one that applies the migrations and deploys' })
+  else
+    for (const database of migrations)
+      if (!new RegExp(`d1 migrations apply ${database.binding}\\b[^&]*--remote`).test(deploy)) findings.push({ what: `the deploy script never applies ${database.binding}'s migrations`, fix: `add \`wrangler d1 migrations apply ${database.binding} --remote\` before \`wrangler deploy\`` })
+  if ((config.assets || existsSync(join(app, 'vite.config.ts'))) && !pkg.scripts?.build) findings.push({ what: 'the app serves built files but has no build script', fix: 'add "build" (the button runs it before deploy)' })
+  return { findings, notes, config }
+}
+
+/** The README with the button block set to `markdown`: in place between the markers, else after the title. */
+const readmeWithButton = (readme, markdown) => {
+  const block = `${BUTTON_START}\n${markdown}\n${BUTTON_END}`
+  const start = readme.indexOf(BUTTON_START)
+  const end = readme.indexOf(BUTTON_END)
+  if (start >= 0 && end > start) return readme.slice(0, start) + block + readme.slice(end + BUTTON_END.length)
+  // A button pasted by hand becomes the block, so there is never a second one
+  const pasted = readme.split('\n').findIndex((line) => line.includes(BUTTON_IMAGE))
+  if (pasted >= 0) return readme.split('\n').toSpliced(pasted, 1, block).join('\n')
+  const [title, ...rest] = readme.split('\n')
+  return [title, '', block, ...rest].join('\n')
+}
+
+/** Cloudflare's REST API with the token wrangler would use; throws with Cloudflare's own message. */
+const cloudflareApi = async (method, path, body) => {
+  const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+    method,
+    headers: { authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`, 'content-type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const answer = await response.json().catch(() => ({}))
+  if (!response.ok || answer.success === false) {
+    const said = (answer.errors ?? []).map((error) => error.message).join('; ')
+    const rights = /authentication error/i.test(said) ? ' (the token needs Workers Scripts, D1, Workers KV, R2 and Queues edit rights on the account)' : ''
+    throw new Error(`${method} ${path.replace(/accounts\/[^/]+/, 'accounts/<account>')}: ${response.status} ${said}${rights}`)
+  }
+  return answer.result
+}
+
+/**
+ * A stranger's deploy, for real: this app copied to a temporary folder, its resources made in the account under names
+ * ending `-smoke-<random>` (as the button makes them before it runs the scripts), its build and deploy scripts run as
+ * the button runs them, then its health answered on workers.dev. Everything it made is deleted afterwards, whatever
+ * happened. Needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
+ */
+const smokeDeploy = async (app, config, pkg) => {
+  const account = process.env.CLOUDFLARE_ACCOUNT_ID
+  if (!account || !process.env.CLOUDFLARE_API_TOKEN) fail('--smoke needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (run it under your secret store)')
+  const suffix = `smoke-${createHash('sha256').update(String(Math.random())).digest('hex').slice(0, 6)}`
+  const named = (name) => `${name}-${suffix}`.slice(0, 63)
+  const made = []
+  const work = join(tmpdir(), `kit-${suffix}`)
+  try {
+    const listed = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: app, encoding: 'utf8' })
+    if (listed.status !== 0) fail('--smoke copies what git tracks: run it in a git repository')
+    for (const file of listed.stdout.split('\0').filter(Boolean)) {
+      mkdirSync(dirname(join(work, file)), { recursive: true })
+      // A link (init makes .claude/skills one) stays a link
+      if (lstatSync(join(app, file)).isSymbolicLink()) symlinkSync(readlinkSync(join(app, file)), join(work, file))
+      else writeFileSync(join(work, file), readFileSync(join(app, file)), { mode: statSync(join(app, file)).mode })
+    }
+    const deployed = structuredClone(config)
+    deployed.name = named(config.name)
+    for (const database of deployed.d1_databases ?? []) {
+      database.database_name = named(database.database_name)
+      database.database_id = (await cloudflareApi('POST', `/accounts/${account}/d1/database`, { name: database.database_name })).uuid
+      made.push({ kind: 'D1 database', name: database.database_name, path: `/accounts/${account}/d1/database/${database.database_id}` })
+    }
+    for (const namespace of deployed.kv_namespaces ?? []) {
+      namespace.id = (await cloudflareApi('POST', `/accounts/${account}/storage/kv/namespaces`, { title: named(namespace.binding) })).id
+      made.push({ kind: 'KV namespace', name: named(namespace.binding), path: `/accounts/${account}/storage/kv/namespaces/${namespace.id}` })
+    }
+    for (const bucket of deployed.r2_buckets ?? []) {
+      bucket.bucket_name = named(bucket.bucket_name)
+      await cloudflareApi('POST', `/accounts/${account}/r2/buckets`, { name: bucket.bucket_name })
+      made.push({ kind: 'R2 bucket', name: bucket.bucket_name, path: `/accounts/${account}/r2/buckets/${bucket.bucket_name}` })
+    }
+    const queueNames = new Map()
+    for (const queue of [...(deployed.queues?.producers ?? []), ...(deployed.queues?.consumers ?? [])]) {
+      if (!queueNames.has(queue.queue)) {
+        const name = named(queue.queue)
+        const created = await cloudflareApi('POST', `/accounts/${account}/queues`, { queue_name: name })
+        made.push({ kind: 'queue', name, path: `/accounts/${account}/queues/${created.queue_id}`, queueId: created.queue_id })
+        queueNames.set(queue.queue, name)
+      }
+      queue.queue = queueNames.get(queue.queue)
+    }
+    // What the deploy form asks for, filled from the examples: secrets as plain vars, which the Worker reads the same way
+    const examples = existsSync(join(app, '.dev.vars.example')) ? Object.fromEntries([...readFileSync(join(app, '.dev.vars.example'), 'utf8').matchAll(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*"?([^"\n]*)"?/gm)].map(([, name, value]) => [name, value])) : {}
+    deployed.vars = { ...examples, ...Object.fromEntries(Object.entries(deployed.vars ?? {}).map(([name, value]) => [name, value === '' ? (examples[name] ?? 'smoke') : value])) }
+    const subdomain = (await cloudflareApi('GET', `/accounts/${account}/workers/subdomain`)).subdomain
+    const host = `${deployed.name}.${subdomain}.workers.dev`
+    if ('PUBLIC_HOST' in deployed.vars) deployed.vars.PUBLIC_HOST = host
+    writeFileSync(join(work, 'wrangler.jsonc'), `${JSON.stringify(deployed, null, 2)}\n`)
+    made.push({ kind: 'Worker', name: deployed.name, path: `/accounts/${account}/workers/scripts/${deployed.name}` })
+    const env = { ...process.env, CLOUDFLARE_ACCOUNT_ID: account, CI: 'true' }
+    for (const script of [null, 'build', 'deploy']) {
+      if (script && !pkg.scripts?.[script]) continue
+      const args = script ? ['run', script] : ['install', '--frozen-lockfile']
+      console.log(`$ pnpm ${args.join(' ')}`)
+      const ran = spawnSync('pnpm', args, { cwd: work, env, stdio: 'inherit' })
+      if (ran.status !== 0) throw new Error(`pnpm ${args.join(' ')} failed (exit ${ran.status})`)
+    }
+    // A new workers.dev name can take a few seconds to answer
+    let health = null
+    for (let tries = 0; tries < 30 && health?.status !== 200; tries++) {
+      health = await fetch(`https://${host}/api/health`).catch(() => null)
+      if (health?.status !== 200) await new Promise((done) => setTimeout(done, 3000))
+    }
+    if (health?.status !== 200) throw new Error(`https://${host}/api/health answered ${health?.status ?? 'nothing'} after 90 seconds`)
+    const guide = await fetch(`https://${host}/llms.txt`)
+    if (guide.status !== 200) throw new Error(`https://${host}/llms.txt answered ${guide.status}`)
+    console.log(`deployed as a stranger would: https://${host} answers /api/health and /llms.txt`)
+  } catch (error) {
+    console.error(`kit: the smoke deploy failed: ${error.message}`)
+    process.exitCode = 1
+  } finally {
+    // A queue's consumers first (Cloudflare keeps a Worker that consumes a queue, and a queue a Worker is bound to), then
+    // the Worker, then what it was bound to; each delete is tried, and what stays is named
+    const kept = []
+    for (const queue of made.filter((resource) => resource.queueId))
+      for (const consumer of await cloudflareApi('GET', `/accounts/${account}/queues/${queue.queueId}/consumers`).catch(() => []))
+        await cloudflareApi('DELETE', `/accounts/${account}/queues/${queue.queueId}/consumers/${consumer.consumer_id}`).catch((error) => kept.push(`the consumer of queue ${queue.name} (${error.message})`))
+    for (const resource of made.reverse()) {
+      await cloudflareApi('DELETE', resource.path).then(
+        () => console.log(`deleted ${resource.kind} ${resource.name}`),
+        (error) => kept.push(`${resource.kind} ${resource.name} (${error.message})`),
+      )
+    }
+    rmSync(work, { recursive: true, force: true })
+    if (kept.length) {
+      console.error(`could not delete, remove by hand: ${kept.join('; ')}`)
+      process.exitCode = 1
+    }
+  }
+}
+
 const commands = {
   help: () => console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').match(/\/\*\*([\s\S]*?)\*\//)[1].replace(/^ \* ?/gm, '').trim()),
 
@@ -635,7 +862,7 @@ const commands = {
       const marked = line.match(MARK)
       return !marked ? [line] : keeps[marked[2] ?? marked[3] ?? marked[4]] ? unmarked(marked[1]) : []
     }
-    for (const file of ['AGENTS.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts', '.github/workflows/ci.yml'].map((path) => join(root, path)).filter(existsSync))
+    for (const file of ['AGENTS.md', 'README.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts', '.github/workflows/ci.yml'].map((path) => join(root, path)).filter(existsSync))
       writeFileSync(file, readFileSync(file, 'utf8').split('\n').flatMap(unmarked).join('\n').replaceAll('__worker_dev__', runtime === 'both' ? 'dev:worker' : 'dev'))
     // npm may drop the executable bit when it packs the kit
     chmodSync(join(root, '.githooks/pre-push'), 0o755)
@@ -656,7 +883,9 @@ const commands = {
     const runtimeDeps = { ...(runtime === 'cloudflare' ? {} : RUNTIME), ...(preset === 'app' ? WEB_DEPS : {}) }
     const devDeps = { ...DEV, ...LINT_DEV, ...(runtime === 'node' ? {} : WORKERS_DEV), ...(runtime === 'cloudflare' ? { tsx: RUNTIME.tsx } : {}), ...(preset === 'app' ? WEB_DEV : {}) }
     const sorted = (deps) => Object.fromEntries(Object.entries(deps).sort())
-    writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', packageManager: KIT_PACKAGE_MANAGER, engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps) }, null, 2) + '\n')
+    // What the Deploy to Cloudflare form says about each setting (kit button --check wants one for each it asks)
+    const cloudflare = runtime === 'node' ? {} : { cloudflare: { bindings: DEPLOY_FORM } }
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', packageManager: KIT_PACKAGE_MANAGER, engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps), ...cloudflare }, null, 2) + '\n')
     if (!flags.has('--bare')) addFeature(root, 'notes')
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
     console.log(`Next: cd ${relative(process.cwd(), root)} && pnpm install && pnpm format${runtime === 'node' ? '' : ' && pnpm migrations'} && pnpm test && pnpm dev`)
@@ -762,6 +991,45 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const again = ['kit repo apply', ...(merge === 'squash' ? [] : ['--merge', merge]), ...(valueOf('--checks') ? ['--checks', JSON.stringify(valueOf('--checks'))] : [])].join(' ')
     console.log(findings.length ? `${findings.length} to fix on ${repo}: \`${again}\`` : `${repo} is set up as the standard says (${merge} merges; required: ${checks.join(', ')})`)
     process.exitCode = findings.length ? 1 : 0
+  },
+
+  button: async () => {
+    const app = resolve(process.cwd(), valueOf('--app') ?? '.')
+    const repo = valueOf('--repo') ?? (spawnSync('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], { cwd: app, encoding: 'utf8' }).stdout?.trim() || undefined)
+    const url = repo ? buttonUrl({ repo, branch: valueOf('--branch'), dir: valueOf('--subdir') }) : null
+    const checking = flags.has('--check') || flags.has('--smoke')
+    if (!checking && !flags.has('--write')) {
+      if (!url) fail('no GitHub repository here: run it in a clone, or pass --repo owner/name')
+      const { markdown, html } = buttonSnippets(url)
+      console.log(`Link:     ${url}\nMarkdown: ${markdown}\nHTML:     ${html}`)
+      return
+    }
+    const readmePath = join(app, 'README.md')
+    if (flags.has('--write')) {
+      if (!url) fail('--write needs the repository: run it in a clone, or pass --repo owner/name')
+      const before = existsSync(readmePath) ? readFileSync(readmePath, 'utf8') : `# ${basename(app)}\n`
+      const after = readmeWithButton(before, buttonSnippets(url).markdown)
+      if (after !== before) writeFileSync(readmePath, after)
+      console.log(after === before ? 'README.md already has this button' : `README.md: the button now deploys ${url.split('?url=')[1]}`)
+    }
+    if (!checking) return
+    const { findings, notes, config } = buttonFindings(app)
+    if (url && existsSync(readmePath)) {
+      const readme = readFileSync(readmePath, 'utf8')
+      if (readme.includes(BUTTON_START) && !readme.includes(buttonSnippets(url).markdown)) findings.push({ what: "README.md's button deploys something else", fix: '`kit button --write` sets it to this repository' })
+    }
+    const visibility = repo ? spawnSync('gh', ['repo', 'view', repo, '--json', 'visibility', '-q', '.visibility'], { encoding: 'utf8' }).stdout?.trim() : ''
+    if (!repo) notes.push('not on GitHub yet: the button needs a public github.com or gitlab.com repository')
+    else if (visibility && visibility !== 'PUBLIC') notes.push(`${repo} is ${visibility.toLowerCase()}: the button works for strangers once it is public`)
+    for (const finding of findings) console.log(`fix   ${finding.what}: ${finding.fix}`)
+    for (const note of notes) console.log(`note  ${note}`)
+    if (findings.length) {
+      console.log(`${findings.length} to fix before the button can deploy this app`)
+      process.exitCode = 1
+      return
+    }
+    console.log(`${basename(app)} is ready for the Deploy to Cloudflare button${url ? `: ${url}` : ''}`)
+    if (flags.has('--smoke')) await smokeDeploy(app, config, existsSync(join(app, 'package.json')) ? JSON.parse(readFileSync(join(app, 'package.json'), 'utf8')) : {})
   },
 
   feature: () => {

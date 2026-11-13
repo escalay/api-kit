@@ -25,3 +25,5 @@ pnpm format
 pnpm migrations
 # Everything the app's CI and its pre-push hook run
 pnpm gate
+# Ready for the Deploy to Cloudflare button, checked by the published kit
+npx -y "@escalay/kit@$version" button --check

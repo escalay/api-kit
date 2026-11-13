@@ -1,11 +1,11 @@
 // __title__ on Cloudflare Workers. Secrets (API_KEYS, OAUTH_SIGNING_KEY) go in with `wrangler secret put`, locally in
-// .dev.vars (git-ignored; copy .dev.vars.example). Before the first deploy: pin account_id (wrangler's login may be
-// another account), `wrangler d1 create __name__` and put its id below.
+// .dev.vars (git-ignored; copy .dev.vars.example). No account_id and no database id here, so anyone can deploy it:
+// the Deploy to Cloudflare button makes the database in the deployer's account, and `pnpm run deploy:env` fills yours
+// from CLOUDFLARE_ACCOUNT_ID and D1_DB_ID. `npx @escalay/kit button --check` keeps it that way.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "__name__",
   "main": "src/worker.ts",
-  // "account_id": "<the Cloudflare account this deploys to>",
   "compatibility_date": "__date__",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
@@ -14,6 +14,6 @@
   "assets": { "not_found_handling": "single-page-application", "run_worker_first": ["/*", "!/app/*"] }, // preset:app
   "d1_databases": [
     // migrations/ is written by `pnpm migrations` from every feature's steps and applied at deploy
-    { "binding": "DB", "database_name": "__name__", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
+    { "binding": "DB", "database_name": "__name__", "migrations_dir": "migrations" }
   ]
 }

@@ -42,6 +42,8 @@ const check = (name, preset, more = []) => {
     process.exit(1)
   }
   console.log(`${name}: lint refuses a feature that names Cloudflare, and allows it in src/bindings/`)
+  // Ready for the Deploy to Cloudflare button as made
+  run(process.execPath, [cli, 'button', '--check'], app)
   // A repository from the start, with git pointed at the hook by `pnpm install`
   const hooks = spawnSync('git', ['config', 'core.hooksPath'], { cwd: app, encoding: 'utf8' }).stdout.trim()
   if (hooks !== '.githooks') {

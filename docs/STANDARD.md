@@ -270,8 +270,8 @@ fact, steps with checkable done-when criteria.
   capped model keys, a read-only storage key). Values never enter a repo, doc, commit or transcript.
 - On your host as a container: the API runs with an allowlisted env (`container/entrypoint.sh`), behind Cloudflare
   Access with the bypass paths above; a separate job syncs any read-only store in.
-- **Or on Cloudflare Workers** (`init --runtime cloudflare|both`): `wrangler.jsonc` pins `account_id` in an app you alone deploy (the global
-  wrangler login may be another account), D1 is the database, secrets go in with `wrangler secret put` (locally
+- **Or on Cloudflare Workers** (`init --runtime cloudflare|both`): `wrangler.jsonc` holds no `account_id` and no
+  resource ids (`pnpm run deploy:env` takes yours from the environment: `CLOUDFLARE_ACCOUNT_ID`, `D1_<BINDING>_ID`), D1 is the database, secrets go in with `wrangler secret put` (locally
   `.dev.vars`), and `pnpm run deploy` (never `pnpm deploy`, pnpm's own command) writes the guide module and the D1 migration files, applies them, then deploys.
   Deploy with a scoped token kept in the app's secrets.
 - **A browser app on Workers** (`init --preset app`): one package and one Worker. Vite with Cloudflare's plugin builds
@@ -281,6 +281,16 @@ fact, steps with checkable done-when criteria.
   server uses `base: '/app/'`; the build writes into `app/assets/` instead, because the built folder is served from
   the root. A repository others deploy with their own account (a template, a deploy button) leaves `account_id` out of
   `wrangler.jsonc` and takes it from the environment instead.
+- **The Deploy to Cloudflare button** (`kit button`): anyone deploys the app to their own account from its README.
+  The button reads only the repository (`?url=https://github.com/<owner>/<repo>`, a branch and folder as
+  `/tree/<branch>/<dir>`), makes every D1, KV, R2, queue and Hyperdrive the config names without an id, asks for each
+  secret in `.dev.vars.example`, shows the description `package.json` gives under `cloudflare.bindings`, then runs the
+  `build` and `deploy` scripts. So: no ids or account in `wrangler.jsonc`, a description for every secret and every
+  empty `vars` entry, a `deploy` script that applies the migrations. `kit button --check` holds an app to that (exit
+  1 with a fix per line; the starter check runs it on every starter), `--write` keeps the README's
+  `<!-- deploy-button -->` block current, and `--smoke` deploys a copy as a stranger would (its resources made under
+  `-smoke-` names first, as the button makes them, then the scripts), checks `/api/health` and `/llms.txt`, and
+  deletes all it made. The button needs a public github.com or gitlab.com repository, and deploys Workers only.
 - **Lint and format:** every app has `pnpm lint` (oxlint) and `pnpm format` (oxfmt). Both leave out `src/kit/` (the
   kit's copy must stay byte-equal for `doctor`) and generated files.
 

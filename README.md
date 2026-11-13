@@ -23,6 +23,7 @@ cd my-api && pnpm install && pnpm format && pnpm migrations && pnpm test && pnpm
 npx @escalay/kit feature reading-lists           # a new feature folder, listed and tested
 npx @escalay/kit sdk                             # a typed TypeScript client in sdk/, a method per operation
 gh repo create my-api --private --source . --push && npx @escalay/kit repo apply   # CI runs; the repository set up as §20 says
+npx @escalay/kit button --check && npx @escalay/kit button --write                 # the Deploy to Cloudflare button, ready and in the README
 ```
 
 Every new app is a git repository with CI (`.github/workflows/ci.yml`), monthly Dependabot, a secrets scan, a

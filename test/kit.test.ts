@@ -697,6 +697,20 @@ describe('the copy-in CLI', () => {
         expect(scripts.check).not.toContain('vite build')
         expect(await readFile(join(parent, name, '.githooks/pre-push'), 'utf8')).toContain('exec pnpm gate')
         expect(statSync(join(parent, name, '.githooks/pre-push')).mode & 0o111, `${name}: the hook is executable`).not.toBe(0)
+        // Ready for the Deploy to Cloudflare button: no ids to leave out, a form description for each setting, the block in the README
+        const manifestOf = JSON.parse(await readFile(join(parent, name, 'package.json'), 'utf8'))
+        const readme = await readFile(join(parent, name, 'README.md'), 'utf8')
+        expect(readme).not.toMatch(/runtime:|__title__/)
+        if (name === 'box-api') {
+          expect(manifestOf.cloudflare).toBeUndefined()
+          expect(readme).not.toContain('deploy-button')
+        } else {
+          expect(await readFile(join(parent, name, 'wrangler.jsonc'), 'utf8')).not.toMatch(/database_id|account_id"\s*:/)
+          expect(Object.keys(manifestOf.cloudflare.bindings).sort()).toEqual(['ACCESS_AUD', 'ACCESS_TEAM', 'API_KEYS', 'OAUTH_SIGNING_KEY', 'PUBLIC_HOST'])
+          expect(readme).toContain('<!-- deploy-button -->\n')
+          const ready = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), 'button', '--check'], { cwd: join(parent, name), encoding: 'utf8', env: { ...process.env, PATH: '/usr/bin:/bin' } })
+          expect(ready.stdout, ready.stderr).toContain('is ready for the Deploy to Cloudflare button')
+        }
         // Made inside the kit's own repository: no repository of its own inside another
         expect(existsSync(join(parent, name, '.git'))).toBe(false)
       }

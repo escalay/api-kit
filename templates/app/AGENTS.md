@@ -30,6 +30,7 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 - Dependabot opens one grouped pull request a month per ecosystem, for versions out at least a week, and security
   fixes at once. Merge it when green; a red one found a real break, so fix it there and never merge it red.
 - Deploy with `pnpm run deploy:env` from a machine that has the secrets, after the merge. <!-- runtime:workers -->
+- Anyone else deploys it with the README's Deploy to Cloudflare button (public repository only): `npx @escalay/kit button --check` must pass, so keep ids and the account out of `wrangler.jsonc` and give every setting the form asks for a description under `cloudflare.bindings` in `package.json`; `--smoke` proves it on a real account. <!-- runtime:workers -->
 - CI's actions are pinned to commit SHAs with the version in a comment; Dependabot moves them. A new action is pinned
   the same way, and the `workflows / lint` check (actionlint, zizmor) must stay green. `workflows`, `secrets` and
   `title` call escalay/.github's shared workflows, pinned the same way.
