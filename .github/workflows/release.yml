@@ -25,6 +25,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # To start CI on the release pull request
+      actions: write
     outputs:
       created: ${{ steps.release.outputs.release_created }}
       tag: ${{ steps.release.outputs.tag_name }}
@@ -36,6 +38,16 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+      # A pull request opened with the workflow's own token starts no workflow, so its required checks would never
+      # report; a dispatch is the exception, so CI is started on the release branch by hand
+      - name: Run CI on the release pull request
+        if: steps.release.outputs.pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+        run: |
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH" ||
+            echo "::warning::CI did not start on $BRANCH. Give ci.yml a workflow_dispatch trigger, or close and reopen the release pull request."
 
   publish:
     needs: release-please
