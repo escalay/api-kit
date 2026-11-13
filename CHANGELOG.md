@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.3](https://github.com/escalay/api-kit/compare/v1.15.2...v1.15.3) (2026-11-13)
+
+
+### Fixed
+
+* **init:** pin pnpm in new apps from the published package too ([#36](https://github.com/escalay/api-kit/issues/36)) ([87121d5](https://github.com/escalay/api-kit/commit/87121d518a27bf4ea72d1dee21ed314c84e1b3a2))
+
 ## [1.15.2](https://github.com/escalay/api-kit/compare/v1.15.1...v1.15.2) (2026-11-13)
 
 
