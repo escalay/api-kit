@@ -72,7 +72,8 @@ describe('kit repo', () => {
     expect(kit('apply').status).toBe(0)
     const checked = kit('check')
     expect(checked.status).toBe(0)
-    expect(checked.stdout).toContain('note     rules for main: GitHub offers them on a private repository only with a paid plan')
+    expect(checked.stdout).toContain('note     rules for main and auto-merge: GitHub offers them on a private repository only with a paid plan')
+    expect(checked.stdout).not.toContain('allow_auto_merge')
   })
 
   it('takes rebase merges, named checks, and changes a ruleset that drifted', () => {
