@@ -158,7 +158,7 @@ describe('the command line', () => {
     const { run } = await sampleCli()
     const missing = await run(['app', 'view'])
     expect(missing).toMatchObject({ code: 1, out: '' })
-    expect(missing.err).toContain('"app view" needs <id> (The app id)')
+    expect(missing.err).toContain('"app view" needs <id>: The app id.')
     expect((await run(['app', 'tag', 'a1'])).err).toContain('needs --tags')
     expect((await run(['app', 'list', '--limit', 'many'])).err).toContain('--limit is a whole number, not "many"')
     expect((await run(['app', 'list', '--colour'])).err).toContain('unknown flag --colour for "app list"; it takes --limit')

@@ -184,7 +184,7 @@ export const createCli = (options: CliOptions) => {
   }
   const confirm = async (what: string, globals: Globals) => {
     if (globals.yes) return
-    if (!interactive) throw usage(`${what} changes or deletes things for good: add --yes to go ahead`)
+    if (!interactive) throw new CliError(`"${what}" changes or deletes things for good: add --yes to go ahead`, EXIT.usage, { title: 'Needs --yes', status: 400 })
     if (!/^y(es)?$/i.test((await ask(`${what}: go ahead? [y/N] `)).trim())) throw new CliError('Not done.', EXIT.usage)
   }
   const waiting = async <T>(label: string, work: Promise<T>) => {
@@ -252,7 +252,7 @@ export const createCli = (options: CliOptions) => {
     const { out, ...given } = args as Record<string, unknown> & { out?: string }
     const uri = isResource ? expandTemplate(command.uriTemplate!, given) : undefined
     if (globals.dryRun) return printJson(isResource ? { method: 'resources/read', uri } : { method: 'tools/call', name: command.tool, arguments: given }), EXIT.ok
-    if (command.destructive) await confirm(`${app} ${command.name} ${command.positional.map((key) => String(given[key] ?? '')).join(' ')}`.trim(), globals)
+    if (command.destructive) await confirm(`${command.name} ${command.positional.map((key) => String(given[key] ?? '')).join(' ')}`.trim(), globals)
     const { signal, done } = deadline(globals, command, outer)
     try {
       const client = clientFor(target)
@@ -274,7 +274,7 @@ export const createCli = (options: CliOptions) => {
   const runJob = async (command: Command, args: Record<string, unknown>, globals: Globals, target: Target, outer: AbortSignal) => {
     const job = jobs.find((one) => one.name === command.job)!
     if (globals.dryRun) throw usage(`a job's calls depend on each other's answers, so it has no --dry-run; \`${app} help ${job.name}\` says what it calls`)
-    if (job.destructive) await confirm(`${app} ${job.name}`, globals)
+    if (job.destructive) await confirm(job.name, globals)
     const { signal, done } = deadline(globals, command, outer)
     let client: ReturnType<typeof clientFor> | undefined
     const connected = () => (client ??= clientFor(target))

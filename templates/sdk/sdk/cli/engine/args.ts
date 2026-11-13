@@ -158,7 +158,7 @@ export const completeArguments = (command: Command, values: Record<string, unkno
   for (const flag of command.flags) {
     if (!flag.required || merged[flag.key] !== undefined) continue
     const named = command.positional.includes(flag.key) ? `<${flag.key}>` : `--${flag.name}`
-    throw usage(`"${command.name}" needs ${named}${flag.description ? ` (${flag.description.replace(/\.$/, '')})` : ''}`)
+    throw usage(`"${command.name}" needs ${named}${flag.description ? `: ${flag.description}` : ''}`)
   }
   return merged
 }
