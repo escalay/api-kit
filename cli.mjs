@@ -201,8 +201,11 @@ const DEV = { '@types/node': '^26.6.6', typescript: '^7.0.2', vitest: '^5.1.0' }
 /** What the Cloudflare side adds, at the versions the kit tests with. */
 const KIT_DEV = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8')).devDependencies
 const WORKERS_DEV = Object.fromEntries(['wrangler', '@cloudflare/vitest-plugin', '@cloudflare/workers-types'].map((name) => [name, KIT_DEV[name]]))
-/** The pnpm the kit is built with, pinned in each new app so its CI installs with the pnpm that wrote its lockfile. */
-const KIT_PACKAGE_MANAGER = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8')).packageManager
+/**
+ * The pnpm the kit is built with, pinned in each new app so its CI installs with the pnpm that wrote its lockfile.
+ * Written here because `pnpm pack` drops `packageManager` from the published package.json; a test keeps it equal to ours.
+ */
+const KIT_PACKAGE_MANAGER = 'pnpm@12.3.4'
 /** The newest compatibility date the pinned workerd is sure to know: the day its types were cut (`5.20261106.1` → `2026-11-06`). Today's date fails once it is ahead of that binary. */
 const COMPATIBILITY_DATE = KIT_DEV['@cloudflare/workers-types'].replace(/^\D*\d+\.(\d{4})(\d{2})(\d{2})\..*$/, '$1-$2-$3')
 /** The runtimes an app can run on: `node` (server.ts, a container), `cloudflare` (worker.ts, D1), or `both`. */
