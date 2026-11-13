@@ -1,4 +1,5 @@
 # Routine updates once a month, one pull request per ecosystem; a major version comes on its own.
+# A version is proposed only after a week on the registry, so a hijacked release is usually pulled first.
 # Security updates are separate and arrive as soon as an advisory is out.
 version: 2
 updates:
@@ -6,6 +7,8 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: chore
       include: scope
@@ -16,6 +19,8 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: ci
       include: scope
