@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/escalay/api-kit/compare/v1.13.0...v1.14.0) (2026-11-13)
+
+
+### New
+
+* every app's mcp tools as a command line ([#19](https://github.com/escalay/api-kit/issues/19)) ([1d1b558](https://github.com/escalay/api-kit/commit/1d1b558b95a6753d8216397d4b5494d9d627a2e9))
+
 ## [1.13.0](https://github.com/escalay/api-kit/compare/v1.12.1...v1.13.0) (2026-11-13)
 
 
