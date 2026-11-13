@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.1](https://github.com/escalay/api-kit/compare/v1.14.0...v1.14.1) (2026-11-13)
+
+
+### Fixed
+
+* skills findable over MCP, and sign-in failures name the command ([#21](https://github.com/escalay/api-kit/issues/21)) ([c2103da](https://github.com/escalay/api-kit/commit/c2103daae06898d9c0b574d22bbb3df24c2cf73b))
+
 ## [1.14.0](https://github.com/escalay/api-kit/compare/v1.13.0...v1.14.0) (2026-11-13)
 
 
