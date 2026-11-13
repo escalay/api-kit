@@ -17,6 +17,20 @@ an MCP tool.
 
 A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 
+## How changes ship
+
+- `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format, `migrations/` and the build) and `pnpm test`.
+  `git push` runs it first (`.githooks/pre-push`; `--no-verify` skips it once). When it fails: `pnpm format`,
+  `pnpm migrations`, then the error it names.
+- A change goes in through a pull request whose title is a Conventional Commit (`feat: add notes`,
+  `fix(notes): keep the order`): CI checks it, and the pull request is squash-merged, so the title is the commit on
+  `main`. Merge only when every check is green.
+- Dependabot opens one grouped pull request a month per ecosystem, for versions out at least a week, and security
+  fixes at once. Merge it when green; a red one found a real break, so fix it there and never merge it red.
+- Deploy with `pnpm run deploy:env` from a machine that has the secrets, after the merge. <!-- runtime:workers -->
+- CI's actions are pinned to commit SHAs with the version in a comment; Dependabot moves them. A new action is pinned
+  the same way, and the `workflows` job (actionlint, zizmor) must stay green.
+
 ## Layout
 
 | Path | What |

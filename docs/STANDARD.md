@@ -298,6 +298,7 @@ fact, steps with checkable done-when criteria.
 9. A browser app: the front door (`web.ts`), and the headless search parts under its own UI (§16).
 10. The command line: `kit sdk` (or `kit cli`), a `cli` name and example on every tool, `cliGaps` empty and
     `commands.json` current in the tests, jobs only for steps agents repeat (§19).
+11. The repository: CI, the pre-push gate, Dependabot and the secrets scan as `init` writes them (§20).
 
 ## 14. Discovery
 
@@ -461,3 +462,23 @@ the deployment's `/mcp`, so it can't disagree with the tools.
   throws a failed call's problem.
 - Tests: `cliGaps({ tools, resources, jobs })` returns `[]`, `commands.json` equals `cliSnapshot(...)` byte for byte,
   and the live commands equal the packaged ones (`sdk/test/cli.test.ts`). `kit doctor` runs `cliGaps` too.
+
+## 20. The repository
+
+What `init` sets up, and what an app keeps:
+
+- **One gate.** `pnpm check` (types, lint, `oxfmt --check`, `migrations.ts --check` on Workers, the build for the
+  `app` preset) and `pnpm test`; `pnpm gate` runs both. CI's jobs call those two scripts and nothing else, and
+  `.githooks/pre-push` runs `gate`, so a push the hook lets through passes CI.
+- **CI** (`.github/workflows/ci.yml`): `checks` and `test` in parallel, `workflows` (actionlint, zizmor), `secrets`
+  (gitleaks over the whole history, `.gitleaks.toml` allowing `src/kit/kit.json`), and on pull requests `title`. Read-only
+  `contents` permission, actions pinned to commit SHAs, `persist-credentials: false`, a newer push cancelling only a
+  pull request's run.
+- **Changes**: through pull requests titled as Conventional Commits, squash-merged.
+- **Dependencies**: Dependabot monthly, one grouped pull request per ecosystem (npm minor and patch together, majors
+  alone), a 7-day cooldown; security updates on.
+- **Toolchain pinned**: `.node-version` (the kit's Node) for CI and people alike, `packageManager` (the kit's pnpm) so
+  corepack installs the pnpm that wrote the lockfile.
+- The kit proves it: `scripts/starter-check.mjs` runs `gate` on each new starter, and `scripts/release-smoke.sh` checks
+  an app made from the published package.
+
