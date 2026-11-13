@@ -172,3 +172,34 @@ export const selectFields = (value: unknown, fields: string[] | undefined): unkn
   if (list && !fields.some((field) => field in value)) return list.map(pick)
   return pick(value)
 }
+
+/** Reads text written for MCP clients as the CLI says it; the text itself when there is nothing to change. */
+export type CliWords = (text: string, command?: Command) => string
+
+/**
+ * Text written for MCP clients, as the command line says it: a tool's MCP name becomes its command
+ * (`create_address` → `` `mailroom address create` ``), and a backticked argument of a tool named there, or of the
+ * command being shown, becomes its flag (`` `addressId` `` → `` `--address-id` ``). Conservative: only whole words that
+ * are exactly a tool's name, and a name without an underscore only in backticks. For help and human output only;
+ * `--json` and `commands --json` stay as the server wrote them.
+ *
+ * @example
+ * cliWordsOf(commands, 'mailroom')('The address’s id, from create_address.') // → 'The address’s id, from `mailroom address create`.'
+ */
+export const cliWordsOf = (commands: Command[], app: string): CliWords => {
+  const byTool = new Map(commands.filter((command) => command.tool).map((command) => [command.tool!, command]))
+  if (!byTool.size) return (text) => text
+  return (text, command) => {
+    if (!text) return text
+    const named = command ? [command] : []
+    const withCommands = text.replace(/(`?)\b([a-z][a-z0-9]*(?:_[a-z0-9]+)*)\b(`?)/g, (match, open: string, word: string, close: string) => {
+      const found = byTool.get(word)
+      if (!found || (!word.includes('_') && !(open && close))) return match
+      named.push(found)
+      // In backticks; a backtick the text had on one side only stays where it was
+      return open && !close ? `${open}${app} ${found.name}` : close && !open ? `${app} ${found.name}${close}` : `\`${app} ${found.name}\``
+    })
+    const keys = new Map(named.flatMap((one) => one.flags.map((flag) => [flag.key, flag.name] as const)))
+    return withCommands.replace(/`([A-Za-z_][A-Za-z0-9_]*)`/g, (match, key: string) => (keys.has(key) && !byTool.has(key) ? `\`--${keys.get(key)}\`` : match))
+  }
+}

@@ -1,6 +1,6 @@
 /** What the CLI says about itself: the overview, a noun's verbs, a command's help, the rules for agents, completion. */
 import { GLOBAL_FLAGS } from './args.js'
-import type { Command, Flag } from './commands.js'
+import type { CliWords, Command, Flag } from './commands.js'
 
 export type Paint = { bold: (text: string) => string; dim: (text: string) => string }
 export const paintFor = (on: boolean): Paint => ({ bold: (text) => (on ? `\x1b[1m${text}\x1b[22m` : text), dim: (text) => (on ? `\x1b[2m${text}\x1b[22m` : text) })
@@ -33,13 +33,15 @@ export const nounsOf = (commands: Command[]) => {
   return nouns
 }
 
-export const overview = (app: string, version: string, commands: Command[], paint: Paint) => {
+const asIs: CliWords = (text) => text
+
+export const overview = (app: string, version: string, commands: Command[], paint: Paint, words: CliWords = asIs) => {
   const jobs = commands.filter((command) => command.job)
   const nouns = nounsOf(commands)
   return [
     `${paint.bold(app)} ${version}`,
     '',
-    ...(jobs.length ? [paint.bold('Jobs'), table(jobs.map((job) => [job.name, job.summary])), ''] : []),
+    ...(jobs.length ? [paint.bold('Jobs'), table(jobs.map((job) => [job.name, words(job.summary, job)])), ''] : []),
     paint.bold('Commands'),
     table([...nouns].map(([noun, verbs]) => [noun, verbs.map((command) => command.name.split(' ').slice(1).join(' ')).join(', ')])),
     '',
@@ -50,33 +52,36 @@ export const overview = (app: string, version: string, commands: Command[], pain
   ].join('\n')
 }
 
-export const nounHelp = (app: string, noun: string, verbs: Command[], paint: Paint) =>
-  [paint.bold(`${app} ${noun}`), '', table(verbs.map((command) => [command.name.split(' ').slice(1).join(' '), `${command.summary}${command.destructive ? ' (asks for --yes)' : ''}`])), '', `Run \`${app} help ${noun} <verb>\` for its arguments.`].join('\n')
+export const nounHelp = (app: string, noun: string, verbs: Command[], paint: Paint, words: CliWords = asIs) =>
+  [paint.bold(`${app} ${noun}`), '', table(verbs.map((command) => [command.name.split(' ').slice(1).join(' '), `${words(command.summary, command)}${command.destructive ? ' (asks for --yes)' : ''}`])), '', `Run \`${app} help ${noun} <verb>\` for its arguments.`].join('\n')
 
 const flagLabel = (flag: Flag) => {
   if (flag.type === 'boolean') return `--[no-]${flag.name}`
   const value = flag.enum ? flag.enum.join('|') : flag.type === 'object' ? 'json' : flag.type === 'integer' ? 'number' : flag.type
   return `--${flag.name} <${value}>${flag.multiple ? '…' : ''}`
 }
-const flagNote = (flag: Flag) =>
-  [flag.description, flag.required ? '(required)' : '', flag.multiple ? '(repeat it)' : '', flag.default !== undefined ? `(default ${JSON.stringify(flag.default)})` : '', flag.type === 'object' ? '(only through --input)' : ''].filter(Boolean).join(' ')
+const flagNote = (flag: Flag, words: (text: string) => string) =>
+  [words(flag.description), flag.required ? '(required)' : '', flag.multiple ? '(repeat it)' : '', flag.default !== undefined ? `(default ${JSON.stringify(flag.default)})` : '', flag.type === 'object' ? '(only through --input)' : ''].filter(Boolean).join(' ')
 
-export const commandHelp = (app: string, command: Command, paint: Paint) => {
+export const commandHelp = (app: string, command: Command, paint: Paint, words: CliWords = asIs) => {
+  const say = (text: string) => words(text, command)
+  // A tool that takes its own timeout lists it under Flags; the global one isn't repeated
+  const ownTimeout = command.flags.some((flag) => flag.name === 'timeout')
   const positional = command.positional.map((key) => command.flags.find((flag) => flag.key === key) ?? { name: key, key, type: 'string' as const, description: '', required: true, multiple: false })
   const flags = command.flags.filter((flag) => !command.positional.includes(flag.key))
   const what = command.tool ? `MCP tool ${command.tool}` : command.resource ? `MCP resource ${command.uriTemplate}` : 'a job'
   return [
-    `${paint.bold(`${app} ${command.name}`)}: ${command.summary}`,
+    `${paint.bold(`${app} ${command.name}`)}: ${say(command.summary)}`,
     '',
-    command.description,
+    say(command.description),
     '',
     paint.bold('Usage'),
     `  ${app} ${command.name}${positional.map((flag) => ` <${flag.key}>`).join('')}${flags.length ? ' [flags]' : ''}`,
-    ...(positional.length ? ['', paint.bold('Arguments'), table(positional.map((flag) => [`<${flag.key}>`, `${flagNote(flag)} (or --${flag.name})`.trim()]))] : []),
-    ...(flags.length ? ['', paint.bold('Flags'), table(flags.map((flag) => [flagLabel(flag), flagNote(flag)]))] : []),
+    ...(positional.length ? ['', paint.bold('Arguments'), table(positional.map((flag) => [`<${flag.key}>`, `${flagNote(flag, say)} (or --${flag.name})`.trim()]))] : []),
+    ...(flags.length ? ['', paint.bold('Flags'), table(flags.map((flag) => [flagLabel(flag), flagNote(flag, say)]))] : []),
     ...(command.examples.length ? ['', paint.bold('Examples'), ...command.examples.flatMap((example) => [`  ${paint.dim(`# ${example.about}`)}`, `  $ ${app} ${example.run}`])] : []),
     '',
-    paint.dim(`Also: --json [fields], --input -, --dry-run${command.destructive ? ', --yes (it changes or deletes things for good)' : ''}, --timeout <seconds>. This is ${what}.`),
+    paint.dim(`Also: --json [fields], --input -, --dry-run${command.destructive ? ', --yes (it changes or deletes things for good)' : ''}${ownTimeout ? '' : ', --timeout <seconds>'}. This is ${what}.`),
   ].join('\n')
 }
 

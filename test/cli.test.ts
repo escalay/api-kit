@@ -10,6 +10,7 @@ import { cliMarkdown, createAgentApi, createOAuth, fallbackCliName, hintsOf, key
 import { cliOf, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp } from '../src/mcp/index.js'
 import { CLI_GLOBAL_FLAGS, CLI_RESOURCE_FLAGS, pathKeysOf } from '../src/core/cli.js'
 import { GLOBAL_FLAGS, RESOURCE_FLAGS } from '../templates/sdk/sdk/cli/engine/args.js'
+import { cliWordsOf } from '../templates/sdk/sdk/cli/engine/commands.js'
 import { cliGaps, cliSnapshot, guideGaps } from '../src/testing/index.js'
 import { createCli } from '../templates/sdk/sdk/cli/engine/index.js'
 import { configDirOf } from '../templates/sdk/sdk/cli/engine/auth.js'
@@ -81,12 +82,12 @@ const sampleCli = async () => {
   })
   const tools = [
     mcpTool({ name: 'list_apps', title: 'List apps', description: 'Every app with its id.', input: z.object({ limit: z.number().int().min(1).optional().describe('At most this many.') }), cli: { name: 'app list', examples: [{ run: 'app list --limit 1', about: 'The first app' }, { run: 'app list --json id,name', about: 'Ids and names as JSON' }] }, call: (args) => ({ path: '/api/v1/apps', query: args }), summarize: (json) => json._embedded.apps.map((one: { id: string; name: string }) => `${one.name} (${one.id})`).join('\n') }),
-    mcpTool({ name: 'get_app', title: 'Get an app', description: 'One app by id.', input: z.object({ id: z.string().describe('The app id.') }), cli: { name: 'app view', examples: [{ run: 'app view a1', about: 'Alpha' }] }, call: ({ id }) => ({ path: `/api/v1/apps/${id}` }), summarize: (json) => `${json.name} (${json.id})` }),
+    mcpTool({ name: 'get_app', title: 'Get an app', description: 'One app by id.', input: z.object({ id: z.string().describe('The app id, from list_apps.') }), cli: { name: 'app view', examples: [{ run: 'app view a1', about: 'Alpha' }] }, call: ({ id }) => ({ path: `/api/v1/apps/${id}` }), summarize: (json) => `${json.name} (${json.id})` }),
     mcpTool({ name: 'delete_app', title: 'Delete an app', description: 'Deletes an app for good.', input: z.object({ id: z.string().describe('The app id.') }), annotations: { readOnlyHint: false, destructiveHint: true }, cli: { name: 'app delete', examples: [{ run: 'app delete a2 --yes', about: 'Bravo, gone' }] }, call: ({ id }) => ({ method: 'DELETE', path: `/api/v1/apps/${id}` }), summarize: (_json, { id }) => `Deleted ${id}.` }),
     mcpTool({ name: 'tag_app', title: 'Tag an app', description: 'Sets an app’s tags.', input: z.object({ id: z.string().describe('The app id.'), tags: z.array(z.string()).describe('A tag; repeat for more.'), pinned: z.boolean().optional().describe('Pin it.') }), annotations: { readOnlyHint: false }, cli: { name: 'app tag', examples: [{ run: 'app tag a1 --tags new --tags fast --pinned', about: 'Two tags, pinned' }] }, call: ({ id, ...body }) => ({ method: 'POST', path: `/api/v1/apps/${id}/tags`, body }), summarize: (json) => `${json.name}: ${json.tags.join(', ')}${json.pinned ? ' (pinned)' : ''}` }),
     mcpTool({ name: 'who_am_i', title: 'Who am I', description: 'Who is calling.', input: z.object({}), cli: { name: 'auth status', examples: [{ run: 'auth status', about: 'The caller' }] }, call: () => ({ path: '/api/v1/me' }), summarize: (json) => `Calling as ${json.caller}.` }),
     mcpTool({ name: 'wait_for_app', title: 'Wait for an app', description: 'An app, once it is there.', input: z.object({ app: z.string().describe('The app id.'), timeout: z.number().optional().describe('Seconds to wait.') }), route: 'GET /api/v1/apps/{id}', cli: { name: 'app wait', examples: [{ run: 'app wait a1 --timeout 5', about: 'Alpha, once it is there' }] }, call: ({ app }) => ({ path: `/api/v1/apps/${app}` }), summarize: (json) => `${json.name} is there.` }),
-    mcpTool({ name: 'slow_thing', title: 'Something slow', description: 'Takes a while.', input: z.object({ timeout: z.number().optional().describe('Seconds to wait.') }), cli: { name: 'thing wait', examples: [{ run: 'thing wait --timeout 5', about: 'Waits' }] }, call: () => ({ path: '/api/v1/slow' }), summarize: () => 'Done.' }),
+    mcpTool({ name: 'slow_thing', title: 'Something slow', description: 'Takes a while.', input: z.object({ timeout: z.number().optional().describe('Seconds to wait.') }), cli: { name: 'thing wait', examples: [{ run: 'thing wait --timeout 5', about: 'Waits' }] }, call: () => ({ path: '/api/v1/slow' }), summarize: () => 'Done. Call get_app with `id` next.' }),
   ]
   const resources = [mcpResource({ name: 'app_card', title: 'An app’s card', description: 'The app as JSON.', uriTemplate: 'sample://apps/{id}/card{?format}', cli: { name: 'app card', examples: [{ run: 'app card a1 --format short --out card.json', about: 'Alpha’s card, saved' }] }, read: ({ id }) => [{ path: `/api/v1/apps/${id}` }] })]
   mountMcp(app, { factory: mcpServerFactory({ info: { name: 'sample', version: '1.0.0' }, instructions: 'Find apps.', tools, resources, callApi: inProcess(app) }), allowedHostnames: ['localhost'] })
@@ -144,6 +145,8 @@ describe('the command line', () => {
     expect(help).toContain('sample app view <id>')
     expect(help).toContain('<id>')
     expect(help).toContain('$ sample app view a1')
+    expect(help).toContain('The app id, from `sample app list`.')
+    expect(help).toContain('--timeout <seconds>')
     expect((await run(['app', 'view', '--help'])).out).toBe(help)
     expect((await run(['help', 'agents'])).out).toContain('Exit codes: 0 done, 1 usage')
     expect((await run(['version'])).out).toBe('sample 1.0.0\n')
@@ -178,7 +181,7 @@ describe('the command line', () => {
     const { run } = await sampleCli()
     const missing = await run(['app', 'view'])
     expect(missing).toMatchObject({ code: 1, out: '' })
-    expect(missing.err).toContain('"app view" needs <id>: The app id.')
+    expect(missing.err).toContain('"app view" needs <id>: The app id, from `sample app list`.')
     expect((await run(['app', 'tag', 'a1'])).err).toContain('needs --tags')
     expect((await run(['app', 'list', '--limit', 'many'])).err).toContain('--limit is a whole number, not "many"')
     expect((await run(['app', 'list', '--colour'])).err).toContain('unknown flag --colour for "app list"; it takes --limit')
@@ -200,7 +203,12 @@ describe('the command line', () => {
     expect((await run(['app', 'list'], { env: { SAMPLE_URL: 'http://localhost', SAMPLE_API_KEY: 'test_wrong' } })).code).toBe(2)
     // A tool that waits gets the user's --timeout; anything else is stopped by it
     expect(JSON.parse((await run(['thing', 'wait', '--timeout', '30', '--dry-run'])).out)).toEqual({ method: 'tools/call', name: 'slow_thing', arguments: { timeout: 30 } })
-    expect((await run(['thing', 'wait', '--timeout', '1'])).out).toBe('Done.\n')
+    // Human text names commands, not MCP tools; --json stays as the server wrote it
+    expect((await run(['thing', 'wait', '--timeout', '1'])).out).toBe('Done. Call `sample app view` with `--id` next.\n')
+    expect(JSON.parse((await run(['thing', 'wait', '--json'])).out)).toEqual({ done: true })
+    const waitHelp = (await run(['help', 'thing', 'wait'])).out
+    expect(waitHelp).toContain('--timeout <number>')
+    expect(waitHelp).not.toContain('--timeout <seconds>')
     const slow = await run(['api', 'GET', '/api/v1/slow', '--timeout', '0.05'])
     expect(slow).toMatchObject({ code: 6, err: 'Timed out after 0.05 seconds\n' })
   })
@@ -295,6 +303,23 @@ describe('the command line', () => {
     expect((await run(['auth', 'switch', 'elsewhere'], { env: {} })).code).toBe(1)
     expect((await run(['auth', 'logout'], { env: {} })).out).toBe('Signed out of http://localhost (profile localhost)\n')
     expect((await run(['app', 'list'], { env: {} })).code).toBe(2)
+  })
+
+  it('reads MCP names in human text as commands, and only whole tool names', () => {
+    const commands = cliSnapshot({ tools: [
+      mcpTool({ ...base, name: 'create_address', input: z.object({ label: z.string().describe('What it is for.') }), cli: 'address create', call: (body) => ({ method: 'POST', path: '/api/addresses', body }) }),
+      mcpTool({ ...base, name: 'get_verification', input: z.object({ addressId: z.string().describe('Its id.') }), cli: 'verification code', call: ({ addressId }) => ({ path: `/api/verify/${addressId}` }) }),
+      mcpTool({ ...base, name: 'search', input: z.object({ q: z.string().describe('Words.') }), cli: 'mail search', call: () => ({ path: '/api/search' }) }),
+    ] }).commands as never
+    const say = cliWordsOf(commands, 'mailroom')
+    expect(say('The address’s id (`adr_…`), from create_address.')).toBe('The address’s id (`adr_…`), from `mailroom address create`.')
+    expect(say('Call `get_verification` again with `addressId`.')).toBe('Call `mailroom verification code` again with `--address-id`.')
+    // Not a tool name, part of a longer word, a key of no tool named, or a plain word that is a tool name without backticks
+    expect(say('Call get_verifications, or create_address_v2, with addressId; search first, or `label`.')).toBe('Call get_verifications, or create_address_v2, with addressId; search first, or `label`.')
+    expect(say('Use `search`.')).toBe('Use `mailroom mail search`.')
+    // The command being shown counts as named
+    const shown = (commands as { name: string }[]).find((command) => command.name === 'address create') as never
+    expect(say('Give it a `label`.', shown)).toBe('Give it a `--label`.')
   })
 
   it('shares its own flags with the kit’s audit, so the two can’t drift', () => {

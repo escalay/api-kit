@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { completeArguments, GLOBAL_FLAGS, parseArguments, RESOURCE_FLAGS, splitLeadingFlags, type Globals } from './args.js'
 import { configDirOf, deviceLogin, profileNameOf, profileStore, refreshProfile, revokeProfile, type Profile } from './auth.js'
-import { commandsFromListing, expandTemplate, jobCommand, kebab, selectFields, type Command, type ListedTool, type Snapshot } from './commands.js'
+import { cliWordsOf, commandsFromListing, expandTemplate, jobCommand, kebab, selectFields, type CliWords, type Command, type ListedTool, type Snapshot } from './commands.js'
 import { agentsHelp, commandHelp, completion, nounHelp, nounsOf, overview, paintFor } from './help.js'
 import type { CallResult, Job, JobContext, Problem, ReadResult } from './job.js'
 import { CliError, EXIT, exitFor, mcpClient, PENDING_META, problemLine, problemOfResult, type ToolResult } from './mcp.js'
@@ -131,9 +131,13 @@ export const createCli = (options: CliOptions) => {
     return live
   }
   const snapshotCommands = () => snapshot.commands.filter((command) => !command.job)
+  /** MCP names in human text read as commands, once the commands are known (help, summaries, error lines). */
+  let cliWords: CliWords = (text) => text
   const commandsOf = async (target: Target, signal?: AbortSignal) => {
     const live = await liveOf(target, signal).catch(() => null)
-    return { commands: [...jobCommands, ...(live ? commandsFromListing(live.tools, live.templates) : snapshotCommands())], live }
+    const commands = [...jobCommands, ...(live ? commandsFromListing(live.tools, live.templates) : snapshotCommands())]
+    cliWords = cliWordsOf(commands, app)
+    return { commands, live }
   }
 
   /** The command some words name: a job, `<noun> <verb>`, or a tool's MCP name (snake or kebab case). */
@@ -202,7 +206,7 @@ export const createCli = (options: CliOptions) => {
   // ---- Answers ----
 
   const textOf = (result: ToolResult) => (result.content ?? []).map((part) => (part.type === 'text' ? (part.text ?? '') : part.type === 'resource_link' ? `${part.title ?? part.name ?? 'link'}: ${part.uri}` : `(${part.type})`)).join('\n')
-  const callResultOf = (result: ToolResult): CallResult => ({ text: textOf(result), json: result.structuredContent ?? null, isError: Boolean(result.isError), problem: result.isError ? problemOfResult(result) : null })
+  const callResultOf = (result: ToolResult): CallResult => ({ text: cliWords(textOf(result)), json: result.structuredContent ?? null, isError: Boolean(result.isError), problem: result.isError ? problemOfResult(result) : null })
   const readResultOf = (contents: ReadResult['contents']): ReadResult => {
     const text = contents.flatMap((part) => (part.text === undefined ? [] : [part.text])).join('\n')
     const json = (() => {
@@ -232,7 +236,7 @@ export const createCli = (options: CliOptions) => {
     if (result.isError) failWith(problemOfResult(result))
     const pending = result._meta?.[PENDING_META] as { run?: string } | undefined
     if (globals.json) printJson(selectFields(result.structuredContent ?? { text: textOf(result), ...(pending ? { pending } : {}) }, globals.json === true ? undefined : globals.json))
-    else if (textOf(result)) print(textOf(result))
+    else if (textOf(result)) print(cliWords(textOf(result)))
     if (pending) throw new CliError(`Still working (run ${pending.run}): run the same command again to get the answer`, EXIT.timeout)
     return EXIT.ok
   }
@@ -243,7 +247,7 @@ export const createCli = (options: CliOptions) => {
     const isResource = Boolean(command.resource)
     const parsing = isResource ? { ...command, flags: [...command.flags, ...Object.entries(RESOURCE_FLAGS).map(([name, flag]) => ({ name, key: name, type: flag.value ? ('string' as const) : ('boolean' as const), description: flag.about, required: false, multiple: false }))] } : command
     const { values, globals } = parseArguments(parsing, tokens)
-    if (globals.help) return print(commandHelp(app, command, paint)), EXIT.ok
+    if (globals.help) return print(commandHelp(app, command, paint, cliWords)), EXIT.ok
     const input = globals.input ? await readInput(globals.input) : {}
     const args = completeArguments(command, values, input)
     for (const flag of command.flags) if (args[flag.key] === undefined && flag.default !== undefined && command.job) args[flag.key] = flag.default
@@ -313,14 +317,14 @@ export const createCli = (options: CliOptions) => {
 
   // ---- Built-ins ----
 
-  const helpFor = async (words: string[], globals: Globals) => {
-    if (words[0] === 'agents') return print(agentsHelp(app, prefix)), EXIT.ok
+  const helpFor = async (asked: string[], globals: Globals) => {
+    if (asked[0] === 'agents') return print(agentsHelp(app, prefix)), EXIT.ok
     const { commands } = await commandsOf(targetOf(globals.profile))
-    if (!words.length) return print(overview(app, version, commands, paint)), EXIT.ok
-    if (words[0] === 'auth') return print(AUTH_HELP(app)), EXIT.ok
-    const found = resolve(words, commands)
-    if ('noun' in found) return print(nounHelp(app, found.noun!, found.verbs!, paint)), EXIT.ok
-    return print(commandHelp(app, found.command, paint)), EXIT.ok
+    if (!asked.length) return print(overview(app, version, commands, paint, cliWords)), EXIT.ok
+    if (asked[0] === 'auth') return print(AUTH_HELP(app)), EXIT.ok
+    const found = resolve(asked, commands)
+    if ('noun' in found) return print(nounHelp(app, found.noun!, found.verbs!, paint, cliWords)), EXIT.ok
+    return print(commandHelp(app, found.command, paint, cliWords)), EXIT.ok
   }
 
   /** The global flags among some words, whatever command they belong to. */
@@ -565,7 +569,7 @@ export const createCli = (options: CliOptions) => {
     const found = resolve(words, commands)
     if ('noun' in found) {
       if (leading.includes('--json') || more.includes('--json')) return printJson(manifest(found.verbs!)), EXIT.ok
-      return print(nounHelp(app, found.noun!, found.verbs!, paint)), EXIT.ok
+      return print(nounHelp(app, found.noun!, found.verbs!, paint, cliWords)), EXIT.ok
     }
     return execute(found.command, [...words.slice(found.used), ...leading], outer)
   }
@@ -590,9 +594,9 @@ export const createCli = (options: CliOptions) => {
       if (jsonErrors) tell(JSON.stringify({ ...(failure.problem ?? { title: failure.message, status: 0 }), title: failure.problem?.title ?? failure.message, detail: failure.problem?.detail ?? failure.message, exitCode: failure.exitCode }))
       else if (failure.exitCode === EXIT.usage && !failure.problem) {
         const named = argv.filter((token) => !token.startsWith('-')).slice(0, 2).join(' ')
-        tell(`${app}: ${failure.message}`)
+        tell(`${app}: ${cliWords(failure.message)}`)
         tell(errPaint.dim(`Run \`${app} help${named ? ` ${named}` : ''}\` for the arguments.`))
-      } else tell(failure.message)
+      } else tell(cliWords(failure.message))
       return failure.exitCode
     } finally {
       process.removeListener('SIGINT', interrupt)

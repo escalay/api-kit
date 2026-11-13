@@ -431,6 +431,8 @@ the deployment's `/mcp`, so it can't disagree with the tools.
   `--json`) with stable exit codes: 0 done, 1 usage, 2 sign-in, 3 not found, 4 refused or a limit, 5 the server,
   6 timed out or still working, 130 stopped. Nothing prompts without a terminal; a destructive tool needs `--yes` there.
   `--dry-run` prints the call. `<app> commands --json` is the manifest, `<app> help agents` the rules on one screen.
+  Help, summaries and error lines name commands, not MCP names (`create_address` reads `` `<app> address create` ``,
+  a backticked argument of a named tool `--its-flag`); `--json` and the manifest stay exactly as the server wrote them.
 - **Sign-in**: `<app> auth login <url>` with a device code (RFC 8628, the `oauth` part; the CLI registers itself as a
   public client), or `--with-token` with a key on stdin; profiles per deployment in the user's config folder, mode
   0600, tokens renewed under a lock (a refresh token sent twice revokes the sign-in). `<APP>_URL`, `<APP>_API_KEY`
