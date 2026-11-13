@@ -839,6 +839,71 @@ describe('a guide\'s skills over MCP', () => {
     // A guide without a skill folder offers none, and the factory takes that as it is
     expect(await guideSkills({ files: { 'llms.txt': '# Apps' } })).toEqual({ prompts: [], skills: undefined })
   })
+
+  /** A server with one skill and ten playbooks, called like a plain MCP client: no extension methods needed. */
+  const skillServer = async (references = 10) => {
+    const files: Record<string, string> = { 'skills/mail/SKILL.md': '---\nname: mail\ndescription: Use when sending or reading mail.\n---\n\n# Mail\n' }
+    for (let n = 1; n <= references; n++) files[`skills/mail/references/job-${String(n).padStart(2, '0')}.md`] = `# Job ${n}\n\nDoes job ${n}.\n`
+    const { prompts, skills } = await guideSkills({ files })
+    const app = new Hono()
+    mountMcp(app, { factory: mcpServerFactory({ info: { name: 'mail', version: '1.0.0' }, instructions: 'Mail for agents.', tools: [], prompts, skills, callApi: inProcess(app) }), allowedHostnames: ['localhost'] })
+    const meta = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} }
+    return async (method: string, params: Record<string, unknown> = {}) => {
+      const response = await app.request('/mcp', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': method, ...(params.uri ? { 'mcp-name': String(params.uri) } : {}) },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: { ...params, _meta: meta } }),
+      })
+      return (await response.json()) as { result?: any; error?: { message: string } }
+    }
+  }
+
+  it('lists each skill file with words to start from, and says where to start in the template and instructions', async () => {
+    const rpc = await skillServer()
+    const { resources } = (await rpc('resources/list')).result
+    expect(resources).toHaveLength(11)
+    expect(resources[0]).toEqual({ uri: 'skill://mail/SKILL.md', name: 'mail skill: start here', title: 'mail skill: start here', description: 'Use when sending or reading mail.', mimeType: 'text/markdown', size: expect.any(Number) })
+    expect(resources[1]).toEqual({ uri: 'skill://mail/references/job-01.md', name: 'mail skill: Job 1', title: 'mail skill: Job 1', description: 'Does job 1.', mimeType: 'text/markdown', size: expect.any(Number) })
+    const [template] = (await rpc('resources/templates/list')).result.resourceTemplates
+    expect(template).toMatchObject({ uriTemplate: 'skill://{+path}', title: 'Skills' })
+    expect(template.description).toContain('Start with skill://mail/SKILL.md')
+    expect((await rpc('server/discover')).result.instructions).toBe('Mail for agents.\n\nSkills: read skill://mail/SKILL.md first (resources/read); it names the playbook for each job.')
+    // Many references: only SKILL.md is listed, and a folder read still names every file
+    const crowded = await skillServer(21)
+    expect((await crowded('resources/list')).result.resources.map((resource: { uri: string }) => resource.uri)).toEqual(['skill://mail/SKILL.md'])
+  })
+
+  it('answers a folder read with its files as skill:// URIs, and a miss with where to start', async () => {
+    const rpc = await skillServer()
+    for (const uri of ['skill://mail', 'skill://mail/']) {
+      const [listing] = (await rpc('resources/read', { uri })).result.contents
+      expect(listing).toMatchObject({ uri, mimeType: 'text/markdown' })
+      expect(listing.text).toMatch(/^skill:\/\/mail\/ is a folder, not a file\. Read skill:\/\/mail\/SKILL\.md first/)
+      expect(listing.text).toContain('- skill://mail/SKILL.md (mail skill: start here)\n- skill://mail/references/job-01.md (Job 1)')
+      expect(listing.text.match(/^- skill:\/\//gm)).toHaveLength(11)
+    }
+    const references = (await rpc('resources/read', { uri: 'skill://mail/references' })).result.contents[0].text
+    expect(references).toContain('Read skill://mail/SKILL.md first')
+    expect(references).not.toContain('- skill://mail/SKILL.md')
+    // The root too: every skill's files, from its SKILL.md
+    expect((await rpc('resources/read', { uri: 'skill://' })).result.contents[0].text).toMatch(/^skill:\/\/ is a folder, not a file\. Read skill:\/\/mail\/SKILL\.md first[\s\S]*- skill:\/\/mail\/references\/job-10\.md \(Job 10\)$/)
+    expect((await rpc('resources/read', { uri: 'skill://mail/references/job-02.md' })).result.contents[0].text).toBe('# Job 2\n\nDoes job 2.\n')
+    expect((await rpc('resources/read', { uri: 'skill://index.json' })).error?.message).toBe('Resource not found: skill://index.json. Start with skill://mail/SKILL.md; resources/list names every skill file.')
+  })
+
+  it('keeps the skills extension: skills/list, skills/get, directory reads and prompts', async () => {
+    const rpc = await skillServer()
+    expect((await rpc('server/discover')).result.capabilities.extensions['io.modelcontextprotocol/skills']).toEqual({ directoryRead: true })
+    const { skills } = (await rpc('skills/list')).result
+    expect(skills.map((skill: { uri: string }) => skill.uri)).toEqual(['skill://mail/SKILL.md'])
+    expect(skills[0].resources).toHaveLength(11)
+    expect((await rpc('skills/get', { uri: 'skill://mail/SKILL.md' })).result.skill.frontmatter.name).toBe('mail')
+    expect((await rpc('resources/directory/read', { uri: 'skill://mail' })).result.resources).toEqual([
+      { uri: 'skill://mail/SKILL.md', name: 'SKILL.md', mimeType: 'text/markdown', size: expect.any(Number) },
+      { uri: 'skill://mail/references', name: 'references', mimeType: 'inode/directory' },
+    ])
+    expect((await rpc('prompts/list')).result.prompts).toHaveLength(10)
+  })
 })
 
 describe('the skills', () => {

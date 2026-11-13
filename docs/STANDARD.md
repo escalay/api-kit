@@ -236,7 +236,11 @@ fact, steps with checkable done-when criteria.
   itself (with its `status`) rides in `_meta["api-kit/problem"]`. Hints: read-only by default only for a `GET`.
 - `instructions` on discover: what the server is for and the order to use tools in (not a repeat of descriptions).
   Cache hints: lists and discover cached an hour, `private`.
-- Skills through the Skills extension (SEP-2640) and as prompts. A stdio wrapper (`overHttp(origin, key)`) runs the
+- Skills through the Skills extension (SEP-2640) and as prompts, findable by a client that knows neither:
+  `resources/list` names each `SKILL.md` (`<name> skill: start here`, its frontmatter description) and its references
+  while a skill has at most 20; the `skill://{+path}` template's description and the server's `instructions` name the
+  start URI; a folder read (`skill://<name>`) answers its files as a Markdown list of `skill://` URIs, never only a
+  pointer to `resources/directory/read`; a miss names the start URI. A stdio wrapper (`overHttp(origin, key)`) runs the
   same tools from a laptop against the remote API.
 - Auth is the API's: the same bearer key, or an OAuth token when the app runs `oauth.ts` (then MCP clients such as
   hosted chat apps connect with no key at all: the 401 on `/mcp` points at `/.well-known/oauth-protected-resource/mcp`).
