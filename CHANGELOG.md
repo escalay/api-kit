@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.17.0](https://github.com/escalay/api-kit/compare/v1.16.1...v1.17.0) (2026-11-13)
+
+
+### New
+
+* new apps scan their code and dependencies once public ([#47](https://github.com/escalay/api-kit/issues/47)) ([9d9302d](https://github.com/escalay/api-kit/commit/9d9302d778446a82f1143f9405ca3a2cea534620))
+* **repo:** require the checks a called reusable workflow reports ([#45](https://github.com/escalay/api-kit/issues/45)) ([6466252](https://github.com/escalay/api-kit/commit/6466252aab018c1e4f155be2d3298853be7bb391))
+* run the shared workflows from escalay/.github in CI ([ba1fbfe](https://github.com/escalay/api-kit/commit/ba1fbfe364787e75962b6a39ad05737531473e4b))
+
 ## [1.16.1](https://github.com/escalay/api-kit/compare/v1.16.0...v1.16.1) (2026-11-13)
 
 
