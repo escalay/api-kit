@@ -93,3 +93,21 @@ jobs:
           persist-credentials: false
       - name: gitleaks
         run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.24.3 git /repo --no-banner --redact
+
+  # A run started by a dispatch (release.yml does it for the release pull request) reports on the commit, but GitHub does
+  # not count those checks for a pull request. A commit status does, so once everything passed it says so as `test`,
+  # the check the branch rules require, and auto-merge can go ahead
+  dispatched:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [test, starter, workflows, secrets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      statuses: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -f state=success -f context=test -f description="CI passed on this commit" -f target_url="$RUN"
