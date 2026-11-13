@@ -23,6 +23,10 @@
  *                                             and the app's command line (sdk/cli, the package's bin)
  *   kit cli [--app .] [--bin name] [--update] the command line for an app that already has sdk/; --update takes this
  *                                             kit's engine (sdk/cli/engine) and leaves the app's bin, jobs and commands
+ *   kit repo [check|apply] [--app .] [--repo owner/name] [--merge squash|rebase] [--checks a,b]
+ *                                             the GitHub repository set up as the standard says (§20), through `gh`:
+ *                                             merges, the Actions token, security alerts, and the rules for main
+ *                                             (required checks: ci.yml's jobs that always run); check exits 1 on drift
  *
  * @example
  * npx @escalay/kit add core pagination guide mcp testing --dir apps/api/src/kit --install
@@ -73,7 +77,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin'])
+const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 const lockPath = join(dir, 'kit.json')
@@ -418,6 +422,109 @@ console.log(JSON.stringify(cliGaps({ tools, resources, jobs: ${jobs} })))
 
 // ---- Commands ----
 
+// ---- The GitHub repository ----
+
+/** `gh api` with a JSON body; returns the parsed answer, or `{ status }` when gh exits non-zero (404 for a switch that is off). */
+const ghApi = (method, path, body) => {
+  const result = spawnSync('gh', ['api', '--method', method, path, ...(body ? ['--input', '-'] : [])], { input: body ? JSON.stringify(body) : undefined, encoding: 'utf8' })
+  if (result.error) fail('`kit repo` needs the GitHub CLI: install gh and run `gh auth login`')
+  if (result.status !== 0) return { failed: true, status: Number(result.stdout.match(/"status":\s*"?(\d{3})/)?.[1] ?? 0), message: (result.stdout + result.stderr).trim() }
+  return result.stdout.trim() ? JSON.parse(result.stdout) : {}
+}
+
+/** The jobs in a workflow that run on every event (no `if:`), by the name their check reports; a matrix job's name can't be known here. */
+const alwaysJobsOf = (workflow) => {
+  const body = workflow.split(/^jobs:\s*$/m)[1] ?? ''
+  return [...body.matchAll(/^  ([A-Za-z0-9_-]+):\s*$([\s\S]*?)(?=^  [A-Za-z0-9_-]+:\s*$|(?![\s\S]))/gm)].flatMap(([, id, block]) => {
+    if (/^    if:/m.test(block)) return []
+    const name = block.match(/^    name:\s*(.+?)\s*$/m)?.[1]
+    if (name?.includes('${{')) fail(`ci.yml's job "${id}" names its checks from a matrix (${name}); say which checks to require with --checks`)
+    return [name ?? id]
+  })
+}
+
+/** What the standard (§20) asks of a repository: the settings, the Actions token, and the rules for main and release tags. */
+const repoPlan = ({ merge, release, checks }) => ({
+  settings: {
+    allow_squash_merge: merge === 'squash',
+    allow_rebase_merge: merge === 'rebase',
+    allow_merge_commit: false,
+    ...(merge === 'squash' ? { squash_merge_commit_title: 'PR_TITLE', squash_merge_commit_message: 'BLANK' } : {}),
+    allow_auto_merge: true,
+    allow_update_branch: true,
+    delete_branch_on_merge: true,
+  },
+  // release-please opens its pull request with the workflow's token, which needs "create and approve pull requests"
+  workflow: { default_workflow_permissions: 'read', can_approve_pull_request_reviews: release },
+  rulesets: [
+    {
+      name: 'main',
+      target: 'branch',
+      enforcement: 'active',
+      bypass_actors: [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }],
+      conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
+      rules: [
+        { type: 'deletion' },
+        { type: 'non_fast_forward' },
+        { type: 'required_linear_history' },
+        { type: 'pull_request', parameters: { allowed_merge_methods: [merge], dismiss_stale_reviews_on_push: false, require_code_owner_review: false, require_last_push_approval: false, required_approving_review_count: 0, required_review_thread_resolution: false } },
+        { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, do_not_enforce_on_create: false, required_status_checks: checks.map((context) => ({ context })) } },
+      ],
+    },
+    ...(release
+      ? [{ name: 'release tags', target: 'tag', enforcement: 'active', bypass_actors: [], conditions: { ref_name: { include: ['refs/tags/v*'], exclude: [] } }, rules: [{ type: 'deletion' }, { type: 'non_fast_forward' }, { type: 'update' }] }]
+      : []),
+  ],
+})
+
+/** A ruleset as the comparison sees it: what it covers, its rule types, merge methods and required checks. */
+const rulesetShape = (ruleset) => ({
+  target: ruleset.target,
+  enforcement: ruleset.enforcement,
+  include: ruleset.conditions?.ref_name?.include ?? [],
+  rules: (ruleset.rules ?? []).map((rule) => rule.type).sort(),
+  merge: (ruleset.rules ?? []).find((rule) => rule.type === 'pull_request')?.parameters?.allowed_merge_methods ?? [],
+  checks: ((ruleset.rules ?? []).find((rule) => rule.type === 'required_status_checks')?.parameters?.required_status_checks ?? []).map((check) => check.context).sort(),
+})
+
+/** Every difference between the repository and its plan, one line each, with what fixes it; and what the plan can't reach. */
+const repoFindings = (repo, plan) => {
+  const findings = []
+  const current = ghApi('GET', `repos/${repo}`)
+  if (current.failed) fail(`can't read ${repo}: ${current.message}`)
+  for (const [key, want] of Object.entries(plan.settings)) if (current[key] !== want) findings.push({ what: `setting ${key}`, has: current[key], want, fix: 'settings' })
+  const workflow = ghApi('GET', `repos/${repo}/actions/permissions/workflow`)
+  for (const [key, want] of Object.entries(plan.workflow)) if (workflow[key] !== want) findings.push({ what: `actions ${key}`, has: workflow[key], want, fix: 'workflow' })
+  if (ghApi('GET', `repos/${repo}/vulnerability-alerts`).failed) findings.push({ what: 'vulnerability alerts', has: 'off', want: 'on', fix: 'alerts' })
+  if (!ghApi('GET', `repos/${repo}/automated-security-fixes`).enabled) findings.push({ what: 'Dependabot security updates', has: 'off', want: 'on', fix: 'fixes' })
+  const rulesets = ghApi('GET', `repos/${repo}/rulesets`)
+  const notes = []
+  if (rulesets.failed) notes.push(rulesets.status === 403 ? 'rules for main: GitHub offers them on a private repository only with a paid plan; nothing enforces green checks but the person merging' : `rules for main: can't read them (${rulesets.message})`)
+  else
+    for (const wanted of plan.rulesets) {
+      const found = rulesets.find((ruleset) => ruleset.name === wanted.name)
+      const full = found ? ghApi('GET', `repos/${repo}/rulesets/${found.id}`) : null
+      if (!full) {
+        findings.push({ what: `ruleset "${wanted.name}"`, has: 'missing', want: 'present', fix: 'ruleset', ruleset: wanted })
+        continue
+      }
+      const [has, want] = [rulesetShape(full), rulesetShape(wanted)]
+      for (const key of Object.keys(want)) if (JSON.stringify(has[key]) !== JSON.stringify(want[key])) findings.push({ what: `ruleset "${wanted.name}" ${key}`, has: has[key], want: want[key], fix: 'ruleset', ruleset: wanted, id: found.id })
+    }
+  return { findings, notes }
+}
+
+const applyFinding = (repo, plan, finding) => {
+  const answer =
+    finding.fix === 'settings' ? ghApi('PATCH', `repos/${repo}`, plan.settings)
+    : finding.fix === 'workflow' ? ghApi('PUT', `repos/${repo}/actions/permissions/workflow`, plan.workflow)
+    : finding.fix === 'alerts' ? ghApi('PUT', `repos/${repo}/vulnerability-alerts`)
+    : finding.fix === 'fixes' ? ghApi('PUT', `repos/${repo}/automated-security-fixes`)
+    : finding.id ? ghApi('PUT', `repos/${repo}/rulesets/${finding.id}`, finding.ruleset)
+    : ghApi('POST', `repos/${repo}/rulesets`, finding.ruleset)
+  if (answer.failed) fail(`couldn't set ${finding.what} on ${repo}: ${answer.message}`)
+}
+
 const commands = {
   help: () => console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').match(/\/\*\*([\s\S]*?)\*\//)[1].replace(/^ \* ?/gm, '').trim()),
 
@@ -610,6 +717,33 @@ const { tools, resources } = mountedMcp(app)
 const snapshot = cliSnapshot({ app: '${vars.__bin__}', version: VERSION, tools, resources, jobs })
 writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)), \`\${JSON.stringify(snapshot, null, 2)}\\n\`)`)
     console.log('Then name every tool (`cli` on mcpTool) until cliGaps in sdk/test/cli.test.ts is [].')
+  },
+
+  repo: () => {
+    const [mode = 'check'] = names
+    if (!['check', 'apply'].includes(mode)) fail('kit repo check|apply')
+    const app = resolve(process.cwd(), valueOf('--app') ?? '.')
+    const merge = valueOf('--merge') ?? 'squash'
+    if (!['squash', 'rebase'].includes(merge)) fail('--merge is squash or rebase')
+    const ciPath = join(app, '.github/workflows/ci.yml')
+    const checks = valueOf('--checks')?.split(',').filter(Boolean) ?? (existsSync(ciPath) ? alwaysJobsOf(readFileSync(ciPath, 'utf8')) : [])
+    if (!checks.length) fail('no checks to require: add .github/workflows/ci.yml (kit init writes one) or name them with --checks')
+    const repo = valueOf('--repo') ?? spawnSync('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], { cwd: app, encoding: 'utf8' }).stdout?.trim()
+    if (!repo) fail('no GitHub repository here: run it in a clone, or pass --repo owner/name')
+    const plan = repoPlan({ merge, release: existsSync(join(app, '.github/workflows/release.yml')), checks })
+    let { findings, notes } = repoFindings(repo, plan)
+    if (mode === 'apply' && findings.length) {
+      const fixes = [...new Map(findings.map((finding) => [finding.fix === 'ruleset' ? finding.ruleset.name : finding.fix, finding])).values()]
+      for (const finding of fixes) applyFinding(repo, plan, finding)
+      const named = { settings: 'settings', workflow: 'the Actions token', alerts: 'vulnerability alerts', fixes: 'security updates' }
+      console.log(`Set ${fixes.map((finding) => named[finding.fix] ?? `ruleset "${finding.ruleset.name}"`).join(', ')} on ${repo}`)
+      ;({ findings, notes } = repoFindings(repo, plan))
+    }
+    for (const finding of findings) console.log(`differs  ${finding.what}: has ${JSON.stringify(finding.has)}, wants ${JSON.stringify(finding.want)}`)
+    for (const note of notes) console.log(`note     ${note}`)
+    const again = ['kit repo apply', ...(merge === 'squash' ? [] : ['--merge', merge]), ...(valueOf('--checks') ? ['--checks', JSON.stringify(valueOf('--checks'))] : [])].join(' ')
+    console.log(findings.length ? `${findings.length} to fix on ${repo}: \`${again}\`` : `${repo} is set up as the standard says (${merge} merges; required: ${checks.join(', ')})`)
+    process.exitCode = findings.length ? 1 : 0
   },
 
   feature: () => {

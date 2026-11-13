@@ -475,6 +475,12 @@ What `init` sets up, and what an app keeps:
   `contents` permission, actions pinned to commit SHAs, `persist-credentials: false`, a newer push cancelling only a
   pull request's run.
 - **Changes**: through pull requests titled as Conventional Commits, squash-merged.
+- **The repository's settings** (`kit repo apply`, through `gh`; `kit repo check` exits 1 on drift): squash merges
+  only with the title as the commit (or `--merge rebase`), auto-merge and the update-branch button on, merged branches
+  deleted, a read-only Actions token that may open pull requests only when a `release.yml` needs it, vulnerability
+  alerts and security updates on, and a `main` ruleset (no deletion or force-push, linear history, pull requests only,
+  required checks = the CI jobs that always run). With a `release.yml`, `v*` tags can't be moved or deleted. A private
+  repository on GitHub's free plan has no rulesets: `check` says so, and the person merging is the gate.
 - **Dependencies**: Dependabot monthly, one grouped pull request per ecosystem (npm minor and patch together, majors
   alone), a 7-day cooldown; security updates on.
 - **Toolchain pinned**: `.node-version` (the kit's Node) for CI and people alike, `packageManager` (the kit's pnpm) so
