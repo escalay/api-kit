@@ -503,6 +503,48 @@
       ]
     },
     {
+      "name": "telemetry",
+      "type": "registry:item",
+      "title": "Usage report",
+      "description": "A daily anonymous usage report to the product's collector (`{ schema, instance, version, report }`, coarse ranges and booleans only), off with `DO_NOT_TRACK=1`, `TELEMETRY=off` or the owner's switch; `GET`/`PATCH /api/telemetry` and its MCP tool",
+      "registryDependencies": [
+        "escalay/api-kit/db",
+        "escalay/api-kit/mcp"
+      ],
+      "files": [
+        {
+          "path": "src/telemetry/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/telemetry/index.ts"
+        },
+        {
+          "path": "src/telemetry/repo.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/telemetry/repo.ts"
+        },
+        {
+          "path": "src/telemetry/routes.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/telemetry/routes.ts"
+        },
+        {
+          "path": "src/telemetry/schema.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/telemetry/schema.ts"
+        },
+        {
+          "path": "src/telemetry/tools.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/telemetry/tools.ts"
+        },
+        {
+          "path": "src/telemetry/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/telemetry/README.md"
+        }
+      ]
+    },
+    {
       "name": "testing",
       "type": "registry:item",
       "title": "Testing",

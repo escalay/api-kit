@@ -3,6 +3,7 @@ import { drizzle } from 'drizzle-orm/d1'
 import { describe, expect, it } from 'vitest'
 import { migrate, openDb, type Db } from '../../src/index.js'
 import { softAuthenticator } from '../../src/testing/index.js'
+import { probeTelemetry } from './probe-telemetry.js'
 
 // worker.ts imports the whole kit at global scope, so a top-level Node-only import or a random value made at global
 // scope stops the Worker from starting and every request here fails
@@ -72,6 +73,24 @@ describe('passkeys in workerd', () => {
     const login = await call('/api/session/passkeys/login/options', {})
     expect(await call('/api/session/passkeys/login/verify', { challengeId: login.challengeId, response: await device.login(login.options, 'https://kit.test') })).toMatchObject({ signedIn: true, person: { role: 'owner' } })
     expect(await call('/api/session')).toMatchObject({ signedIn: true, person: { email: 'owner@example.com' } })
+  })
+})
+
+describe('the usage report in workerd', () => {
+  it('makes its instance on the first run, shows its body, and sends it with a timeout', async () => {
+    const shown = (await (await exports.default.fetch('https://kit.test/api/telemetry')).json()) as { on: boolean; body: { instance: string } }
+    expect(shown).toMatchObject({ on: true, body: { schema: 1, version: '1.0.0', report: { notes: '1-10', signed_in: false } } })
+    expect(shown.body.instance).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    // A day older, the next scheduled run sends exactly that
+    await env.DB.prepare('update telemetry set since = ?').bind(new Date(Date.now() - 2 * 86_400_000).toISOString()).run()
+    const sent: { body: unknown; signal: unknown }[] = []
+    const usage = probeTelemetry(async (_url, init) => {
+      sent.push({ body: JSON.parse(String(init?.body)), signal: init?.signal })
+      return Response.json({ latest: '1.0.1' })
+    })
+    expect(await usage.sendDaily(await openDb(drizzle(env.DB) as unknown as Db), env)).toEqual({ sent: true, why: 'Sent.' })
+    expect(sent).toEqual([{ body: shown.body, signal: expect.any(AbortSignal) }])
+    expect(await (await exports.default.fetch('https://kit.test/api/telemetry')).json()).toMatchObject({ latest: '1.0.1' })
   })
 })
 

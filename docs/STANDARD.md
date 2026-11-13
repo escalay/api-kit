@@ -135,13 +135,18 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 - **Agents that get their own token (optional, `oauth.ts`):** the app is its own OAuth server. MCP clients follow the
   401's `resource_metadata` to `/.well-known/oauth-protected-resource[/mcp]`, register (RFC 7591, public clients), and
   send the owner to `/oauth/authorize` (code + PKCE S256); other agents follow `/auth.md` (anonymous or by email),
-  and the owner types the agent's 6-digit code at `/oauth/claim`. Both approval pages sit behind Access and check the
+  and the owner types the agent's 6-digit code at `/oauth/claim`; a CLI or device without a browser uses the device
+  authorization grant (RFC 8628: `POST /oauth/device_authorization`, a `XXXX-XXXX` code with no vowels for the owner
+  to type at `/oauth/device`, 10 minutes, single use, hashes only, 5 wrong codes per person per 10 minutes, then it
+  polls the token endpoint and hears `authorization_pending`, `slow_down`, `expired_token` or `access_denied`). The
+  approval pages sit behind Access and check the
   signed-in person again; **nothing is granted before a person approves** (an unclaimed registration has no scopes).
   Tokens: ES256 JWTs for an hour (`OAUTH_SIGNING_KEY`, a private JWK in your secret store), checked against a revocation list
-  on every request; refresh tokens rotate. Scopes: `read` for safe methods, `write` for the rest; the relay endpoints (`/mcp`, `/a2a`,
+  on every request. Refresh tokens (30 days, MCP clients and claimed agents alike) rotate on each use and are kept only as
+  hashes; a used one sent again revokes every refresh token of that sign-in, and so does revoking any of them. Scopes: `read` for safe methods, `write` for the rest; the relay endpoints (`/mcp`, `/a2a`,
   `auth.relay`) need only `read`, since each call they make reaches a route that checks its own scope. In Access, only
-  `/oauth/authorize` and `/oauth/claim` stay gated; `/oauth/register|token|revoke`, `/agent/identity*`, `/auth.md` and
-  `/.well-known/*` bypass it.
+  `/oauth/authorize`, `/oauth/claim` and `/oauth/device` stay gated; `/oauth/register|token|revoke|device_authorization`,
+  `/agent/identity*`, `/auth.md` and `/.well-known/*` bypass it.
 
 ## 8. Caching
 
@@ -357,7 +362,7 @@ Where items have pictures or prose worth searching by sense, not by keyword (`ve
 ## 16. The browser side
 
 - **Front door (`web.ts`).** `/` is a public page with no data (what the service is, how agents connect, WebMCP
-  tools if any); the browser app lives under `/app` behind Access (which gates only `/app`, `/oauth/authorize` and `/oauth/claim`);
+  tools if any); the browser app lives under `/app` behind Access (which gates only `/app`, `/oauth/authorize`, `/oauth/claim` and `/oauth/device`);
   the app's old addresses and `/?query` deep links redirect there; `frontDoorOpen` lists what auth leaves open. The
   app's calls carry Access's cookie, so the browser never holds a key.
 - **Headless first.** Search logic for browsers is `search-client.ts` (no framework: a typed client for §15's routes, a
@@ -382,3 +387,19 @@ The owner's own collections of a catalog's items (`boards.ts`, `boards-client.ts
 - Agents get `list_boards`, `create_board`, `get_board`, `save_to_board`, `remove_from_board` (and
   `board_suggestions`). Browsers use the headless client and hooks; the UI is the app's.
 
+## 18. Usage reports
+
+A product people deploy for themselves may report its use once a day (`telemetry` part), and only so:
+
+- One `POST <collector>/v1/<product>` a UTC day at most, never in the first 24 hours after the first run, with
+  exactly `{ "schema": <n>, "instance": "<random v4 UUID>", "version": "1.2.3", "report": { … } }` and a 5 second
+  timeout. The instance is made on the first run and names nothing else; the product is in the path, not the body.
+- The report holds **coarse ranges and booleans, never ids or text**: counts as `0`, `1-10`, `11-100`, `101-1k`,
+  `1k-10k`, `10k+` (`countRange`), days as `0`, `1-7`, `8-30`, `31-90`, `91-365`, `365+` (`dayRange`). Anything else
+  is dropped before sending.
+- Off when `DO_NOT_TRACK=1` or `TELEMETRY=off` is set, or the owner switched it off (`PATCH /api/telemetry`
+  `{ enabled }`, owner only). `GET /api/telemetry` shows whether it is on, why, and exactly the body it would send;
+  agents get it as `get_telemetry`.
+- It runs from the app's scheduled handler (`sendDaily`), is tried at most once a day even when the collector is
+  down, and never throws into the app. The collector may answer `{ "latest": "<version>" }`; the app keeps and shows it.
+- The product's README and setup say that it reports, what, and how to switch it off.
