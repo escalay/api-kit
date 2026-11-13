@@ -222,7 +222,8 @@ fact, steps with checkable done-when criteria.
   answers it with the discover facts (capabilities as the server declares them, `listChanged: true`) and a note that it
   isn't needed, never with "method not found".
 - **Tools say their route**: each tool's `tools/list` entry carries `_meta["api-kit/route"]`
-  (`GET /api/v1/recipes/{id}`), so a gateway can tell which tool a guide or playbook means when it names a route.
+  (`GET /api/v1/recipes/{id}`), so a gateway can tell which tool a guide or playbook means when it names a route,
+  and its command in `_meta["api-kit/cli"]` (§19).
 - **Argument names follow the routes**: a tool's arguments are the route's query and path parameter names (`q`, not
   `query`; `slug` where the path says `{slug}`). Ids also accept the board ref form (`recipe:<slug>`); the route, not
   the tool, resolves it, trying the id as given first, so ids that hold a colon themselves (`step:<slug>`) work.
@@ -230,7 +231,8 @@ fact, steps with checkable done-when criteria.
   and MCP cannot drift. Names `snake_case` verbs (`search_recipes`); `title`, a description that says when to use it;
   `annotations` (read-only, idempotent, closed-world unless a tool writes or calls out); `outputSchema` = the route's
   2xx schema, with its JSON as `structuredContent`; a short text summary first; images as `resource_link`s.
-- Errors are tool results with `isError: true` and the problem's one-line summary, never protocol errors.
+- Errors are tool results with `isError: true` and the problem's one-line summary, never protocol errors; the problem
+  itself (with its `status`) rides in `_meta["api-kit/problem"]`. Hints: read-only by default only for a `GET`.
 - `instructions` on discover: what the server is for and the order to use tools in (not a repeat of descriptions).
   Cache hints: lists and discover cached an hour, `private`.
 - Skills through the Skills extension (SEP-2640) and as prompts. A stdio wrapper (`overHttp(origin, key)`) runs the
@@ -289,6 +291,8 @@ fact, steps with checkable done-when criteria.
 8. Pictures or prose to search by sense: ledgers built with `embedMissing` (pilot, budget, capped key),
    `registerVectorSearch` with the app's filters, `vectorSearchTools`, the measured `minZ` in the trust page (§15).
 9. A browser app: the front door (`web.ts`), and the headless search parts under its own UI (§16).
+10. The command line: `kit sdk` (or `kit cli`), a `cli` name and example on every tool, `cliGaps` empty and
+    `commands.json` current in the tests, jobs only for steps agents repeat (§19).
 
 ## 14. Discovery
 
@@ -403,3 +407,36 @@ A product people deploy for themselves may report its use once a day (`telemetry
 - It runs from the app's scheduled handler (`sendDaily`), is tried at most once a day even when the collector is
   down, and never throws into the app. The collector may answer `{ "latest": "<version>" }`; the app keeps and shows it.
 - The product's README and setup say that it reports, what, and how to switch it off.
+
+## 19. The command line
+
+Every app's MCP tools are also its command line, for agents first and people too (decision 0003). The app ships it as
+the bin of its npm package (`sdk/`, made by `kit sdk`, or `kit cli` for an app that has one); it is an MCP client of
+the deployment's `/mcp`, so it can't disagree with the tools.
+
+- **Names are noun then verb**, as `gh` writes them, and each tool declares its own: `cli: { name: 'mail wait',
+  examples: [{ run: 'mail wait adr_1 --timeout 30', about: '…' }] }` on `mcpTool` (and `mcpResource`). Nouns are
+  singular; verbs are `gh`'s (`list`, `view`, `create`, `edit`, `delete`) where one fits, the task's word otherwise.
+  No noun is a built-in (`auth`, `help`, `commands`, `api`, `tool`, `doctor`, `completion`, `version`) or a job. A tool
+  without a name gets the route rule's (`GET /api/addresses/{id}` → `address view`) and `cliGaps` asks for one. The
+  MCP name stays a hidden alias.
+- **Arguments come from the input schema**: the route's path parameters are positional, in order; every property is a
+  `--kebab-case` flag (positional ones too); `--x` / `--no-x` for booleans; a repeated flag for an array; numbers and
+  enums checked before the call; nested objects only through `--input -`, a JSON object the flags win over.
+- **Agents first**: stdout holds only the answer; progress, prompts and warnings go to stderr. `--json [fields]` prints
+  `structuredContent` (fields of each item for a list). Errors are the problem as one line on stderr (JSON with
+  `--json`) with stable exit codes: 0 done, 1 usage, 2 sign-in, 3 not found, 4 refused or a limit, 5 the server,
+  6 timed out or still working, 130 stopped. Nothing prompts without a terminal; a destructive tool needs `--yes` there.
+  `--dry-run` prints the call. `<app> commands --json` is the manifest, `<app> help agents` the rules on one screen.
+- **Sign-in**: `<app> auth login <url>` with a device code (RFC 8628, the `oauth` part; the CLI registers itself as a
+  public client), or `--with-token` with a key on stdin; profiles per deployment in the user's config folder, mode
+  0600, tokens renewed under a lock (a refresh token sent twice revokes the sign-in). `<APP>_URL`, `<APP>_API_KEY`
+  and `<APP>_PROFILE` override them.
+- **Commands come from the deployment**: the package carries `sdk/cli/commands.json` (`cliSnapshot`, written by
+  `pnpm sdk:types`) for help before sign-in; signed in, the live `tools/list` wins, cached per profile for its `ttlMs`.
+  `<app> doctor` reports drift between the two.
+- **Jobs**: one task, one top-level command (`sdk/cli/jobs/`, `defineJob`), written when the agent test shows agents
+  making the same few calls for one playbook step; the playbook then names the job.
+- **The guide** lists the commands with `{{cli.commands}}`.
+- Tests: `cliGaps({ tools, resources, jobs })` returns `[]`, `commands.json` equals `cliSnapshot(...)` byte for byte,
+  and the live commands equal the packaged ones (`sdk/test/cli.test.ts`). `kit doctor` runs `cliGaps` too.
