@@ -124,6 +124,8 @@ jobs:
     uses: escalay/.github/.github/workflows/secrets.yml@0123abc # v1.0.0
   local:
     uses: ./.github/workflows/local.yml
+  self:
+    uses: $/.github/workflows/local.yml
   title:
     if: github.event_name == 'pull_request'
     uses: escalay/.github/.github/workflows/title.yml@0123abc # v1.0.0
@@ -133,7 +135,7 @@ jobs:
     expect(kit('apply').status).toBe(0)
     const main = (read().rulesets as { rules: { type: string; parameters?: { required_status_checks?: unknown } }[] }[])[0]!
     // The called workflow's conditional job, and the caller's conditional job, are left out
-    expect(main.rules.find((rule) => rule.type === 'required_status_checks')?.parameters?.required_status_checks).toEqual(['test', 'workflows / lint', 'leaks / gitleaks', 'local / build'].map((context) => ({ context })))
+    expect(main.rules.find((rule) => rule.type === 'required_status_checks')?.parameters?.required_status_checks).toEqual(['test', 'workflows / lint', 'leaks / gitleaks', 'local / build', 'self / build'].map((context) => ({ context })))
     expect(readFileSync(log, 'utf8')).toContain('GET repos/escalay/.github/contents/.github/workflows/workflows.yml?ref=0123abc')
   })
 

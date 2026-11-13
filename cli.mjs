@@ -450,9 +450,9 @@ const alwaysJobsOf = (workflow, readCalled, file = 'ci.yml') => {
   })
 }
 
-/** A reusable workflow's text: `./path` from the app folder, `owner/repo/path@ref` from GitHub through `gh`. */
+/** A reusable workflow's text: `./path` or `$/path` from the app folder, `owner/repo/path@ref` from GitHub through `gh`. */
 const calledWorkflowReader = (app) => (called) => {
-  if (called.startsWith('./')) return existsSync(join(app, called)) ? readFileSync(join(app, called), 'utf8') : fail(`ci.yml calls ${called}, which isn't in ${app}`)
+  if (/^[.$]\//.test(called)) return existsSync(join(app, called.slice(2))) ? readFileSync(join(app, called.slice(2)), 'utf8') : fail(`ci.yml calls ${called}, which isn't in ${app}`)
   const [, owner, repo, path, ref] = called.match(/^([^/]+)\/([^/]+)\/(.+)@(.+)$/) ?? fail(`ci.yml calls "${called}", which is neither ./path nor owner/repo/path@ref`)
   const file = ghApi('GET', `repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`)
   if (file.failed || typeof file.content !== 'string') fail(`can't read ${called} to name its checks (${file.message ?? 'not a file'}); name them with --checks`)
