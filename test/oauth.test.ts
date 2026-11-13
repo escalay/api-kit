@@ -1,19 +1,19 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, parseApiKeys, dbOAuthStore, openDb } from '../src/index.js'
+import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, parseApiKeys, dbOAuthStore, openDb, type OAuthStore } from '../src/index.js'
 
 const OWNER = 'owner@example.test'
 const ORIGIN = 'http://localhost'
 
-const sampleApi = async () => {
+const sampleApi = async (store: OAuthStore = memoryOAuthStore()) => {
   const oauth = createOAuth({
     name: 'Sample',
     signingKey: await generateOAuthKey(),
-    store: memoryOAuthStore(),
+    store,
     // The test stands in for the single sign-on: a header says who is signed in
     owner: async (c) => c.req.header('x-test-owner') ?? null,
     owners: [OWNER],
@@ -43,11 +43,14 @@ describe('OAuth for agents', () => {
     expect((await (await app.request('/.well-known/oauth-protected-resource/mcp')).json()).resource).toBe(`${ORIGIN}/mcp`)
     const as = await (await app.request('/.well-known/oauth-authorization-server')).json()
     expect(as).toMatchObject({ issuer: ORIGIN, jwks_uri: `${ORIGIN}/.well-known/jwks.json`, code_challenge_methods_supported: ['S256'], agent_auth: { skill: `${ORIGIN}/auth.md`, register_uri: `${ORIGIN}/agent/identity`, identity_types_supported: ['anonymous', 'service_auth'], anonymous: { credential_types_supported: ['identity_assertion'] } } })
+    expect(as).toMatchObject({ device_authorization_endpoint: `${ORIGIN}/oauth/device_authorization`, grant_types_supported: expect.arrayContaining(['refresh_token', 'urn:ietf:params:oauth:grant-type:device_code']) })
     expect((await (await app.request('/.well-known/jwks.json')).json()).keys[0]).toMatchObject({ kty: 'EC', alg: 'ES256', use: 'sig' })
     expect((await (await app.request('/.well-known/jwks.json')).json()).keys[0].d).toBeUndefined()
     const md = await app.request('/auth.md')
     expect(md.headers.get('content-type')).toContain('text/markdown')
-    expect(await md.text()).toMatch(/^# Sample auth\.md/)
+    const text = await md.text()
+    expect(text).toMatch(/^# Sample auth\.md/)
+    expect(text).toContain('/oauth/device_authorization')
   })
 
   it('publishes a sitemap and a Personal Agent Protocol document bound to the issuer', async () => {
@@ -144,6 +147,186 @@ describe('OAuth for agents', () => {
     expect((await app.request('/api/v1/things', { method: 'POST', headers: { authorization: `Bearer ${granted.access_token}` } })).status).toBe(201)
     const again = await (await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: granted.identity_assertion }))).json()
     expect(again.access_token).toBeTruthy()
+  })
+
+  it('gives a claimed agent a refresh token that rotates, and revokes the sign-in when a used one comes back', async () => {
+    const { app, oauth } = await sampleApi()
+    const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+    const attemptToken = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
+    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attemptToken, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    const granted = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))).json()
+    expect(granted.refresh_token).toMatch(/^rt_/)
+
+    const refresh = (token: string) => app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: token }))
+    const first = await (await refresh(granted.refresh_token)).json()
+    expect(first).toMatchObject({ token_type: 'Bearer', scope: 'read write' })
+    expect(first.refresh_token).not.toBe(granted.refresh_token)
+    expect((await app.request('/api/v1/things', { headers: { authorization: `Bearer ${first.access_token}` } })).status).toBe(200)
+    const second = await (await refresh(first.refresh_token)).json()
+    expect(second.refresh_token).toBeTruthy()
+
+    // A used token sent again (stolen, or a retry): refused, and so is the newest one of the same sign-in
+    const replay = await (await refresh(first.refresh_token)).json()
+    expect(replay).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+    expect((await (await refresh(second.refresh_token)).json()).error).toBe('invalid_grant')
+
+    // Another sign-in of the same agent is untouched by that, and the owner's kill switch ends it too
+    const other = await (await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: granted.identity_assertion }))).json()
+    expect(other.access_token).toBeTruthy()
+    const registration2 = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER }))).json()
+    const attempt2 = new URL(registration2.claim.verification_uri).searchParams.get('claim_attempt_token')!
+    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attempt2, user_code: registration2.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    const granted2 = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration2.claim_token }))).json()
+    await oauth.revokeClient(registration2.registration_id)
+    expect((await refresh(granted2.refresh_token)).status).toBe(400)
+  })
+
+  it('revokes the whole sign-in when a refresh token is revoked, and still rotates a token stored before families', async () => {
+    const store = memoryOAuthStore()
+    const oauth = createOAuth({ name: 'Sample', signingKey: await generateOAuthKey(), store, owner: async () => null })
+    const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys('') }, oauth })
+    const legacy = 'rt_from-an-older-kit'
+    await store.put('refresh', createHash('sha256').update(legacy).digest('hex'), { client: 'c1', name: 'Old', owner: OWNER, scopes: ['read'] }, Math.floor(Date.now() / 1000) + 3600)
+    const rotated = await (await app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: legacy }))).json()
+    expect(rotated).toMatchObject({ scope: 'read', refresh_token: expect.stringMatching(/^rt_/) })
+    // Revoking any token of the sign-in, even a used one, ends its newest
+    expect((await app.request('/oauth/revoke', form({ token: legacy }))).status).toBe(200)
+    const next = await (await app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: rotated.refresh_token }))).json()
+    expect(next.error).toBe('invalid_grant')
+  })
+
+  describe('device authorization (RFC 8628)', () => {
+    const DEVICE = 'urn:ietf:params:oauth:grant-type:device_code'
+    afterEach(() => vi.useRealTimers())
+    // Only Date moves: jose and the store read it, and async crypto keeps working
+    const clock = () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      return (seconds: number) => vi.setSystemTime((at += seconds * 1000))
+    }
+    const signedIn = (owner = OWNER) => ({ 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': owner, 'sec-fetch-site': 'same-origin' })
+    const start = async (app: Awaited<ReturnType<typeof sampleApi>>['app'], scope = 'read write', name = 'Terminal') => {
+      const registered = await app.request('/oauth/register', json({ client_name: name, grant_types: [DEVICE] }))
+      expect(registered.status).toBe(201)
+      const client = await registered.json()
+      expect(client.grant_types).toEqual(['refresh_token', DEVICE])
+      const started = await app.request('/oauth/device_authorization', form({ client_id: client.client_id, scope }))
+      expect(started.headers.get('cache-control')).toBe('no-store')
+      const device = await started.json()
+      const poll = () => app.request('/oauth/token', form({ grant_type: DEVICE, device_code: device.device_code, client_id: client.client_id }))
+      const decide = (decision: string, code = device.user_code, owner = OWNER) => app.request('/oauth/device', { ...form({ user_code: code, decision }), headers: signedIn(owner) })
+      return { client, device, poll, decide }
+    }
+
+    it('hands out a code, waits for the owner, then issues tokens once', async () => {
+      const tick = clock()
+      const { app } = await sampleApi()
+      const { device, poll, decide } = await start(app)
+      expect(device).toMatchObject({ device_code: expect.stringMatching(/^dc_/), verification_uri: `${ORIGIN}/oauth/device`, expires_in: 600, interval: 5 })
+      expect(device.user_code).toMatch(/^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/)
+      expect(device.verification_uri_complete).toBe(`${ORIGIN}/oauth/device?user_code=${device.user_code}`)
+
+      expect(await (await poll()).json()).toMatchObject({ error: 'authorization_pending' })
+      // The page asks for sign-in, then shows who is asking, from the complete link, lower case and all
+      expect((await app.request('/oauth/device')).status).toBe(401)
+      expect(await (await app.request('/oauth/device', { headers: signedIn() })).text()).toContain('name="user_code"')
+      const consent = await app.request(`/oauth/device?user_code=${device.user_code.toLowerCase()}`, { headers: signedIn() })
+      expect(await consent.text()).toContain('Allow <strong>Terminal</strong>')
+      // Another site can't approve through the owner's session
+      expect((await app.request('/oauth/device', { ...form({ user_code: device.user_code, decision: 'allow' }), headers: { ...signedIn(), 'sec-fetch-site': 'cross-site' } })).status).toBe(403)
+      expect((await decide('allow')).status).toBe(200)
+      // The typed code is single use
+      expect((await decide('allow')).status).toBe(400)
+
+      tick(5)
+      const tokens = await (await poll()).json()
+      expect(tokens).toMatchObject({ token_type: 'Bearer', scope: 'read write', refresh_token: expect.stringMatching(/^rt_/) })
+      const read = await app.request('/api/v1/things', { headers: { authorization: `Bearer ${tokens.access_token}` } })
+      expect((await read.json()).caller).toMatchObject({ kind: 'agent', name: 'Terminal', owner: OWNER, scopes: ['read', 'write'] })
+      // The device code is single use too
+      tick(5)
+      expect((await (await poll()).json()).error).toBe('invalid_grant')
+    })
+
+    it('keeps the owner’s answer when a poll lands at the same moment', async () => {
+      const tick = clock()
+      const inner = memoryOAuthStore()
+      const during: { run?: () => unknown } = {}
+      // The approval lands between a poll's read of the device row and its write
+      const store: OAuthStore = {
+        ...inner,
+        put: async (kind, id, value, expiresAt) => {
+          const run = kind === 'device' && Number(value.polledAt) > 0 ? during.run : undefined
+          during.run = undefined
+          if (run) await run()
+          return inner.put(kind, id, value, expiresAt)
+        },
+      }
+      const { app } = await sampleApi(store)
+      const { poll, decide } = await start(app)
+      during.run = () => decide('allow')
+      expect((await (await poll()).json()).error).toBe('authorization_pending')
+      tick(5)
+      expect((await (await poll()).json()).access_token).toBeTruthy()
+    })
+
+    it('keeps only hashes of device codes, user codes and refresh tokens', async () => {
+      const tick = clock()
+      const inner = memoryOAuthStore()
+      const kept: string[] = []
+      const store: OAuthStore = { ...inner, put: async (kind, id, value, expiresAt) => (kept.push(id, JSON.stringify(value)), inner.put(kind, id, value, expiresAt)) }
+      const { app } = await sampleApi(store)
+      const { device, poll, decide } = await start(app)
+      await decide('allow')
+      tick(5)
+      const tokens = await (await poll()).json()
+      const rotated = await (await app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }))).json()
+      const secrets = [device.device_code, device.user_code, device.user_code.replace('-', ''), tokens.refresh_token, rotated.refresh_token]
+      for (const secret of secrets) expect(kept.filter((entry) => entry.includes(secret)), secret).toEqual([])
+    })
+
+    it('says access_denied when the owner says no', async () => {
+      clock()
+      const { app } = await sampleApi()
+      const { poll, decide } = await start(app, 'read')
+      const denied = await decide('deny')
+      expect([denied.status, await denied.text()]).toEqual([200, expect.stringContaining('Denied')])
+      expect((await (await poll()).json()).error).toBe('access_denied')
+    })
+
+    it('says slow_down to a device polling faster than the interval, and raises it', async () => {
+      const tick = clock()
+      const { app } = await sampleApi()
+      const { poll } = await start(app)
+      expect((await (await poll()).json()).error).toBe('authorization_pending')
+      tick(2)
+      expect(await (await poll()).json()).toMatchObject({ error: 'slow_down', interval: 10 })
+      tick(6)
+      expect((await (await poll()).json()).error).toBe('slow_down')
+      tick(15)
+      expect((await (await poll()).json()).error).toBe('authorization_pending')
+    })
+
+    it('says expired_token after ten minutes, and the code no longer opens the page', async () => {
+      const tick = clock()
+      const { app } = await sampleApi()
+      const { poll, decide } = await start(app)
+      tick(601)
+      expect((await decide('allow')).status).toBe(400)
+      expect((await (await poll()).json()).error).toBe('expired_token')
+    })
+
+    it('refuses an unregistered client, a stranger, and a sixth wrong code', async () => {
+      clock()
+      const { app } = await sampleApi()
+      expect((await (await app.request('/oauth/device_authorization', form({ client_id: 'client_nope' }))).json()).error).toBe('invalid_client')
+      expect((await app.request('/oauth/register', json({ client_name: 'No way back' }))).status).toBe(400)
+      const { decide } = await start(app)
+      // Only the owners the server names may approve
+      expect((await decide('allow', undefined, 'someone@else.test')).status).toBe(403)
+      for (let tries = 0; tries < 5; tries++) expect((await decide('allow', 'AAAA-AAAA')).status).toBe(400)
+      expect((await decide('allow')).status).toBe(429)
+    })
   })
 
   it('lets the owner revoke an agent outright', async () => {

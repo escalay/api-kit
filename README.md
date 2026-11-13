@@ -98,7 +98,7 @@ The full standard: [docs/STANDARD.md](docs/STANDARD.md). Why the layout is what 
 |---|---|---|
 | `core` | `createAgentApi`: OpenAPI 3.1 + Scalar, HAL, problem+json, keys + Access, caching, Idempotency-Key, rate limits, discovery, a key-value store type; `newId`, `waitFor`, `Jobs` (a queue for later work) | [core](src/core/README.md) |
 | `db` | the app's database through Drizzle: `openDb`, `migrate` per feature, `testDb` | [db](src/db/README.md) |
-| `oauth` | the app as its own OAuth server (auth code + PKCE, agent registration via auth.md, ES256 tokens) | [oauth](src/oauth/README.md) |
+| `oauth` | the app as its own OAuth server (auth code + PKCE, device authorization for CLIs, agent registration via auth.md, rotating refresh tokens, ES256 tokens) | [oauth](src/oauth/README.md) |
 | `pagination` | cursor pages and sorting | [pagination](src/pagination/README.md) |
 | `guide` | the agent guide from templates and its generated parts | [guide](src/guide/README.md) |
 | `mcp` | an MCP server over the routes: tools, resources, prompts, skills, its Server Card | [mcp](src/mcp/README.md) |
@@ -108,6 +108,7 @@ The full standard: [docs/STANDARD.md](docs/STANDARD.md). Why the layout is what 
 | `web` | the front door: a public `/` or none, the browser app under `/app` | [web](src/web/README.md) |
 | `keys` | API keys made and revoked through the app's own API beside `API_KEYS`, `GET /api/me`, their MCP tools | [keys](src/keys/README.md) |
 | `boards` | the owner's collections of items with notes; `boardRef` / `parseBoardRef`; the reference feature shape | [boards](src/boards/README.md) |
+| `telemetry` | a daily anonymous usage report (coarse ranges only) to the product's collector, the owner's switch, `GET /api/telemetry` showing exactly what is sent | [telemetry](src/telemetry/README.md) |
 | `testing` | `lintOpenApi`, `guideRoutes`, `guideGaps`, `toolRoutes`, `toolsRun` | [testing](src/testing/README.md) |
 | `search-client`, `search-react`, `vector-search-ui`, `boards-client`, `boards-react` | the browser side: typed clients, headless hooks, an optional shadcn block | [browser](src/browser/README.md) |
 
