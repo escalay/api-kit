@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.0](https://github.com/escalay/api-kit/compare/v1.17.0...v1.18.0) (2026-11-13)
+
+
+### New
+
+* new apps refuse a feature that names Cloudflare ([#49](https://github.com/escalay/api-kit/issues/49)) ([165332f](https://github.com/escalay/api-kit/commit/165332fcca60d588b8ea95adbc607c3610cc7082))
+
 ## [1.17.0](https://github.com/escalay/api-kit/compare/v1.16.1...v1.17.0) (2026-11-13)
 
 
