@@ -135,7 +135,7 @@ const jobCommand = (job: CliJobLike): CliSnapshotCommand => ({
 export const cliSnapshot = ({ app = '', version = '', tools, resources = [], jobs = [] }: { app?: string; version?: string; tools: SnapshotTool[]; resources?: SnapshotResource[]; jobs?: CliJobLike[] }): CliSnapshot => ({
   app,
   version,
-  commands: [...jobs.map(jobCommand).sort((a, b) => a.name.localeCompare(b.name)), ...[...tools.map(toolCommand), ...resources.map(resourceCommand)].sort((a, b) => a.name.localeCompare(b.name))],
+  commands: [...jobs.map(jobCommand).sort(byName), ...[...tools.map(toolCommand), ...resources.map(resourceCommand)].sort(byName)],
 })
 
 /** Nouns that end in s and are singular. */
@@ -147,6 +147,9 @@ const looksPlural = (noun: string, allowed: Set<string>) => {
 
 /** Global flags every command takes. */
 const GLOBAL_FLAGS = new Set(['json', 'yes', 'dry-run', 'input', 'timeout', 'profile', 'help'])
+
+const FIELDS = /^[A-Za-z_$][\w$.-]*(,[A-Za-z_$][\w$.-]*)*$/
+const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
 
 /** An example's words, quotes kept together as the shell would. */
 const wordsOf = (run: string) => [...run.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((match) => match[1] ?? match[2] ?? match[3]!)
@@ -168,6 +171,11 @@ const exampleGaps = (command: CliSnapshotCommand, where: string) =>
         continue
       }
       const name = word.slice(2).split('=')[0]!
+      // As the CLI reads it: the next word is --json's fields once every bare argument is given
+      if (name === 'json') {
+        if (!word.includes('=') && FIELDS.test(words[index + 1] ?? '') && bare >= command.positional.length) index++
+        continue
+      }
       const flag = flags.get(name) ?? (name.startsWith('no-') && flags.get(name.slice(3))?.type === 'boolean' ? flags.get(name.slice(3)) : undefined)
       if (!flag && !GLOBAL_FLAGS.has(name)) gaps.push(`${where}: the example "${run}" uses --${name}, which it doesn't take`)
       // A flag's value is the next word, except for booleans and flags written with =
@@ -212,6 +220,7 @@ export const cliGaps = ({ tools, resources = [], jobs = [] }: { tools: SnapshotT
     if (jobNames.has(noun)) gaps.push(`${where}: the noun "${noun}" is the job ${noun}`)
     if (looksPlural(noun, allowed)) gaps.push(`${where}: the noun "${noun}" looks plural; nouns are singular (or pass it in singular)`)
     for (const flag of command.flags) if (!command.resource && !flag.description) gaps.push(`${where}: the argument ${flag.key} has no description`)
+    for (const flag of command.flags) if (GLOBAL_FLAGS.has(flag.name) && flag.name !== 'timeout') gaps.push(`${where}: the argument ${flag.key} is --${flag.name}, a flag every command already has; rename it`)
     if (needsExample && !command.examples.length) gaps.push(`${where}: no example; add cli: { name, examples: [{ run, about }] }`)
     gaps.push(...exampleGaps(command, where))
   }
@@ -221,6 +230,7 @@ export const cliGaps = ({ tools, resources = [], jobs = [] }: { tools: SnapshotT
     if (builtIns.has(job.name)) gaps.push(`${where}: "${job.name}" is a built-in command`)
     claim(job.name, where)
     for (const [key, arg] of Object.entries(job.args)) if (!arg.description) gaps.push(`${where}: the argument ${key} has no description`)
+    for (const flag of jobCommand(job).flags) if (GLOBAL_FLAGS.has(flag.name) && flag.name !== 'timeout') gaps.push(`${where}: the argument ${flag.key} is --${flag.name}, a flag every command already has; rename it`)
     if (!job.examples.length) gaps.push(`${where}: no example`)
     gaps.push(...exampleGaps(jobCommand(job), where))
   }

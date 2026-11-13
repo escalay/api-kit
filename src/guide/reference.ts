@@ -157,7 +157,7 @@ export const cliMarkdown = (tools: ToolLike[], resources: ResourceLike[] = []) =
     ...resources.flatMap((resource) => (resource.name ? [{ command: resourceCli({ name: resource.name, uriTemplate: resource.uriTemplate, cli: resource.cli }), about: resource.title, of: resource.uriTemplate }] : [])),
   ]
     .map(({ command, about, of }) => ({ line: `${command.name}${command.positional.map((key) => ` <${key}>`).join('')}`, about, of }))
-    .sort((a, b) => a.line.localeCompare(b.line))
+    .sort((a, b) => (a.line < b.line ? -1 : a.line > b.line ? 1 : 0))
     .map(({ line, about, of }) => `- \`${line}\` — ${about} (\`${of}\`)`)
     .join('\n')
 

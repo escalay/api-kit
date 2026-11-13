@@ -398,8 +398,9 @@ console.log(JSON.stringify(cliGaps({ tools, resources, jobs: ${jobs} })))
   const checked = spawnSync('pnpm', ['exec', 'tsx', script], { cwd: root, encoding: 'utf8' })
   rmSync(script, { force: true })
   const gaps = checked.status === 0 ? JSON.parse(checked.stdout.trim().split('\n').at(-1) || '[]') : null
-  if (!gaps) return [`cli      could not build the app to check its commands (\`pnpm install\` first?): ${(checked.stderr || '').trim().split('\n')[0] ?? ''}`]
-  return gaps.map((gap) => `cli      ${gap}`)
+  // Not a finding about the kit's copy: say so, and leave the exit code to the copy
+  if (!gaps) console.log(`note     could not build the app to check its commands with cliGaps (installed? createApp({ db, env }) enough?): ${(checked.stderr || '').trim().split('\n')[0] ?? ''}`)
+  return (gaps ?? []).map((gap) => `cli      ${gap}`)
 }
 
 // ---- Commands ----

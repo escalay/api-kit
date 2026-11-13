@@ -297,7 +297,8 @@ export const createCli = (options: CliOptions) => {
       jsonMode: Boolean(globals.json),
     }
     try {
-      await waiting(job.summary, job.run(ctx, args as never))
+      // No spinner: a job prints and reports progress as it goes
+      await job.run(ctx, args as never)
       return EXIT.ok
     } finally {
       done()
@@ -350,7 +351,8 @@ export const createCli = (options: CliOptions) => {
           profile = { url, apiKey }
           await clientFor({ url, apiKey, from: 'stdin' }).listTools(outer)
         } else profile = await deviceLogin({ url, app, send, tell, sleep, signal: outer, now })
-        store.write({ current: name, profiles: { ...profiles.profiles, [name]: profile } })
+        // Read again: the sign-in took minutes, and another process may have changed the file meanwhile
+        store.write({ current: name, profiles: { ...store.read().profiles, [name]: profile } })
         print(`Signed in to ${url} as profile ${name}`)
         return EXIT.ok
       }
@@ -495,6 +497,9 @@ export const createCli = (options: CliOptions) => {
     const { leading, words } = splitLeadingFlags(argv)
     const [first, ...more] = words
     const firstFlags = parseArguments(builtIn('', []), leading).globals
+    // The profile picks which deployment's commands to read, wherever it was written
+    const at = argv.findIndex((token) => token === '--profile' || token.startsWith('--profile='))
+    if (at >= 0) firstFlags.profile = argv[at]!.includes('=') ? argv[at]!.slice('--profile='.length) : argv[at + 1]
     if (!first || first === '--help' || first === '-h') {
       if (firstFlags.json) return printJson(manifest((await commandsOf(targetOf(firstFlags.profile), outer)).commands)), EXIT.ok
       return helpFor([], firstFlags)

@@ -92,14 +92,16 @@ export const routeOf = (tool: Pick<CliTool, 'route' | 'input' | 'call'>): string
 }
 
 /**
- * A tool's MCP hints with the kit's defaults: read-only when its route is a `GET` and it says nothing else (a tool
- * that says it is destructive is never read-only), not destructive, idempotent, closed-world.
+ * A tool's MCP hints with the kit's defaults: read-only when its route is a `GET` (or can't be read from its call)
+ * and it says nothing else (a tool that says it is destructive is never read-only), not destructive, idempotent,
+ * closed-world.
  *
  * @example
  * hintsOf(deleteNote) // → { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
  */
 export const hintsOf = (tool: Pick<CliTool, 'route' | 'input' | 'call'> & { annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean } }) => {
-  const reads = (routeOf(tool) ?? 'GET').startsWith('GET ') && !tool.annotations?.destructiveHint
+  // A route the call doesn't show (built from its arguments' values) keeps the old default: read-only
+  const reads = (routeOf(tool) ?? 'GET ').startsWith('GET ') && !tool.annotations?.destructiveHint
   return { readOnlyHint: reads, destructiveHint: false, idempotentHint: true, openWorldHint: false, ...tool.annotations }
 }
 

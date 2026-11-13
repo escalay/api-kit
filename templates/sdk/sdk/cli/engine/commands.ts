@@ -157,7 +157,7 @@ export const jobCommand = (job: Job): Command => ({
  * protocol extension serves (`io.modelcontextprotocol/skills`, named with a slash) are the extension's, not commands.
  */
 export const commandsFromListing = (tools: ListedTool[], templates: ListedTemplate[]) =>
-  [...tools.map(toolCommand), ...templates.filter((template) => template._meta?.[CLI_META] || !template.name.includes('/')).map(resourceCommand)].sort((a, b) => a.name.localeCompare(b.name))
+  [...tools.map(toolCommand), ...templates.filter((template) => template._meta?.[CLI_META] || !template.name.includes('/')).map(resourceCommand)].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 
 /**
  * `--json id,name`: those top-level fields of an object, of each item of an array, and of each item of a HAL list
