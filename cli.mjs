@@ -490,16 +490,18 @@ const rulesetShape = (ruleset) => ({
 /** Every difference between the repository and its plan, one line each, with what fixes it; and what the plan can't reach. */
 const repoFindings = (repo, plan) => {
   const findings = []
+  const notes = []
   const current = ghApi('GET', `repos/${repo}`)
   if (current.failed) fail(`can't read ${repo}: ${current.message}`)
+  const rulesets = ghApi('GET', `repos/${repo}/rulesets`)
+  // Auto-merge waits for required checks, so GitHub turns it on only where rules can exist
+  if (rulesets.failed && rulesets.status === 403) delete plan.settings.allow_auto_merge
   for (const [key, want] of Object.entries(plan.settings)) if (current[key] !== want) findings.push({ what: `setting ${key}`, has: current[key], want, fix: 'settings' })
   const workflow = ghApi('GET', `repos/${repo}/actions/permissions/workflow`)
   for (const [key, want] of Object.entries(plan.workflow)) if (workflow[key] !== want) findings.push({ what: `actions ${key}`, has: workflow[key], want, fix: 'workflow' })
   if (ghApi('GET', `repos/${repo}/vulnerability-alerts`).failed) findings.push({ what: 'vulnerability alerts', has: 'off', want: 'on', fix: 'alerts' })
   if (!ghApi('GET', `repos/${repo}/automated-security-fixes`).enabled) findings.push({ what: 'Dependabot security updates', has: 'off', want: 'on', fix: 'fixes' })
-  const rulesets = ghApi('GET', `repos/${repo}/rulesets`)
-  const notes = []
-  if (rulesets.failed) notes.push(rulesets.status === 403 ? 'rules for main: GitHub offers them on a private repository only with a paid plan; nothing enforces green checks but the person merging' : `rules for main: can't read them (${rulesets.message})`)
+  if (rulesets.failed) notes.push(rulesets.status === 403 ? 'rules for main and auto-merge: GitHub offers them on a private repository only with a paid plan; nothing enforces green checks but the person merging' : `rules for main: can't read them (${rulesets.message})`)
   else
     for (const wanted of plan.rulesets) {
       const found = rulesets.find((ruleset) => ruleset.name === wanted.name)
