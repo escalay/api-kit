@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.0](https://github.com/escalay/api-kit/compare/v1.12.1...v1.13.0) (2026-11-13)
+
+
+### New
+
+* device codes, refresh tokens for claimed agents, and the telemetry part ([#18](https://github.com/escalay/api-kit/issues/18)) ([6f35242](https://github.com/escalay/api-kit/commit/6f35242532391184780ed7582bfc567ade4961f3))
+* people and setup parts (passkey sign-in, claiming a deployment, the team) ([#16](https://github.com/escalay/api-kit/issues/16)) ([d5a6d58](https://github.com/escalay/api-kit/commit/d5a6d583b1a5f8b9a2b00ee0385c7a51b8e2bddd))
+
 ## [1.12.1](https://github.com/escalay/api-kit/compare/v1.12.0...v1.12.1) (2026-11-12)
 
 
