@@ -49,9 +49,10 @@ at the GitHub repo (provenance checks it).
    Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests".
 6. Branch rules for `main`: pull requests only, squash merging only with the pull request title as the commit
    message, and the CI checks required. A pull request opened by the workflow's own token does not start CI, so
-   `release.yml` starts `ci.yml` on the release branch itself: give `ci.yml` a `workflow_dispatch:` trigger, and the
-   required checks report on the release pull request like on any other. Turn on auto-merge in the repository
-   settings, then `gh pr merge --auto --squash <number>` publishes once they pass. Enable it as yourself, never
+   `release.yml` starts `ci.yml` on the release branch itself: give `ci.yml` a `workflow_dispatch:` trigger. GitHub
+   does not count a dispatched run's checks for a pull request, so `ci.yml` ends with a job that, on a dispatch and
+   once every other job passed, sets the required check's name (`test`) as a commit status. Turn on auto-merge in the
+   repository settings, then `gh pr merge --auto --squash <number>` publishes once it is set. Enable it as yourself, never
    from a workflow: a merge made with the workflow's token would not start `release.yml`.
 7. `pnpm release:check` until every line is ✓.
 
