@@ -479,8 +479,10 @@ What `init` sets up, and what an app keeps:
   only with the title as the commit (or `--merge rebase`), auto-merge and the update-branch button on, merged branches
   deleted, a read-only Actions token that may open pull requests only when a `release.yml` needs it, vulnerability
   alerts and security updates on, and a `main` ruleset (no deletion or force-push, linear history, pull requests only,
-  required checks = the CI jobs that always run). With a `release.yml`, `v*` tags can't be moved or deleted. A private
-  repository on GitHub's free plan has no rulesets: `check` says so, and the person merging is the gate.
+  required checks = the CI jobs that always run; a job that calls a reusable workflow reports one check per job of it,
+  `<job> / <called job>`, read from the called workflow at the ref the CI pins). With a `release.yml`, `v*` tags can't
+  be moved or deleted. A private repository on GitHub's free plan has no rulesets: `check` says so, and the person
+  merging is the gate.
 - **Dependencies**: Dependabot monthly, one grouped pull request per ecosystem (npm minor and patch together, majors
   alone), a 7-day cooldown; security updates on.
 - **Toolchain pinned**: `.node-version` (the kit's Node) for CI and people alike, `packageManager` (the kit's pnpm) so
