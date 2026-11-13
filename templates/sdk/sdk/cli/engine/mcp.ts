@@ -28,6 +28,8 @@ export const exitFor = (status: number) => {
 export class CliError extends Error {
   readonly exitCode: number
   readonly problem?: Problem
+  /** The line after a usage error, when the usual `Run help <command>` would point somewhere that doesn't exist. */
+  hint?: string
   constructor(message: string, exitCode: number, problem?: Problem) {
     super(message)
     this.name = 'CliError'

@@ -168,12 +168,61 @@ export const commandsFromListing = (tools: ListedTool[], templates: ListedTempla
  */
 export const selectFields = (value: unknown, fields: string[] | undefined): unknown => {
   if (!fields?.length || value === null || typeof value !== 'object') return value
-  const pick = (item: unknown) => (item && typeof item === 'object' ? Object.fromEntries(fields.filter((field) => field in item).map((field) => [field, (item as Record<string, unknown>)[field]])) : item)
+  // `senderWritten` names the fields a stranger wrote: it stays with them, chosen or not
+  const kept = [...fields, ...(fields.includes(SENDER_WRITTEN) ? [] : [SENDER_WRITTEN])]
+  const pick = (item: unknown) => (item && typeof item === 'object' ? Object.fromEntries(kept.filter((field) => field in item).map((field) => [field, (item as Record<string, unknown>)[field]])) : item)
   if (Array.isArray(value)) return value.map(pick)
-  const embedded = (value as { _embedded?: Record<string, unknown> })._embedded
-  const list = embedded && Object.values(embedded).find(Array.isArray)
+  const list = listOf(value)
   if (list && !fields.some((field) => field in value)) return list.map(pick)
   return pick(value)
+}
+
+/** The field the kit's apps use to name the fields a stranger wrote. */
+export const SENDER_WRITTEN = 'senderWritten'
+
+const listOf = (value: object) => {
+  const embedded = (value as { _embedded?: Record<string, unknown> })._embedded
+  return embedded ? (Object.values(embedded).find(Array.isArray) as unknown[] | undefined) : undefined
+}
+
+/**
+ * The fields `--json a,b` asks for that the answer doesn't have, and the ones it has: the top-level keys of the
+ * first item (of an array or a HAL list), or of the object. Nothing to say about an empty list.
+ */
+export const missingFields = (value: unknown, fields: string[] | undefined) => {
+  if (!fields?.length || value === null || typeof value !== 'object') return { missing: [], keys: [] }
+  const list = Array.isArray(value) ? value : listOf(value)
+  const own = Array.isArray(value) ? [] : Object.keys(value)
+  const sample = list && !fields.some((field) => own.includes(field)) ? list[0] : value
+  if (!sample || typeof sample !== 'object') return { missing: [], keys: [] }
+  const keys = Object.keys(sample)
+  return { missing: fields.filter((field) => !keys.includes(field) && !own.includes(field)), keys }
+}
+
+/**
+ * JSON as lines a person reads: `key: value` for a flat object, a list of words joined, nested values indented under
+ * their key. `_links` is left out (the commands are what to follow) and `senderWritten` is said once, above.
+ *
+ * @example
+ * readableOf({ subject: 'Hi', to: ['a@x.example', 'b@x.example'], from: { name: 'Ana' } })
+ * // → 'subject: Hi\nto: a@x.example, b@x.example\nfrom:\n  name: Ana'
+ */
+export const readableOf = (value: unknown, indent = ''): string => {
+  const flat = (one: unknown) => one === null || typeof one !== 'object'
+  if (flat(value)) return `${indent}${value === null || value === undefined ? '—' : String(value)}`
+  if (Array.isArray(value)) {
+    if (!value.length) return `${indent}—`
+    if (value.every(flat)) return `${indent}${value.map((one) => (one === null ? '—' : String(one))).join(', ')}`
+    return value.map((one) => readableOf(one, `${indent}  `).replace(new RegExp(`^${indent}  `), `${indent}- `)).join('\n')
+  }
+  return Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => key !== '_links' && key !== SENDER_WRITTEN)
+    .map(([key, one]) => {
+      if (typeof one === 'string' && one.includes('\n')) return `${indent}${key}:\n${one.split('\n').map((line) => `${indent}  ${line}`).join('\n')}`
+      if (flat(one) || (Array.isArray(one) && one.every(flat))) return `${indent}${key}: ${readableOf(one)}`
+      return `${indent}${key}:\n${readableOf(one, `${indent}  `)}`
+    })
+    .join('\n')
 }
 
 /** Reads text written for MCP clients as the CLI says it; the text itself when there is nothing to change. */
