@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto'
 import { z } from '@hono/zod-openapi'
 import type { Context, Hono } from 'hono'
 import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, TOOLS_HASH_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
+import { attachSkills, instructionsWithSkills } from './skills.js'
 import { MODERN_PROTOCOL_VERSION, mountedOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN } from '../core/discovery.js'
 import { originOf, pathWith } from '../core/hal.js'
 
@@ -167,7 +168,7 @@ export type AgentMcpFactory = McpServerFactory & { info: McpServerInfo; tools: M
 export const mcpServerFactory = ({ info, instructions, tools, resources = [], prompts = [], skills, callApi, waitMs = 60_000, toolsTtlMs = HOUR }: { info: McpServerInfo; instructions: string; tools: McpTool[]; resources?: McpResource[]; prompts?: McpPrompt[]; skills?: SkillCatalog; callApi: CallApi; waitMs?: number; toolsTtlMs?: number }): AgentMcpFactory => Object.assign(() => {
   // Lists only change with a deploy: let clients cache them for an hour
   const cached = { ttlMs: HOUR, cacheScope: 'private' as const }
-  const server = new McpServer(info, { instructions, cacheHints: { 'server/discover': cached, 'tools/list': { ...cached, ttlMs: toolsTtlMs }, 'prompts/list': cached, 'resources/list': cached, 'resources/templates/list': cached } })
+  const server = new McpServer(info, { instructions: instructionsWithSkills(instructions, skills), cacheHints: { 'server/discover': cached, 'tools/list': { ...cached, ttlMs: toolsTtlMs }, 'prompts/list': cached, 'resources/list': cached, 'resources/templates/list': cached } })
   // Clients that cache the list learn from any answer that it changed
   const listed = { [TOOLS_HASH_META]: toolsHashOf(tools, resources) }
   for (const tool of tools) {
@@ -218,9 +219,9 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
       },
     )
   }
-  skills?.attach(server)
+  if (skills) attachSkills(server, skills)
   return server
-}, { info, tools, resources, instructions, prompts })
+}, { info, tools, resources, instructions: instructionsWithSkills(instructions, skills), prompts })
 
 /**
  * The tools and resources `mountMcp` serves on an app, as they were given: for the CLI snapshot and `cliGaps`.

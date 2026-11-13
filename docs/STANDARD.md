@@ -236,7 +236,11 @@ fact, steps with checkable done-when criteria.
   itself (with its `status`) rides in `_meta["api-kit/problem"]`. Hints: read-only by default only for a `GET`.
 - `instructions` on discover: what the server is for and the order to use tools in (not a repeat of descriptions).
   Cache hints: lists and discover cached an hour, `private`.
-- Skills through the Skills extension (SEP-2640) and as prompts. A stdio wrapper (`overHttp(origin, key)`) runs the
+- Skills through the Skills extension (SEP-2640) and as prompts, findable by a client that knows neither:
+  `resources/list` names each `SKILL.md` (`<name> skill: start here`, its frontmatter description) and its references
+  while a skill has at most 20; the `skill://{+path}` template's description and the server's `instructions` name the
+  start URI; a folder read (`skill://<name>`) answers its files as a Markdown list of `skill://` URIs, never only a
+  pointer to `resources/directory/read`; a miss names the start URI. A stdio wrapper (`overHttp(origin, key)`) runs the
   same tools from a laptop against the remote API.
 - Auth is the API's: the same bearer key, or an OAuth token when the app runs `oauth.ts` (then MCP clients such as
   hosted chat apps connect with no key at all: the 401 on `/mcp` points at `/.well-known/oauth-protected-resource/mcp`).
@@ -441,7 +445,8 @@ the deployment's `/mcp`, so it can't disagree with the tools.
 - **Sign-in**: `<app> auth login <url>` with a device code (RFC 8628, the `oauth` part; the CLI registers itself as a
   public client), or `--with-token` with a key on stdin; profiles per deployment in the user's config folder, mode
   0600, tokens renewed under a lock (a refresh token sent twice revokes the sign-in). `<APP>_URL`, `<APP>_API_KEY`
-  and `<APP>_PROFILE` override them.
+  and `<APP>_PROFILE` override them. A sign-in that fails or ends (an expired or unknown code, a refresh refused) says
+  the command to run, `` `<app> auth login <url>` again ``, never the OAuth endpoint the server's own error names.
 - **Commands come from the deployment**: the package carries `sdk/cli/commands.json` (`cliSnapshot`, written by
   `pnpm sdk:types`) for help before sign-in; signed in, the live `tools/list` wins, cached per profile for its `ttlMs`.
   Each listed tool and every call's result carry `_meta["api-kit/tools-hash"]` (a hash of the whole listing): an
