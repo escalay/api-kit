@@ -17,6 +17,7 @@
  * mcpServerFactory({ tools: [...vectorSearchTools({ path: '/api/search', similarPath: '/api/recipes/{slug}/similar', noun: 'recipes', label: (recipe) => recipe.title }), …], … })
  */
 import { createRoute, z, type OpenAPIHono } from '@hono/zod-openapi'
+import { singularOf } from '../core/cli.js'
 import { rateLimit } from '../core/guards.js'
 import { HAL_JSON, linksOf, LinksSchema, originOf, pathWith } from '../core/hal.js'
 import { mcpTool, type McpTool } from '../mcp/index.js'
@@ -325,6 +326,8 @@ export const vectorSearchTools = (config: ToolConfig): McpTool[] => {
   const by = offers.length > 1 ? z.enum(['both', 'look', 'meaning']).optional().describe('look: appearance; meaning: subject; both (default for words).') : z.enum([offers[0]!] as [SearchSpace]).optional().describe(`Only ${offers[0]} here.`)
   const limit = z.number().int().min(1).max(100).optional().describe('At most this many (default 24).')
   const summarize = summary(config.label)
+  // The command line's noun: one of the things searched (`recipes` → `recipe`)
+  const thing = singularOf(noun.toLowerCase().trim().replace(/\s+/g, '-'))
   const tools: McpTool[] = [
     mcpTool({
       name: config.names?.search ?? `search_${noun}`,
@@ -332,6 +335,7 @@ export const vectorSearchTools = (config: ToolConfig): McpTool[] => {
       description: `${noun} that match a description of what they show or look like, best first. Returns only clear matches: an empty answer means nothing fits.`,
       input: z.object({ q: z.string().min(2).describe('What you are looking for, in words.'), by, limit, ...filters }),
       annotations: { readOnlyHint: true, openWorldHint: false },
+      cli: { name: `${thing} search`, examples: [{ run: `${thing} search --q "something warm and red"`, about: `${noun} by what they show` }] },
       call: (args) => ({ path, query: args as never }),
       summarize,
     }),
@@ -341,6 +345,7 @@ export const vectorSearchTools = (config: ToolConfig): McpTool[] => {
       description: `${noun} that look like a picture: pass it as a data URL (data:image/png;base64,…), or one of this server's own image links${config.imageHosts?.length ? `, or an https URL on ${config.imageHosts.join(', ')}` : ''}. Other URLs are refused. by=meaning finds ${noun} about what the picture shows.`,
       input: z.object({ image: z.string().describe("A data URL, or one of this server's own image links."), by: z.enum(['look', 'meaning', 'both']).optional().describe('look (default), meaning or both.'), limit, ...filters }),
       annotations: { readOnlyHint: true, openWorldHint: false },
+      cli: { name: `${thing} search-by-image`, examples: [{ run: `${thing} search-by-image --image "data:image/png;base64,iVBORw0KGgo…"`, about: `${noun} that look like a picture` }] },
       call: ({ image, ...rest }) => ({ method: 'POST', path, query: rest as never, body: { image } }),
       summarize,
     })]),
@@ -354,6 +359,7 @@ export const vectorSearchTools = (config: ToolConfig): McpTool[] => {
         description: `${noun} like one you have the id of: by look (same forms and style) or meaning (same subject). Always answers, closest first.`,
         input: z.object({ [param]: z.string().describe(`The item’s ${param}, from a search result or its link (a board ref like \`type:${param}\` works too).`), by: z.enum(offers as [SearchSpace, ...SearchSpace[]]).optional().describe(offers.length > 1 ? 'look or meaning.' : `Only ${offers[0]} here.`), limit, ...filters }),
         annotations: { readOnlyHint: true, openWorldHint: false },
+        cli: { name: `${thing} similar`, examples: [{ run: `${thing} similar ${param}-from-a-result --limit 5`, about: `Five ${noun} like one` }] },
         call: (args: Record<string, unknown>) => {
           const { [param]: id, ...rest } = args
           // As given: the route tells an id holding a colon from a board ref's type prefix

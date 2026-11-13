@@ -8,6 +8,7 @@
  * endpointsMarkdown(doc)             // ### Search … - `GET /api/v1/search/recipes?q=…` — Recipes for a description. …
  * toolRoute(tool, doc)               // { method: 'GET', path: '/api/v1/search/recipes', operationId: 'searchRecipes' }
  */
+import { cliOf, resourceCli, toolCli } from '../core/cli.js'
 import type { ResourceLike, ToolLike } from '../core/discovery.js'
 
 type Schema = { type?: string | string[]; enum?: unknown[]; default?: unknown; example?: unknown; description?: string; items?: Schema; minimum?: number; maximum?: number; anyOf?: Schema[]; $ref?: string; properties?: Record<string, Schema>; additionalProperties?: unknown }
@@ -146,6 +147,33 @@ export const toolsMarkdown = (tools: ToolLike[], doc: OpenApiDoc) =>
     })
     .join('\n')
 
+/** A command as the CLI snapshot (`commands.json`) holds it: enough to list it. */
+export type CliCommandLike = { name: string; positional: string[]; summary: string; tool?: string; uriTemplate?: string; job?: string }
+/** What the CLI needs of a job to list it. */
+export type CliJobLine = { name: string; summary: string; args: Record<string, { positional?: boolean }> }
+
+/**
+ * One line per command of the app's CLI, jobs first: the command with its positional arguments, what it does, and the
+ * MCP tool (or resource, or "job") behind it. From the tools, resources and jobs, or from the snapshot's `commands`.
+ * Without the bin's name, which the guide writes around it.
+ *
+ * @example
+ * cliMarkdown({ commands: snapshot.commands }) // → '- `signup` — Make an address and wait for its code (job)\n- `mail wait <address>` — …'
+ */
+export const cliMarkdown = ({ tools = [], resources = [], jobs = [], commands }: { tools?: ToolLike[]; resources?: ResourceLike[]; jobs?: CliJobLine[]; commands?: CliCommandLike[] }) => {
+  const listed: CliCommandLike[] = commands ?? [
+    ...jobs.map((job) => ({ name: job.name, job: job.name, summary: job.summary, positional: Object.entries(job.args).filter(([, arg]) => arg.positional).map(([key]) => key) })),
+    ...tools.map((tool) => ({ ...(tool.input ? cliOf(tool as ToolLike & { input: { shape: Record<string, unknown> } }) : toolCli({ name: tool.name, cli: tool.cli, keys: [] })), summary: tool.title ?? firstSentence(tool.description), tool: tool.name })),
+    ...resources.flatMap((resource) => (resource.name ? [{ ...resourceCli({ name: resource.name, uriTemplate: resource.uriTemplate, cli: resource.cli }), summary: resource.title, uriTemplate: resource.uriTemplate }] : [])),
+  ]
+  // Jobs first in the app's own order (the sort keeps it), then the rest by name
+  const order = (a: CliCommandLike, b: CliCommandLike) => (a.job && !b.job ? -1 : b.job && !a.job ? 1 : a.job ? 0 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+  return [...listed]
+    .sort(order)
+    .map((command) => `- \`${command.name}${command.positional.map((key) => ` <${key}>`).join('')}\` — ${command.summary} (${command.job ? 'job' : `\`${command.tool ?? command.uriTemplate}\``})`)
+    .join('\n')
+}
+
 /** One line per MCP resource: its URI template and what attaching it gives. */
 export const resourcesMarkdown = (resources: ResourceLike[]) => resources.map((resource) => `- \`${resource.uriTemplate}\` — ${resource.title}: ${resource.description.replace(/\s+/g, ' ').trim()}`).join('\n')
 
@@ -191,14 +219,15 @@ export const unblockMarkdown = (origin: string) => {
 }
 
 /** Everything generated, keyed the way guide templates name it. */
-export const generatedVars = ({ origin, doc, tools, resources, files }: { origin: string; doc: OpenApiDoc; tools?: ToolLike[]; resources?: ResourceLike[]; files: Map<string, string> }) => {
+export const generatedVars = ({ origin, doc, tools, resources, commands, files }: { origin: string; doc: OpenApiDoc; tools?: ToolLike[]; resources?: ResourceLike[]; commands?: CliCommandLike[]; files: Map<string, string> }) => {
   const skills = [...new Set([...files.keys()].flatMap((path) => path.match(/^skills\/([^/]+)\/SKILL\.md$/)?.[1] ?? []))]
   return {
     api: { endpoints: endpointsMarkdown(doc), tag: endpointsByTag(doc), unblock: unblockMarkdown(origin), operations: operationsOf(doc).length },
     mcp: { tools: tools ? toolsMarkdown(tools, doc) : '', count: tools?.length ?? 0, resources: resources?.length ? resourcesMarkdown(resources) : 'None.' },
     skills: Object.fromEntries(skills.map((name) => [name, { playbooks: playbooksMarkdown(files, name) }])),
+    cli: { commands: commands || tools ? cliMarkdown({ tools, resources, commands }) : '' },
   }
 }
 
 /** Template names the kit fills itself; `guideGaps` doesn't ask the app for them. */
-export const GENERATED_ROOTS = ['origin', 'api', 'mcp', 'skills'] as const
+export const GENERATED_ROOTS = ['origin', 'api', 'mcp', 'skills', 'cli'] as const

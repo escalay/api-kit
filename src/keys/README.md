@@ -9,7 +9,7 @@ API keys the app makes and revokes through its own API, beside the ones it is st
 | `repo.ts` | `keysRepo`: list, get, make, revoke, and `nameOf(hash)`, which notes a use at most once an hour |
 | `routes.ts` | `keyRoutes`: `GET/POST {path}`, `GET/DELETE {path}/{id}`, `GET {mePath}` |
 | `handlers.ts` | `keyHandlers`, and `holderOf`: who may make or revoke keys |
-| `tools.ts` | `keyTools`: `who_am_i`, `list_keys`, `get_key`, `create_key`, `delete_key` |
+| `tools.ts` | `keyTools`: `who_am_i`, `list_keys`, `get_key`, `create_key`, `delete_key`; on the command line `auth status`, `key list`, `key view`, `key create`, `key delete` |
 | `index.ts` | `registerKeys`, `storedKeysOf` (for `auth.storedKeys`), `KEYS_TAG` |
 
 ## Wiring
