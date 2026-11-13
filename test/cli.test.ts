@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { createRoute, z } from '@hono/zod-openapi'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { boardTools } from '../src/boards/index.js'
 import { vectorSearchTools } from '../src/vector-search/index.js'
 import { cliMarkdown, createAgentApi, createOAuth, fallbackCliName, hintsOf, keyTools, teamTools, telemetryTools, generateOAuthKey, HAL_JSON, linksOf, memoryOAuthStore, mintApiKey, originOf, pageOf, pageSchema, parseApiKeys, problemResponses, ProblemError, LinksSchema } from '../src/index.js'
@@ -366,6 +366,32 @@ describe('the command line', () => {
     expect((await run(['auth', 'switch', 'elsewhere'], { env: {} })).code).toBe(1)
     expect((await run(['auth', 'logout'], { env: {} })).out).toBe('Signed out of http://localhost (profile localhost)\n')
     expect((await run(['app', 'list'], { env: {} })).code).toBe(2)
+  })
+
+  it('names the command to run again when the device code expires, never an endpoint', async () => {
+    const { app, configDir } = await sampleCli()
+    const login = async (clock: { now: () => number; sleep: () => Promise<void> }) => {
+      let err = ''
+      const cli = createCli({ name: 'sample', envPrefix: 'SAMPLE', version: '1.0.0', snapshot: { commands: [] }, fetch: async (input, init) => app.request(String(input), init), io: { stdout: { write: () => true }, stderr: { write: (text: string) => ((err += text), true) }, stdin: Readable.from(['']) as never, env: {}, configDir, ...clock } })
+      return { code: await cli.run(['auth', 'login', 'localhost']), err }
+    }
+    const start = Date.now()
+    let skew = 0
+    // The server's clock passes the code's ten minutes while the CLI still polls: the server answers expired_token
+    const serverClock = vi.spyOn(Date, 'now').mockImplementation(() => start + skew)
+    try {
+      const told = await login({ now: () => start, sleep: async () => void (skew += 11 * 60_000) })
+      expect(told.code).toBe(2)
+      // The page to open is a URL by design; the failure itself names the command, not /oauth/device_authorization
+      expect(told.err.trim().split('\n').at(-1)).toBe('The code expired before it was approved: run `sample auth login http://localhost` again.')
+    } finally {
+      serverClock.mockRestore()
+    }
+    // The CLI's own clock runs out first
+    let waited = 0
+    const local = await login({ now: () => start + waited, sleep: async () => void (waited += 11 * 60_000) })
+    expect(local.code).toBe(2)
+    expect(local.err.trim().split('\n').at(-1)).toBe('The code expired before it was approved: run `sample auth login http://localhost` again.')
   })
 
   it('reads MCP names in human text as commands, and only whole tool names', () => {

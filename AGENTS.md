@@ -34,7 +34,7 @@ what `feature` generates): `schema.ts` (Drizzle tables + migration steps) · `re
 | `src/guide/reference.ts` | the generated guide parts: endpoints from the spec, tools with their routes, playbooks, how to get unstuck |
 | `src/a2a/index.ts` | A2A 1.0 over the MCP tools: `mountA2A` (Agent Card + JSON-RPC `/a2a`), `agentCard` |
 | `src/mcp/index.ts` | MCP 2026-07-28 over the routes: `mcpTool`, `mcpResource`, `mcpServerFactory`, `inProcess`, `overHttp`, `mountMcp` (+ Server Card), `mountedMcp`; `_meta["api-kit/cli"]` on each tool and template, `_meta["api-kit/problem"]` on a failed call |
-| `src/mcp/skills.ts` | `guideSkills`: the guide's skill folders as the factory's skills and prompts, one prompt per playbook |
+| `src/mcp/skills.ts` | `guideSkills`: the guide's skill folders as the factory's skills and prompts, one prompt per playbook; `attachSkills` (the factory calls it): the extension plus what a plain client needs (listed files, a described template, folder reads as lists) |
 | `src/testing/index.ts` | `lintOpenApi`, `guideRoutes`, `guideGaps`, `toolRoutes`, `toolsRun`; `src/testing/cli.ts`: `cliGaps`, `cliSnapshot` |
 | `src/vectors/index.ts` | Gemini Embedding 2 via OpenRouter: `createEmbedder`, ledgers (`embedMissing`, `readLedger`), `vectorSpace`, `nearest`, `standouts`; `hashOf` must stay byte-compatible with the ledgers already paid for (test pins it) |
 | `src/vector-search/index.ts` | `registerVectorSearch` (words, picture, likeness routes), `vectorSearchTools` |

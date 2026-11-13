@@ -98,7 +98,7 @@ export const createCli = (options: CliOptions) => {
   const bearerOf = async (target: Target) => {
     if (target.apiKey) return target.apiKey
     if (!target.profile?.accessToken || !target.profileName) return undefined
-    if (target.profile.expiresAt && target.profile.expiresAt - 60_000 <= now()) target.profile = await refreshProfile({ store, name: target.profileName, send, sleep, now })
+    if (target.profile.expiresAt && target.profile.expiresAt - 60_000 <= now()) target.profile = await refreshProfile({ app, store, name: target.profileName, send, sleep, now })
     return target.profile.accessToken
   }
 
@@ -111,7 +111,7 @@ export const createCli = (options: CliOptions) => {
       bearer: () => bearerOf(target),
       refresh: async () => {
         if (target.apiKey || !target.profileName || !target.profile?.refreshToken) return false
-        target.profile = await refreshProfile({ store, name: target.profileName, send, sleep, now, stale: target.profile.accessToken })
+        target.profile = await refreshProfile({ app, store, name: target.profileName, send, sleep, now, stale: target.profile.accessToken })
         return true
       },
     })
@@ -477,7 +477,7 @@ export const createCli = (options: CliOptions) => {
         const name = String(values.profile ?? globals.profile ?? profiles.current ?? '')
         const profile = profiles.profiles[name]
         if (!profile) throw usage(`no profile "${name}" to sign out of`)
-        await revokeProfile(profile, send)
+        await revokeProfile(profile, send, app)
         const { [name]: _gone, ...others } = profiles.profiles
         store.write({ current: profiles.current === name ? Object.keys(others)[0] : profiles.current, profiles: others })
         print(`Signed out of ${profile.url} (profile ${name})`)
