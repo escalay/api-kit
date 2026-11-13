@@ -97,6 +97,11 @@ for a look at the kit on Workers by hand)
    `npm trust github @escalay/kit --file release.yml --repo escalay/api-kit --env npm --allow-publish` and the
    same for `create-escalay`.
 5. Apps take it with `diff` + `update` deliberately; nothing follows `main`.
+6. The canaries, `escalay/kit-canary-api` and `escalay/kit-canary-app` (private), are new apps made again from the
+   newest `create-escalay` every Monday (their `refresh.yml`), pushed, and run through their own CI on GitHub. A
+   failed refresh is a broken starter. When a release changes the template's workflows, the refresh fails asking a
+   person to push them (no workflow token may): `npm create escalay@<version> … --no-git`, copy `.github/workflows/`
+   beside `refresh.yml`, push.
 
 ## Rules
 
