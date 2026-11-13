@@ -113,6 +113,7 @@ describe('telemetry', () => {
     expect([0, 1, 10, 11, 100, 101, 1000, 1001, 10_000, 10_001].map(countRange)).toEqual(['0', '1-10', '1-10', '11-100', '11-100', '101-1k', '101-1k', '1k-10k', '1k-10k', '10k+'])
     expect([0, 0.5, 1, 7, 8, 30, 31, 90, 91, 365, 366].map(dayRange)).toEqual(['0', '0', '1-7', '1-7', '8-30', '8-30', '31-90', '31-90', '91-365', '91-365', '365+'])
     expect(coarseReport({ notes: '11-100', search_used: false, count: 42, owner: 'me@example.com', note_title: 'Soup', 'Bad-Key': true, schema: '0' })).toEqual({ notes: '11-100', search_used: false, schema: '0' })
+    expect(coarseReport({ install: 'wrangler', host: 'wrangler', kind: 'mine' }, { install: ['deploy-button', 'wrangler', 'other'], kind: ['other'] })).toEqual({ install: 'wrangler' })
   })
 
   it('keeps the collector’s keys its own: collect can’t add or replace top-level fields', async () => {

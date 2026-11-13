@@ -46,8 +46,10 @@ export type TelemetryConfig = {
   version: string
   /** The collector's origin, e.g. `https://pulse.example.com`. */
   url: string
-  /** The report: coarse ranges and yes/no answers only. Anything else is dropped. */
+  /** The report: coarse ranges and yes/no answers only, plus the `choices` declared below. Anything else is dropped. */
   collect: (db: Db) => TelemetryReport | Promise<TelemetryReport>
+  /** Fields that hold one of a fixed set of words, e.g. `{ install: ['deploy-button', 'wrangler', 'other'] }`. */
+  choices?: Record<string, readonly string[]>
   /** For tests: the fetch that sends it. */
   fetch?: typeof fetch
 }
@@ -79,9 +81,13 @@ export const countRange = (count: number): (typeof COUNT_RANGES)[number] =>
 export const dayRange = (days: number): (typeof DAY_RANGES)[number] =>
   days < 1 ? '0' : days <= 7 ? '1-7' : days <= 30 ? '8-30' : days <= 90 ? '31-90' : days <= 365 ? '91-365' : '365+'
 
-/** coarseReport keeps what a report may hold: lowercase keys whose values are a range or a boolean; the rest is dropped. */
-export const coarseReport = (report: Record<string, unknown>): TelemetryReport =>
-  Object.fromEntries(Object.entries(report).filter(([key, value]) => KEY.test(key) && (typeof value === 'boolean' || (typeof value === 'string' && RANGES.has(value))))) as TelemetryReport
+/** coarseReport keeps what a report may hold: lowercase keys whose values are a range, a boolean or one of the key's declared choices; the rest is dropped. */
+export const coarseReport = (report: Record<string, unknown>, choices: Record<string, readonly string[]> = {}): TelemetryReport =>
+  Object.fromEntries(
+    Object.entries(report).filter(
+      ([key, value]) => KEY.test(key) && (typeof value === 'boolean' || (typeof value === 'string' && (RANGES.has(value) || (Object.hasOwn(choices, key) && choices[key]!.includes(value))))),
+    ),
+  ) as TelemetryReport
 
 const processEnv = (): TelemetryEnv => (globalThis as { process?: { env?: TelemetryEnv } }).process?.env ?? {}
 const envOf = (c: Context): TelemetryEnv => {
@@ -110,7 +116,7 @@ export const telemetry = (config: TelemetryConfig) => {
     return null
   }
 
-  const bodyFor = async (db: Db, row: TelemetryRow): Promise<TelemetryBody> => ({ schema: config.schemaVersion, instance: row.instance, version: config.version, report: coarseReport(await config.collect(db)) })
+  const bodyFor = async (db: Db, row: TelemetryRow): Promise<TelemetryBody> => ({ schema: config.schemaVersion, instance: row.instance, version: config.version, report: coarseReport(await config.collect(db), config.choices) })
 
   /** The body as it would be sent now, made from the app's `collect`. */
   const bodyOf = async (db: Db) => {

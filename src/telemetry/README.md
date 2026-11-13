@@ -27,7 +27,8 @@ Needs: `db`, `mcp` (for the tool).
 - `version`: like `1.2.3` or `1.2.3-beta.1`; anything else and nothing is sent.
 - `report`: what the app's `collect` returns, **coarse ranges and booleans only**: counts through `countRange`
   (`0`, `1-10`, `11-100`, `101-1k`, `1k-10k`, `10k+`), ages through `dayRange` (`0`, `1-7`, `8-30`, `31-90`,
-  `91-365`, `365+`), yes/no as `true`/`false`. Never ids, names, emails, URLs, free text or exact numbers.
+  `91-365`, `365+`), yes/no as `true`/`false`. A field with a fixed set of words (how it was installed) is declared in
+  `choices`, and only those words pass. Never ids, names, emails, URLs, free text or exact numbers.
   `coarseReport` enforces it: a key that isn't lowercase `snake_case` or a value that isn't one of those ranges or a
   boolean is dropped, so a slip can't leak.
 
