@@ -600,7 +600,41 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+10 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+11 passed/)
+
+      // The client and its command line: `kit sdk` makes both; the CLI compiles on its own and offers the app's tools
+      const sdk = cli(parent, 'sdk', '--app', 'demo-api')
+      expect(sdk.status, sdk.stderr).toBe(0)
+      for (const path of ['sdk/cli/bin.ts', 'sdk/cli/engine/index.ts', 'sdk/cli/jobs/index.ts', 'sdk/cli/tsconfig.json', 'sdk/test/cli.test.ts']) expect(existsSync(join(app, path)), path).toBe(true)
+      expect(JSON.parse(await readFile(join(app, 'sdk/package.json'), 'utf8'))).toMatchObject({ name: 'demo-api-client', bin: { 'demo-api': './dist/cli/bin.js' }, engines: { node: '>=20.10' } })
+      expect(await readFile(join(app, 'sdk/cli/bin.ts'), 'utf8')).toContain("createCli({ name: 'demo-api', envPrefix: 'DEMO_API', version, snapshot, jobs })")
+      expect(JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).scripts.typecheck).toContain('tsc --noEmit -p sdk/cli/tsconfig.json')
+      expect(JSON.parse(await readFile(join(app, '.oxfmtrc.json'), 'utf8')).ignorePatterns).toContain('sdk/cli/engine/**')
+      // What `pnpm sdk:types` runs first: the OpenAPI document, and the commands the CLI packages
+      const written = spawnSync(bin('tsx'), ['scripts/openapi.ts'], { cwd: app, encoding: 'utf8' })
+      expect(written.status, written.stderr).toBe(0)
+      const packaged = JSON.parse(await readFile(join(app, 'sdk/cli/commands.json'), 'utf8')) as { app: string; commands: { name: string }[] }
+      expect(packaged.app).toBe('demo-api')
+      expect(packaged.commands.map((command) => command.name)).toEqual(expect.arrayContaining(['note list', 'note view', 'reading-list create', 'reading-list delete']))
+      for (const project of ['tsconfig.json', 'sdk/cli/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const cliTests = spawnSync(bin('vitest'), ['run', '--root', '.', 'sdk/test/cli.test.ts'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(cliTests.status, cliTests.stdout + cliTests.stderr).toBe(0)
+      expect(cliTests.stdout).toMatch(/Tests\s+3 passed/)
+      // An app whose sdk/ came before the command line takes it with `kit cli`; `--update` takes a newer engine only
+      await rm(join(app, 'sdk/cli'), { recursive: true })
+      await rm(join(app, 'sdk/test/cli.test.ts'))
+      expect(cli(parent, 'cli', '--app', 'demo-api', '--bin', 'demo').status).toBe(0)
+      expect(JSON.parse(await readFile(join(app, 'sdk/package.json'), 'utf8')).bin).toMatchObject({ demo: './dist/cli/bin.js' })
+      expect(await readFile(join(app, 'sdk/cli/bin.ts'), 'utf8')).toContain("name: 'demo', envPrefix: 'DEMO'")
+      expect(existsSync(join(app, 'sdk/test/cli.test.ts'))).toBe(true)
+      expect(cli(parent, 'cli', '--app', 'demo-api').stderr).toContain('sdk/cli already exists')
+      await writeFile(join(app, 'sdk/cli/engine/index.ts'), '// edited\n')
+      expect(cli(parent, 'cli', '--app', 'demo-api', '--update').status).toBe(0)
+      expect(await readFile(join(app, 'sdk/cli/engine/index.ts'), 'utf8')).toBe(await readFile(join(import.meta.dirname, '..', 'templates/sdk/sdk/cli/engine/index.ts'), 'utf8'))
+      expect(cli(parent, 'cli', '--app', 'edge-none').stderr).toContain('no sdk/package.json')
 
       expect(cli(parent, 'init', 'edge-api', '--runtime', 'cloudflare').status).toBe(0)
       for (const path of ['src/server.ts', 'Dockerfile', 'container']) expect(existsSync(join(parent, 'edge-api', path)), path).toBe(false)

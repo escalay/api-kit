@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { createApp, TOOLS } from '../src/app.js'
 import { FEATURES } from '../src/features/index.js'
 import { guideFiles, guideModuleSource, hashApiKey, testDb } from '../src/kit/index.js'
-import { guideGaps, lintOpenApi, toolRoutes, toolsRun } from '../src/kit/testing/index.js'
+import { cliGaps, guideGaps, lintOpenApi, toolRoutes, toolsRun } from '../src/kit/testing/index.js'
 
 const GUIDE_DIR = fileURLToPath(new URL('../guide', import.meta.url))
 const KEY = 'test-key'
@@ -22,6 +22,10 @@ describe('the API', () => {
   it('runs every MCP tool against its route', async () => {
     const samples = Object.assign({}, ...(await Promise.all(FEATURES.map((feature) => feature.samples(request)))))
     expect(await toolsRun(TOOLS, app, samples, { headers })).toEqual([])
+  })
+
+  it('names every tool’s command for the command line, with an example', () => {
+    expect(cliGaps({ tools: TOOLS })).toEqual([])
   })
 
   it('fills every placeholder in the agent guide', async () => {
