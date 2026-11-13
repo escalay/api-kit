@@ -11,7 +11,7 @@
  * expect(readFileSync('sdk/cli/commands.json', 'utf8')).toBe(`${JSON.stringify(cliSnapshot({ app: 'mailroom', version: VERSION, tools: TOOLS, resources: RESOURCES, jobs }), null, 2)}\n`)
  */
 import { z } from '@hono/zod-openapi'
-import { CLI_BUILT_INS, cliOf, resourceCli, templateVariables, type CliExample, type CliSpec, type CliTool } from '../core/cli.js'
+import { CLI_BUILT_INS, cliOf, hintsOf, resourceCli, templateVariables, type CliExample, type CliSpec, type CliTool } from '../core/cli.js'
 
 type JsonSchema = { type?: string | string[]; description?: string; enum?: unknown[]; default?: unknown; items?: JsonSchema; anyOf?: JsonSchema[]; oneOf?: JsonSchema[]; properties?: Record<string, JsonSchema>; required?: string[] }
 
@@ -82,7 +82,7 @@ export const flagsOf = (schema: JsonSchema): CliFlag[] =>
 
 const toolCommand = (tool: SnapshotTool): CliSnapshotCommand => {
   const cli = cliOf(tool)
-  const annotations = { readOnlyHint: true, destructiveHint: false, ...tool.annotations }
+  const annotations = hintsOf(tool)
   return {
     name: cli.name,
     tool: tool.name,

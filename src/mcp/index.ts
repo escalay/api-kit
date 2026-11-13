@@ -16,8 +16,8 @@ import { createMcpHandler, McpServer, originValidationResponse, ResourceTemplate
 import type { SkillCatalog } from '@modelcontextprotocol/server/ext/skills'
 import type { z } from '@hono/zod-openapi'
 import type { Context, Hono } from 'hono'
-import { CLI_META, cliOf, PENDING_META, PROBLEM_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
-import { MODERN_PROTOCOL_VERSION, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN } from '../core/discovery.js'
+import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
+import { MODERN_PROTOCOL_VERSION, mountedOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN } from '../core/discovery.js'
 import { originOf, pathWith } from '../core/hal.js'
 
 type Query = Record<string, string | number | boolean | string[] | null | undefined>
@@ -133,6 +133,12 @@ const lenientTemplate = (template: string) => {
   })
 }
 
+/** A resource's command as `resources/templates/list` publishes it. */
+const resourceMeta = (resource: McpResource) => {
+  const { name, positional, examples } = resourceCli(resource)
+  return { name, positional, examples }
+}
+
 /** A factory that also carries its server info and tools, so `mountMcp` can publish the card and the guide can list the tools. */
 export type AgentMcpFactory = McpServerFactory & { info: McpServerInfo; tools: McpTool[]; resources: McpResource[]; instructions?: string; prompts?: McpPrompt[] }
 
@@ -146,7 +152,7 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
     const cli = cliOf(tool)
     server.registerTool(
       tool.name,
-      { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false, ...tool.annotations }, _meta: { ...(route ? { [ROUTE_META]: route } : {}), [CLI_META]: { name: cli.name, positional: cli.positional, examples: cli.examples } } },
+      { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, ...hintsOf(tool) }, _meta: { ...(route ? { [ROUTE_META]: route } : {}), [CLI_META]: { name: cli.name, positional: cli.positional, examples: cli.examples } } },
       async (args: Record<string, unknown>, ctx): Promise<CallToolResult> => {
         const { response, pending } = await callWaiting(callApi, tool.call(args as never), ctx.http?.authInfo, waitMs)
         const json = await response.json().catch(() => null)
@@ -169,7 +175,7 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
     server.registerResource(
       resource.name,
       new ResourceTemplate(lenientTemplate(resource.uriTemplate), { list: undefined }),
-      { title: resource.title, description: resource.description, cacheHint: cached, _meta: { [CLI_META]: (({ named: _, ...cli }) => cli)(resourceCli(resource)) } },
+      { title: resource.title, description: resource.description, cacheHint: cached, _meta: { [CLI_META]: resourceMeta(resource) } },
       async (uri, variables, ctx) => {
         const auth = ctx.http?.authInfo
         const values = Object.fromEntries(Object.entries(variables).map(([key, value]) => [key, Array.isArray(value) ? value[0]! : String(value)]))
@@ -191,6 +197,18 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
   skills?.attach(server)
   return server
 }, { info, tools, resources, instructions, prompts })
+
+/**
+ * The tools and resources `mountMcp` serves on an app, as they were given: for the CLI snapshot and `cliGaps`.
+ *
+ * @example
+ * const { tools, resources } = mountedMcp(await createApp({ db: await testDb(), env: {} }))
+ * expect(cliGaps({ tools, resources, jobs })).toEqual([])
+ */
+export const mountedMcp = (app: object) => {
+  const mcp = mountedOf(app).mcp
+  return { tools: (mcp?.tools ?? []) as unknown as McpTool[], resources: (mcp?.resources ?? []) as unknown as McpResource[] }
+}
 
 export const FORWARDED = ['authorization', 'cf-access-jwt-assertion'] as const
 

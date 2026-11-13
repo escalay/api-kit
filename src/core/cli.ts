@@ -36,7 +36,7 @@ const kebab = (text: string) => text.replace(/([a-z0-9])([A-Z])/g, '$1-$2').repl
  * singularOf('webhooks') // → 'webhook'
  */
 export const singularOf = (word: string) => {
-  if (/ies$/.test(word)) return `${word.slice(0, -3)}y`
+  if (word.endsWith('ies')) return `${word.slice(0, -3)}y`
   if (/(ss|x|ch|sh)es$/.test(word)) return word.slice(0, -2)
   if (/[^su]s$/.test(word)) return word.slice(0, -1)
   return word
@@ -89,6 +89,18 @@ export const routeOf = (tool: Pick<CliTool, 'route' | 'input' | 'call'>): string
   } catch {
     return undefined
   }
+}
+
+/**
+ * A tool's MCP hints with the kit's defaults: read-only when its route is a `GET` and it says nothing else (a tool
+ * that says it is destructive is never read-only), not destructive, idempotent, closed-world.
+ *
+ * @example
+ * hintsOf(deleteNote) // → { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
+ */
+export const hintsOf = (tool: Pick<CliTool, 'route' | 'input' | 'call'> & { annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean } }) => {
+  const reads = (routeOf(tool) ?? 'GET').startsWith('GET ') && !tool.annotations?.destructiveHint
+  return { readOnlyHint: reads, destructiveHint: false, idempotentHint: true, openWorldHint: false, ...tool.annotations }
 }
 
 const specOf = (cli: CliSpec | undefined) => (typeof cli === 'string' ? { name: cli, examples: [] } : cli ? { name: cli.name, examples: cli.examples ?? [] } : undefined)
