@@ -8,6 +8,8 @@
  *   guideGaps       placeholders a guide uses that neither the app nor the kit's generated parts fill
  *   toolRoutes      MCP tools whose call doesn't land on a documented operation
  *   toolsRun        MCP tools that fail when run: each called in-process with sample arguments, as an agent would
+ *   cliGaps         commands the app's CLI can't offer well: unnamed, duplicated, shadowing, plural, undescribed, no example
+ *   cliSnapshot     every command as the CLI package carries it (`commands.json`)
  *
  * @example
  * const doc = await (await app.request('/openapi.json')).json()
@@ -18,7 +20,7 @@ import { fillTemplate } from '../guide/guide.js'
 import type { ResourceLike, ToolLike } from '../core/discovery.js'
 import { pathWith } from '../core/hal.js'
 import { PROBLEM_JSON } from '../core/problem.js'
-import { generatedVars, toolRoute, type OpenApiDoc } from '../guide/reference.js'
+import { generatedVars, toolRoute, type CliCommandLike, type OpenApiDoc } from '../guide/reference.js'
 
 type Operation = {
   operationId?: string
@@ -85,9 +87,9 @@ export const guideRoutes = (files: Map<string, string>, doc: Document, prefix = 
  * Placeholders a guide uses that nothing fills: not `vars`, and not the kit's generated parts when `doc` (and `tools`)
  * are given, so a typo like `{{api.endpoint}}` is caught too.
  */
-export const guideGaps = (files: Map<string, string>, vars: Record<string, unknown>, { doc, tools, resources }: { doc?: OpenApiDoc; tools?: ToolLike[]; resources?: ResourceLike[] } = {}) => {
-  const generated = doc ? generatedVars({ origin: 'https://example.test', doc, tools, resources, files }) : {}
-  const skipped = doc ? [] : ['api.', 'mcp.', 'skills.']
+export const guideGaps = (files: Map<string, string>, vars: Record<string, unknown>, { doc, tools, resources, commands }: { doc?: OpenApiDoc; tools?: ToolLike[]; resources?: ResourceLike[]; commands?: CliCommandLike[] } = {}) => {
+  const generated = doc ? generatedVars({ origin: 'https://example.test', doc, tools, resources, commands, files }) : {}
+  const skipped = doc ? [] : ['api.', 'mcp.', 'skills.', 'cli.']
   return [...files].flatMap(([file, text]) =>
     fillTemplate(text, { origin: 'https://example.test', ...generated, ...vars })
       .missing.filter((name) => !skipped.some((root) => name.startsWith(root)))
@@ -162,3 +164,4 @@ export const toolsRun = async (tools: RunnableTool[], app: RequestableApp, args:
 }
 
 export { softAuthenticator } from './authenticator.js'
+export { cliGaps, cliSnapshot, flagsOf, type CliFlag, type CliJobLike, type CliSnapshot, type CliSnapshotCommand } from './cli.js'

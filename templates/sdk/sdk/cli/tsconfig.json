@@ -1,0 +1,18 @@
+{
+  "$comment": "The command line as it is published: Node 20.10+, built-ins only, compiled into dist/cli beside the library",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "outDir": "../dist/cli",
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["**/*.ts", "commands.json"]
+}

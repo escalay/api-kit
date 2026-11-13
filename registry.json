@@ -72,6 +72,11 @@
           "target": "~/src/kit/core/wait.ts"
         },
         {
+          "path": "src/core/cli.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/cli.ts"
+        },
+        {
           "path": "src/core/README.md",
           "type": "registry:file",
           "target": "~/src/kit/core/README.md"
@@ -190,7 +195,7 @@
       "name": "mcp",
       "type": "registry:item",
       "title": "MCP server",
-      "description": "An MCP server (2026-07-28) over the app's own routes: tools, resources, prompts, skills, and its Server Card",
+      "description": "An MCP server (2026-07-28) over the app's own routes: tools, resources, prompts, skills, and its Server Card; each tool publishes its command-line name",
       "dependencies": [
         "@modelcontextprotocol/server@^2.4.0"
       ],
@@ -548,7 +553,7 @@
       "name": "testing",
       "type": "registry:item",
       "title": "Testing",
-      "description": "Checks for an app's tests: lintOpenApi, guideRoutes, guideGaps, toolRoutes, toolsRun, and softAuthenticator (passkeys in CI)",
+      "description": "Checks for an app's tests: lintOpenApi, guideRoutes, guideGaps, toolRoutes, toolsRun, cliGaps and cliSnapshot (the command line), and softAuthenticator (passkeys in CI)",
       "registryDependencies": [
         "escalay/api-kit/guide"
       ],
@@ -557,6 +562,11 @@
           "path": "src/testing/index.ts",
           "type": "registry:file",
           "target": "~/src/kit/testing/index.ts"
+        },
+        {
+          "path": "src/testing/cli.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/testing/cli.ts"
         },
         {
           "path": "src/testing/authenticator.ts",

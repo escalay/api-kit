@@ -44,6 +44,8 @@ A feature is one folder, `src/features/<name>/`, with one shape. The kit's `boar
 - `snake_case` verb names (`get_reading_list`), a description that says when to use it.
 - Arguments are named like the route's parameters (`q`, not `query`).
 - `call` returns the route to call; `summarize` returns a few lines with ids and links.
+- `cli` names its command, noun then verb, with an example: `cli: { name: 'reading-list view', examples: [{ run:
+  'reading-list view rl_123', about: 'One list with its books' }] }`. Rules and jobs: the `api-kit-cli` skill.
 - `samples` in `index.ts` gives each tool arguments that work, creating what the tool needs first. A tool with no
   sample fails `toolsRun`.
 
@@ -56,8 +58,9 @@ A feature is one folder, `src/features/<name>/`, with one shape. The kit's `boar
 | Every tool runs | `toolsRun(TOOLS, app, samples)` returns `[]` |
 | The guide has no empty placeholder | `guideGaps(...)` returns `[]` |
 | The guide module is current | `pnpm guide`, then the `guide.gen.ts` test |
+| Every tool has a command and an example | `cliGaps({ tools: TOOLS })` returns `[]`; with `sdk/`, also `pnpm sdk:types` |
 
-All five run with `pnpm test`.
+All six run with `pnpm test`.
 
 ## Done when
 

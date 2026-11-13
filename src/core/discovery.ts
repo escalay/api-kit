@@ -22,6 +22,7 @@
 import { createHash } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import type { Context, Hono } from 'hono'
+import type { CliSpec } from './cli.js'
 import { originOf } from './hal.js'
 
 /** What a discovery document links to; the kit serves each of these. */
@@ -251,9 +252,9 @@ export const serverCard = (origin: string, path: string, info: ServerCardInfo, p
 // ---- What an app has mounted, for the catalogs ----
 
 /** What the guide needs of an MCP tool: the kit's `McpTool` fits, so does any tool with a name, a description and a call. */
-export type ToolLike = { name: string; description: string; call: (args: never) => { method?: string; path: string } }
+export type ToolLike = { name: string; description: string; call: (args: never) => { method?: string; path: string }; title?: string; route?: string; input?: { shape: Record<string, unknown> }; cli?: CliSpec }
 /** What the guide needs of an MCP resource: its URI template and what it is. */
-export type ResourceLike = { uriTemplate: string; title: string; description: string }
+export type ResourceLike = { uriTemplate: string; title: string; description: string; name?: string; cli?: CliSpec }
 
 type Mounted = {
   skills?: (origin: string) => SkillArtifact[]

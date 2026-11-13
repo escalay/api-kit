@@ -17,8 +17,12 @@
  *                                             container) and/or Workers (worker.ts, D1). It never asks; --yes is accepted
  *   kit feature <plural-name> [--app .]       a new feature folder (schema, repo, routes, handlers, tools), listed
  *   kit guide [--from guide] [--out src/guide.gen.ts]  the guide folder as a module (GUIDE_FILES), for Workers
- *   kit sdk [--app .] [--package name]      a typed TypeScript client in sdk/: generated types, a fetch-only core,
- *                                             a coverage test that fails until every route has a method; `pnpm sdk:types`
+ *   kit sdk [--app .] [--package name] [--bin name]
+ *                                             a typed TypeScript client in sdk/: generated types, a fetch-only core,
+ *                                             a coverage test that fails until every route has a method; `pnpm sdk:types`;
+ *                                             and the app's command line (sdk/cli, the package's bin)
+ *   kit cli [--app .] [--bin name] [--update] the command line for an app that already has sdk/; --update takes this
+ *                                             kit's engine (sdk/cli/engine) and leaves the app's bin, jobs and commands
  *
  * @example
  * npx @escalay/kit add core pagination guide mcp testing --dir apps/api/src/kit --install
@@ -28,7 +32,8 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const KIT = dirname(fileURLToPath(import.meta.url))
 const REPO = 'escalay/api-kit'
@@ -68,7 +73,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out'])
+const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 const lockPath = join(dir, 'kit.json')
@@ -299,6 +304,7 @@ export const namesOf = (name) => {
     __table__: many.join('_'),
     __snake_singular__: one.join('_'),
     __snake__: many.join('_'),
+    __kebab_singular__: one.join('-'),
     __labels__: many.join(' '),
     __label__: one.join(' '),
   }
@@ -344,6 +350,57 @@ const sdkMethods = (root) => {
   writeFileSync(index, readFileSync(index, 'utf8').replace('    // kit:methods\n', lines.map(({ text }) => `${text}\n`).join('')))
   writeFileSync(test, readFileSync(test, 'utf8').replace('      // kit:covered\n', lines.map(({ id }) => `      ${id}: '${id}',\n`).join('')))
   return lines.length + 1
+}
+
+/** The names the SDK and CLI templates fill: the package, its title, its bin (`mailroom`) and env prefix (`MAILROOM`). */
+const sdkVarsOf = (root, packageName) => {
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+  const words = basename(pkg.name ?? basename(root)).split(/[-_.]/).filter(Boolean)
+  const bin = valueOf('--bin') ?? words.join('-')
+  if (!/^[a-z][a-z0-9-]*$/.test(bin)) fail(`--bin is one lowercase word or kebab-case name, like mailroom`)
+  return { __package__: packageName ?? valueOf('--package') ?? `${words.join('-')}-client`, __Title__: words.map(capital).join(' '), __Pascal__: words.map(capital).join(''), __camel__: words[0] + words.slice(1).map(capital).join(''), __bin__: bin, __PREFIX__: bin.replace(/-/g, '_').toUpperCase() }
+}
+
+/** Lint and format leave the generated files and the kit's CLI engine alone (the engine stays the kit's bytes, like src/kit). */
+const ignoreGenerated = (root) => {
+  for (const file of ['.oxlintrc.json', '.oxfmtrc.json'].map((name) => join(root, name)).filter(existsSync)) {
+    const config = JSON.parse(readFileSync(file, 'utf8'))
+    config.ignorePatterns = [...new Set([...(config.ignorePatterns ?? []), 'sdk/src/schema.gen.ts', 'sdk/openapi.json', 'sdk/dist/**', 'sdk/cli/engine/**', 'sdk/cli/commands.json'])]
+    writeFileSync(file, JSON.stringify(config, null, 2) + '\n')
+  }
+}
+
+/** The app's typecheck covers the CLI's own tsconfig too. */
+const typecheckCli = (root) => {
+  const manifest = join(root, 'package.json')
+  const pkg = JSON.parse(readFileSync(manifest, 'utf8'))
+  if (pkg.scripts?.typecheck && !pkg.scripts.typecheck.includes('sdk/cli/tsconfig.json')) pkg.scripts.typecheck += ' && tsc --noEmit -p sdk/cli/tsconfig.json'
+  writeFileSync(manifest, JSON.stringify(pkg, null, 2) + '\n')
+}
+
+/**
+ * The app's commands through `cliGaps`, when the kit folder sits in an app (`<app>/src/kit` beside `src/app.ts`) with
+ * its dependencies installed: the app is built in-process and its mounted tools, resources and jobs checked.
+ */
+const cliFindings = () => {
+  const root = resolve(dir, '../..')
+  if (!existsSync(join(root, 'src/app.ts')) || !existsSync(join(dir, 'testing/cli.ts'))) return []
+  const url = (path) => JSON.stringify(pathToFileURL(join(root, path)).href)
+  const jobs = existsSync(join(root, 'sdk/cli/jobs/index.ts')) ? `(await import(${url('sdk/cli/jobs/index.ts')})).jobs` : '[]'
+  const script = join(tmpdir(), `kit-cli-gaps-${process.pid}.mts`)
+  writeFileSync(script, `const { createApp } = await import(${url('src/app.ts')})
+const { mountedOf, testDb } = await import(${url(`${relative(root, dir)}/index.ts`)})
+const { cliGaps } = await import(${url(`${relative(root, dir)}/testing/cli.ts`)})
+const app = await createApp({ db: await testDb(), env: {} })
+const { tools = [], resources = [] } = mountedOf(app).mcp ?? {}
+console.log(JSON.stringify(cliGaps({ tools, resources, jobs: ${jobs} })))
+`)
+  const checked = spawnSync('pnpm', ['exec', 'tsx', script], { cwd: root, encoding: 'utf8' })
+  rmSync(script, { force: true })
+  const gaps = checked.status === 0 ? JSON.parse(checked.stdout.trim().split('\n').at(-1) || '[]') : null
+  // Not a finding about the kit's copy: say so, and leave the exit code to the copy
+  if (!gaps) console.log(`note     could not build the app to check its commands with cliGaps (installed? createApp({ db, env }) enough?): ${(checked.stderr || '').trim().split('\n')[0] ?? ''}`)
+  return (gaps ?? []).map((gap) => `cli      ${gap}`)
 }
 
 // ---- Commands ----
@@ -467,7 +524,7 @@ const commands = {
   doctor: () => {
     if (flags.has('--adopt') && !existsSync(lockPath)) adopt()
     const lock = readLock()
-    const findings = lock ? findingsOf(lock) : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
+    const findings = lock ? [...findingsOf(lock), ...cliFindings()] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
     for (const finding of findings) console.log(finding)
     console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
@@ -479,24 +536,62 @@ const commands = {
     if (!existsSync(manifest) || !existsSync(join(root, 'src/app.ts'))) fail(`no package.json and src/app.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
     for (const path of ['sdk', 'scripts/openapi.ts']) if (existsSync(join(root, path))) fail(`${path} already exists`)
     const pkg = JSON.parse(readFileSync(manifest, 'utf8'))
-    const words = basename(pkg.name ?? basename(root)).split(/[-_.]/).filter(Boolean)
-    const vars = { __package__: valueOf('--package') ?? `${words.join('-')}-client`, __Title__: words.map(capital).join(' '), __Pascal__: words.map(capital).join(''), __camel__: words[0] + words.slice(1).map(capital).join('') }
+    const vars = sdkVarsOf(root)
     copyTemplate(join(KIT, 'templates/sdk'), root, vars)
     const scripts = { ...pkg.scripts, 'sdk:types': `tsx scripts/openapi.ts && pnpm dlx openapi-typescript@${OPENAPI_TYPESCRIPT} sdk/openapi.json -o sdk/src/schema.gen.ts` }
     if (scripts.typecheck && !scripts.typecheck.includes('sdk/tsconfig.json')) scripts.typecheck += ' && tsc --noEmit -p sdk/tsconfig.json'
     writeFileSync(manifest, JSON.stringify({ ...pkg, scripts }, null, 2) + '\n')
-    // Lint and format leave what is generated alone
-    for (const file of ['.oxlintrc.json', '.oxfmtrc.json'].map((name) => join(root, name)).filter(existsSync)) {
-      const config = JSON.parse(readFileSync(file, 'utf8'))
-      config.ignorePatterns = [...new Set([...(config.ignorePatterns ?? []), 'sdk/src/schema.gen.ts', 'sdk/openapi.json', 'sdk/dist/**'])]
-      writeFileSync(file, JSON.stringify(config, null, 2) + '\n')
-    }
+    typecheckCli(root)
+    ignoreGenerated(root)
     const methods = sdkMethods(root)
     if (methods) console.log(`Wrote ${methods} methods, one per operation in the API's document`)
     else console.warn('Could not build the API document (dependencies installed?): only getHealth is written; run `kit sdk` again after `pnpm install`, or add methods by hand')
-    console.log(`Made sdk/ (${vars.__package__}: create${vars.__Pascal__}, a fetch-only core, a coverage test) and scripts/openapi.ts, and added \`sdk:types\` to package.json.
-Next: \`pnpm sdk:types\` (the types), then shape sdk/src/index.ts for its callers; a new route needs a method there and a line in sdk/test/client.test.ts.
+    console.log(`Made sdk/ (${vars.__package__}: create${vars.__Pascal__}, a fetch-only core, a coverage test, and the \`${vars.__bin__}\` command in sdk/cli) and scripts/openapi.ts, and added \`sdk:types\` to package.json.
+Next: \`pnpm sdk:types\` (the types and sdk/cli/commands.json), then shape sdk/src/index.ts for its callers; a new route needs a method there and a line in sdk/test/client.test.ts.
 If createApp takes more than { db, env }, pass it in scripts/openapi.ts and sdk/test/client.test.ts. Tests under sdk/test must be in vitest's include.`)
+  },
+
+  cli: () => {
+    const root = resolve(process.cwd(), valueOf('--app') ?? '.')
+    const sdkManifest = join(root, 'sdk/package.json')
+    if (!existsSync(sdkManifest)) fail(`no sdk/package.json in ${relative(process.cwd(), root) || '.'}: \`kit sdk\` makes the client and the command line together`)
+    const engine = join(KIT, 'templates/sdk/sdk/cli/engine')
+    if (flags.has('--update')) {
+      if (!existsSync(join(root, 'sdk/cli/engine'))) fail('no sdk/cli/engine to update: `kit cli` adds the command line first')
+      rmSync(join(root, 'sdk/cli/engine'), { recursive: true, force: true })
+      copyTemplate(engine, join(root, 'sdk/cli/engine'), {})
+      console.log(`Replaced sdk/cli/engine with kit ${VERSION}'s; sdk/cli/bin.ts, jobs/ and commands.json are yours and were left alone`)
+      return
+    }
+    if (existsSync(join(root, 'sdk/cli'))) fail('sdk/cli already exists; `kit cli --update` takes this kit\'s engine')
+    const sdk = JSON.parse(readFileSync(sdkManifest, 'utf8'))
+    const vars = sdkVarsOf(root, sdk.name)
+    copyTemplate(join(KIT, 'templates/sdk/sdk/cli'), join(root, 'sdk/cli'), vars)
+    const test = join(root, 'sdk/test/cli.test.ts')
+    if (!existsSync(test)) {
+      mkdirSync(dirname(test), { recursive: true })
+      copyTemplate(join(KIT, 'templates/sdk/sdk/test'), join(root, '.kit-cli-test'), vars)
+      writeFileSync(test, readFileSync(join(root, '.kit-cli-test/cli.test.ts'), 'utf8'))
+      rmSync(join(root, '.kit-cli-test'), { recursive: true, force: true })
+    }
+    // The bin beside the library: built by its own tsconfig, Node 20.10 for JSON imports
+    const build = (script) => (script && !script.includes('cli/tsconfig.json') ? `${script} && tsc -p cli/tsconfig.json` : (script ?? 'tsc -p tsconfig.json && tsc -p cli/tsconfig.json'))
+    writeFileSync(sdkManifest, JSON.stringify({ ...sdk, bin: { ...sdk.bin, [vars.__bin__]: './dist/cli/bin.js' }, scripts: { ...sdk.scripts, build: build(sdk.scripts?.build), prepack: build(sdk.scripts?.prepack) }, engines: { ...sdk.engines, node: '>=20.10' } }, null, 2) + '\n')
+    typecheckCli(root)
+    ignoreGenerated(root)
+    const writes = existsSync(join(root, 'scripts/openapi.ts')) && readFileSync(join(root, 'scripts/openapi.ts'), 'utf8').includes('cliSnapshot')
+    console.log(`Made sdk/cli: the \`${vars.__bin__}\` command (bin of ${sdk.name}), its engine, jobs/, commands.json, and sdk/test/cli.test.ts.`)
+    if (!writes)
+      console.log(`Next: write the commands in scripts/openapi.ts (what \`pnpm sdk:types\` runs), then run it:
+
+import { jobs } from '../sdk/cli/jobs/index.js'
+import { mountedMcp } from '../src/kit/mcp/index.js'
+import { cliSnapshot } from '../src/kit/testing/index.js'
+
+const { tools, resources } = mountedMcp(app)
+const snapshot = cliSnapshot({ app: '${vars.__bin__}', version: VERSION, tools, resources, jobs })
+writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)), \`\${JSON.stringify(snapshot, null, 2)}\\n\`)`)
+    console.log('Then name every tool (`cli` on mcpTool) until cliGaps in sdk/test/cli.test.ts is [].')
   },
 
   feature: () => {
