@@ -5,7 +5,7 @@
  * the Worker leaves to files), a dry-run deploy, and that a formatted app still takes a new feature and passes.
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -23,6 +23,25 @@ const check = (name, preset, more = []) => {
   run(process.execPath, [create, name, '--preset', preset, '--yes'], parent)
   // init's last line, then what the app's CI and its pre-push hook run: `pnpm gate`
   for (const args of [['install'], ['format'], ['migrations'], ['gate'], ...more]) run('pnpm', args, app)
+  // A feature that names Cloudflare is refused by lint; the same import in a binding is allowed
+  const probe = (path) => join(app, path)
+  writeFileSync(probe('src/features/provider-probe.ts'), "import { env } from 'cloudflare:workers'\nexport const probe = env\n")
+  const refused = spawnSync('pnpm', ['lint'], { cwd: app, encoding: 'utf8' })
+  rmSync(probe('src/features/provider-probe.ts'))
+  // The file is named whatever the reporter (on GitHub Actions oxlint writes annotations without the rule's message)
+  if (refused.status === 0 || !`${refused.stdout}${refused.stderr}`.includes('provider-probe.ts')) {
+    console.error(`lint should refuse a feature that imports cloudflare:workers, but it said:\n${refused.stdout}${refused.stderr}`)
+    process.exit(1)
+  }
+  mkdirSync(probe('src/bindings'), { recursive: true })
+  writeFileSync(probe('src/bindings/provider-probe.ts'), "import { env } from 'cloudflare:workers'\nexport const probe = env\n")
+  const allowed = spawnSync('pnpm', ['lint'], { cwd: app, encoding: 'utf8' })
+  rmSync(probe('src/bindings'), { recursive: true })
+  if (allowed.status !== 0) {
+    console.error(`lint should allow cloudflare:workers inside src/bindings/, but it said:\n${allowed.stdout}${allowed.stderr}`)
+    process.exit(1)
+  }
+  console.log(`${name}: lint refuses a feature that names Cloudflare, and allows it in src/bindings/`)
   // A repository from the start, with git pointed at the hook by `pnpm install`
   const hooks = spawnSync('git', ['config', 'core.hooksPath'], { cwd: app, encoding: 'utf8' }).stdout.trim()
   if (hooks !== '.githooks') {

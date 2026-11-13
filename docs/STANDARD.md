@@ -21,6 +21,10 @@ parts an app copies in (`npx @escalay/kit add`, see the README); its `testing` p
   (`worker.ts`, `nodejs_compat`). Nothing runs at global scope that Workers refuse there (random values, I/O, timers),
   and no module imports a Node-only API at the top unless Workers provide it. The kit's tests run in both (`node` and
   `workers` projects); `test/workers/worker.ts` imports the whole kit at global scope so a regression fails to start.
+- **The provider stays at the edge:** only `worker.ts` and `src/bindings/` name Cloudflare (`cloudflare:*`,
+  `drizzle-orm/d1`, a provider's file such as `bindings/mail/cloudflare.ts`). A feature, `app.ts` and the browser app
+  take what they need from the context `createApp` is given, or from a type in `src/bindings/`; another provider is one
+  more file there. `pnpm lint` enforces it (the `no-restricted-imports` override every new app's `.oxlintrc.json` has).
 - **What the API writes goes through Drizzle** (`db`): one `openDb(source)` per app (a `node:sqlite` file on Node; D1
   on Workers, `openDb(drizzle(env.DB))`; Turso by passing its Drizzle database), and only a feature's repo queries it, never a handler. Each feature
   brings its tables and its migration steps (`migrate(db, feature, steps)`, recorded in `kit_migrations`); a step

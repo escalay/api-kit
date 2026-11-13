@@ -60,6 +60,7 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 
 ## Rules
 
+- A feature, `src/app.ts` and the browser app never name Cloudflare (`cloudflare:*`, `drizzle-orm/d1`, a provider file under `src/bindings/`): they take what they need from the context `createApp` is given, or from a type in `src/bindings/`, so only `src/worker.ts` and `src/bindings/` know the provider. `pnpm lint` fails on such an import. <!-- runtime:workers -->
 - Only a feature's `repo.ts` queries the database; handlers call the repo. That keeps a move off SQLite to one file
   per feature (`openDb` takes any Drizzle SQLite database: Turso via `drizzle-orm/libsql`, D1 via `drizzle(env.DB)`).
 - A migration step never changes once it has run anywhere; a change is a new step at the end of the list.

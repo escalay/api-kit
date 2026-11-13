@@ -5,5 +5,23 @@
   "rules": {
     "vitest/valid-expect": ["error", { "maxArgs": 2 }]
   },
-  "ignorePatterns": ["src/kit/**", "src/guide.gen.ts", "web/routeTree.gen.ts", "migrations/**", "dist/**"]
+  "ignorePatterns": ["src/kit/**", "src/guide.gen.ts", "web/routeTree.gen.ts", "migrations/**", "dist/**"],
+  "overrides": [
+    {
+      "files": ["src/features/**", "src/app.ts", "web/**"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["cloudflare:*", "drizzle-orm/d1", "**/bindings/*/cloudflare*", "**/bindings/cloudflare*", "**/worker", "**/worker.js"],
+                "message": "Only src/worker.ts and src/bindings/ may name Cloudflare. Take what you need from the context createApp is given, or from a type in src/bindings/."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
 }

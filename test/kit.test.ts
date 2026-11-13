@@ -667,7 +667,12 @@ describe('the copy-in CLI', () => {
       // Every app lints and formats with oxlint and oxfmt, the kit's copy left out
       for (const name of ['demo-api', 'edge-api', 'box-api']) {
         expect(JSON.parse(await readFile(join(parent, name, 'package.json'), 'utf8')).scripts).toMatchObject({ lint: 'oxlint', format: 'oxfmt' })
-        expect(JSON.parse(await readFile(join(parent, name, '.oxlintrc.json'), 'utf8')).ignorePatterns).toContain('src/kit/**')
+        const lintConfig = JSON.parse(await readFile(join(parent, name, '.oxlintrc.json'), 'utf8'))
+        expect(lintConfig.ignorePatterns).toContain('src/kit/**')
+        // Only worker.ts and src/bindings/ may name the provider: features, app.ts and the browser app are linted for it
+        const [provider] = lintConfig.overrides
+        expect(provider.files).toEqual(['src/features/**', 'src/app.ts', 'web/**'])
+        expect(provider.rules['eslint/no-restricted-imports'][1].patterns[0].group).toEqual(expect.arrayContaining(['cloudflare:*', 'drizzle-orm/d1', '**/bindings/*/cloudflare*']))
         expect(JSON.parse(await readFile(join(parent, name, '.oxfmtrc.json'), 'utf8')).ignorePatterns).toContain('src/kit/**')
       }
       // Every app gets CI, Dependabot, a secrets scan and the Node the kit runs on; each workflow keeps only its runtime's steps
