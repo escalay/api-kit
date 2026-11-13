@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.16.1](https://github.com/escalay/api-kit/compare/v1.16.0...v1.16.1) (2026-11-13)
+
+
+### Fixed
+
+* **repo:** leave auto-merge out on a repository that can't have rules ([#42](https://github.com/escalay/api-kit/issues/42)) ([e22f843](https://github.com/escalay/api-kit/commit/e22f843e3de5ad9a04872a5769b6ff0d693f6274))
+
+
+### Documentation
+
+* name the canaries and what to do when one fails ([#44](https://github.com/escalay/api-kit/issues/44)) ([873940a](https://github.com/escalay/api-kit/commit/873940ad99f4726fa3342cc89e272e84be45f86d))
+
 ## [1.16.0](https://github.com/escalay/api-kit/compare/v1.15.3...v1.16.0) (2026-11-13)
 
 
