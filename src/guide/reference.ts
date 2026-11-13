@@ -8,6 +8,7 @@
  * endpointsMarkdown(doc)             // ### Search … - `GET /api/v1/search/recipes?q=…` — Recipes for a description. …
  * toolRoute(tool, doc)               // { method: 'GET', path: '/api/v1/search/recipes', operationId: 'searchRecipes' }
  */
+import { cliOf, resourceCli, toolCli } from '../core/cli.js'
 import type { ResourceLike, ToolLike } from '../core/discovery.js'
 
 type Schema = { type?: string | string[]; enum?: unknown[]; default?: unknown; example?: unknown; description?: string; items?: Schema; minimum?: number; maximum?: number; anyOf?: Schema[]; $ref?: string; properties?: Record<string, Schema>; additionalProperties?: unknown }
@@ -146,6 +147,20 @@ export const toolsMarkdown = (tools: ToolLike[], doc: OpenApiDoc) =>
     })
     .join('\n')
 
+/**
+ * One line per command of the app's CLI, from the tools and resources: the command with its positional arguments,
+ * what it does, and the MCP name it calls. Without the bin's name, which the guide writes around it.
+ */
+export const cliMarkdown = (tools: ToolLike[], resources: ResourceLike[] = []) =>
+  [
+    ...tools.map((tool) => ({ command: tool.input ? cliOf(tool as ToolLike & { input: { shape: Record<string, unknown> } }) : toolCli({ name: tool.name, cli: tool.cli, keys: [] }), about: tool.title ?? firstSentence(tool.description), of: tool.name })),
+    ...resources.flatMap((resource) => (resource.name ? [{ command: resourceCli({ name: resource.name, uriTemplate: resource.uriTemplate, cli: resource.cli }), about: resource.title, of: resource.uriTemplate }] : [])),
+  ]
+    .map(({ command, about, of }) => ({ line: `${command.name}${command.positional.map((key) => ` <${key}>`).join('')}`, about, of }))
+    .sort((a, b) => a.line.localeCompare(b.line))
+    .map(({ line, about, of }) => `- \`${line}\` — ${about} (\`${of}\`)`)
+    .join('\n')
+
 /** One line per MCP resource: its URI template and what attaching it gives. */
 export const resourcesMarkdown = (resources: ResourceLike[]) => resources.map((resource) => `- \`${resource.uriTemplate}\` — ${resource.title}: ${resource.description.replace(/\s+/g, ' ').trim()}`).join('\n')
 
@@ -197,8 +212,9 @@ export const generatedVars = ({ origin, doc, tools, resources, files }: { origin
     api: { endpoints: endpointsMarkdown(doc), tag: endpointsByTag(doc), unblock: unblockMarkdown(origin), operations: operationsOf(doc).length },
     mcp: { tools: tools ? toolsMarkdown(tools, doc) : '', count: tools?.length ?? 0, resources: resources?.length ? resourcesMarkdown(resources) : 'None.' },
     skills: Object.fromEntries(skills.map((name) => [name, { playbooks: playbooksMarkdown(files, name) }])),
+    cli: { commands: tools ? cliMarkdown(tools, resources) : '' },
   }
 }
 
 /** Template names the kit fills itself; `guideGaps` doesn't ask the app for them. */
-export const GENERATED_ROOTS = ['origin', 'api', 'mcp', 'skills'] as const
+export const GENERATED_ROOTS = ['origin', 'api', 'mcp', 'skills', 'cli'] as const

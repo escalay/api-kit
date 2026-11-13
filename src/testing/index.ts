@@ -89,7 +89,7 @@ export const guideRoutes = (files: Map<string, string>, doc: Document, prefix = 
  */
 export const guideGaps = (files: Map<string, string>, vars: Record<string, unknown>, { doc, tools, resources }: { doc?: OpenApiDoc; tools?: ToolLike[]; resources?: ResourceLike[] } = {}) => {
   const generated = doc ? generatedVars({ origin: 'https://example.test', doc, tools, resources, files }) : {}
-  const skipped = doc ? [] : ['api.', 'mcp.', 'skills.']
+  const skipped = doc ? [] : ['api.', 'mcp.', 'skills.', 'cli.']
   return [...files].flatMap(([file, text]) =>
     fillTemplate(text, { origin: 'https://example.test', ...generated, ...vars })
       .missing.filter((name) => !skipped.some((root) => name.startsWith(root)))

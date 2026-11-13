@@ -6,9 +6,9 @@ import { createRoute, z } from '@hono/zod-openapi'
 import { describe, expect, it } from 'vitest'
 import { boardTools } from '../src/boards/index.js'
 import { vectorSearchTools } from '../src/vector-search/index.js'
-import { createAgentApi, createOAuth, fallbackCliName, keyTools, teamTools, telemetryTools, generateOAuthKey, HAL_JSON, linksOf, memoryOAuthStore, mintApiKey, originOf, pageOf, pageSchema, parseApiKeys, problemResponses, ProblemError, LinksSchema } from '../src/index.js'
+import { cliMarkdown, createAgentApi, createOAuth, fallbackCliName, hintsOf, keyTools, teamTools, telemetryTools, generateOAuthKey, HAL_JSON, linksOf, memoryOAuthStore, mintApiKey, originOf, pageOf, pageSchema, parseApiKeys, problemResponses, ProblemError, LinksSchema } from '../src/index.js'
 import { inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp } from '../src/mcp/index.js'
-import { cliGaps, cliSnapshot } from '../src/testing/index.js'
+import { cliGaps, cliSnapshot, guideGaps } from '../src/testing/index.js'
 import { createCli } from '../templates/sdk/sdk/cli/engine/index.js'
 import { defineJob } from '../templates/sdk/sdk/cli/engine/job.js'
 
@@ -276,6 +276,22 @@ describe('naming commands', () => {
     expect(fallbackCliName('POST /api/messages/{id}/reply', 'reply')).toBe('message reply')
     expect(fallbackCliName('PUT /api/boards/{id}/items/{ref}', 'save_to_board')).toBe('item edit')
     expect(fallbackCliName(undefined, 'search_recipes')).toBe('recipe search')
+  })
+
+  it('hints a tool that writes as not read-only, and one that deletes as destructive', () => {
+    const tool = (method: 'GET' | 'POST', annotations?: { destructiveHint?: boolean }) => mcpTool({ ...base, name: 'x', input: z.object({}), annotations, call: () => ({ method, path: '/x' }) })
+    expect(hintsOf(tool('GET'))).toMatchObject({ readOnlyHint: true, destructiveHint: false })
+    expect(hintsOf(tool('POST'))).toMatchObject({ readOnlyHint: false, destructiveHint: false })
+    expect(hintsOf(tool('GET', { destructiveHint: true }))).toMatchObject({ readOnlyHint: false, destructiveHint: true })
+  })
+
+  it('lists the commands for the guide as {{cli.commands}}', async () => {
+    const { app, tools, resources } = await sampleCli()
+    const lines = cliMarkdown(tools, resources).split('\n')
+    expect(lines).toContain('- `app view <id>` — Get an app (`get_app`)')
+    expect(lines).toContain('- `app card <id>` — An app’s card (`sample://apps/{id}/card{?format}`)')
+    const doc = await (await app.request('/openapi.json', { headers: { authorization: `Bearer ${key}` } })).json()
+    expect(guideGaps(new Map([['llms.txt', 'Commands:\n\n{{cli.commands}}\n']]), {}, { doc, tools, resources })).toEqual([])
   })
 
   it('finds what keeps commands from being usable', async () => {
