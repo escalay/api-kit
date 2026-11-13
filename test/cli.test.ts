@@ -7,7 +7,8 @@ import { describe, expect, it } from 'vitest'
 import { boardTools } from '../src/boards/index.js'
 import { vectorSearchTools } from '../src/vector-search/index.js'
 import { cliMarkdown, createAgentApi, createOAuth, fallbackCliName, hintsOf, keyTools, teamTools, telemetryTools, generateOAuthKey, HAL_JSON, linksOf, memoryOAuthStore, mintApiKey, originOf, pageOf, pageSchema, parseApiKeys, problemResponses, ProblemError, LinksSchema } from '../src/index.js'
-import { inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp } from '../src/mcp/index.js'
+import { cliOf, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp } from '../src/mcp/index.js'
+import { pathKeysOf } from '../src/core/cli.js'
 import { cliGaps, cliSnapshot, guideGaps } from '../src/testing/index.js'
 import { createCli } from '../templates/sdk/sdk/cli/engine/index.js'
 import { configDirOf } from '../templates/sdk/sdk/cli/engine/auth.js'
@@ -15,6 +16,7 @@ import { defineJob } from '../templates/sdk/sdk/cli/engine/job.js'
 
 const { key, hash } = mintApiKey('test')
 const OWNER = 'owner@example.test'
+const base = { title: 'T', description: 'D', summarize: () => '' }
 
 const first = defineJob({
   name: 'first',
@@ -28,6 +30,18 @@ const first = defineJob({
     const one = await ctx.call('get_app', { id: list.json._embedded.apps[0].id })
     if (ctx.jsonMode) ctx.json(one.json)
     else ctx.print(one.text)
+  },
+})
+
+const late = defineJob({
+  name: 'late',
+  summary: 'Fails the way jobs fail',
+  args: { how: { type: 'string', description: 'timeout, plain or problem.', positional: true, required: true } },
+  examples: [{ run: 'late timeout', about: 'Gives up waiting' }],
+  run: async (ctx, { how }) => {
+    if (how === 'timeout') throw Object.assign(new Error('Nothing came in 120 seconds.'), { exitCode: 6 })
+    if (how === 'problem') ctx.fail(await ctx.call('get_app', { id: 'a9' }))
+    throw new Error('Something broke.')
   },
 })
 
@@ -69,12 +83,13 @@ const sampleCli = async () => {
     mcpTool({ name: 'get_app', title: 'Get an app', description: 'One app by id.', input: z.object({ id: z.string().describe('The app id.') }), cli: { name: 'app view', examples: [{ run: 'app view a1', about: 'Alpha' }] }, call: ({ id }) => ({ path: `/api/v1/apps/${id}` }), summarize: (json) => `${json.name} (${json.id})` }),
     mcpTool({ name: 'delete_app', title: 'Delete an app', description: 'Deletes an app for good.', input: z.object({ id: z.string().describe('The app id.') }), annotations: { readOnlyHint: false, destructiveHint: true }, cli: { name: 'app delete', examples: [{ run: 'app delete a2 --yes', about: 'Bravo, gone' }] }, call: ({ id }) => ({ method: 'DELETE', path: `/api/v1/apps/${id}` }), summarize: (_json, { id }) => `Deleted ${id}.` }),
     mcpTool({ name: 'tag_app', title: 'Tag an app', description: 'Sets an app’s tags.', input: z.object({ id: z.string().describe('The app id.'), tags: z.array(z.string()).describe('A tag; repeat for more.'), pinned: z.boolean().optional().describe('Pin it.') }), annotations: { readOnlyHint: false }, cli: { name: 'app tag', examples: [{ run: 'app tag a1 --tags new --tags fast --pinned', about: 'Two tags, pinned' }] }, call: ({ id, ...body }) => ({ method: 'POST', path: `/api/v1/apps/${id}/tags`, body }), summarize: (json) => `${json.name}: ${json.tags.join(', ')}${json.pinned ? ' (pinned)' : ''}` }),
-    mcpTool({ name: 'who_am_i', title: 'Who am I', description: 'Who is calling.', input: z.object({}), cli: { name: 'me view', examples: [{ run: 'me view', about: 'The caller' }] }, call: () => ({ path: '/api/v1/me' }), summarize: (json) => `Calling as ${json.caller}.` }),
+    mcpTool({ name: 'who_am_i', title: 'Who am I', description: 'Who is calling.', input: z.object({}), cli: { name: 'auth status', examples: [{ run: 'auth status', about: 'The caller' }] }, call: () => ({ path: '/api/v1/me' }), summarize: (json) => `Calling as ${json.caller}.` }),
+    mcpTool({ name: 'wait_for_app', title: 'Wait for an app', description: 'An app, once it is there.', input: z.object({ app: z.string().describe('The app id.'), timeout: z.number().optional().describe('Seconds to wait.') }), route: 'GET /api/v1/apps/{id}', cli: { name: 'app wait', examples: [{ run: 'app wait a1 --timeout 5', about: 'Alpha, once it is there' }] }, call: ({ app }) => ({ path: `/api/v1/apps/${app}` }), summarize: (json) => `${json.name} is there.` }),
     mcpTool({ name: 'slow_thing', title: 'Something slow', description: 'Takes a while.', input: z.object({ timeout: z.number().optional().describe('Seconds to wait.') }), cli: { name: 'thing wait', examples: [{ run: 'thing wait --timeout 5', about: 'Waits' }] }, call: () => ({ path: '/api/v1/slow' }), summarize: () => 'Done.' }),
   ]
   const resources = [mcpResource({ name: 'app_card', title: 'An app’s card', description: 'The app as JSON.', uriTemplate: 'sample://apps/{id}/card{?format}', cli: 'app card', read: ({ id }) => [{ path: `/api/v1/apps/${id}` }] })]
   mountMcp(app, { factory: mcpServerFactory({ info: { name: 'sample', version: '1.0.0' }, instructions: 'Find apps.', tools, resources, callApi: inProcess(app) }), allowedHostnames: ['localhost'] })
-  const snapshot = cliSnapshot({ app: 'sample', version: '1.0.0', tools, resources, jobs: [first] })
+  const snapshot = cliSnapshot({ app: 'sample', version: '1.0.0', tools, resources, jobs: [first, late] })
   const configDir = await mkdtemp(join(tmpdir(), 'cli-'))
 
   /** The CLI in this process: its fetch is the app's own `request`, aborted like a real one. */
@@ -86,7 +101,7 @@ const sampleCli = async () => {
       envPrefix: 'SAMPLE',
       version: '1.0.0',
       snapshot,
-      jobs: [first],
+      jobs: [first, late],
       fetch: (input, init) =>
         new Promise<Response>((resolve, reject) => {
           init?.signal?.addEventListener('abort', () => reject(init.signal!.reason))
@@ -107,7 +122,7 @@ describe('the command line', () => {
     const packaged = JSON.parse((await run(['commands', '--json'], { env: {} })).out)
     expect(live).toEqual(snapshot)
     expect(packaged).toEqual(snapshot)
-    expect(snapshot.commands.map((command) => command.name)).toEqual(['first', 'app card', 'app delete', 'app list', 'app tag', 'app view', 'me view', 'thing wait'])
+    expect(snapshot.commands.map((command) => command.name)).toEqual(['first', 'late', 'app card', 'app delete', 'app list', 'app tag', 'app view', 'app wait', 'auth status', 'thing wait'])
     expect(snapshot.commands.find((command) => command.name === 'app tag')).toMatchObject({ tool: 'tag_app', positional: ['id'], readOnly: false, destructive: false, flags: [{ name: 'id', required: true }, { name: 'tags', type: 'string', multiple: true, required: true }, { name: 'pinned', type: 'boolean', required: false }] })
     expect(snapshot.commands.find((command) => command.name === 'app card')).toMatchObject({ resource: 'app_card', uriTemplate: 'sample://apps/{id}/card{?format}', positional: ['id'] })
   })
@@ -118,7 +133,7 @@ describe('the command line', () => {
     expect(top.code).toBe(0)
     expect(top.out.indexOf('Jobs')).toBeLessThan(top.out.indexOf('Commands'))
     expect(top.out).toContain('first')
-    expect(top.out).toMatch(/app\s+card, delete, list, tag, view/)
+    expect(top.out).toMatch(/app\s+card, delete, list, tag, view, wait/)
     expect(top.out).not.toContain('\x1b[')
     // Colour on a terminal, never with NO_COLOR
     expect((await run([], { tty: true })).out).toContain('\x1b[1m')
@@ -203,6 +218,21 @@ describe('the command line', () => {
     expect((await run(['app', 'delete', 'a1', '--yes'])).code).toBe(0)
   })
 
+  it('maps what a job throws: its exitCode, else its problem’s status, else 1', async () => {
+    const { run } = await sampleCli()
+    expect(await run(['late', 'timeout'])).toEqual({ code: 6, out: '', err: 'Nothing came in 120 seconds.\n' })
+    expect(await run(['late', 'problem'])).toEqual({ code: 3, out: '', err: '404 not_found Not found: No such app.\n' })
+    expect(await run(['late', 'plain'])).toEqual({ code: 1, out: '', err: 'Something broke.\n' })
+    expect(JSON.parse((await run(['late', 'timeout', '--json'])).err)).toMatchObject({ title: 'Nothing came in 120 seconds.', detail: 'Nothing came in 120 seconds.', exitCode: 6 })
+  })
+
+  it('takes positional arguments from where the call puts them, not from the route’s names', () => {
+    const tool = (cli?: { name: string; positional?: string[] }) => mcpTool({ ...base, name: 'wait_for_message', input: z.object({ address: z.string(), index: z.number().optional(), timeout: z.number().optional() }), route: 'GET /api/addresses/{id}/messages/next', ...(cli ? { cli } : {}), call: ({ address, index }) => ({ path: `/api/addresses/${address}/messages/next`, query: { index } }) })
+    expect(cliOf(tool()).positional).toEqual(['address'])
+    expect(cliOf(tool({ name: 'mail attachment', positional: ['address', 'index'] })).positional).toEqual(['address', 'index'])
+    expect(pathKeysOf(mcpTool({ ...base, name: 'two', input: z.object({ ref: z.string(), id: z.string() }), call: ({ id, ref }) => ({ path: `/api/boards/${id}/items/${encodeURIComponent(ref)}` }) }))).toEqual(['id', 'ref'])
+  })
+
   it('reads resources, fills the template’s query from flags, and runs jobs', async () => {
     const { run } = await sampleCli()
     expect(JSON.parse((await run(['app', 'card', 'a1'])).out)).toMatchObject({ id: 'a1' })
@@ -221,7 +251,7 @@ describe('the command line', () => {
     expect((await run(['tool'])).out).toContain('get_app')
     const bash = (await run(['completion', 'bash'])).out
     expect(bash).toContain('complete -F _sample sample')
-    expect(bash).toContain('app) COMPREPLY=($(compgen -W "card delete list tag view"')
+    expect(bash).toContain('app) COMPREPLY=($(compgen -W "card delete list tag view wait"')
     expect((await run(['completion', 'fish'])).out).toContain("__fish_seen_subcommand_from app")
     expect((await run(['completion', 'tcsh'])).code).toBe(1)
     const doctor = await run(['doctor'])
@@ -247,9 +277,10 @@ describe('the command line', () => {
     expect((await stat(file)).mode & 0o777).toBe(0o600)
     const saved = JSON.parse(await readFile(file, 'utf8'))
     expect(saved).toMatchObject({ current: 'localhost', profiles: { localhost: { url: 'http://localhost', clientId: expect.any(String), refreshToken: expect.stringMatching(/^rt_/) } } })
+    // `auth status` is the app's who_am_i tool, filling a free verb of the built-in auth
     const status = await run(['auth', 'status'], { env: {} })
-    expect(status.code).toBe(0)
-    expect(status.out).toContain('Calling as agent.')
+    expect(status).toEqual({ code: 0, out: 'Calling as agent.\n', err: 'Using http://localhost from profile localhost\n' })
+    expect((await run(['auth', 'switch'], { env: {} })).out).toBe('* localhost  http://localhost  OAuth\n')
     expect((await run(['app', 'view', 'a1'], { env: {} })).out).toBe('Alpha (a1)\n')
     // Two hours on, the token has expired for the CLI: it renews it with the refresh token and goes on
     const later = await run(['app', 'view', 'a2'], { env: {}, now: () => Date.now() + 2 * 3_600_000 })
@@ -282,7 +313,6 @@ const createCliFor = (app: { request: (input: string, init?: RequestInit) => Res
   createCli({ name: 'sample', envPrefix: 'SAMPLE', version: '1.0.0', snapshot: { commands: [] }, fetch: async (input, init) => app.request(String(input), init), io: { stdout: { write: onOut }, stderr: { write: onErr }, stdin: Readable.from(['']) as never, env: {}, configDir, sleep } })
 
 describe('naming commands', () => {
-  const base = { title: 'T', description: 'D', summarize: () => '' }
   it('falls back to the route rule for a tool that names none', () => {
     expect(fallbackCliName('GET /api/addresses/{id}', 'get_address')).toBe('address view')
     expect(fallbackCliName('GET /api/v1/addresses', 'list_addresses')).toBe('address list')
@@ -302,8 +332,12 @@ describe('naming commands', () => {
 
   it('lists the commands for the guide as {{cli.commands}}', async () => {
     const { app, tools, resources } = await sampleCli()
-    const lines = cliMarkdown(tools, resources).split('\n')
+    const lines = cliMarkdown({ tools, resources, jobs: [first] }).split('\n')
+    expect(lines[0]).toBe('- `first` — The first app, opened (job)')
     expect(lines).toContain('- `app view <id>` — Get an app (`get_app`)')
+    expect(lines).toContain('- `app wait <app>` — Wait for an app (`wait_for_app`)')
+    // From the snapshot, the same lines
+    expect(cliMarkdown({ commands: cliSnapshot({ tools, resources, jobs: [first] }).commands })).toBe(lines.join('\n'))
     expect(lines).toContain('- `app card <id>` — An app’s card (`sample://apps/{id}/card{?format}`)')
     const doc = await (await app.request('/openapi.json', { headers: { authorization: `Bearer ${key}` } })).json()
     expect(guideGaps(new Map([['llms.txt', 'Commands:\n\n{{cli.commands}}\n']]), {}, { doc, tools, resources })).toEqual([])
@@ -311,7 +345,7 @@ describe('naming commands', () => {
 
   it('finds what keeps commands from being usable', async () => {
     const { tools, resources } = await sampleCli()
-    expect(cliGaps({ tools, resources, jobs: [first] })).toEqual([])
+    expect(cliGaps({ tools, resources, jobs: [first, late] })).toEqual([])
     const bad = [
       mcpTool({ ...base, name: 'list_things', input: z.object({ q: z.string() }), call: () => ({ path: '/api/things' }) }),
       mcpTool({ ...base, name: 'get_thing', input: z.object({ id: z.string().describe('Id.') }), cli: 'things view', call: ({ id }) => ({ path: `/api/things/${id}` }) }),
@@ -321,7 +355,7 @@ describe('naming commands', () => {
       mcpTool({ ...base, name: 'Odd', input: z.object({}), cli: { name: 'Odd', examples: [] }, call: () => ({ path: '/o' }) }),
       mcpTool({ ...base, name: 'clash', input: z.object({ json: z.boolean().describe('Raw.') }), cli: { name: 'clash view', examples: [{ run: 'clash view', about: 'x' }] }, call: () => ({ path: '/c' }) }),
     ]
-    expect(cliGaps({ tools: bad, resources: [mcpResource({ name: 'r', title: 'R', description: 'R', uriTemplate: 's://things/{id}', read: () => [] })], jobs: [first] })).toEqual([
+    expect(cliGaps({ tools: bad, resources: [mcpResource({ name: 'r', title: 'R', description: 'R', uriTemplate: 's://things/{id}', read: () => [] })], jobs: [first, late] })).toEqual([
       'tool list_things: no cli name (the route rule would call it "thing list"); add cli: \'<noun> <verb>\'',
       'tool list_things: the argument q has no description',
       'tool list_things: no example; add cli: { name, examples: [{ run, about }] }',
@@ -330,7 +364,7 @@ describe('naming commands', () => {
       'tool other: "thing list" is also the name of tool list_things',
       'tool other: the example "thing list --nope" uses --nope, which it doesn\'t take',
       'tool other: the example "thing ls" doesn\'t start with "thing list"',
-      'tool login: the noun "auth" is a built-in command',
+      'tool login: "auth login" is a built-in command',
       'tool first_thing: the noun "first" is the job first',
       'tool Odd: "Odd" is not "<noun> <verb>" in lowercase kebab-case',
       'tool clash: the argument json is --json, a flag every command already has; rename it',

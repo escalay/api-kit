@@ -27,9 +27,11 @@ few task-sized jobs, and the kit checks the result like it checks the guide and 
    (`mailroom wait-for-message` and `mailroom tool wait_for_message '{…}'` both work), so an agent that learnt the
    MCP names is never stuck.
 
-3. **Arguments come from the input schema.** Path parameters are positional, in the route's order
-   (`mailroom mail view msg_123`), and work as flags too; every property is a `--kebab-case` flag with its
-   description as help; booleans take `--flag` / `--no-flag`; arrays repeat the flag; numbers and enums are checked
+3. **Arguments come from the input schema.** The input keys the call puts in its path are positional, in path order
+   (found by running `call` on placeholders, not read from `route`, whose names may differ: Mailroom's
+   `wait_for_message` takes `address` for `{id}`; `cli.positional` overrides it, and the route's names are used only
+   when `call` can't run on placeholders), as in `mailroom mail view msg_123`, and work as flags too; every
+   property is a `--kebab-case` flag with its description as help; booleans take `--flag` / `--no-flag`; arrays repeat the flag; numbers and enums are checked
    before the call; nested objects come only through `--input -`, which reads the input as a JSON object from stdin
    (or a file), **under** the flags: a flag wins over the same field in the JSON. Examples come from the tool
    (`cli: { name, examples }`); `cliGaps` checks each against its command (the name, the flags it takes, how many
@@ -98,12 +100,14 @@ few task-sized jobs, and the kit checks the result like it checks the guide and 
     so `testing` audits names without the `mcp` part.
 
 11. **Audited like the rest.** `cliGaps({ tools, resources, jobs })` in `testing` returns `[]` when every tool and
-    resource has a name, names are unique and never shadow a job or a built-in (`auth`, `help`, `commands`, `api`,
-    `tool`, `doctor`, `completion`, `version`), nouns are singular (a heuristic with an allowlist, extendable with
+    resource has a name, names are unique and never shadow a job or a built-in (`help`, `commands`, `api`, `tool`,
+    `doctor`, `completion`, `version` as nouns, and `auth login`, `auth logout`, `auth token`, `auth switch`: a tool
+    may fill another `auth` verb, as the kit's `who_am_i` is `auth status`), no argument hides a global flag, nouns
+    are singular (a heuristic with an allowlist, extendable with
     `singular`), every argument has a description, every tool and job has an example, and each example fits its
     command. Verbs are not checked against a list: the task's own word is allowed. `kit doctor` runs it when the kit
     folder sits in an app with its dependencies installed, and the guide gets `{{cli.commands}}` so `llms.txt` lists
-    the commands as it lists the tools.
+    the commands as it lists the tools, jobs first (from the snapshot when `serveGuide` gets `commands`).
 
 ## Consequences
 

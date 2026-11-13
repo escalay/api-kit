@@ -184,6 +184,7 @@ code already knows is generated, never written by hand**, so the guide cannot dr
 |---|---|
 | `{{api.endpoints}}`, `{{api.tag.<slug>}}` | `/openapi.json`: per tag, every operation as a working example call, what it is for, its query parameters (`*` required, enums, defaults), its body type and the schema it returns with its top-level fields |
 | `{{api.unblock}}` | the kit: how to look a call or a field up in the spec, read an error, restart from `/api`, handle a `202` |
+| `{{cli.commands}}` | the CLI's commands (§19), jobs first: name with positional arguments, summary, the tool behind it |
 | `{{mcp.tools}}`, `{{mcp.count}}`, `{{mcp.resources}}` | the MCP tools (name, the route its call reaches, description) and resources (URI template, what it gives) |
 | `{{skills.<name>.playbooks}}` | the skill folder: each playbook's title and first sentence |
 
@@ -417,10 +418,12 @@ the deployment's `/mcp`, so it can't disagree with the tools.
 - **Names are noun then verb**, as `gh` writes them, and each tool declares its own: `cli: { name: 'mail wait',
   examples: [{ run: 'mail wait adr_1 --timeout 30', about: '…' }] }` on `mcpTool` (and `mcpResource`). Nouns are
   singular; verbs are `gh`'s (`list`, `view`, `create`, `edit`, `delete`) where one fits, the task's word otherwise.
-  No noun is a built-in (`auth`, `help`, `commands`, `api`, `tool`, `doctor`, `completion`, `version`) or a job. A tool
+  No noun is a built-in (`help`, `commands`, `api`, `tool`, `doctor`, `completion`, `version`) or a job; `auth login`,
+  `logout`, `token` and `switch` are built in, and a tool may fill another `auth` verb (`who_am_i` is `auth status`). A tool
   without a name gets the route rule's (`GET /api/addresses/{id}` → `address view`) and `cliGaps` asks for one. The
   MCP name stays a hidden alias.
-- **Arguments come from the input schema**: the route's path parameters are positional, in order; every property is a
+- **Arguments come from the input schema**: the input keys the call puts in its path are positional, in path order
+  (`cli.positional` overrides); no property may hide a global flag (`json`, `yes`, `input`, `profile`); every property is a
   `--kebab-case` flag (positional ones too); `--x` / `--no-x` for booleans; a repeated flag for an array; numbers and
   enums checked before the call; nested objects only through `--input -`, a JSON object the flags win over.
 - **Agents first**: stdout holds only the answer; progress, prompts and warnings go to stderr. `--json [fields]` prints
@@ -437,6 +440,9 @@ the deployment's `/mcp`, so it can't disagree with the tools.
   `<app> doctor` reports drift between the two.
 - **Jobs**: one task, one top-level command (`sdk/cli/jobs/`, `defineJob`), written when the agent test shows agents
   making the same few calls for one playbook step; the playbook then names the job.
-- **The guide** lists the commands with `{{cli.commands}}`.
+- **The guide** lists the commands with `{{cli.commands}}`, jobs first; `serveGuide({ commands: snapshot })` (the
+  imported `commands.json`) lets it list the jobs, which the server can't see.
+- **A job that fails** throws: its numeric `exitCode` wins, else its problem's `status`, else 1; `ctx.fail(result)`
+  throws a failed call's problem.
 - Tests: `cliGaps({ tools, resources, jobs })` returns `[]`, `commands.json` equals `cliSnapshot(...)` byte for byte,
   and the live commands equal the packaged ones (`sdk/test/cli.test.ts`). `kit doctor` runs `cliGaps` too.

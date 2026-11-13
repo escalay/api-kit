@@ -37,10 +37,12 @@ Rules:
 - `<noun> <verb>`, lowercase kebab-case, as `gh` writes them. The noun is singular (`address`, `mail`, `webhook`).
 - Verbs are `gh`'s where one fits: `list`, `view`, `create`, `edit`, `delete`. Otherwise the task's own word:
   `wait`, `reply`, `mark-read`, `set-role`.
-- Never a built-in as a noun (`auth`, `help`, `commands`, `api`, `tool`, `doctor`, `completion`, `version`), and
-  never a job's name.
-- Path parameters are positional, in the route's order; every other argument is a `--kebab-case` flag. So name
-  input properties for flags people type (`--timeout`, not `--timeout-seconds-max`), and describe every one.
+- Never a built-in as a noun (`help`, `commands`, `api`, `tool`, `doctor`, `completion`, `version`), never a job's
+  name. `auth` is shared: `auth login|logout|token|switch` are built in, and a tool may fill another verb (the
+  kit's `who_am_i` is `auth status`).
+- The input keys the call puts in its path are positional, in path order (`cli.positional` overrides, rarely); every
+  argument is also a `--kebab-case` flag. Name inputs for flags people type (`--timeout`), describe every one, and
+  never name one `json`, `yes`, `input`, `profile`, `help` or `dry-run` (the CLI's own flags).
 - An example uses only flags the tool takes and a plausible id (`adr_123`). `about` says what it does.
 
 | Good | Bad | Why |
@@ -82,6 +84,8 @@ List it in `sdk/cli/jobs/index.ts`, run `pnpm sdk:types`, then name the job in t
 - One task per job, one lowercase word. Jobs are listed first by `<app>` alone.
 - `ctx.print` / `ctx.json` write the answer (stdout); `ctx.progress` writes everything else (stderr).
 - `ctx.call` never throws for a failed call: check `isError` and `ctx.fail(result)` (its status picks the exit code).
+  Anything else a job throws exits with its numeric `exitCode` (`6` when nothing came in time), else its
+  `problem.status`'s code, else 1; its message is the one line on stderr.
 - No prompts: `ctx.interactive` is false for agents. Mark a job `destructive: true` when it deletes things.
 
 ## Checks

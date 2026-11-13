@@ -11,7 +11,7 @@
  * expect(readFileSync('sdk/cli/commands.json', 'utf8')).toBe(`${JSON.stringify(cliSnapshot({ app: 'mailroom', version: VERSION, tools: TOOLS, resources: RESOURCES, jobs }), null, 2)}\n`)
  */
 import { z } from '@hono/zod-openapi'
-import { CLI_BUILT_INS, cliOf, hintsOf, resourceCli, templateVariables, type CliExample, type CliSpec, type CliTool } from '../core/cli.js'
+import { CLI_AUTH_VERBS, CLI_BUILT_INS, cliOf, hintsOf, resourceCli, templateVariables, type CliExample, type CliSpec, type CliTool } from '../core/cli.js'
 
 type JsonSchema = { type?: string | string[]; description?: string; enum?: unknown[]; default?: unknown; items?: JsonSchema; anyOf?: JsonSchema[]; oneOf?: JsonSchema[]; properties?: Record<string, JsonSchema>; required?: string[] }
 
@@ -217,6 +217,7 @@ export const cliGaps = ({ tools, resources = [], jobs = [] }: { tools: SnapshotT
     claim(command.name, where)
     const [noun = ''] = command.name.split(' ')
     if (builtIns.has(noun)) gaps.push(`${where}: the noun "${noun}" is a built-in command`)
+    if (noun === 'auth' && (CLI_AUTH_VERBS as readonly string[]).includes(command.name.split(' ')[1]!)) gaps.push(`${where}: "${command.name}" is a built-in command`)
     if (jobNames.has(noun)) gaps.push(`${where}: the noun "${noun}" is the job ${noun}`)
     if (looksPlural(noun, allowed)) gaps.push(`${where}: the noun "${noun}" looks plural; nouns are singular (or pass it in singular)`)
     for (const flag of command.flags) if (!command.resource && !flag.description) gaps.push(`${where}: the argument ${flag.key} has no description`)
@@ -227,7 +228,7 @@ export const cliGaps = ({ tools, resources = [], jobs = [] }: { tools: SnapshotT
   for (const job of jobs) {
     const where = `job ${job.name}`
     if (!/^[a-z][a-z0-9-]*$/.test(job.name)) gaps.push(`${where}: a job is one lowercase kebab-case word`)
-    if (builtIns.has(job.name)) gaps.push(`${where}: "${job.name}" is a built-in command`)
+    if (builtIns.has(job.name) || job.name === 'auth') gaps.push(`${where}: "${job.name}" is a built-in command`)
     claim(job.name, where)
     for (const [key, arg] of Object.entries(job.args)) if (!arg.description) gaps.push(`${where}: the argument ${key} has no description`)
     for (const flag of jobCommand(job).flags) if (GLOBAL_FLAGS.has(flag.name) && flag.name !== 'timeout') gaps.push(`${where}: the argument ${flag.key} is --${flag.name}, a flag every command already has; rename it`)

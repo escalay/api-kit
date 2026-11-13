@@ -317,14 +317,20 @@ export const createCli = (options: CliOptions) => {
     return print(commandHelp(app, found.command, paint)), EXIT.ok
   }
 
+  /** The global flags among some words, whatever command they belong to. */
+  const globals0 = (tokens: string[]) => {
+    const at = tokens.findIndex((token) => token === '--profile' || token.startsWith('--profile='))
+    return { profile: at < 0 ? undefined : tokens[at]!.includes('=') ? tokens[at]!.slice('--profile='.length) : tokens[at + 1] }
+  }
+
   const AUTH_HELP = (name: string) =>
     [
       `${paint.bold(`${name} auth`)}: sign in to a deployment`,
       '',
       `  login <url>            a code to approve in a browser (any device); --with-token reads an API key from stdin`,
-      `  status                 the profiles, and who you are on the current one`,
+      `  status                 who you are, and on which deployment`,
       `  token                  the current bearer token, on stdout`,
-      `  switch <profile>       use another signed-in deployment`,
+      `  switch [profile]       use another signed-in deployment; alone, list them`,
       `  logout [profile]       sign out and forget the profile`,
       '',
       `Profiles live in ${store.file} (mode 0600). ${prefix}_URL and ${prefix}_API_KEY (or ${prefix}_PROFILE) override them.`,
@@ -334,6 +340,15 @@ export const createCli = (options: CliOptions) => {
     const at = tokens.findIndex((token) => !token.startsWith('-'))
     const verb = at < 0 ? undefined : tokens[at]
     const rest = tokens.filter((_, index) => index !== at)
+    // A free `auth` verb may be the app's own tool (`who_am_i` as `auth status`): run it, saying which sign-in it used
+    if (verb && !['login', 'logout', 'token', 'switch'].includes(verb)) {
+      const target = targetOf(globals0(rest).profile)
+      const command = (await commandsOf(target, outer)).commands.find((one) => one.name === `auth ${verb}` && !one.job)
+      if (command) {
+        if (target.url && !rest.includes('--help') && !rest.includes('-h')) tell(`Using ${target.url} from ${target.from}`)
+        return execute(command, rest, outer)
+      }
+    }
     const spec = builtIn(`auth ${verb ?? ''}`.trim(), verb === 'login' ? ['url'] : verb === 'switch' || verb === 'logout' ? ['profile'] : [], verb === 'login' ? [{ name: 'with-token', key: 'withToken', type: 'boolean', description: '', required: false, multiple: false }] : [])
     const { values, globals } = parseArguments(spec, rest)
     if (globals.help || !verb) return print(AUTH_HELP(app)), EXIT.ok
@@ -382,6 +397,10 @@ export const createCli = (options: CliOptions) => {
       }
       case 'switch': {
         const name = String(values.profile ?? '')
+        if (!name) {
+          for (const [one, profile] of Object.entries(profiles.profiles)) print(`${one === profiles.current ? '*' : ' '} ${one}  ${profile.url}  ${profile.apiKey ? 'API key' : 'OAuth'}`)
+          return EXIT.ok
+        }
         if (!profiles.profiles[name]) throw usage(`no profile "${name}"; ${Object.keys(profiles.profiles).length ? `there are ${Object.keys(profiles.profiles).join(', ')}` : `sign in first: \`${app} auth login <url>\``}`)
         store.write({ ...profiles, current: name })
         print(`Using ${name} (${profiles.profiles[name]!.url})`)
@@ -554,8 +573,15 @@ export const createCli = (options: CliOptions) => {
     try {
       return await dispatch(argv, controller.signal)
     } catch (error) {
-      const failure = error instanceof CliError ? error : controller.signal.aborted && controller.signal.reason instanceof CliError ? controller.signal.reason : new CliError(error instanceof Error ? error.message : String(error), EXIT.usage)
-      if (jsonErrors) tell(JSON.stringify({ ...(failure.problem ?? { title: failure.message, status: 0 }), detail: failure.problem?.detail ?? failure.message, exitCode: failure.exitCode }))
+      // What a job throws: its own numeric exitCode first, else its problem's status, else 1
+      const thrown = error as { message?: string; exitCode?: unknown; problem?: Problem }
+      const failure =
+        error instanceof CliError
+          ? error
+          : controller.signal.aborted && controller.signal.reason instanceof CliError
+            ? controller.signal.reason
+            : new CliError(thrown?.message ?? String(error), typeof thrown?.exitCode === 'number' ? thrown.exitCode : typeof thrown?.problem?.status === 'number' ? exitFor(thrown.problem.status) : EXIT.usage, thrown?.problem ?? { title: thrown?.message ?? String(error), status: 0 })
+      if (jsonErrors) tell(JSON.stringify({ ...(failure.problem ?? { title: failure.message, status: 0 }), title: failure.problem?.title ?? failure.message, detail: failure.problem?.detail ?? failure.message, exitCode: failure.exitCode }))
       else if (failure.exitCode === EXIT.usage && !failure.problem) {
         const named = argv.filter((token) => !token.startsWith('-')).slice(0, 2).join(' ')
         tell(`${app}: ${failure.message}`)

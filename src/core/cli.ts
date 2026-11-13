@@ -11,8 +11,11 @@
 /** One example of a command: the command line without the bin, and what it does. */
 export type CliExample = { run: string; about: string }
 
-/** What a tool or resource says about its command: `'mail wait'`, or the name with examples. */
-export type CliSpec = string | { name: string; examples?: CliExample[] }
+/**
+ * What a tool or resource says about its command: `'mail wait'`, or the name with examples, and (rarely) its
+ * positional arguments when the path doesn't show them.
+ */
+export type CliSpec = string | { name: string; examples?: CliExample[]; positional?: string[] }
 
 /** A command as published: `named` is false when the name came from the route rule, not from the tool. */
 export type CliCommand = { name: string; positional: string[]; examples: CliExample[]; named: boolean }
@@ -24,8 +27,13 @@ export const PROBLEM_META = 'api-kit/problem'
 /** Where a tool call that is still working names its run. */
 export const PENDING_META = 'api-kit/pending'
 
-/** Commands every app's CLI has, which no tool, resource or job may be named after. */
-export const CLI_BUILT_INS = ['auth', 'help', 'commands', 'api', 'tool', 'doctor', 'completion', 'version'] as const
+/** Commands every app's CLI has, which no tool, resource or job may be named after (or use as a noun). */
+export const CLI_BUILT_INS = ['help', 'commands', 'api', 'tool', 'doctor', 'completion', 'version'] as const
+/**
+ * The built-in `auth` verbs. `auth` is shared: an app's tool may fill a free verb (`who_am_i` is `auth status`, which
+ * the CLI shows with the profile it used).
+ */
+export const CLI_AUTH_VERBS = ['login', 'logout', 'token', 'switch'] as const
 
 const kebab = (text: string) => text.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/[_\s]+/g, '-').toLowerCase()
 
@@ -105,7 +113,7 @@ export const hintsOf = (tool: Pick<CliTool, 'route' | 'input' | 'call'> & { anno
   return { readOnlyHint: reads, destructiveHint: false, idempotentHint: true, openWorldHint: false, ...tool.annotations }
 }
 
-const specOf = (cli: CliSpec | undefined) => (typeof cli === 'string' ? { name: cli, examples: [] } : cli ? { name: cli.name, examples: cli.examples ?? [] } : undefined)
+const specOf = (cli: CliSpec | undefined) => (typeof cli === 'string' ? { name: cli, examples: [], positional: undefined } : cli ? { name: cli.name, examples: cli.examples ?? [], positional: cli.positional } : undefined)
 
 /**
  * A tool's command: its own `cli`, or the fallback name; the route's path parameters that are input keys, in order.
@@ -113,10 +121,28 @@ const specOf = (cli: CliSpec | undefined) => (typeof cli === 'string' ? { name: 
  * @example
  * toolCli({ name: 'save_to_board', route: 'PUT /api/boards/{id}/items/{ref}', keys: ['id', 'ref', 'note'] }).positional // → ['id', 'ref']
  */
-export const toolCli = ({ name, cli, route, keys }: { name: string; cli?: CliSpec; route?: string; keys: string[] }): CliCommand => {
+export const toolCli = ({ name, cli, route, keys, inPath }: { name: string; cli?: CliSpec; route?: string; keys: string[]; inPath?: string[] }): CliCommand => {
   const spec = specOf(cli)
-  const params = [...(route ?? '').matchAll(/\{([^}]+)\}/g)].map(([, param]) => param!).filter((param) => keys.includes(param))
-  return { name: spec?.name ?? fallbackCliName(route, name), positional: [...new Set(params)], examples: spec?.examples ?? [], named: Boolean(spec) }
+  const params = inPath ?? [...(route ?? '').matchAll(/\{([^}]+)\}/g)].map(([, param]) => param!).filter((param) => keys.includes(param))
+  return { name: spec?.name ?? fallbackCliName(route, name), positional: spec?.positional ?? [...new Set(params)], examples: spec?.examples ?? [], named: Boolean(spec) }
+}
+
+/**
+ * The input keys a tool's call puts in its path, in path order: `call` run with each key as `{key}`. Undefined when
+ * the call can't run on placeholders, so the caller falls back to the route's `{names}`. A tool's own `route` may name
+ * its placeholders differently (`{id}` for the input `address`), which is why the call decides.
+ *
+ * @example
+ * pathKeysOf(waitForMessage) // → ['address'] (route says `/api/addresses/{id}/messages/next`)
+ */
+export const pathKeysOf = (tool: Pick<CliTool, 'input' | 'call'>): string[] | undefined => {
+  const keys = Object.keys(tool.input.shape)
+  try {
+    const path = decodeURIComponent(tool.call(Object.fromEntries(keys.map((key) => [key, `{${key}}`])) as never).path)
+    return keys.filter((key) => path.includes(`{${key}}`)).sort((a, b) => path.indexOf(`{${a}}`) - path.indexOf(`{${b}}`))
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -126,7 +152,7 @@ export const toolCli = ({ name, cli, route, keys }: { name: string; cli?: CliSpe
  * @example
  * cliOf(getApp) // → { name: 'app view', positional: ['id'], examples: [{ run: 'app view a1', about: 'One app' }], named: true }
  */
-export const cliOf = (tool: CliTool): CliCommand => toolCli({ name: tool.name, cli: tool.cli, route: routeOf(tool), keys: Object.keys(tool.input.shape) })
+export const cliOf = (tool: CliTool): CliCommand => toolCli({ name: tool.name, cli: tool.cli, route: routeOf(tool), keys: Object.keys(tool.input.shape), inPath: pathKeysOf(tool) })
 
 /**
  * The variables of an RFC 6570 URI template: `path` ones (`{id}`) are positional, `query` ones (`{?format,part}`) are flags.
@@ -154,5 +180,5 @@ export const resourceCli = ({ name, uriTemplate, cli }: { name: string; uriTempl
   const [thing = name] = uriTemplate.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')
   const noun = singularOf(kebab(thing.replace(/\{.*$/, '') || name))
   const verb = kebab(name) === noun ? 'view' : kebab(name)
-  return { name: spec?.name ?? `${noun} ${verb}`, positional: templateVariables(uriTemplate).path, examples: spec?.examples ?? [], named: Boolean(spec) }
+  return { name: spec?.name ?? `${noun} ${verb}`, positional: spec?.positional ?? templateVariables(uriTemplate).path, examples: spec?.examples ?? [], named: Boolean(spec) }
 }

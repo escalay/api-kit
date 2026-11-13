@@ -25,7 +25,7 @@ import { CACHE } from '../core/cache.js'
 import { frontmatterOf, recordMounted, mountedOf, sendPublic, skillsIndex, tarGz, WELL_KNOWN, type SkillArtifact } from '../core/discovery.js'
 import { originOf } from '../core/hal.js'
 import { problemResponse } from '../core/problem.js'
-import { generatedVars, type OpenApiDoc } from './reference.js'
+import { generatedVars, type CliCommandLike, type OpenApiDoc } from './reference.js'
 
 export const MARKDOWN = 'text/markdown; charset=utf-8'
 
@@ -85,7 +85,11 @@ type Requester = { request: (input: string, init?: RequestInit) => Response | Pr
 
 export type GuideSource = { dir: string; files?: never } | { files: Map<string, string> | Record<string, string>; dir?: never }
 
-export const serveGuide = (app: Hono<any, any, any> & Requester, { vars, full, ...source }: GuideSource & { vars: () => Record<string, unknown>; full: string[] }): Guide => {
+/**
+ * `commands`: the CLI snapshot (`sdk/cli/commands.json`), so `{{cli.commands}}` lists the jobs too; without it the
+ * mounted tools and resources are listed.
+ */
+export const serveGuide = (app: Hono<any, any, any> & Requester, { vars, full, commands, ...source }: GuideSource & { vars: () => Record<string, unknown>; full: string[]; commands?: { commands: CliCommandLike[] } }): Guide => {
   const files = source.files ? (source.files instanceof Map ? source.files : new Map(Object.entries(source.files))) : guideFiles(source.dir!)
   // The OpenAPI document only changes with a deploy: fetch it once per origin, in-process, with the caller's own
   // credentials (a private service answers the spec only to them); only a good answer is kept
@@ -104,7 +108,7 @@ export const serveGuide = (app: Hono<any, any, any> & Requester, { vars, full, .
   }
   const credentialsOf = (c: Context) => Object.fromEntries((['authorization', 'cookie', 'cf-access-jwt-assertion'] as const).flatMap((name) => (c.req.header(name) ? [[name, c.req.header(name)!]] : [])))
   const render = async (origin: string, name: string, credentials: Record<string, string> = {}) => {
-    const generated = generatedVars({ origin, doc: await docOf(origin, credentials), tools: mountedOf(app).mcp?.tools, resources: mountedOf(app).mcp?.resources, files })
+    const generated = generatedVars({ origin, doc: await docOf(origin, credentials), tools: mountedOf(app).mcp?.tools, resources: mountedOf(app).mcp?.resources, commands: commands?.commands, files })
     return fillTemplate(files.get(name)!, { origin, ...generated, ...vars() }).text
   }
   const send = (c: Context, body: string) => c.body(body, 200, { 'content-type': MARKDOWN, 'cache-control': CACHE.docs })

@@ -25,7 +25,8 @@ const table = (rows: [string, string][], indent = '  ') => {
 /** Commands by their first word: `mail` → its verbs. */
 export const nounsOf = (commands: Command[]) => {
   const nouns = new Map<string, Command[]>()
-  for (const command of commands.filter((one) => !one.job)) {
+  // `auth` is built in: an app tool that fills one of its verbs is listed there, not as a noun
+  for (const command of commands.filter((one) => !one.job && !one.name.startsWith('auth '))) {
     const [noun = ''] = command.name.split(' ')
     nouns.set(noun, [...(nouns.get(noun) ?? []), command])
   }
@@ -104,13 +105,14 @@ export const completion = (app: string, shell: string, commands: Command[]) => {
   const nouns = nounsOf(commands)
   const first = [...commands.filter((command) => command.job).map((command) => command.name), ...nouns.keys(), ...BUILT_INS.map(([name]) => name)]
   const fn = `_${app.replace(/[^A-Za-z0-9]/g, '_')}`
+  const authVerbs = [...new Set(['login', 'logout', 'status', 'token', 'switch', ...commands.filter((command) => command.name.startsWith('auth ')).map((command) => command.name.split(' ')[1]!)])].join(' ')
   const flagsOf = (command: Command) => [...command.flags.map((flag) => `--${flag.name}`), ...Object.keys(GLOBAL_FLAGS).map((name) => `--${name}`)]
   if (shell === 'fish')
     return [
       `complete -c ${app} -f`,
       `complete -c ${app} -n '__fish_use_subcommand' -a '${quoteWords(first)}'`,
       ...[...nouns].map(([noun, verbs]) => `complete -c ${app} -n '__fish_seen_subcommand_from ${noun}' -a '${quoteWords(verbs.map((command) => command.name.split(' ')[1]!))}'`),
-      `complete -c ${app} -n '__fish_seen_subcommand_from auth' -a 'login logout status token switch'`,
+      `complete -c ${app} -n '__fish_seen_subcommand_from auth' -a '${authVerbs}'`,
       `complete -c ${app} -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'`,
     ].join('\n')
   if (shell !== 'bash' && shell !== 'zsh') return null
@@ -132,7 +134,7 @@ export const completion = (app: string, shell: string, commands: Command[]) => {
     '  elif [ "$COMP_CWORD" -eq 2 ]; then',
     '    case "${COMP_WORDS[1]}" in',
     ...cases,
-    '      auth) COMPREPLY=($(compgen -W "login logout status token switch" -- "$cur")) ;;',
+    `      auth) COMPREPLY=($(compgen -W "${authVerbs}" -- "$cur")) ;;`,
     '      completion) COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur")) ;;',
     '    esac',
     '  fi',

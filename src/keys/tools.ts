@@ -20,7 +20,7 @@ export const keyTools = ({ path = '/api/keys', mePath = '/api/me' }: { path?: st
       description: 'Who you are calling as (which key, person or agent) and whether you may make and revoke keys. Use it to check that a key works.',
       input: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
-      cli: { name: 'key whoami', examples: [{ run: 'key whoami', about: 'Which key, person or agent you call as' }] },
+      cli: { name: 'auth status', examples: [{ run: 'auth status', about: 'Which key, person or agent you call as' }] },
       call: () => ({ path: mePath }),
       summarize: (json: { kind: string; name: string; keyId: string | null; canManageKeys: boolean }) => `Calling as ${json.kind} ${json.name}${json.keyId ? ` (key id ${json.keyId})` : ''}. ${json.canManageKeys ? 'May' : 'May not'} make or revoke keys.`,
     }),
