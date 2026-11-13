@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -7,8 +7,18 @@ import { afterEach, describe, expect, it } from 'vitest'
 const CLI = join(import.meta.dirname, '..', 'cli.mjs')
 const FAKE = join(import.meta.dirname, 'fixtures/fake-gh.mjs')
 const TEMPLATE_CI = readFileSync(join(import.meta.dirname, '..', 'templates/app/github/workflows/ci.yml'), 'utf8')
+const SHARED = join(import.meta.dirname, 'fixtures/shared-workflows')
 
-type State = { name: string; repo: Record<string, unknown>; workflow: Record<string, unknown>; alerts: boolean; fixes: boolean; rulesets: unknown[] | 'forbidden' }
+type State = { name: string; repo: Record<string, unknown>; workflow: Record<string, unknown>; alerts: boolean; fixes: boolean; rulesets: unknown[] | 'forbidden'; contents: Record<string, string> }
+
+/** What GitHub serves for each escalay/.github workflow the CI calls, at the ref it pins: the stand-ins in fixtures/shared-workflows. */
+const sharedContentsOf = (ci: string) =>
+  Object.fromEntries(
+    [...ci.matchAll(/uses: (escalay\/\.github\/\.github\/workflows\/([\w-]+\.yml)@\S+)/g)]
+      .filter(([, , file]) => existsSync(join(SHARED, file!)))
+      .map(([, called, file]) => [called!, readFileSync(join(SHARED, file!), 'utf8')]),
+  )
+
 const folders: string[] = []
 afterEach(() => folders.splice(0).forEach((folder) => rmSync(folder, { recursive: true, force: true })))
 
@@ -27,11 +37,11 @@ const setUp = (state: Partial<State>, { release = false, ci = TEMPLATE_CI } = {}
   const statePath = join(root, 'state.json')
   const log = join(root, 'calls.log')
   writeFileSync(log, '')
-  writeFileSync(statePath, JSON.stringify({ name: 'acme/notes', repo: { private: false, allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true }, workflow: { default_workflow_permissions: 'write', can_approve_pull_request_reviews: true }, alerts: false, fixes: false, rulesets: [], ...state }))
+  writeFileSync(statePath, JSON.stringify({ name: 'acme/notes', repo: { private: false, allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true }, workflow: { default_workflow_permissions: 'write', can_approve_pull_request_reviews: true }, alerts: false, fixes: false, rulesets: [], contents: sharedContentsOf(ci), ...state }))
   const kit = (...args: string[]) => spawnSync(process.execPath, [CLI, 'repo', ...args], { cwd: app, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_GH_STATE: statePath, FAKE_GH_LOG: log } })
   const read = () => JSON.parse(readFileSync(statePath, 'utf8')) as State
   const calls = () => readFileSync(log, 'utf8').trim().split('\n').filter((line) => !line.startsWith('GET'))
-  return { kit, read, calls }
+  return { kit, read, calls, app, log }
 }
 
 describe('kit repo', () => {
@@ -95,5 +105,50 @@ describe('kit repo', () => {
     const refused = kit('check')
     expect(refused.status).toBe(1)
     expect(refused.stderr).toContain('names its checks from a matrix')
+  })
+
+  it('requires each always-running job of a called workflow by the name its check reports, read at the ref the CI pins', () => {
+    const ci = `name: CI
+on: [pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: pnpm test
+  workflows:
+    uses: escalay/.github/.github/workflows/workflows.yml@0123abc # v1.0.0
+    with:
+      also: templates
+  secrets:
+    name: leaks
+    uses: escalay/.github/.github/workflows/secrets.yml@0123abc # v1.0.0
+  local:
+    uses: ./.github/workflows/local.yml
+  title:
+    if: github.event_name == 'pull_request'
+    uses: escalay/.github/.github/workflows/title.yml@0123abc # v1.0.0
+`
+    const { kit, read, app, log } = setUp({}, { ci })
+    writeFileSync(join(app, '.github/workflows/local.yml'), readFileSync(join(SHARED, 'workflows.yml'), 'utf8').replace('lint:', 'build:'))
+    expect(kit('apply').status).toBe(0)
+    const main = (read().rulesets as { rules: { type: string; parameters?: { required_status_checks?: unknown } }[] }[])[0]!
+    // The called workflow's conditional job, and the caller's conditional job, are left out
+    expect(main.rules.find((rule) => rule.type === 'required_status_checks')?.parameters?.required_status_checks).toEqual(['test', 'workflows / lint', 'leaks / gitleaks', 'local / build'].map((context) => ({ context })))
+    expect(readFileSync(log, 'utf8')).toContain('GET repos/escalay/.github/contents/.github/workflows/workflows.yml?ref=0123abc')
+  })
+
+  it('asks for the checks when a called workflow can\'t be read', () => {
+    const ci = `jobs:\n  workflows:\n    uses: escalay/.github/.github/workflows/gone.yml@0123abc\n`
+    const refused = setUp({}, { ci }).kit('check')
+    expect(refused.status).toBe(1)
+    expect(refused.stderr).toContain("can't read escalay/.github/.github/workflows/gone.yml@0123abc to name its checks")
+    expect(refused.stderr).toContain('--checks')
+  })
+
+  it('takes named checks with spaces in them', () => {
+    const { kit, read } = setUp({})
+    expect(kit('apply', '--checks', 'gate, workflows / lint').status).toBe(0)
+    const main = (read().rulesets as { rules: { type: string; parameters?: { required_status_checks?: unknown } }[] }[])[0]!
+    expect(main.rules.find((rule) => rule.type === 'required_status_checks')?.parameters?.required_status_checks).toEqual([{ context: 'gate' }, { context: 'workflows / lint' }])
   })
 })

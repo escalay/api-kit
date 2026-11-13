@@ -20,6 +20,14 @@ appendFileSync(process.env.FAKE_GH_LOG, `${method} ${path}\n`)
 const base = `repos/${state.name}`
 const rulesetId = path.match(/\/rulesets\/(\d+)$/)?.[1]
 
+// A file of any repository, as `contents` holds it under `owner/repo/path@ref`
+const file = path.match(/^repos\/([^/]+\/[^/]+)\/contents\/([^?]+)\?ref=(.+)$/)
+if (file) {
+  const text = state.contents?.[`${file[1]}/${file[2]}@${decodeURIComponent(file[3])}`]
+  if (text === undefined) refuse(404, 'Not Found')
+  answer({ type: 'file', encoding: 'base64', content: Buffer.from(text).toString('base64') })
+}
+
 if (path === base) {
   // Like GitHub, a repository that can't have rules keeps auto-merge off whatever it is sent
   if (method === 'PATCH') Object.assign(state.repo, body, state.rulesets === 'forbidden' ? { allow_auto_merge: false } : {}), save()

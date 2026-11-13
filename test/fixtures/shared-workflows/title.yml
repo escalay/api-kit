@@ -1,0 +1,9 @@
+# Stands in for escalay/.github's title.yml in `kit repo` tests
+on:
+  workflow_call:
+
+jobs:
+  conventional:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo title

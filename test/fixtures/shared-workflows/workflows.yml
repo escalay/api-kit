@@ -1,0 +1,9 @@
+# Stands in for escalay/.github's workflows.yml in `kit repo` tests: one job, which always runs
+on:
+  workflow_call:
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo actionlint and zizmor

@@ -26,7 +26,8 @@
  *   kit repo [check|apply] [--app .] [--repo owner/name] [--merge squash|rebase] [--checks a,b]
  *                                             the GitHub repository set up as the standard says (§20), through `gh`:
  *                                             merges, the Actions token, security alerts, and the rules for main
- *                                             (required checks: ci.yml's jobs that always run); check exits 1 on drift
+ *                                             (required checks: ci.yml's jobs that always run, and for a job calling a
+ *                                             reusable workflow, "<job> / <its job>"); check exits 1 on drift
  *
  * @example
  * npx @escalay/kit add core pagination guide mcp testing --dir apps/api/src/kit --install
@@ -432,15 +433,30 @@ const ghApi = (method, path, body) => {
   return result.stdout.trim() ? JSON.parse(result.stdout) : {}
 }
 
-/** The jobs in a workflow that run on every event (no `if:`), by the name their check reports; a matrix job's name can't be known here. */
-const alwaysJobsOf = (workflow) => {
+/**
+ * The jobs in a workflow that run on every event (no `if:`), by the name their check reports; a matrix job's name can't
+ * be known here. A job that calls a reusable workflow (`uses:`) reports one check per job of that workflow, named
+ * `<job> / <its job>`: `readCalled` returns the called workflow's text.
+ */
+const alwaysJobsOf = (workflow, readCalled, file = 'ci.yml') => {
   const body = workflow.split(/^jobs:\s*$/m)[1] ?? ''
   return [...body.matchAll(/^  ([A-Za-z0-9_-]+):\s*$([\s\S]*?)(?=^  [A-Za-z0-9_-]+:\s*$|(?![\s\S]))/gm)].flatMap(([, id, block]) => {
     if (/^    if:/m.test(block)) return []
     const name = block.match(/^    name:\s*(.+?)\s*$/m)?.[1]
-    if (name?.includes('${{')) fail(`ci.yml's job "${id}" names its checks from a matrix (${name}); say which checks to require with --checks`)
-    return [name ?? id]
+    if (name?.includes('${{')) fail(`${file}'s job "${id}" names its checks from a matrix (${name}); say which checks to require with --checks`)
+    const called = block.match(/^    uses:\s*([^\s#]+)/m)?.[1]
+    if (!called) return [name ?? id]
+    return alwaysJobsOf(readCalled(called), readCalled, called).map((inner) => `${name ?? id} / ${inner}`)
   })
+}
+
+/** A reusable workflow's text: `./path` from the app folder, `owner/repo/path@ref` from GitHub through `gh`. */
+const calledWorkflowReader = (app) => (called) => {
+  if (called.startsWith('./')) return existsSync(join(app, called)) ? readFileSync(join(app, called), 'utf8') : fail(`ci.yml calls ${called}, which isn't in ${app}`)
+  const [, owner, repo, path, ref] = called.match(/^([^/]+)\/([^/]+)\/(.+)@(.+)$/) ?? fail(`ci.yml calls "${called}", which is neither ./path nor owner/repo/path@ref`)
+  const file = ghApi('GET', `repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`)
+  if (file.failed || typeof file.content !== 'string') fail(`can't read ${called} to name its checks (${file.message ?? 'not a file'}); name them with --checks`)
+  return Buffer.from(file.content, 'base64').toString('utf8')
 }
 
 /** What the standard (§20) asks of a repository: the settings, the Actions token, and the rules for main and release tags. */
@@ -728,7 +744,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const merge = valueOf('--merge') ?? 'squash'
     if (!['squash', 'rebase'].includes(merge)) fail('--merge is squash or rebase')
     const ciPath = join(app, '.github/workflows/ci.yml')
-    const checks = valueOf('--checks')?.split(',').filter(Boolean) ?? (existsSync(ciPath) ? alwaysJobsOf(readFileSync(ciPath, 'utf8')) : [])
+    const checks = valueOf('--checks')?.split(',').map((check) => check.trim()).filter(Boolean) ?? (existsSync(ciPath) ? alwaysJobsOf(readFileSync(ciPath, 'utf8'), calledWorkflowReader(app)) : [])
     if (!checks.length) fail('no checks to require: add .github/workflows/ci.yml (kit init writes one) or name them with --checks')
     const repo = valueOf('--repo') ?? spawnSync('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'], { cwd: app, encoding: 'utf8' }).stdout?.trim()
     if (!repo) fail('no GitHub repository here: run it in a clone, or pass --repo owner/name')
