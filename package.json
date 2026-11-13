@@ -1,6 +1,6 @@
 {
   "name": "@escalay/kit",
-  "version": "1.15.3",
+  "version": "1.16.0",
   "type": "module",
   "description": "Agent-ready HTTP APIs as parts an app copies in (shadcn-style): Hono + zod OpenAPI 3.1, HAL links, problem+json, cursors, ETags, API keys, discovery, a generated agent guide with skills, an MCP server over the same routes, vector search by words, picture and likeness, and its headless browser side.",
   "license": "MIT",

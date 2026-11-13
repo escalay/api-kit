@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.16.0](https://github.com/escalay/api-kit/compare/v1.15.3...v1.16.0) (2026-11-13)
+
+
+### New
+
+* kit repo check|apply sets a GitHub repository up as the standard says ([#41](https://github.com/escalay/api-kit/issues/41)) ([4359346](https://github.com/escalay/api-kit/commit/4359346d8f2505810b9de79c1ece093b582b21a8))
+* pnpm gate and a pre-push hook in every new app, the same checks as CI ([#38](https://github.com/escalay/api-kit/issues/38)) ([6157a59](https://github.com/escalay/api-kit/commit/6157a59dd3ed732b9f9c493f88c98d380b39e5bb))
+
+
+### Documentation
+
+* say how changes ship, in every new app and in the standard ([#40](https://github.com/escalay/api-kit/issues/40)) ([becf43e](https://github.com/escalay/api-kit/commit/becf43e301c7a62cf4db6f1a424c0ffccb2506ee))
+
 ## [1.15.3](https://github.com/escalay/api-kit/compare/v1.15.2...v1.15.3) (2026-11-13)
 
 
