@@ -54,63 +54,24 @@ jobs:
   # The title becomes the squash commit, and so a line in the release notes
   title:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: The pull request title is a Conventional Commit
-        env:
-          TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          pattern='^(feat|fix|perf|docs|refactor|chore|test|build|ci|revert)(\([a-z0-9./-]+\))?!?: [^ ].*$'
-          if ! [[ "$TITLE" =~ $pattern ]]; then
-            echo "::error::The title \"$TITLE\" is not a Conventional Commit. It becomes the commit on main and a line in the release notes, e.g. \"feat: add cursor pages to boards\" or \"fix(mcp): answer a tool call without arguments\"."
-            exit 1
-          fi
+    uses: escalay/.github/.github/workflows/title.yml@b945d51a4e0d15c924874c395e09752109d00d8b # v1.0.0
 
+  # actionlint and zizmor over this repository's workflows, then the ones every new app starts with
   workflows:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # This repository's workflows, then the one every new app starts with
-      - name: actionlint
-        run: |
-          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
-          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color templates/app/github/workflows/*.yml
-      - name: zizmor
-        run: pipx run zizmor==1.32.0 --offline .github templates/app/github/workflows/*.yml templates/app/github/dependabot.yml
+    uses: escalay/.github/.github/workflows/workflows.yml@b945d51a4e0d15c924874c395e09752109d00d8b # v1.0.0
+    with:
+      also: templates/app/github
 
-  # The whole history, so a key committed and then removed is still found
+  # gitleaks over the whole history, so a key committed and then removed is still found
   secrets:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: gitleaks
-        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.24.3 git /repo --no-banner --redact
+    uses: escalay/.github/.github/workflows/secrets.yml@b945d51a4e0d15c924874c395e09752109d00d8b # v1.0.0
 
   # A run started by a dispatch (release.yml does it for the release pull request) reports on the commit, but GitHub does
   # not count those checks for a pull request. Commit statuses do, so once everything passed it sets each check the
-  # branch rules require as one, and auto-merge can go ahead
+  # rules for main require (read from the rules at that moment) as one, and auto-merge can go ahead
   dispatched:
     if: github.event_name == 'workflow_dispatch'
     needs: [test, starter, workflows, secrets]
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
     permissions:
       statuses: write
-    steps:
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        # The checks the rules for main require: the jobs above that always run (what `kit repo` requires)
-        run: |
-          for check in test starter workflows secrets; do
-            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-              -f state=success -f context="$check" -f description="Passed in a dispatched run" -f target_url="$RUN" >/dev/null
-          done
+    uses: escalay/.github/.github/workflows/required-statuses.yml@b945d51a4e0d15c924874c395e09752109d00d8b # v1.0.0

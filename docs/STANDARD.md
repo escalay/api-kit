@@ -471,7 +471,9 @@ What `init` sets up, and what an app keeps:
   `app` preset) and `pnpm test`; `pnpm gate` runs both. CI's jobs call those two scripts and nothing else, and
   `.githooks/pre-push` runs `gate`, so a push the hook lets through passes CI.
 - **CI** (`.github/workflows/ci.yml`): `checks` and `test` in parallel, `workflows` (actionlint, zizmor), `secrets`
-  (gitleaks over the whole history, `.gitleaks.toml` allowing `src/kit/kit.json`), and on pull requests `title`. Read-only
+  (gitleaks over the whole history, `.gitleaks.toml` allowing `src/kit/kit.json`), and on pull requests `title`. The
+  last three call the shared workflows in [escalay/.github](https://github.com/escalay/.github), pinned to a release's
+  commit, so their checks are `workflows / lint`, `secrets / gitleaks` and `title / conventional`. Read-only
   `contents` permission, actions pinned to commit SHAs, `persist-credentials: false`, a newer push cancelling only a
   pull request's run.
 - **Security scanning, once public**: CodeQL (`codeql.yml`: `javascript-typescript` and `actions`, on main, pull

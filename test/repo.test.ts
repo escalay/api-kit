@@ -62,11 +62,11 @@ describe('kit repo', () => {
     expect(state.workflow).toEqual({ default_workflow_permissions: 'read', can_approve_pull_request_reviews: false })
     const main = (state.rulesets as { name: string; rules: { type: string; parameters?: Record<string, unknown> }[] }[])[0]!
     expect(main.name).toBe('main')
-    expect(main.rules.find((rule) => rule.type === 'required_status_checks')?.parameters?.required_status_checks).toEqual(['checks', 'test', 'workflows', 'secrets'].map((context) => ({ context })))
+    expect(main.rules.find((rule) => rule.type === 'required_status_checks')?.parameters?.required_status_checks).toEqual(['checks', 'test', 'workflows / lint', 'secrets / gitleaks'].map((context) => ({ context })))
 
     const again = kit('check')
     expect(again.status).toBe(0)
-    expect(again.stdout).toContain('acme/notes is set up as the standard says (squash merges; required: checks, test, workflows, secrets)')
+    expect(again.stdout).toContain('acme/notes is set up as the standard says (squash merges; required: checks, test, workflows / lint, secrets / gitleaks)')
   })
 
   it('keeps release-please able to open its pull request, and guards the release tags', () => {

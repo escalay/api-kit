@@ -51,7 +51,8 @@ at the GitHub repo (provenance checks it).
    message, and the CI checks required. A pull request opened by the workflow's own token does not start CI, so
    `release.yml` starts `ci.yml` on the release branch itself: give `ci.yml` a `workflow_dispatch:` trigger. GitHub
    does not count a dispatched run's checks for a pull request, so `ci.yml` ends with a job that, on a dispatch and
-   once every other job passed, sets the required check's name (`test`) as a commit status. Turn on auto-merge in the
+   once every other job passed, sets each check the rules for `main` require as a commit status: escalay/.github's
+   `required-statuses.yml`, which reads the names from the rules at run time. Turn on auto-merge in the
    repository settings, then `gh pr merge --auto --squash <number>` publishes once it is set. Enable it as yourself, never
    from a workflow: a merge made with the workflow's token would not start `release.yml`.
 7. `pnpm release:check` until every line is ✓.
