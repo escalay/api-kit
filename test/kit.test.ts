@@ -903,7 +903,7 @@ describe('MCP (2026-07-28)', () => {
     expect((await (await rpc(short.app, 'tools/list')).json()).result.ttlMs).toBe(60_000)
     expect(list.result.tools[0]).toMatchObject({ name: 'get_app', annotations: { readOnlyHint: true }, inputSchema: { type: 'object', required: ['id'] }, outputSchema: { type: 'object' } })
     // Its route, so a gateway can tell which tool a guide's `GET /api/v1/apps/{id}` means
-    expect(list.result.tools[0]._meta).toEqual({ 'api-kit/route': 'GET /api/v1/apps/{id}' })
+    expect(list.result.tools[0]._meta).toEqual({ 'api-kit/route': 'GET /api/v1/apps/{id}', 'api-kit/cli': { name: 'app view', positional: ['id'], examples: [] } })
     const call = await (await rpc(app, 'tools/call', { name: 'get_app', arguments: { id: 'a2' } })).json()
     expect(call.result.content[0]).toEqual({ type: 'text', text: 'Bravo (a2)' })
     expect(call.result.structuredContent).toMatchObject({ id: 'a2', _links: { self: { href: 'http://localhost/api/v1/apps/a2' } } })
@@ -911,6 +911,8 @@ describe('MCP (2026-07-28)', () => {
     expect(proxied.result.structuredContent._links.self.href).toBe('https://apps.example/api/v1/apps/a1')
     const missing = await (await rpc(app, 'tools/call', { name: 'get_app', arguments: { id: 'a9' } })).json()
     expect(missing.result).toMatchObject({ isError: true, content: [{ text: '404 not_found Not found: No such app.' }] })
+    // The problem itself, so a client (the app's CLI) can pick its exit code without reading the text
+    expect(missing.result._meta['api-kit/problem']).toMatchObject({ status: 404, code: 'not_found', detail: 'No such app.' })
   })
 
   it('answers an agent that opens with initialize instead of a method-not-found', async () => {

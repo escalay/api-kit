@@ -72,6 +72,11 @@
           "target": "~/src/kit/core/wait.ts"
         },
         {
+          "path": "src/core/cli.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/cli.ts"
+        },
+        {
           "path": "src/core/README.md",
           "type": "registry:file",
           "target": "~/src/kit/core/README.md"
@@ -557,6 +562,11 @@
           "path": "src/testing/index.ts",
           "type": "registry:file",
           "target": "~/src/kit/testing/index.ts"
+        },
+        {
+          "path": "src/testing/cli.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/testing/cli.ts"
         },
         {
           "path": "src/testing/authenticator.ts",

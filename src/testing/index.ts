@@ -8,6 +8,8 @@
  *   guideGaps       placeholders a guide uses that neither the app nor the kit's generated parts fill
  *   toolRoutes      MCP tools whose call doesn't land on a documented operation
  *   toolsRun        MCP tools that fail when run: each called in-process with sample arguments, as an agent would
+ *   cliGaps         commands the app's CLI can't offer well: unnamed, duplicated, shadowing, plural, undescribed, no example
+ *   cliSnapshot     every command as the CLI package carries it (`commands.json`)
  *
  * @example
  * const doc = await (await app.request('/openapi.json')).json()
@@ -162,3 +164,4 @@ export const toolsRun = async (tools: RunnableTool[], app: RequestableApp, args:
 }
 
 export { softAuthenticator } from './authenticator.js'
+export { cliGaps, cliSnapshot, flagsOf, type CliFlag, type CliJobLike, type CliSnapshot, type CliSnapshotCommand } from './cli.js'

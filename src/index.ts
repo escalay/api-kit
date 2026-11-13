@@ -1,6 +1,7 @@
 export * from './core/api.js'
 export * from './core/auth.js'
 export * from './core/cache.js'
+export * from './core/cli.js'
 export * from './db/index.js'
 export * from './core/discovery.js'
 export * from './guide/guide.js'

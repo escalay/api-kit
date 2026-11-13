@@ -12,10 +12,11 @@
  * // a stdio client on a laptop: the same tools over HTTP with its own key
  * serveStdio(mcpServerFactory({ info, instructions, tools, callApi: overHttp(origin, process.env.COOKBOOK_API_KEY!) }))
  */
-import { createMcpHandler, McpServer, originValidationResponse, ResourceTemplate, SUPPORTED_PROTOCOL_VERSIONS, type AuthInfo, type CallToolResult, type McpServerFactory } from '@modelcontextprotocol/server'
+import { createMcpHandler, McpServer, originValidationResponse, ResourceTemplate, SUPPORTED_PROTOCOL_VERSIONS, UriTemplate, type AuthInfo, type CallToolResult, type McpServerFactory } from '@modelcontextprotocol/server'
 import type { SkillCatalog } from '@modelcontextprotocol/server/ext/skills'
 import type { z } from '@hono/zod-openapi'
 import type { Context, Hono } from 'hono'
+import { CLI_META, cliOf, PENDING_META, PROBLEM_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
 import { MODERN_PROTOCOL_VERSION, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN } from '../core/discovery.js'
 import { originOf, pathWith } from '../core/hal.js'
 
@@ -43,29 +44,12 @@ export type McpTool<Input extends z.ZodObject = z.ZodObject> = {
   links?: (json: any) => ResourceLinkOut[]
   /** The route it calls, `GET /api/v1/recipes/{id}`, when `routeOf` can't read it from `call` (a path built in steps). */
   route?: string
+  /** Its command, noun then verb (`'mail wait'`), with examples run without the bin (`'mail wait adr_1 --timeout 30'`). */
+  cli?: CliSpec
 }
 
 /** Where a tool's route is published in its MCP listing, so a gateway can tell which tool a guide's route means. */
 export const ROUTE_META = 'api-kit/route'
-
-/**
- * A tool's route as `METHOD /path/{param}`: its own `route`, or `call` run with each argument as its `{name}`. Undefined
- * when neither works (a call that reads its arguments' values).
- *
- * @example
- * routeOf(mcpTool({ name: 'get_recipe', input: z.object({ id: z.string() }), call: ({ id }) => ({ path: `/api/v1/recipes/${id}` }), … }))
- * // → 'GET /api/v1/recipes/{id}'
- */
-export const routeOf = (tool: McpTool): string | undefined => {
-  if (tool.route) return tool.route
-  try {
-    const placeholders = Object.fromEntries(Object.keys(tool.input.shape).map((key) => [key, `{${key}}`]))
-    const call = tool.call(placeholders as never)
-    return `${call.method ?? 'GET'} ${decodeURIComponent(call.path)}`
-  } catch {
-    return undefined
-  }
-}
 
 /** Keeps the input type when building a list of tools. */
 export const mcpTool = <Input extends z.ZodObject>(tool: McpTool<Input>) => tool as unknown as McpTool
@@ -83,6 +67,8 @@ export type McpResource = {
   uriTemplate: string
   /** The calls whose answers make up the resource, in order; an `optional` one (an image) is left out when it fails. */
   read: (variables: Record<string, string>) => (ApiCall & { optional?: boolean })[]
+  /** Its command, noun then verb (`'mail headers'`); the template's path variables are its positional arguments. */
+  cli?: CliSpec
 }
 
 /** Keeps a resource's shape checked when building the list. */
@@ -97,6 +83,15 @@ const HOUR = 3_600_000
 /** A problem+json body (or anything else) as one line an agent can act on. */
 export const problemText = (json: any, status: number) =>
   json && typeof json === 'object' && 'title' in json ? `${json.status ?? status} ${json.code ?? ''} ${json.title}: ${json.detail ?? ''}`.replace(/\s+/g, ' ').trim() : `HTTP ${status}`
+
+/**
+ * An answer's body as an RFC 9457 problem that always has its `status`, also when the body was not a problem.
+ *
+ * @example
+ * problemOf(null, 502) // → { type: 'about:blank', title: 'HTTP 502', status: 502 }
+ */
+export const problemOf = (json: any, status: number): Record<string, unknown> & { status: number } =>
+  json && typeof json === 'object' && 'title' in json ? { ...json, status: typeof json.status === 'number' ? json.status : status } : { type: 'about:blank', title: `HTTP ${status}`, status }
 
 /**
  * A slow route answers 202 with a run in `Location`: the tool polls it (up to `waitMs`), then asks again for the
@@ -117,6 +112,27 @@ export const callWaiting = async (callApi: CallApi, call: ApiCall, auth: AuthInf
   return { response, pending: location.split('/').pop()! }
 }
 
+/**
+ * A URI template whose query variables (`{?format}`) may be left out or given in part: the SDK's own match needs every
+ * one, so `mail://messages/m1/body` would find no resource.
+ */
+const lenientTemplate = (template: string) => {
+  const strict = new UriTemplate(template)
+  const bare = template.replace(/\{[?&][^}]*\}/g, '')
+  if (bare === template) return strict
+  const plain = new UriTemplate(bare)
+  const { query } = templateVariables(template)
+  return Object.assign(strict, {
+    match: (uri: string) => {
+      const exact = UriTemplate.prototype.match.call(strict, uri)
+      if (exact) return exact
+      const [path = '', search = ''] = uri.split('?')
+      const found = plain.match(path)
+      return found && { ...found, ...Object.fromEntries([...new URLSearchParams(search)].filter(([name]) => query.includes(name))) }
+    },
+  })
+}
+
 /** A factory that also carries its server info and tools, so `mountMcp` can publish the card and the guide can list the tools. */
 export type AgentMcpFactory = McpServerFactory & { info: McpServerInfo; tools: McpTool[]; resources: McpResource[]; instructions?: string; prompts?: McpPrompt[] }
 
@@ -127,14 +143,15 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
   const server = new McpServer(info, { instructions, cacheHints: { 'server/discover': cached, 'tools/list': { ...cached, ttlMs: toolsTtlMs }, 'prompts/list': cached, 'resources/list': cached, 'resources/templates/list': cached } })
   for (const tool of tools) {
     const route = routeOf(tool)
+    const cli = cliOf(tool)
     server.registerTool(
       tool.name,
-      { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false, ...tool.annotations }, ...(route ? { _meta: { [ROUTE_META]: route } } : {}) },
+      { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false, ...tool.annotations }, _meta: { ...(route ? { [ROUTE_META]: route } : {}), [CLI_META]: { name: cli.name, positional: cli.positional, examples: cli.examples } } },
       async (args: Record<string, unknown>, ctx): Promise<CallToolResult> => {
         const { response, pending } = await callWaiting(callApi, tool.call(args as never), ctx.http?.authInfo, waitMs)
         const json = await response.json().catch(() => null)
-        if (pending) return { content: [{ type: 'text', text: `Still working: run ${pending}. Check it with get_run, then call ${tool.name} again with the same arguments (it answers at once when done).` }] }
-        if (!response.ok) return { isError: true, content: [{ type: 'text', text: problemText(json, response.status) }] }
+        if (pending) return { content: [{ type: 'text', text: `Still working: run ${pending}. Check it with get_run, then call ${tool.name} again with the same arguments (it answers at once when done).` }], _meta: { [PENDING_META]: { run: pending } } }
+        if (!response.ok) return { isError: true, content: [{ type: 'text', text: problemText(json, response.status) }], _meta: { [PROBLEM_META]: problemOf(json, response.status) } }
         return {
           content: [{ type: 'text', text: tool.summarize(json, args as never) }, ...(tool.links?.(json) ?? []).map((link) => ({ type: 'resource_link' as const, ...link }))],
           ...(json && typeof json === 'object' ? { structuredContent: json } : {}),
@@ -151,8 +168,8 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
   for (const resource of resources) {
     server.registerResource(
       resource.name,
-      new ResourceTemplate(resource.uriTemplate, { list: undefined }),
-      { title: resource.title, description: resource.description, cacheHint: cached },
+      new ResourceTemplate(lenientTemplate(resource.uriTemplate), { list: undefined }),
+      { title: resource.title, description: resource.description, cacheHint: cached, _meta: { [CLI_META]: (({ named: _, ...cli }) => cli)(resourceCli(resource)) } },
       async (uri, variables, ctx) => {
         const auth = ctx.http?.authInfo
         const values = Object.fromEntries(Object.entries(variables).map(([key, value]) => [key, Array.isArray(value) ? value[0]! : String(value)]))
@@ -251,3 +268,4 @@ export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, all
 }
 
 export { guideSkills } from './skills.js'
+export { CLI_META, cliOf, PENDING_META, PROBLEM_META, routeOf, type CliExample, type CliSpec } from '../core/cli.js'
