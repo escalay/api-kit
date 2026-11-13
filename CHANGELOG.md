@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.1](https://github.com/escalay/api-kit/compare/v1.15.0...v1.15.1) (2026-11-13)
+
+
+### Fixed
+
+* **release:** release pull requests auto-merge, and a tag can be published by hand ([#32](https://github.com/escalay/api-kit/issues/32)) ([3c3b6fa](https://github.com/escalay/api-kit/commit/3c3b6fabf10cfd647602ed8ba88866240569f3e5))
+
 ## [1.15.0](https://github.com/escalay/api-kit/compare/v1.14.1...v1.15.0) (2026-11-13)
 
 
