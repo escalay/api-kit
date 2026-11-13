@@ -181,7 +181,9 @@ const exampleGaps = (command: CliSnapshotCommand, where: string) =>
         if (!word.includes('=') && FIELDS.test(words[index + 1] ?? '') && bare >= command.positional.length) index++
         continue
       }
-      const flag = flags.get(name) ?? (name.startsWith('no-') && flags.get(name.slice(3))?.type === 'boolean' ? flags.get(name.slice(3)) : undefined)
+      // `--no-x` for a yes/no flag, and for a list flag (an empty list)
+      const negated = name.startsWith('no-') ? flags.get(name.slice(3)) : undefined
+      const flag = flags.get(name) ?? (negated && (negated.type === 'boolean' || negated.multiple) ? { ...negated, type: 'boolean' as const } : undefined)
       if (!flag && !(name in own)) gaps.push(`${where}: the example "${run}" uses --${name}, which it doesn't take`)
       // A flag's value is the next word, except for booleans and flags written with =
       const takesValue = flag ? flag.type !== 'boolean' : Boolean(own[name])

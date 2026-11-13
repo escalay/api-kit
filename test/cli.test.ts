@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, stat } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -85,7 +86,7 @@ const sampleCli = async () => {
     mcpTool({ name: 'list_apps', title: 'List apps', description: 'Every app with its id.', input: z.object({ limit: z.number().int().min(1).optional().describe('At most this many.') }), cli: { name: 'app list', examples: [{ run: 'app list --limit 1', about: 'The first app' }, { run: 'app list --json id,name', about: 'Ids and names as JSON' }] }, call: (args) => ({ path: '/api/v1/apps', query: args }), summarize: (json) => json._embedded.apps.map((one: { id: string; name: string }) => `${one.name} (${one.id})`).join('\n') }),
     mcpTool({ name: 'get_app', title: 'Get an app', description: 'One app by id.', input: z.object({ id: z.string().describe('The app id, from list_apps.') }), cli: { name: 'app view', examples: [{ run: 'app view a1', about: 'Alpha' }] }, call: ({ id }) => ({ path: `/api/v1/apps/${id}` }), summarize: (json) => `${json.name} (${json.id})` }),
     mcpTool({ name: 'delete_app', title: 'Delete an app', description: 'Deletes an app for good.', input: z.object({ id: z.string().describe('The app id.') }), annotations: { readOnlyHint: false, destructiveHint: true }, cli: { name: 'app delete', examples: [{ run: 'app delete a2 --yes', about: 'Bravo, gone' }] }, call: ({ id }) => ({ method: 'DELETE', path: `/api/v1/apps/${id}` }), summarize: (_json, { id }) => `Deleted ${id}.` }),
-    mcpTool({ name: 'tag_app', title: 'Tag an app', description: 'Sets an app’s tags.', input: z.object({ id: z.string().describe('The app id.'), tags: z.array(z.string()).describe('A tag; repeat for more.'), pinned: z.boolean().optional().describe('Pin it.') }), annotations: { readOnlyHint: false }, cli: { name: 'app tag', examples: [{ run: 'app tag a1 --tags new --tags fast --pinned', about: 'Two tags, pinned' }] }, call: ({ id, ...body }) => ({ method: 'POST', path: `/api/v1/apps/${id}/tags`, body }), summarize: (json) => `${json.name}: ${json.tags.join(', ')}${json.pinned ? ' (pinned)' : ''}` }),
+    mcpTool({ name: 'tag_app', title: 'Tag an app', description: 'Sets an app’s tags.', input: z.object({ id: z.string().describe('The app id.'), tags: z.array(z.string()).describe('A tag; repeat for more.'), pinned: z.boolean().optional().describe('Pin it.') }), annotations: { readOnlyHint: false }, cli: { name: 'app tag', examples: [{ run: 'app tag a1 --tags new --tags fast --pinned', about: 'Two tags, pinned' }, { run: 'app tag a1 --no-tags', about: 'No tags at all' }] }, call: ({ id, ...body }) => ({ method: 'POST', path: `/api/v1/apps/${id}/tags`, body }), summarize: (json) => `${json.name}: ${json.tags.join(', ')}${json.pinned ? ' (pinned)' : ''}` }),
     mcpTool({ name: 'who_am_i', title: 'Who am I', description: 'Who is calling.', input: z.object({}), cli: { name: 'auth status', examples: [{ run: 'auth status', about: 'The caller' }] }, call: () => ({ path: '/api/v1/me' }), summarize: (json) => `Calling as ${json.caller}.` }),
     mcpTool({ name: 'wait_for_app', title: 'Wait for an app', description: 'An app, once it is there.', input: z.object({ app: z.string().describe('The app id.'), timeout: z.number().optional().describe('Seconds to wait.') }), route: 'GET /api/v1/apps/{id}', cli: { name: 'app wait', examples: [{ run: 'app wait a1 --timeout 5', about: 'Alpha, once it is there' }] }, call: ({ app }) => ({ path: `/api/v1/apps/${app}` }), summarize: (json) => `${json.name} is there.` }),
     mcpTool({ name: 'slow_thing', title: 'Something slow', description: 'Takes a while.', input: z.object({ timeout: z.number().optional().describe('Seconds to wait.') }), cli: { name: 'thing wait', examples: [{ run: 'thing wait --timeout 5', about: 'Waits' }] }, call: () => ({ path: '/api/v1/slow' }), summarize: () => 'Done. Call get_app with `id` next.' }),
@@ -176,6 +177,11 @@ describe('the command line', () => {
     expect((await run(['app', 'tag', 'a1', '--input', '-', '--pinned'], { stdin: '{"tags":["from-stdin"],"pinned":false}' })).out).toBe('Alpha: from-stdin (pinned)\n')
     expect(apps.get('a1')).toMatchObject({ tags: ['from-stdin'], pinned: true })
     expect(JSON.parse((await run(['app', 'tag', 'a2', '--tags', 'x', '--dry-run'])).out)).toEqual({ method: 'tools/call', name: 'tag_app', arguments: { id: 'a2', tags: ['x'] } })
+    // A list flag negated sends an empty list
+    expect(JSON.parse((await run(['app', 'tag', 'a2', '--no-tags', '--dry-run'])).out)).toEqual({ method: 'tools/call', name: 'tag_app', arguments: { id: 'a2', tags: [] } })
+    expect((await run(['app', 'tag', 'a1', '--no-tags'])).code).toBe(0)
+    expect(apps.get('a1')!.tags).toEqual([])
+    expect((await run(['help', 'app', 'tag'])).out).toMatch(/^ {2}--no-tags +Send an empty list\.$/m)
   })
 
   it('stops a usage mistake with exit 1 and a line that names the argument', async () => {
@@ -212,6 +218,44 @@ describe('the command line', () => {
     expect(waitHelp).not.toContain('--timeout <seconds>')
     const slow = await run(['api', 'GET', '/api/v1/slow', '--timeout', '0.05'])
     expect(slow).toMatchObject({ code: 6, err: 'Timed out after 0.05 seconds\n' })
+  })
+
+  it('drops a cached command list once the server answers from another one, and looks again before saying unknown', async () => {
+    const { run, configDir } = await sampleCli()
+    expect((await run(['app', 'list'])).code).toBe(0)
+    const [name] = await readdir(join(configDir, 'cache'))
+    const file = join(configDir, 'cache', name!)
+    const fresh = JSON.parse(await readFile(file, 'utf8'))
+    expect(fresh.hash).toMatch(/^[0-9a-f]{16}$/)
+    const tamper = async (change: (cache: any) => void) => {
+      const cache = JSON.parse(JSON.stringify(fresh))
+      change(cache)
+      await writeFile(file, JSON.stringify(cache))
+    }
+    const toolOf = (cache: any, tool: string) => cache.tools.find((one: { name: string }) => one.name === tool)
+    // A deploy renamed a command: the old name still runs from the cache, and its answer's hash drops the cache
+    await tamper((cache) => {
+      cache.hash = '0000000000000000'
+      toolOf(cache, 'list_apps')._meta['api-kit/cli'].name = 'app ls'
+    })
+    expect((await run(['app', 'ls'])).out).toBe('Alpha (a1)\nBravo (a2)\n')
+    expect(existsSync(file)).toBe(false)
+    const names = JSON.parse((await run(['commands', '--json'])).out).commands.map((command: { name: string }) => command.name)
+    expect(names).toContain('app list')
+    expect(names).not.toContain('app ls')
+    // A command or a flag the cache doesn't know: one fresh look before "unknown"
+    await tamper((cache) => (cache.tools = cache.tools.filter((one: { name: string }) => one.name !== 'get_app')))
+    expect((await run(['app', 'view', 'a1'])).out).toBe('Alpha (a1)\n')
+    await tamper((cache) => delete toolOf(cache, 'list_apps').inputSchema.properties.limit)
+    expect((await run(['app', 'list', '--limit', '1'])).out).toBe('Alpha (a1)\n')
+    expect((await run(['app', 'nope'])).code).toBe(1)
+    // doctor says how old the cache is, and drops one the server has moved on from
+    expect((await run(['doctor'])).out).toMatch(/^ok {4}cache +hash [0-9a-f]{16}, \d+ min old, fresh for \d+ more, matches the server$/m)
+    await tamper((cache) => (cache.hash = '0000000000000000'))
+    const doctor = await run(['doctor'])
+    expect(doctor.code).toBe(0)
+    expect(doctor.out).toMatch(/^warn {2}cache +the cached command list \(hash 0000000000000000, .*\) was older than the server's/m)
+    expect(existsSync(file)).toBe(false)
   })
 
   it('asks before a destructive tool: --yes without a terminal, y/N in one, and --dry-run prints the call', async () => {
@@ -366,7 +410,7 @@ describe('the command line', () => {
     expect(help.match(/default 20/g)).toHaveLength(1)
     // A flag wider than the column puts its text on the next line, never touching it
     expect(help).toMatch(/^ {2}--kind <disposable\|permanent>\n {4,}disposable \(default\) or permanent\.$/m)
-    expect(help).toContain('Repeat the flag for more: `--allow-from a.example --allow-from b.example`')
+    expect(help).toContain('Repeat the flag for more: `--allow-from a.example --allow-from b.example`; `--no-allow-from` sends an empty list')
   })
 
   it('shares its own flags with the kit’s audit, so the two can’t drift', () => {

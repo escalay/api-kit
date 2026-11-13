@@ -8,6 +8,8 @@ import type { Problem } from './job.js'
 export const PROTOCOL = '2026-07-28'
 export const PROBLEM_META = 'api-kit/problem'
 export const PENDING_META = 'api-kit/pending'
+/** The kit's hash of the server's tool list, on each listed tool and every call's result. */
+export const TOOLS_HASH_META = 'api-kit/tools-hash'
 
 /** The exit codes, stable for scripts and agents. */
 export const EXIT = { ok: 0, usage: 1, signIn: 2, notFound: 3, refused: 4, server: 5, timeout: 6, interrupted: 130 } as const

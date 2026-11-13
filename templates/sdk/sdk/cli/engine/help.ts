@@ -76,8 +76,12 @@ const repeatHint = (flag: Flag): [string, string][] => {
   if (!array) return []
   const values = [...array[0].matchAll(/"([^"]*)"/g)].map(([, value]) => value!)
   const [first, second] = values.length >= 2 ? values : ['a.example', 'b.example']
-  return [['', `Repeat the flag for more: \`--${flag.name} ${first} --${flag.name} ${second}\``]]
+  const empty = /\[\s*\]|\bempty\b/i.test(flag.description) ? `; \`--no-${flag.name}\` sends an empty list` : ''
+  return [['', `Repeat the flag for more: \`--${flag.name} ${first} --${flag.name} ${second}\`${empty}`]]
 }
+
+/** A list flag's way to send an empty list. */
+const emptyRow = (flag: Flag): [string, string][] => (flag.multiple && flag.type !== 'object' ? [[`--no-${flag.name}`, 'Send an empty list.']] : [])
 
 export const commandHelp = (app: string, command: Command, paint: Paint, words: CliWords = asIs) => {
   const say = (text: string) => words(text, command)
@@ -94,7 +98,7 @@ export const commandHelp = (app: string, command: Command, paint: Paint, words: 
     paint.bold('Usage'),
     `  ${app} ${command.name}${positional.map((flag) => ` <${flag.key}>`).join('')}${flags.length ? ' [flags]' : ''}`,
     ...(positional.length ? ['', paint.bold('Arguments'), table(positional.map((flag) => [`<${flag.key}>`, `${flagNote(flag, say)} (or --${flag.name})`.trim()]))] : []),
-    ...(flags.length ? ['', paint.bold('Flags'), table(flags.flatMap((flag) => [[flagLabel(flag), flagNote(flag, say)] as [string, string], ...repeatHint(flag)]))] : []),
+    ...(flags.length ? ['', paint.bold('Flags'), table(flags.flatMap((flag) => [[flagLabel(flag), flagNote(flag, say)] as [string, string], ...repeatHint(flag), ...emptyRow(flag)]))] : []),
     ...(command.examples.length ? ['', paint.bold('Examples'), ...command.examples.flatMap((example) => [`  ${paint.dim(`# ${example.about}`)}`, `  $ ${app} ${example.run}`])] : []),
     '',
     paint.dim(`Also: --json [fields], --input -, --dry-run${command.destructive ? ', --yes (it changes or deletes things for good)' : ''}${ownTimeout ? '' : ', --timeout <seconds>'}. This is ${what}.`),

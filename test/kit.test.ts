@@ -937,9 +937,11 @@ describe('MCP (2026-07-28)', () => {
     expect((await (await rpc(short.app, 'tools/list')).json()).result.ttlMs).toBe(60_000)
     expect(list.result.tools[0]).toMatchObject({ name: 'get_app', annotations: { readOnlyHint: true }, inputSchema: { type: 'object', required: ['id'] }, outputSchema: { type: 'object' } })
     // Its route, so a gateway can tell which tool a guide's `GET /api/v1/apps/{id}` means
-    expect(list.result.tools[0]._meta).toEqual({ 'api-kit/route': 'GET /api/v1/apps/{id}', 'api-kit/cli': { name: 'app view', positional: ['id'], examples: [] } })
+    expect(list.result.tools[0]._meta).toEqual({ 'api-kit/route': 'GET /api/v1/apps/{id}', 'api-kit/cli': { name: 'app view', positional: ['id'], examples: [] }, 'api-kit/tools-hash': expect.stringMatching(/^[0-9a-f]{16}$/) })
     const call = await (await rpc(app, 'tools/call', { name: 'get_app', arguments: { id: 'a2' } })).json()
     expect(call.result.content[0]).toEqual({ type: 'text', text: 'Bravo (a2)' })
+    // Every answer says which tool list it came from, so a client's cached list can tell it is stale
+    expect(call.result._meta['api-kit/tools-hash']).toBe(list.result.tools[0]._meta['api-kit/tools-hash'])
     expect(call.result.structuredContent).toMatchObject({ id: 'a2', _links: { self: { href: 'http://localhost/api/v1/apps/a2' } } })
     const proxied = await (await app.request('/mcp', { method: 'POST', headers: { ...auth, 'x-forwarded-proto': 'https', 'x-forwarded-host': 'apps.example', 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': 'get_app' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'get_app', arguments: { id: 'a1' }, _meta: meta } }) })).json()
     expect(proxied.result.structuredContent._links.self.href).toBe('https://apps.example/api/v1/apps/a1')

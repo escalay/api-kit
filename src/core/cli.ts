@@ -26,6 +26,11 @@ export const CLI_META = 'api-kit/cli'
 export const PROBLEM_META = 'api-kit/problem'
 /** Where a tool call that is still working names its run. */
 export const PENDING_META = 'api-kit/pending'
+/**
+ * Where each listed tool, and every call's result, carries a short hash of the whole listing (tools and resources:
+ * names, words, schemas, `_meta`), so a client that cached the list can tell it changed with the next answer.
+ */
+export const TOOLS_HASH_META = 'api-kit/tools-hash'
 
 /** Commands every app's CLI has, which no tool, resource or job may be named after (or use as a noun). */
 export const CLI_BUILT_INS = ['help', 'commands', 'api', 'tool', 'doctor', 'completion', 'version'] as const

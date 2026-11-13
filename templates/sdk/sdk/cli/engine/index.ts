@@ -9,7 +9,7 @@
  * const cli = createCli({ name: 'mailroom', envPrefix: 'MAILROOM', version: '0.3.0', snapshot, jobs })
  * process.exitCode = await cli.run(process.argv.slice(2))
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { completeArguments, GLOBAL_FLAGS, parseArguments, RESOURCE_FLAGS, splitLeadingFlags, type Globals } from './args.js'
@@ -17,7 +17,7 @@ import { configDirOf, deviceLogin, profileNameOf, profileStore, refreshProfile, 
 import { cliWordsOf, commandsFromListing, expandTemplate, jobCommand, kebab, selectFields, type CliWords, type Command, type ListedTool, type Snapshot } from './commands.js'
 import { agentsHelp, commandHelp, completion, nounHelp, nounsOf, overview, paintFor } from './help.js'
 import type { CallResult, Job, JobContext, Problem, ReadResult } from './job.js'
-import { CliError, EXIT, exitFor, mcpClient, PENDING_META, problemLine, problemOfResult, type ToolResult } from './mcp.js'
+import { CliError, EXIT, exitFor, mcpClient, PENDING_META, problemLine, problemOfResult, TOOLS_HASH_META, type ToolResult } from './mcp.js'
 
 export { defineJob, type Job, type JobContext } from './job.js'
 export { CliError, EXIT } from './mcp.js'
@@ -92,7 +92,7 @@ export const createCli = (options: CliOptions) => {
 
   const clientFor = (target: Target) => {
     if (!target.url) throw new CliError(`Not signed in: ${signInHint}`, EXIT.signIn)
-    return mcpClient({
+    const client = mcpClient({
       url: target.url,
       fetch: send,
       signIn: signInHint,
@@ -103,25 +103,40 @@ export const createCli = (options: CliOptions) => {
         return true
       },
     })
+    // Every answer names the server's tool list: one the cache doesn't hold means a deploy changed it
+    const callTool: typeof client.callTool = async (name, args, signal) => {
+      const result = await client.callTool(name, args, signal)
+      const hash = result._meta?.[TOOLS_HASH_META]
+      if (typeof hash === 'string' && hash !== cachedOf(target)?.hash) dropCache(target)
+      return result
+    }
+    return { ...client, callTool }
   }
 
   // ---- The commands: live from the deployment (cached per profile until its ttl), else the snapshot ----
 
   const cacheFile = (target: Target) => join(configDir, 'cache', `${(target.profileName ?? `env-${target.url}`).replace(/[^\w.-]+/g, '_')}.json`)
-  type Live = { url: string; until: number; tools: ListedTool[]; templates: any[] }
+  type Live = { url: string; at: number; until: number; hash?: string; tools: ListedTool[]; templates: any[]; cached?: boolean }
+  /** The cached listing for this target while it is fresh, else null. */
+  const cachedOf = (target: Target): Live | null => {
+    try {
+      const cached = JSON.parse(readFileSync(cacheFile(target), 'utf8')) as Live
+      return cached.url === target.url && cached.until > now() ? { ...cached, cached: true } : null
+    } catch {
+      return null
+    }
+  }
+  const dropCache = (target: Target) => rmSync(cacheFile(target), { force: true })
   const liveOf = async (target: Target, signal?: AbortSignal): Promise<Live | null> => {
     if (!signedIn(target)) return null
     const file = cacheFile(target)
-    try {
-      const cached = JSON.parse(readFileSync(file, 'utf8')) as Live
-      if (cached.url === target.url && cached.until > now()) return cached
-    } catch {
-      // No cache yet
-    }
+    const cached = cachedOf(target)
+    if (cached) return cached
     const client = clientFor(target)
     const tools = await client.listTools(signal)
     const templates = await client.listTemplates(signal).catch(() => ({ resourceTemplates: [], ttlMs: undefined }))
-    const live: Live = { url: target.url!, until: now() + Math.min(tools.ttlMs ?? 3_600_000, templates.ttlMs ?? 3_600_000), tools: tools.tools, templates: templates.resourceTemplates }
+    const hash = tools.tools.find((tool: ListedTool) => typeof tool._meta?.[TOOLS_HASH_META] === 'string')?._meta?.[TOOLS_HASH_META] as string | undefined
+    const live: Live = { url: target.url!, at: now(), until: now() + Math.min(tools.ttlMs ?? 3_600_000, templates.ttlMs ?? 3_600_000), ...(hash ? { hash } : {}), tools: tools.tools, templates: templates.resourceTemplates }
     try {
       mkdirSync(join(configDir, 'cache'), { recursive: true, mode: 0o700 })
       writeFileSync(file, JSON.stringify(live), { mode: 0o600 })
@@ -136,7 +151,8 @@ export const createCli = (options: CliOptions) => {
   let known: Command[] = []
   /** The command of a tool, for reading its result's text in its own terms. */
   const commandOfTool = (tool: string) => known.find((command) => command.tool === tool)
-  const commandsOf = async (target: Target, signal?: AbortSignal) => {
+  const commandsOf = async (target: Target, signal?: AbortSignal, { fresh = false }: { fresh?: boolean } = {}) => {
+    if (fresh) dropCache(target)
     const live = await liveOf(target, signal).catch(() => null)
     const commands = [...jobCommands, ...(live ? commandsFromListing(live.tools, live.templates) : snapshotCommands())]
     cliWords = cliWordsOf(commands, app)
@@ -453,6 +469,16 @@ export const createCli = (options: CliOptions) => {
           const client = clientFor(target)
           const listed = await client.listTools(outer)
           checks.push({ check: 'sign-in', ok: true, detail: `${listed.tools.length} tools listed with ${target.apiKey ? 'an API key' : 'an OAuth token'}` })
+          const serverHash = listed.tools.find((tool: ListedTool) => typeof tool._meta?.[TOOLS_HASH_META] === 'string')?._meta?.[TOOLS_HASH_META] as string | undefined
+          const cache = cachedOf(target)
+          if (!cache) checks.push({ check: 'cache', ok: true, detail: `no cached command list (${cacheFile(target)}); the next command fetches it` })
+          else {
+            const age = `${Math.round((now() - (cache.at ?? now())) / 60_000)} min old, fresh for ${Math.max(0, Math.round((cache.until - now()) / 60_000))} more`
+            if (serverHash && cache.hash !== serverHash) {
+              dropCache(target)
+              checks.push({ check: 'cache', ok: 'warn', detail: `the cached command list (hash ${cache.hash ?? 'none'}, ${age}) was older than the server's (${serverHash}): dropped, the next command fetches it` })
+            } else checks.push({ check: 'cache', ok: true, detail: `hash ${cache.hash ?? 'none'}, ${age}, matches the server` })
+          }
           const server = (await client.discover(outer).catch(() => ({ serverInfo: undefined }))).serverInfo ?? (listed._meta?.['io.modelcontextprotocol/serverInfo'] as { version?: string } | undefined)
           if (server?.version && snapshot.version) checks.push({ check: 'version', ok: server.version === snapshot.version ? true : 'warn', detail: server.version === snapshot.version ? `server and CLI both ${server.version}` : `server ${server.version}, commands packaged from ${snapshot.version}: the server's own list is used` })
           const packaged = new Set(snapshotCommands().flatMap((command) => (command.tool ? [command.tool] : [])))
@@ -573,13 +599,30 @@ export const createCli = (options: CliOptions) => {
         return tool(more, leading, outer)
     }
     const target = targetOf(firstFlags.profile)
-    const { commands } = await commandsOf(target, outer)
-    const found = resolve(words, commands)
-    if ('noun' in found) {
-      if (leading.includes('--json') || more.includes('--json')) return printJson(manifest(found.verbs!)), EXIT.ok
-      return print(nounHelp(app, found.noun!, found.verbs!, paint, cliWords)), EXIT.ok
+    // A cached list may be older than the server's: a command or flag it doesn't know gets one fresh look first
+    const attempt = async (fresh: boolean): Promise<number> => {
+      const { commands, live } = await commandsOf(target, outer, { fresh })
+      const retry = !fresh && Boolean(live?.cached)
+      let found: ReturnType<typeof resolve>
+      try {
+        found = resolve(words, commands)
+      } catch (error) {
+        if (retry && error instanceof CliError && error.exitCode === EXIT.usage) return attempt(true)
+        throw error
+      }
+      if ('noun' in found) {
+        if (leading.includes('--json') || more.includes('--json')) return printJson(manifest(found.verbs!)), EXIT.ok
+        return print(nounHelp(app, found.noun!, found.verbs!, paint, cliWords)), EXIT.ok
+      }
+      try {
+        return await execute(found.command, [...words.slice(found.used), ...leading], outer)
+      } catch (error) {
+        // Thrown while reading the arguments, before any call was made
+        if (retry && error instanceof CliError && error.message.startsWith('unknown flag ')) return attempt(true)
+        throw error
+      }
     }
-    return execute(found.command, [...words.slice(found.used), ...leading], outer)
+    return attempt(false)
   }
 
   /** Runs one command line and resolves its exit code; never exits the process itself. */

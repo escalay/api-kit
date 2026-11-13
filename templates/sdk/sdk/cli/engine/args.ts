@@ -1,7 +1,7 @@
 /**
  * The command line in two passes: first the command words (and global flags before them), then that command's own
  * arguments. Flags are the input schema's properties in `--kebab-case` (the property's own name works too); booleans
- * take `--x` / `--no-x`; an array repeats its flag; numbers are checked; nested objects come only through `--input -`.
+ * take `--x` / `--no-x`; an array repeats its flag, and `--no-x` sends it empty; numbers are checked; nested objects come only through `--input -`.
  * `--json` takes the next word as its fields when every bare argument the command needs is already given (else write
  * `--json=id,name`).
  */
@@ -107,8 +107,13 @@ export const parseArguments = (command: Command, tokens: string[]) => {
       continue
     }
     const negated = name.startsWith('no-') ? byName.get(name.slice(3)) : undefined
-    if (negated?.type === 'boolean') {
+    if (negated?.type === 'boolean' && !negated.multiple) {
       set(negated, false)
+      continue
+    }
+    // A list flag negated sends an empty list (`--no-allow-from` → `[]`)
+    if (negated?.multiple) {
+      values[negated.key] = []
       continue
     }
     switch (name) {

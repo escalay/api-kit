@@ -424,7 +424,8 @@ the deployment's `/mcp`, so it can't disagree with the tools.
   MCP name stays a hidden alias.
 - **Arguments come from the input schema**: the input keys the call puts in its path are positional, in path order
   (`cli.positional` overrides); no property may hide a global flag (`json`, `yes`, `input`, `profile`); every property is a
-  `--kebab-case` flag (positional ones too); `--x` / `--no-x` for booleans; a repeated flag for an array; numbers and
+  `--kebab-case` flag (positional ones too); `--x` / `--no-x` for booleans; a repeated flag for an array (`--no-x`
+  sends it empty); numbers and
   enums checked before the call; nested objects only through `--input -`, a JSON object the flags win over.
 - **Agents first**: stdout holds only the answer; progress, prompts and warnings go to stderr. `--json [fields]` prints
   `structuredContent` (fields of each item for a list). Errors are the problem as one line on stderr (JSON with
@@ -441,7 +442,10 @@ the deployment's `/mcp`, so it can't disagree with the tools.
   and `<APP>_PROFILE` override them.
 - **Commands come from the deployment**: the package carries `sdk/cli/commands.json` (`cliSnapshot`, written by
   `pnpm sdk:types`) for help before sign-in; signed in, the live `tools/list` wins, cached per profile for its `ttlMs`.
-  `<app> doctor` reports drift between the two.
+  Each listed tool and every call's result carry `_meta["api-kit/tools-hash"]` (a hash of the whole listing): an
+  answer from another list drops the cache, and a command or flag the cache doesn't know gets one fresh look before
+  it is called unknown, so a deploy never leaves the CLI on old names. `<app> doctor` reports drift between the
+  snapshot and the server, and the cache's age and hash.
 - **Jobs**: one task, one top-level command (`sdk/cli/jobs/`, `defineJob`), written when the agent test shows agents
   making the same few calls for one playbook step; the playbook then names the job.
 - **The guide** lists the commands with `{{cli.commands}}`, jobs first; `serveGuide({ commands: snapshot })` (the

@@ -14,9 +14,10 @@
  */
 import { createMcpHandler, McpServer, originValidationResponse, ResourceTemplate, SUPPORTED_PROTOCOL_VERSIONS, UriTemplate, type AuthInfo, type CallToolResult, type McpServerFactory } from '@modelcontextprotocol/server'
 import type { SkillCatalog } from '@modelcontextprotocol/server/ext/skills'
-import type { z } from '@hono/zod-openapi'
+import { createHash } from 'node:crypto'
+import { z } from '@hono/zod-openapi'
 import type { Context, Hono } from 'hono'
-import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
+import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, TOOLS_HASH_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
 import { MODERN_PROTOCOL_VERSION, mountedOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN } from '../core/discovery.js'
 import { originOf, pathWith } from '../core/hal.js'
 
@@ -139,6 +140,26 @@ const resourceMeta = (resource: McpResource) => {
   return { name, positional, examples }
 }
 
+const hashes = new WeakMap<McpTool[], string>()
+/**
+ * A short hash of what `tools/list` and `resources/templates/list` say: each tool's name, words, schemas, hints and
+ * `_meta`, each resource's. Made once per tool list, on the first request (never at global scope, for Workers).
+ *
+ * @example
+ * toolsHashOf(TOOLS, RESOURCES) // → '3f9a0c1e2b7d4a58'
+ */
+export const toolsHashOf = (tools: McpTool[], resources: McpResource[] = []) => {
+  const known = hashes.get(tools)
+  if (known) return known
+  const listing = {
+    tools: tools.map((tool) => ({ name: tool.name, title: tool.title, description: tool.description, input: z.toJSONSchema(tool.input, { io: 'input' }), output: tool.output ? z.toJSONSchema(tool.output, { io: 'output', unrepresentable: 'any' }) : null, hints: hintsOf(tool), route: routeOf(tool) ?? null, cli: cliOf(tool) })),
+    resources: resources.map((resource) => ({ name: resource.name, title: resource.title, description: resource.description, uriTemplate: resource.uriTemplate, cli: resourceCli(resource) })),
+  }
+  const hash = createHash('sha256').update(JSON.stringify(listing)).digest('hex').slice(0, 16)
+  hashes.set(tools, hash)
+  return hash
+}
+
 /** A factory that also carries its server info and tools, so `mountMcp` can publish the card and the guide can list the tools. */
 export type AgentMcpFactory = McpServerFactory & { info: McpServerInfo; tools: McpTool[]; resources: McpResource[]; instructions?: string; prompts?: McpPrompt[] }
 
@@ -147,20 +168,23 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
   // Lists only change with a deploy: let clients cache them for an hour
   const cached = { ttlMs: HOUR, cacheScope: 'private' as const }
   const server = new McpServer(info, { instructions, cacheHints: { 'server/discover': cached, 'tools/list': { ...cached, ttlMs: toolsTtlMs }, 'prompts/list': cached, 'resources/list': cached, 'resources/templates/list': cached } })
+  // Clients that cache the list learn from any answer that it changed
+  const listed = { [TOOLS_HASH_META]: toolsHashOf(tools, resources) }
   for (const tool of tools) {
     const route = routeOf(tool)
     const cli = cliOf(tool)
     server.registerTool(
       tool.name,
-      { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, ...hintsOf(tool) }, _meta: { ...(route ? { [ROUTE_META]: route } : {}), [CLI_META]: { name: cli.name, positional: cli.positional, examples: cli.examples } } },
+      { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, ...hintsOf(tool) }, _meta: { ...(route ? { [ROUTE_META]: route } : {}), [CLI_META]: { name: cli.name, positional: cli.positional, examples: cli.examples }, ...listed } },
       async (args: Record<string, unknown>, ctx): Promise<CallToolResult> => {
         const { response, pending } = await callWaiting(callApi, tool.call(args as never), ctx.http?.authInfo, waitMs)
         const json = await response.json().catch(() => null)
-        if (pending) return { content: [{ type: 'text', text: `Still working: run ${pending}. Check it with get_run, then call ${tool.name} again with the same arguments (it answers at once when done).` }], _meta: { [PENDING_META]: { run: pending } } }
-        if (!response.ok) return { isError: true, content: [{ type: 'text', text: problemText(json, response.status) }], _meta: { [PROBLEM_META]: problemOf(json, response.status) } }
+        if (pending) return { content: [{ type: 'text', text: `Still working: run ${pending}. Check it with get_run, then call ${tool.name} again with the same arguments (it answers at once when done).` }], _meta: { [PENDING_META]: { run: pending }, ...listed } }
+        if (!response.ok) return { isError: true, content: [{ type: 'text', text: problemText(json, response.status) }], _meta: { [PROBLEM_META]: problemOf(json, response.status), ...listed } }
         return {
           content: [{ type: 'text', text: tool.summarize(json, args as never) }, ...(tool.links?.(json) ?? []).map((link) => ({ type: 'resource_link' as const, ...link }))],
           ...(json && typeof json === 'object' ? { structuredContent: json } : {}),
+          _meta: listed,
         }
       },
     )
@@ -286,4 +310,4 @@ export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, all
 }
 
 export { guideSkills } from './skills.js'
-export { CLI_META, cliOf, PENDING_META, PROBLEM_META, routeOf, type CliExample, type CliSpec } from '../core/cli.js'
+export { CLI_META, cliOf, PENDING_META, PROBLEM_META, routeOf, TOOLS_HASH_META, type CliExample, type CliSpec } from '../core/cli.js'
