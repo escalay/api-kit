@@ -672,11 +672,15 @@ describe('the copy-in CLI', () => {
       }
       // Every app gets CI, Dependabot, a secrets scan and the Node the kit runs on; each workflow keeps only its runtime's steps
       const kitNode = (await readFile(join(import.meta.dirname, '..', '.node-version'), 'utf8')).trim()
+      // Pinned in cli.mjs, since the published package.json loses it: it must follow the kit's own
+      const kitPnpm = JSON.parse(await readFile(join(import.meta.dirname, '..', 'package.json'), 'utf8')).packageManager
+      expect(kitPnpm).toMatch(/^pnpm@\d+\.\d+\.\d+$/)
+      expect((await readFile(join(import.meta.dirname, '..', 'cli.mjs'), 'utf8')).match(/KIT_PACKAGE_MANAGER = '([^']+)'/)?.[1]).toBe(kitPnpm)
       for (const name of ['demo-api', 'edge-api', 'box-api']) {
         for (const path of ['.github/dependabot.yml', '.gitleaks.toml']) expect(existsSync(join(parent, name, path)), `${name}: ${path}`).toBe(true)
         expect((await readFile(join(parent, name, '.node-version'), 'utf8')).trim()).toBe(kitNode)
         // corepack in CI installs this pnpm, the one that wrote the lockfile, not whatever is newest that day
-        expect(JSON.parse(await readFile(join(parent, name, 'package.json'), 'utf8')).packageManager).toBe(JSON.parse(await readFile(join(import.meta.dirname, '..', 'package.json'), 'utf8')).packageManager)
+        expect(JSON.parse(await readFile(join(parent, name, 'package.json'), 'utf8')).packageManager).toBe(kitPnpm)
         const ci = await readFile(join(parent, name, '.github/workflows/ci.yml'), 'utf8')
         expect(ci).not.toMatch(/runtime:|preset:|pnpm build/)
         expect(ci).toContain('pnpm exec oxfmt --check')

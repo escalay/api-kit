@@ -11,6 +11,15 @@ cd "$parent"
 export npm_config_prefer_online=true
 npm create "escalay@$version" smoke-api -- --yes
 cd smoke-api
+# What the published package gives a new app, which the repository's own tests cannot see
+for path in .github/workflows/ci.yml .github/dependabot.yml .gitleaks.toml .node-version; do
+  [ -f "$path" ] || { echo "::error::a new app has no $path"; exit 1; }
+done
+if ! jq -re '.packageManager | test("^pnpm@[0-9]+\\.[0-9]+\\.[0-9]+$")' package.json >/dev/null; then
+  echo "::error::a new app's package.json pins no pnpm (packageManager)"
+  exit 1
+fi
 pnpm install
+pnpm format
 pnpm migrations
 pnpm test
