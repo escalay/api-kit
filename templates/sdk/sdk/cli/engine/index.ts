@@ -133,10 +133,14 @@ export const createCli = (options: CliOptions) => {
   const snapshotCommands = () => snapshot.commands.filter((command) => !command.job)
   /** MCP names in human text read as commands, once the commands are known (help, summaries, error lines). */
   let cliWords: CliWords = (text) => text
+  let known: Command[] = []
+  /** The command of a tool, for reading its result's text in its own terms. */
+  const commandOfTool = (tool: string) => known.find((command) => command.tool === tool)
   const commandsOf = async (target: Target, signal?: AbortSignal) => {
     const live = await liveOf(target, signal).catch(() => null)
     const commands = [...jobCommands, ...(live ? commandsFromListing(live.tools, live.templates) : snapshotCommands())]
     cliWords = cliWordsOf(commands, app)
+    known = commands
     return { commands, live }
   }
 
@@ -206,7 +210,7 @@ export const createCli = (options: CliOptions) => {
   // ---- Answers ----
 
   const textOf = (result: ToolResult) => (result.content ?? []).map((part) => (part.type === 'text' ? (part.text ?? '') : part.type === 'resource_link' ? `${part.title ?? part.name ?? 'link'}: ${part.uri}` : `(${part.type})`)).join('\n')
-  const callResultOf = (result: ToolResult): CallResult => ({ text: cliWords(textOf(result)), json: result.structuredContent ?? null, isError: Boolean(result.isError), problem: result.isError ? problemOfResult(result) : null })
+  const callResultOf = (result: ToolResult, tool?: string): CallResult => ({ text: cliWords(textOf(result), tool ? commandOfTool(tool) : undefined), json: result.structuredContent ?? null, isError: Boolean(result.isError), problem: result.isError ? problemOfResult(result) : null })
   const readResultOf = (contents: ReadResult['contents']): ReadResult => {
     const text = contents.flatMap((part) => (part.text === undefined ? [] : [part.text])).join('\n')
     const json = (() => {
@@ -232,11 +236,14 @@ export const createCli = (options: CliOptions) => {
     return { signal: controller.signal, done: () => (clearTimeout(timer), outer.removeEventListener('abort', stop)) }
   }
 
-  const answerTool = (result: ToolResult, globals: Globals) => {
-    if (result.isError) failWith(problemOfResult(result))
+  const answerTool = (result: ToolResult, globals: Globals, command?: Command) => {
+    if (result.isError) {
+      const problem = problemOfResult(result)
+      throw new CliError(cliWords(problemLine(problem), command), exitFor(problem.status), problem)
+    }
     const pending = result._meta?.[PENDING_META] as { run?: string } | undefined
     if (globals.json) printJson(selectFields(result.structuredContent ?? { text: textOf(result), ...(pending ? { pending } : {}) }, globals.json === true ? undefined : globals.json))
-    else if (textOf(result)) print(cliWords(textOf(result)))
+    else if (textOf(result)) print(cliWords(textOf(result), command))
     if (pending) throw new CliError(`Still working (run ${pending.run}): run the same command again to get the answer`, EXIT.timeout)
     return EXIT.ok
   }
@@ -260,7 +267,7 @@ export const createCli = (options: CliOptions) => {
     const { signal, done } = deadline(globals, command, outer)
     try {
       const client = clientFor(target)
-      if (!isResource) return answerTool(await waiting(command.summary, client.callTool(command.tool!, given, signal)), globals)
+      if (!isResource) return answerTool(await waiting(command.summary, client.callTool(command.tool!, given, signal)), globals, command)
       const read = readResultOf((await waiting(command.summary, client.readResource(uri!, signal))).contents)
       const blobs = read.contents.filter((part) => part.blob !== undefined)
       if (out && blobs.length) {
@@ -289,7 +296,7 @@ export const createCli = (options: CliOptions) => {
     let client: ReturnType<typeof clientFor> | undefined
     const connected = () => (client ??= clientFor(target))
     const ctx: JobContext = {
-      call: async (tool, callArgs = {}) => callResultOf(await connected().callTool(tool, callArgs, signal)),
+      call: async (tool, callArgs = {}) => callResultOf(await connected().callTool(tool, callArgs, signal), tool),
       read: async (uri) => readResultOf((await connected().readResource(uri, signal)).contents),
       print: (text) => void print(text),
       json: (value) => void printJson(selectFields(value, Array.isArray(globals.json) ? globals.json : undefined)),
@@ -512,7 +519,8 @@ export const createCli = (options: CliOptions) => {
     if (globals.dryRun) return printJson({ method: 'tools/call', name: values.name, arguments: args }), EXIT.ok
     const { signal, done } = deadline(globals, undefined, outer)
     try {
-      return answerTool(await waiting(String(values.name), clientFor(target).callTool(String(values.name), args, signal)), globals)
+      await commandsOf(target, outer)
+      return answerTool(await waiting(String(values.name), clientFor(target).callTool(String(values.name), args, signal)), globals, commandOfTool(String(values.name)))
     } finally {
       done()
     }

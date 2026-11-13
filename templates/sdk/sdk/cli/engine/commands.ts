@@ -11,6 +11,8 @@ export type Example = { run: string; about: string }
 export type Command = {
   name: string
   tool?: string
+  /** The tool's route, `GET /api/addresses/{id}`, so text naming it can name the command. */
+  route?: string
   resource?: string
   uriTemplate?: string
   job?: string
@@ -109,6 +111,7 @@ const toolCommand = (tool: ListedTool): Command => {
   return {
     name: meta?.name ?? fallbackName(route, tool.name),
     tool: tool.name,
+    ...(route ? { route } : {}),
     summary: tool.title ?? tool.annotations?.title ?? tool.name,
     description: tool.description ?? '',
     positional,
@@ -176,30 +179,73 @@ export const selectFields = (value: unknown, fields: string[] | undefined): unkn
 /** Reads text written for MCP clients as the CLI says it; the text itself when there is nothing to change. */
 export type CliWords = (text: string, command?: Command) => string
 
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** A route or URI template as a pattern whose groups are its path variables; `{?query}` parts are left out. */
+const patternOf = (template: string) => new RegExp(`^${template.replace(/\{[?&][^}]*\}/g, '').split(/(\{[^}]+\})/).map((part) => (/^\{[^}]+\}$/.test(part) ? '([^/?#]+)' : escapeRegExp(part))).join('')}$`)
+
+/** A command line for a matched route or URI: each captured value given, a `{placeholder}` shown as `<positional>`. */
+const commandLine = (app: string, command: Command, values: string[]) =>
+  [app, command.name, ...command.positional.map((key, index) => {
+    const value = values[index]
+    return value === undefined || /^\{[^}]+\}$/.test(value) ? `<${key}>` : value
+  })].join(' ')
+
+/** In backticks; a backtick the text had on one side only stays where it was. */
+const quoted = (open: string, close: string, line: string) => (open && !close ? `${open}${line}` : close && !open ? `${line}${close}` : `\`${line}\``)
+
 /**
- * Text written for MCP clients, as the command line says it: a tool's MCP name becomes its command
- * (`create_address` → `` `mailroom address create` ``), and a backticked argument of a tool named there, or of the
- * command being shown, becomes its flag (`` `addressId` `` → `` `--address-id` ``). Conservative: only whole words that
- * are exactly a tool's name, and a name without an underscore only in backticks. For help and human output only;
- * `--json` and `commands --json` stay as the server wrote them.
+ * Text written for MCP clients, as the command line says it. Conservative: only what exactly matches a command
+ *   - a tool's MCP name (a whole word; one without an underscore only in backticks) → `` `mailroom address create` ``
+ *   - a route (`GET /api/addresses`, `{id}` matching any value) → the command whose tool calls it
+ *   - a resource URI (`mailroom://messages/{id}/headers`) → `` `mailroom mail headers <id>` ``
+ *   - a backticked argument (`` `addressId` ``) of the command shown or of a command named above → `` `--address-id` ``,
+ *     and `` `read: false` `` → `` `--no-read` `` (`` `--read` `` for true, `` `--key value` `` otherwise)
+ * For help, summaries and error lines only; `--json` and `commands --json` stay as the server wrote them.
  *
  * @example
  * cliWordsOf(commands, 'mailroom')('The address’s id, from create_address.') // → 'The address’s id, from `mailroom address create`.'
  */
 export const cliWordsOf = (commands: Command[], app: string): CliWords => {
   const byTool = new Map(commands.filter((command) => command.tool).map((command) => [command.tool!, command]))
-  if (!byTool.size) return (text) => text
+  const routes = commands.flatMap((command) => (command.route ? [{ command, method: command.route.split(' ')[0]!, pattern: patternOf(command.route.split(' ')[1] ?? '') }] : []))
+  const uris = commands.flatMap((command) => (command.uriTemplate ? [{ command, pattern: patternOf(command.uriTemplate) }] : []))
+  if (!byTool.size && !uris.length) return (text) => text
   return (text, command) => {
     if (!text) return text
     const named = command ? [command] : []
-    const withCommands = text.replace(/(`?)\b([a-z][a-z0-9]*(?:_[a-z0-9]+)*)\b(`?)/g, (match, open: string, word: string, close: string) => {
-      const found = byTool.get(word)
-      if (!found || (!word.includes('_') && !(open && close))) return match
-      named.push(found)
-      // In backticks; a backtick the text had on one side only stays where it was
-      return open && !close ? `${open}${app} ${found.name}` : close && !open ? `${app} ${found.name}${close}` : `\`${app} ${found.name}\``
+    const said = text
+      // Resource URIs, with the words "the resource" before them, which the command now says
+      .replace(/(?:\b(?:the )?resource )?(`?)\b([a-z][a-z0-9+.-]*:\/\/[^\s`'")<>]+?)(`?)([.,;:]?)(?=[\s'")<>]|$)/g, (match, open: string, uri: string, close: string, stop: string) => {
+        for (const { command: found, pattern } of uris) {
+          const values = uri.split('?')[0]!.match(pattern)
+          if (!values) continue
+          named.push(found)
+          return `${quoted(open, close, commandLine(app, found, values.slice(1)))}${stop}`
+        }
+        return match
+      })
+      .replace(/(`?)\b(GET|POST|PUT|PATCH|DELETE) (\/[^\s`'")<>?]*)(\?[^\s`'")<>]*)?(`?)/g, (match, open: string, method: string, path: string, _query: string, close: string) => {
+        const bare = path.replace(/[.,;:]+$/, '')
+        const found = routes.find((route) => route.method === method && route.pattern.test(bare))
+        if (!found) return match
+        named.push(found.command)
+        return `${quoted(open, close, commandLine(app, found.command, bare.match(found.pattern)!.slice(1)))}${path.slice(bare.length)}`
+      })
+      .replace(/(`?)\b([a-z][a-z0-9]*(?:_[a-z0-9]+)*)\b(`?)/g, (match, open: string, word: string, close: string) => {
+        const found = byTool.get(word)
+        if (!found || (!word.includes('_') && !(open && close))) return match
+        named.push(found)
+        return quoted(open, close, `${app} ${found.name}`)
+      })
+    const flags = new Map(named.flatMap((one) => one.flags.map((flag) => [flag.key, flag] as const)))
+    return said.replace(/`([A-Za-z_][A-Za-z0-9_]*)(?::\s*([^`]+))?`/g, (match, key: string, value: string | undefined) => {
+      const flag = flags.get(key)
+      if (!flag || byTool.has(key)) return match
+      if (value === undefined) return `\`--${flag.name}\``
+      const given = value.trim().replace(/^(["'])(.*)\1$/, '$2')
+      if (flag.type === 'boolean' && (given === 'true' || given === 'false')) return given === 'true' || flag.name.startsWith('no-') ? `\`--${flag.name}\`` : `\`--no-${flag.name}\``
+      return `\`--${flag.name} ${given}\``
     })
-    const keys = new Map(named.flatMap((one) => one.flags.map((flag) => [flag.key, flag.name] as const)))
-    return withCommands.replace(/`([A-Za-z_][A-Za-z0-9_]*)`/g, (match, key: string) => (keys.has(key) && !byTool.has(key) ? `\`--${keys.get(key)}\`` : match))
   }
 }

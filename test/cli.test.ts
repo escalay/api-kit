@@ -11,6 +11,7 @@ import { cliOf, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp } fr
 import { CLI_GLOBAL_FLAGS, CLI_RESOURCE_FLAGS, pathKeysOf } from '../src/core/cli.js'
 import { GLOBAL_FLAGS, RESOURCE_FLAGS } from '../templates/sdk/sdk/cli/engine/args.js'
 import { cliWordsOf } from '../templates/sdk/sdk/cli/engine/commands.js'
+import { commandHelp, paintFor } from '../templates/sdk/sdk/cli/engine/help.js'
 import { cliGaps, cliSnapshot, guideGaps } from '../src/testing/index.js'
 import { createCli } from '../templates/sdk/sdk/cli/engine/index.js'
 import { configDirOf } from '../templates/sdk/sdk/cli/engine/auth.js'
@@ -320,6 +321,52 @@ describe('the command line', () => {
     // The command being shown counts as named
     const shown = (commands as { name: string }[]).find((command) => command.name === 'address create') as never
     expect(say('Give it a `label`.', shown)).toBe('Give it a `--label`.')
+  })
+
+  it('reads routes, resource URIs and `key: value` in result text as commands and flags', () => {
+    const { commands } = cliSnapshot({
+      tools: [
+        mcpTool({ ...base, name: 'list_addresses', input: z.object({}), cli: 'address list', call: () => ({ path: '/api/addresses' }) }),
+        mcpTool({ ...base, name: 'get_address', input: z.object({ id: z.string().describe('Id.') }), cli: 'address view', call: ({ id }) => ({ path: `/api/addresses/${id}` }) }),
+        mcpTool({ ...base, name: 'wait_for_event', input: z.object({ after: z.string().optional().describe('A cursor.'), read: z.boolean().optional().describe('Read ones too.') }), cli: 'event wait', call: (query) => ({ path: '/api/events/next', query }) }),
+      ],
+      resources: [mcpResource({ name: 'mail_headers', title: 'Headers', description: 'H', uriTemplate: 'mailroom://messages/{id}/headers', cli: 'mail headers', read: () => [] })],
+    })
+    const say = cliWordsOf(commands as never, 'mailroom')
+    const wait = (commands as { name: string }[]).find((command) => command.name === 'event wait') as never
+    // The command a result came from: its own keys, and `key: value` as the flag it means
+    expect(say('Cursor 20: pass it as `after` to continue.', wait)).toBe('Cursor 20: pass it as `--after` to continue.')
+    expect(say('Again with `read: false`, `read: true` or `after: "c_20"`; `other: 1` is not one.', wait)).toBe('Again with `--no-read`, `--read` or `--after c_20`; `other: 1` is not one.')
+    expect(say('Pass it as `after`.')).toBe('Pass it as `after`.')
+    // Routes, matched with their placeholders or real values; a route no tool calls stays
+    expect(say('No address adr_9. GET /api/addresses lists them; `GET /api/addresses/{id}` shows one, as GET /api/addresses/adr_1 does. DELETE /api/addresses is not a route here.')).toBe(
+      'No address adr_9. `mailroom address list` lists them; `mailroom address view <id>` shows one, as `mailroom address view adr_1` does. DELETE /api/addresses is not a route here.',
+    )
+    expect(say('Attach the resource `mailroom://messages/{id}/headers`, or read mailroom://messages/msg_1/headers.')).toBe('Attach `mailroom mail headers <id>`, or read `mailroom mail headers msg_1`.')
+    expect(say('Open https://example.com/x, or other://messages/1.')).toBe('Open https://example.com/x, or other://messages/1.')
+  })
+
+  it('renders help for negated, defaulted, wide and list flags', () => {
+    const job = defineJob({
+      name: 'signup',
+      summary: 'Sign up',
+      args: {
+        noWait: { type: 'boolean', description: 'Return at once.', default: false },
+        limit: { type: 'number', description: 'At most this many (default 20).', default: 20 },
+        kind: { type: 'string', description: 'disposable (default) or permanent.' },
+        allowFrom: { type: 'string', multiple: true, description: 'Senders, as ["acme.example"]; `[]` for anyone.' },
+      },
+      examples: [{ run: 'signup --no-wait', about: 'At once' }],
+      run: async () => {},
+    })
+    const command = { ...cliSnapshot({ tools: [], jobs: [job] }).commands[0]!, flags: cliSnapshot({ tools: [], jobs: [job] }).commands[0]!.flags.map((flag) => (flag.key === 'kind' ? { ...flag, enum: ['disposable', 'permanent'] } : flag)) }
+    const help = commandHelp('mailroom', command as never, paintFor(false))
+    expect(help).toMatch(/^ {2}--no-wait +Return at once\.$/m)
+    expect(help).not.toContain('--[no-]no-wait')
+    expect(help.match(/default 20/g)).toHaveLength(1)
+    // A flag wider than the column puts its text on the next line, never touching it
+    expect(help).toMatch(/^ {2}--kind <disposable\|permanent>\n {4,}disposable \(default\) or permanent\.$/m)
+    expect(help).toContain('Repeat the flag for more: `--allow-from a.example --allow-from b.example`')
   })
 
   it('shares its own flags with the kit’s audit, so the two can’t drift', () => {

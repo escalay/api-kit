@@ -17,9 +17,12 @@ export const BUILT_INS: [string, string][] = [
   ['version', 'This CLI’s version'],
 ]
 
+/** Two columns; a left cell wider than the column puts its text on the next line, under the column. */
 const table = (rows: [string, string][], indent = '  ') => {
   const width = Math.min(Math.max(0, ...rows.map(([left]) => left.length)) + 2, 28)
-  return rows.map(([left, right]) => `${indent}${left.padEnd(width)}${right}`.trimEnd()).join('\n')
+  return rows
+    .map(([left, right]) => (left.length + 2 > width && right ? `${indent}${left}\n${indent}${''.padEnd(width)}${right}` : `${indent}${left.padEnd(width)}${right}`).trimEnd())
+    .join('\n')
 }
 
 /** Commands by their first word: `mail` → its verbs. */
@@ -56,12 +59,25 @@ export const nounHelp = (app: string, noun: string, verbs: Command[], paint: Pai
   [paint.bold(`${app} ${noun}`), '', table(verbs.map((command) => [command.name.split(' ').slice(1).join(' '), `${words(command.summary, command)}${command.destructive ? ' (asks for --yes)' : ''}`])), '', `Run \`${app} help ${noun} <verb>\` for its arguments.`].join('\n')
 
 const flagLabel = (flag: Flag) => {
-  if (flag.type === 'boolean') return `--[no-]${flag.name}`
+  // A flag that already says no (`--no-wait`) is never offered as `--no-no-wait`
+  if (flag.type === 'boolean') return flag.name.startsWith('no-') ? `--${flag.name}` : `--[no-]${flag.name}`
   const value = flag.enum ? flag.enum.join('|') : flag.type === 'object' ? 'json' : flag.type === 'integer' ? 'number' : flag.type
   return `--${flag.name} <${value}>${flag.multiple ? '…' : ''}`
 }
 const flagNote = (flag: Flag, words: (text: string) => string) =>
-  [words(flag.description), flag.required ? '(required)' : '', flag.multiple ? '(repeat it)' : '', flag.default !== undefined ? `(default ${JSON.stringify(flag.default)})` : '', flag.type === 'object' ? '(only through --input)' : ''].filter(Boolean).join(' ')
+  [words(flag.description), flag.required ? '(required)' : '', flag.multiple ? '(repeat it)' : '', flag.default !== undefined && flag.default !== false && !/default/i.test(flag.description) ? `(default ${JSON.stringify(flag.default)})` : '', flag.type === 'object' ? '(only through --input)' : ''].filter(Boolean).join(' ')
+
+/**
+ * A list flag whose description shows a JSON array (`["acme.example"]`): one more line saying how the command line
+ * takes a list, since a JSON array means nothing to a repeated flag.
+ */
+const repeatHint = (flag: Flag): [string, string][] => {
+  const array = flag.multiple ? flag.description.match(/\[\s*(?:"[^"]*"\s*,?\s*)*\]/) : null
+  if (!array) return []
+  const values = [...array[0].matchAll(/"([^"]*)"/g)].map(([, value]) => value!)
+  const [first, second] = values.length >= 2 ? values : ['a.example', 'b.example']
+  return [['', `Repeat the flag for more: \`--${flag.name} ${first} --${flag.name} ${second}\``]]
+}
 
 export const commandHelp = (app: string, command: Command, paint: Paint, words: CliWords = asIs) => {
   const say = (text: string) => words(text, command)
@@ -78,7 +94,7 @@ export const commandHelp = (app: string, command: Command, paint: Paint, words: 
     paint.bold('Usage'),
     `  ${app} ${command.name}${positional.map((flag) => ` <${flag.key}>`).join('')}${flags.length ? ' [flags]' : ''}`,
     ...(positional.length ? ['', paint.bold('Arguments'), table(positional.map((flag) => [`<${flag.key}>`, `${flagNote(flag, say)} (or --${flag.name})`.trim()]))] : []),
-    ...(flags.length ? ['', paint.bold('Flags'), table(flags.map((flag) => [flagLabel(flag), flagNote(flag, say)]))] : []),
+    ...(flags.length ? ['', paint.bold('Flags'), table(flags.flatMap((flag) => [[flagLabel(flag), flagNote(flag, say)] as [string, string], ...repeatHint(flag)]))] : []),
     ...(command.examples.length ? ['', paint.bold('Examples'), ...command.examples.flatMap((example) => [`  ${paint.dim(`# ${example.about}`)}`, `  $ ${app} ${example.run}`])] : []),
     '',
     paint.dim(`Also: --json [fields], --input -, --dry-run${command.destructive ? ', --yes (it changes or deletes things for good)' : ''}${ownTimeout ? '' : ', --timeout <seconds>'}. This is ${what}.`),
