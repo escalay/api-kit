@@ -1,0 +1,3 @@
+#!/bin/sh
+# Runs what CI runs before anything leaves this machine (`git push --no-verify` skips it once).
+exec pnpm gate

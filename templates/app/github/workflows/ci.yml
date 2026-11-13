@@ -1,4 +1,5 @@
-# Every change, in parallel jobs: the checks, the tests, the workflows themselves, a secrets scan, and on pull requests
+# Every change, in parallel jobs: the checks (`pnpm check`) and the tests (`pnpm test`), together `pnpm gate`, which the
+# pre-push hook runs too; the workflows themselves, a secrets scan, and on pull requests
 # the title. A new push to a pull request cancels the run it replaces; a push to main always finishes.
 name: CI
 
@@ -32,13 +33,9 @@ jobs:
           node-version-file: .node-version
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm lint
-      - name: Everything is formatted (pnpm format fixes it)
-        run: pnpm exec oxfmt --check
-      - name: migrations/ matches every feature's steps # runtime:workers
-        run: pnpm migrations && test -z "$(git status --porcelain migrations)" # runtime:workers
-      - run: pnpm build # preset:app
+      # Types, lint, format, migrations/ and the build, exactly as `pnpm check` runs them locally (`pnpm format` fixes
+      # formatting, `pnpm migrations` writes what is missing)
+      - run: pnpm check
 
   test:
     runs-on: ubuntu-24.04
