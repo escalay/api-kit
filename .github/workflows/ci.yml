@@ -54,17 +54,17 @@ jobs:
   # The title becomes the squash commit, and so a line in the release notes
   title:
     if: github.event_name == 'pull_request'
-    uses: escalay/.github/.github/workflows/title.yml@b945d51a4e0d15c924874c395e09752109d00d8b # v1.0.0
+    uses: escalay/.github/.github/workflows/title.yml@77927b958181cff87d6fd903f7d9c32afc087617 # v1.0.1
 
   # actionlint and zizmor over this repository's workflows, then the ones every new app starts with
   workflows:
-    uses: escalay/.github/.github/workflows/workflows.yml@b945d51a4e0d15c924874c395e09752109d00d8b # v1.0.0
+    uses: escalay/.github/.github/workflows/workflows.yml@77927b958181cff87d6fd903f7d9c32afc087617 # v1.0.1
     with:
       also: templates/app/github
 
   # gitleaks over the whole history, so a key committed and then removed is still found
   secrets:
-    uses: escalay/.github/.github/workflows/secrets.yml@b945d51a4e0d15c924874c395e09752109d00d8b # v1.0.0
+    uses: escalay/.github/.github/workflows/secrets.yml@77927b958181cff87d6fd903f7d9c32afc087617 # v1.0.1
 
   # A run started by a dispatch (release.yml does it for the release pull request) reports on the commit, but GitHub does
   # not count those checks for a pull request. Commit statuses do, so once everything passed it sets each check the
@@ -74,4 +74,4 @@ jobs:
     needs: [test, starter, workflows, secrets]
     permissions:
       statuses: write
-    uses: escalay/.github/.github/workflows/required-statuses.yml@b945d51a4e0d15c924874c395e09752109d00d8b # v1.0.0
+    uses: escalay/.github/.github/workflows/required-statuses.yml@77927b958181cff87d6fd903f7d9c32afc087617 # v1.0.1

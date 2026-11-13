@@ -57,16 +57,16 @@ jobs:
   # (workflows / lint, secrets / gitleaks, title / conventional); Dependabot moves the pin.
   # actionlint for mistakes, zizmor for the ways a workflow can be turned against its repository
   workflows:
-    uses: escalay/.github/.github/workflows/workflows.yml@b945d51a4e0d15c924874c395e09752109d00d8b # v1.0.0
+    uses: escalay/.github/.github/workflows/workflows.yml@77927b958181cff87d6fd903f7d9c32afc087617 # v1.0.1
 
   # gitleaks over the whole history (a key committed and then removed is still found), with .gitleaks.toml
   secrets:
-    uses: escalay/.github/.github/workflows/secrets.yml@b945d51a4e0d15c924874c395e09752109d00d8b # v1.0.0
+    uses: escalay/.github/.github/workflows/secrets.yml@77927b958181cff87d6fd903f7d9c32afc087617 # v1.0.1
 
   # The title is a Conventional Commit: it becomes the commit on main
   title:
     if: github.event_name == 'pull_request'
-    uses: escalay/.github/.github/workflows/title.yml@b945d51a4e0d15c924874c395e09752109d00d8b # v1.0.0
+    uses: escalay/.github/.github/workflows/title.yml@77927b958181cff87d6fd903f7d9c32afc087617 # v1.0.1
 
   # Dependency review: a pull request that adds a dependency with a known high-severity vulnerability fails. GitHub's
   # free plan has it on public repositories only, so it is skipped while the repository is private
