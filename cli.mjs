@@ -201,6 +201,8 @@ const DEV = { '@types/node': '^26.6.6', typescript: '^7.0.2', vitest: '^5.1.0' }
 /** What the Cloudflare side adds, at the versions the kit tests with. */
 const KIT_DEV = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8')).devDependencies
 const WORKERS_DEV = Object.fromEntries(['wrangler', '@cloudflare/vitest-plugin', '@cloudflare/workers-types'].map((name) => [name, KIT_DEV[name]]))
+/** The pnpm the kit is built with, pinned in each new app so its CI installs with the pnpm that wrote its lockfile. */
+const KIT_PACKAGE_MANAGER = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8')).packageManager
 /** The newest compatibility date the pinned workerd is sure to know: the day its types were cut (`5.20261106.1` → `2026-11-06`). Today's date fails once it is ahead of that binary. */
 const COMPATIBILITY_DATE = KIT_DEV['@cloudflare/workers-types'].replace(/^\D*\d+\.(\d{4})(\d{2})(\d{2})\..*$/, '$1-$2-$3')
 /** The runtimes an app can run on: `node` (server.ts, a container), `cloudflare` (worker.ts, D1), or `both`. */
@@ -513,7 +515,7 @@ const commands = {
     const runtimeDeps = { ...(runtime === 'cloudflare' ? {} : RUNTIME), ...(preset === 'app' ? WEB_DEPS : {}) }
     const devDeps = { ...DEV, ...LINT_DEV, ...(runtime === 'node' ? {} : WORKERS_DEV), ...(runtime === 'cloudflare' ? { tsx: RUNTIME.tsx } : {}), ...(preset === 'app' ? WEB_DEV : {}) }
     const sorted = (deps) => Object.fromEntries(Object.entries(deps).sort())
-    writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps) }, null, 2) + '\n')
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', packageManager: KIT_PACKAGE_MANAGER, engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps) }, null, 2) + '\n')
     if (!flags.has('--bare')) addFeature(root, 'notes')
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
     console.log(`Next: cd ${relative(process.cwd(), root)} && pnpm install && pnpm format${runtime === 'node' ? '' : ' && pnpm migrations'} && pnpm test && pnpm dev`)
