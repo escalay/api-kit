@@ -675,6 +675,8 @@ describe('the copy-in CLI', () => {
       for (const name of ['demo-api', 'edge-api', 'box-api']) {
         for (const path of ['.github/dependabot.yml', '.gitleaks.toml']) expect(existsSync(join(parent, name, path)), `${name}: ${path}`).toBe(true)
         expect((await readFile(join(parent, name, '.node-version'), 'utf8')).trim()).toBe(kitNode)
+        // corepack in CI installs this pnpm, the one that wrote the lockfile, not whatever is newest that day
+        expect(JSON.parse(await readFile(join(parent, name, 'package.json'), 'utf8')).packageManager).toBe(JSON.parse(await readFile(join(import.meta.dirname, '..', 'package.json'), 'utf8')).packageManager)
         const ci = await readFile(join(parent, name, '.github/workflows/ci.yml'), 'utf8')
         expect(ci).not.toMatch(/runtime:|preset:|pnpm build/)
         expect(ci).toContain('pnpm exec oxfmt --check')
