@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.0](https://github.com/escalay/api-kit/compare/v1.18.0...v1.19.0) (2026-11-13)
+
+
+### New
+
+* kit button, the Deploy to Cloudflare button for any app, checked and proven ([#51](https://github.com/escalay/api-kit/issues/51)) ([f85b8a8](https://github.com/escalay/api-kit/commit/f85b8a8a136d5ebae8f3deb36af1b0cb012c3f44))
+
 ## [1.18.0](https://github.com/escalay/api-kit/compare/v1.17.0...v1.18.0) (2026-11-13)
 
 
