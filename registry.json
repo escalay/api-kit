@@ -9,11 +9,11 @@
       "title": "Core",
       "description": "createAgentApi: OpenAPI 3.1 + Scalar docs, HAL links, problem+json, API keys + Access, ETags and Cache-Control, Idempotency-Key and rate limits, discovery (api-catalog, Link headers, robots.txt, Markdown for agents), a key-value store type, sortable ids (`newId`), long-poll waits (`waitFor`) and later work through a queue (`Jobs`: `queueJobs`, `memoryJobs`); an OAuth server plugs in from the `oauth` part",
       "dependencies": [
-        "hono@^4.13.14",
+        "hono@^4.13.18",
         "@hono/zod-openapi@^1.6.3",
         "zod@^4.6.7",
-        "jose@^6.2.14",
-        "@scalar/hono-api-reference@^0.12.17"
+        "jose@^6.2.17",
+        "@scalar/hono-api-reference@^0.12.20"
       ],
       "files": [
         {
@@ -301,7 +301,7 @@
       "title": "Front door",
       "description": "The front door: a public landing page at /, the browser app under /app behind the sign-in, old addresses redirected, and the paths auth must leave open",
       "dependencies": [
-        "@hono/node-server@^2.1.5"
+        "@hono/node-server@^2.1.8"
       ],
       "registryDependencies": [
         "escalay/api-kit/core"

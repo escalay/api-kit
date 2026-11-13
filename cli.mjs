@@ -196,8 +196,8 @@ const adopt = () => {
 
 /** The modules a new app starts with. */
 const APP_MODULES = ['core', 'db', 'oauth', 'guide', 'mcp', 'testing']
-const RUNTIME = { '@hono/node-server': '^2.1.5', tsx: '^4.23.15' }
-const DEV = { '@types/node': '^24.19.2', typescript: '^7.0.2', vitest: '^5.0.5' }
+const RUNTIME = { '@hono/node-server': '^2.1.8', tsx: '^4.23.15' }
+const DEV = { '@types/node': '^26.6.6', typescript: '^7.0.2', vitest: '^5.1.0' }
 /** What the Cloudflare side adds, at the versions the kit tests with. */
 const KIT_DEV = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8')).devDependencies
 const WORKERS_DEV = Object.fromEntries(['wrangler', '@cloudflare/vitest-plugin', '@cloudflare/workers-types'].map((name) => [name, KIT_DEV[name]]))
