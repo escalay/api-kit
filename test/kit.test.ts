@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, readdir, readlink, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -681,11 +681,19 @@ describe('the copy-in CLI', () => {
         expect((await readFile(join(parent, name, '.node-version'), 'utf8')).trim()).toBe(kitNode)
         // corepack in CI installs this pnpm, the one that wrote the lockfile, not whatever is newest that day
         expect(JSON.parse(await readFile(join(parent, name, 'package.json'), 'utf8')).packageManager).toBe(kitPnpm)
+        // CI runs the app's own `check` and `test`, so a push the pre-push hook let through passes CI
         const ci = await readFile(join(parent, name, '.github/workflows/ci.yml'), 'utf8')
-        expect(ci).not.toMatch(/runtime:|preset:|pnpm build/)
-        expect(ci).toContain('pnpm exec oxfmt --check')
-        if (name === 'box-api') expect(ci).not.toContain('pnpm migrations')
-        else expect(ci).toContain('pnpm migrations && test -z')
+        expect(ci).not.toMatch(/runtime:|preset:/)
+        for (const line of ['      - run: pnpm check\n', '      - run: pnpm test\n']) expect(ci).toContain(line)
+        const scripts = JSON.parse(await readFile(join(parent, name, 'package.json'), 'utf8')).scripts
+        expect(scripts).toMatchObject({ gate: 'pnpm check && pnpm test', prepare: 'tsx scripts/hooks.ts' })
+        expect(scripts.check).toMatch(/^pnpm typecheck && pnpm lint && oxfmt --check/)
+        expect(scripts.check.includes('scripts/migrations.ts --check'), name).toBe(name !== 'box-api')
+        expect(scripts.check).not.toContain('vite build')
+        expect(await readFile(join(parent, name, '.githooks/pre-push'), 'utf8')).toContain('exec pnpm gate')
+        expect(statSync(join(parent, name, '.githooks/pre-push')).mode & 0o111, `${name}: the hook is executable`).not.toBe(0)
+        // Made inside the kit's own repository: no repository of its own inside another
+        expect(existsSync(join(parent, name, '.git'))).toBe(false)
       }
       // Nothing of the app preset reaches an API-only app
       for (const text of [edgeWrangler, await readFile(join(parent, 'edge-api/src/app.ts'), 'utf8'), await readFile(join(parent, 'edge-api/vitest.config.ts'), 'utf8'), await agentsOf('edge-api')]) expect(text).not.toMatch(/preset:|"assets"|home: 'app'|plugin-react|vite build/)
@@ -719,7 +727,7 @@ describe('the copy-in CLI', () => {
       // The Worker leaves only /app to the built files, and sends people who open the address there
       expect(await read('wrangler.jsonc')).toContain('"assets": { "not_found_handling": "single-page-application", "run_worker_first": ["/*", "!/app/*"] },')
       expect(await read('wrangler.jsonc')).not.toMatch(/account_id": "[0-9a-f]/)
-      expect(await read('.github/workflows/ci.yml')).toContain('      - run: pnpm build\n')
+      expect(manifest.scripts.check).toMatch(/scripts\/migrations\.ts --check && vite build$/)
       expect(await read('src/app.ts')).toContain("    home: 'app',\n")
       expect(await read('web/routes/index.tsx')).toContain('>Desk</h1>')
       const agents = await read('AGENTS.md')

@@ -12,7 +12,7 @@
  *   kit update [part…] [--dir src/kit] [--force]
  *   kit doctor [--dir src/kit] [--adopt]      missing files, edited files, parts behind this kit; exits 1 with a fix per line
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
- *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--yes]
+ *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--yes]
  *                                             a new app: features/, the kit in src/kit, tests; Node (server.ts, a
  *                                             container) and/or Workers (worker.ts, D1). It never asks; --yes is accepted
  *   kit feature <plural-name> [--app .]       a new feature folder (schema, repo, routes, handlers, tools), listed
@@ -30,7 +30,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -231,7 +231,15 @@ const scriptsFor = (runtime, preset) => {
     'deploy:env': 'tsx scripts/deploy-env.ts',
   }
   const typecheck = runtime === 'node' ? 'tsc --noEmit' : 'tsc --noEmit && tsc --noEmit -p test/workers/tsconfig.json'
-  const lint = { lint: 'oxlint', format: 'oxfmt' }
+  // `check` is CI's checks job and `gate` everything CI runs, so a push that passes the pre-push hook passes CI
+  const gateOf = (...more) => ({
+    lint: 'oxlint',
+    format: 'oxfmt',
+    check: ['pnpm typecheck', 'pnpm lint', 'oxfmt --check', ...more].join(' && '),
+    gate: 'pnpm check && pnpm test',
+    prepare: 'tsx scripts/hooks.ts',
+  })
+  const migrationsCheck = 'tsx scripts/migrations.ts --check'
   // The app preset: Vite runs and builds both sides (the Worker through Cloudflare's plugin), and wrangler deploys the build
   if (preset === 'app')
     return {
@@ -244,7 +252,7 @@ const scriptsFor = (runtime, preset) => {
       'deploy:env': workers['deploy:env'],
       test: 'vitest run',
       typecheck: `${typecheck} && tsc --noEmit -p tsconfig.web.json`,
-      ...lint,
+      ...gateOf(migrationsCheck, 'vite build'),
     }
   return {
     ...(runtime === 'cloudflare' ? { dev: 'wrangler dev' } : node),
@@ -253,7 +261,7 @@ const scriptsFor = (runtime, preset) => {
     ...(runtime === 'node' ? {} : workers),
     test: 'vitest run',
     typecheck,
-    ...lint,
+    ...gateOf(...(runtime === 'node' ? [] : [migrationsCheck])),
   }
 }
 
@@ -488,7 +496,7 @@ const commands = {
     if (!RUNTIMES.includes(runtime)) fail(`--runtime is one of ${RUNTIMES.join(', ')}`)
     if (preset === 'app' && runtime !== 'cloudflare') fail('the app preset runs on Cloudflare Workers; leave --runtime out or use --runtime cloudflare')
     const vars = { __name__: name, __title__: title, __kit__: VERSION, __date__: COMPATIBILITY_DATE }
-    copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (['gitignore', 'oxlintrc.json', 'oxfmtrc.json', 'github', 'node-version', 'gitleaks.toml'].includes(file) ? `.${file}` : file === 'agents-skills' ? '.agents/skills' : file))
+    copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (['gitignore', 'oxlintrc.json', 'oxfmtrc.json', 'github', 'githooks', 'node-version', 'gitleaks.toml'].includes(file) ? `.${file}` : file === 'agents-skills' ? '.agents/skills' : file))
     if (runtime !== 'node') {
       copyTemplate(join(KIT, 'templates/runtime-cloudflare'), root, vars, (file) => (file === 'dev.vars.example' ? '.dev.vars.example' : file))
       mkdirSync(join(root, 'migrations'), { recursive: true })
@@ -504,6 +512,11 @@ const commands = {
     }
     for (const file of ['AGENTS.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts', '.github/workflows/ci.yml'].map((path) => join(root, path)).filter(existsSync))
       writeFileSync(file, readFileSync(file, 'utf8').split('\n').flatMap(unmarked).join('\n').replaceAll('__worker_dev__', runtime === 'both' ? 'dev:worker' : 'dev'))
+    // npm may drop the executable bit when it packs the kit
+    chmodSync(join(root, '.githooks/pre-push'), 0o755)
+    // A repository from the start, so `pnpm install` can point git at .githooks; never one inside another
+    const inside = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, encoding: 'utf8' })
+    if (inside.status !== 0 && !flags.has('--no-git')) spawnSync('git', ['init', '-q', '-b', 'main'], { cwd: root })
     // Coding agents that read .claude/skills find the repository's developer skills through this link
     mkdirSync(join(root, '.claude'), { recursive: true })
     try {

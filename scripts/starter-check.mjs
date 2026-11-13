@@ -21,8 +21,14 @@ const cli = fileURLToPath(new URL('../cli.mjs', import.meta.url))
 const check = (name, preset, more = []) => {
   const app = join(parent, name)
   run(process.execPath, [create, name, '--preset', preset, '--yes'], parent)
-  // What the app's own CI runs (templates/app/github/workflows/ci.yml), after the `pnpm format` init's last line asks for
-  for (const args of [['install'], ['format'], ['migrations'], ['typecheck'], ['lint'], ['exec', 'oxfmt', '--check'], ['test'], ...more]) run('pnpm', args, app)
+  // init's last line, then what the app's CI and its pre-push hook run: `pnpm gate`
+  for (const args of [['install'], ['format'], ['migrations'], ['gate'], ...more]) run('pnpm', args, app)
+  // A repository from the start, with git pointed at the hook by `pnpm install`
+  const hooks = spawnSync('git', ['config', 'core.hooksPath'], { cwd: app, encoding: 'utf8' }).stdout.trim()
+  if (hooks !== '.githooks') {
+    console.error(`git should run .githooks/pre-push after install, but core.hooksPath is "${hooks}"`)
+    process.exit(1)
+  }
   return app
 }
 const api = check('starter-api', 'api')
@@ -34,7 +40,7 @@ run('pnpm', ['--dir', 'sdk', 'exec', 'tsc', '-p', 'cli/tsconfig.json'], api)
 // The kit's copy and the app's command names, both clean
 run(process.execPath, [cli, 'doctor'], api)
 run(process.execPath, ['sdk/dist/cli/bin.js', 'note', 'list', '--help'], api)
-const app = check('starter-app', 'app', [['build'], ['exec', 'oxfmt', '--check', 'web', 'vite.config.ts', 'tsconfig.web.json', 'index.html'], ['exec', 'wrangler', 'deploy', '--dry-run']])
+const app = check('starter-app', 'app', [['exec', 'oxfmt', '--check', 'web', 'vite.config.ts', 'tsconfig.web.json', 'index.html'], ['exec', 'wrangler', 'deploy', '--dry-run']])
 const built = [...readFileSync(join(app, 'dist/client/index.html'), 'utf8').matchAll(/(?:src|href)="(\/[^"]+)"/g)].map(([, path]) => path)
 const stray = built.filter((path) => !path.startsWith('/app/assets/') || !existsSync(join(app, 'dist/client', path)))
 if (!built.length || stray.length) {
