@@ -21,7 +21,8 @@ const base = `repos/${state.name}`
 const rulesetId = path.match(/\/rulesets\/(\d+)$/)?.[1]
 
 if (path === base) {
-  if (method === 'PATCH') Object.assign(state.repo, body), save()
+  // Like GitHub, a repository that can't have rules keeps auto-merge off whatever it is sent
+  if (method === 'PATCH') Object.assign(state.repo, body, state.rulesets === 'forbidden' ? { allow_auto_merge: false } : {}), save()
   answer(state.repo)
 }
 if (path === `${base}/actions/permissions/workflow`) {
