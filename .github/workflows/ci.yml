@@ -6,6 +6,8 @@ on:
     types: [opened, edited, synchronize, reopened]
   push:
     branches: [main]
+  # release.yml starts it on the release pull request, which its own token cannot trigger otherwise
+  workflow_dispatch:
 
 permissions:
   contents: read
