@@ -47,6 +47,7 @@ Nothing to wire: `mount` adds it, and the metadata names `device_authorization_e
   10 minutes; single use; only hashes kept. A signed-in person may type 5 wrong codes in 10 minutes, then 429. When
   `owners` is set, only they may approve. Polling sooner than `interval` answers `slow_down` and adds 5 seconds.
 - In Access, `/oauth/device` stays behind the sign-in (like `/oauth/authorize` and `/oauth/claim`);
-  `/oauth/device_authorization` bypasses it.
+  `/oauth/device_authorization` bypasses it. Name the path exactly: an Access path without `*` covers only itself, while
+  `/oauth/device*` would also gate `/oauth/device_authorization` and break every device.
 - Keep the OAuth paths open (`OAUTH_OPEN_PATHS`); `createAgentApi` does it when `oauth` is set, private mode included.
 - Standard: `docs/STANDARD.md` §7.
