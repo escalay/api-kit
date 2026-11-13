@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: A tagged version (v1.2.3) to publish again, after a run that tagged it failed before npm had it. Empty for a normal run.
+        type: string
 
 permissions:
   contents: read
@@ -40,18 +44,20 @@ jobs:
           manifest-file: .release-please-manifest.json
       # A pull request opened with the workflow's own token starts no workflow, so its required checks would never
       # report; a dispatch is the exception, so CI is started on the release branch by hand
+      # The pull request is read with jq, not fromJSON: a step's env is evaluated even when its `if` skips it
       - name: Run CI on the release pull request
-        if: steps.release.outputs.pr
+        if: steps.release.outputs.pr != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          PR: ${{ steps.release.outputs.pr }}
         run: |
+          BRANCH="$(echo "$PR" | jq -r .headBranchName)"
           gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH" ||
             echo "::warning::CI did not start on $BRANCH. Give ci.yml a workflow_dispatch trigger, or close and reopen the release pull request."
 
   publish:
     needs: release-please
-    if: needs.release-please.outputs.created == 'true'
+    if: needs.release-please.outputs.created == 'true' || inputs.tag != ''
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: npm
@@ -61,15 +67,25 @@ jobs:
       # npm trusted publishing and provenance: no npm token exists
       id-token: write
     env:
-      TAG: ${{ needs.release-please.outputs.tag }}
+      TAG: ${{ inputs.tag || needs.release-please.outputs.tag }}
       VERSION: ${{ needs.release-please.outputs.version }}
       PACK_DIR: /tmp/release-packages
       REGISTRY: https://registry.npmjs.org
       # The package document an install reads
       PACKUMENT: 'Accept: application/vnd.npm.install-v1+json'
     steps:
+      # A tag given by hand: the version is the tag's, and only a version tag is accepted
+      - name: The version to publish
+        if: inputs.tag != ''
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::\"$TAG\" is not a version tag like v1.2.3."
+            exit 1
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag || github.sha }}
           persist-credentials: false
       # Before setup-node: its pnpm cache needs pnpm on the PATH
       - run: corepack enable
