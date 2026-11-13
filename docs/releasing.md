@@ -78,6 +78,9 @@ without the ticket, the file or the how.
 
 - **Run the failed jobs again** (Actions → the run → "Re-run failed jobs", not "all jobs": a full re-run finds
   no new release and skips publishing). The publish step skips every `name@version` npm already has.
+- **The tag exists but the publish job never ran** (the release-please job failed after tagging). Re-running finds
+  the tag and skips publishing, so publish that tag by hand: `gh workflow run release.yml -f tag=vX.Y.Z`. It checks
+  out the tag, tests it and publishes it like a normal run.
 - **A version can never be published twice**, even after unpublishing. If a published version is bad, fix it and
   release the next one; `npm deprecate <package>@<version> "<why>"` warns people off the bad one.
 - **"npm still does not serve …" after 20 minutes.** npm can hold a new version back before serving it. The
