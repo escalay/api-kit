@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.15.0](https://github.com/escalay/api-kit/compare/v1.14.1...v1.15.0) (2026-11-13)
+
+
+### New
+
+* every new app starts with CI, Dependabot and a secrets scan ([#31](https://github.com/escalay/api-kit/issues/31)) ([faf2a5d](https://github.com/escalay/api-kit/commit/faf2a5d857e4be2e0b6e6da7b149a34c84c8b8c4))
+
+
+### Fixed
+
+* **deps:** new apps start on the latest versions, tested on Node 26 ([#29](https://github.com/escalay/api-kit/issues/29)) ([4a3c1d2](https://github.com/escalay/api-kit/commit/4a3c1d2e38ab287c79e913f07a179ce3ac44eb44))
+
 ## [1.14.1](https://github.com/escalay/api-kit/compare/v1.14.0...v1.14.1) (2026-11-13)
 
 
