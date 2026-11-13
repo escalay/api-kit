@@ -670,6 +670,17 @@ describe('the copy-in CLI', () => {
         expect(JSON.parse(await readFile(join(parent, name, '.oxlintrc.json'), 'utf8')).ignorePatterns).toContain('src/kit/**')
         expect(JSON.parse(await readFile(join(parent, name, '.oxfmtrc.json'), 'utf8')).ignorePatterns).toContain('src/kit/**')
       }
+      // Every app gets CI, Dependabot, a secrets scan and the Node the kit runs on; each workflow keeps only its runtime's steps
+      const kitNode = (await readFile(join(import.meta.dirname, '..', '.node-version'), 'utf8')).trim()
+      for (const name of ['demo-api', 'edge-api', 'box-api']) {
+        for (const path of ['.github/dependabot.yml', '.gitleaks.toml']) expect(existsSync(join(parent, name, path)), `${name}: ${path}`).toBe(true)
+        expect((await readFile(join(parent, name, '.node-version'), 'utf8')).trim()).toBe(kitNode)
+        const ci = await readFile(join(parent, name, '.github/workflows/ci.yml'), 'utf8')
+        expect(ci).not.toMatch(/runtime:|preset:|pnpm build/)
+        expect(ci).toContain('pnpm exec oxfmt --check')
+        if (name === 'box-api') expect(ci).not.toContain('pnpm migrations')
+        else expect(ci).toContain('pnpm migrations && test -z')
+      }
       // Nothing of the app preset reaches an API-only app
       for (const text of [edgeWrangler, await readFile(join(parent, 'edge-api/src/app.ts'), 'utf8'), await readFile(join(parent, 'edge-api/vitest.config.ts'), 'utf8'), await agentsOf('edge-api')]) expect(text).not.toMatch(/preset:|"assets"|home: 'app'|plugin-react|vite build/)
       expect(existsSync(join(parent, 'edge-api/web'))).toBe(false)
@@ -702,6 +713,7 @@ describe('the copy-in CLI', () => {
       // The Worker leaves only /app to the built files, and sends people who open the address there
       expect(await read('wrangler.jsonc')).toContain('"assets": { "not_found_handling": "single-page-application", "run_worker_first": ["/*", "!/app/*"] },')
       expect(await read('wrangler.jsonc')).not.toMatch(/account_id": "[0-9a-f]/)
+      expect(await read('.github/workflows/ci.yml')).toContain('      - run: pnpm build\n')
       expect(await read('src/app.ts')).toContain("    home: 'app',\n")
       expect(await read('web/routes/index.tsx')).toContain('>Desk</h1>')
       const agents = await read('AGENTS.md')

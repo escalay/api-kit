@@ -1,0 +1,6 @@
+# The default rules, minus the kit's file checksums in src/kit/kit.json, which look like keys and are not.
+[extend]
+useDefault = true
+
+[allowlist]
+paths = ['''src/kit/kit\.json''']

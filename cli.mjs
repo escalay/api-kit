@@ -483,21 +483,21 @@ const commands = {
     if (!RUNTIMES.includes(runtime)) fail(`--runtime is one of ${RUNTIMES.join(', ')}`)
     if (preset === 'app' && runtime !== 'cloudflare') fail('the app preset runs on Cloudflare Workers; leave --runtime out or use --runtime cloudflare')
     const vars = { __name__: name, __title__: title, __kit__: VERSION, __date__: COMPATIBILITY_DATE }
-    copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (['gitignore', 'oxlintrc.json', 'oxfmtrc.json'].includes(file) ? `.${file}` : file === 'agents-skills' ? '.agents/skills' : file))
+    copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (['gitignore', 'oxlintrc.json', 'oxfmtrc.json', 'github', 'node-version', 'gitleaks.toml'].includes(file) ? `.${file}` : file === 'agents-skills' ? '.agents/skills' : file))
     if (runtime !== 'node') {
       copyTemplate(join(KIT, 'templates/runtime-cloudflare'), root, vars, (file) => (file === 'dev.vars.example' ? '.dev.vars.example' : file))
       mkdirSync(join(root, 'migrations'), { recursive: true })
     }
     if (preset === 'app') copyTemplate(join(KIT, 'templates/preset-app'), root, vars)
     if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container']) rmSync(join(root, path), { recursive: true, force: true })
-    // Lines marked for one runtime or preset (`<!-- runtime:node -->`, `// preset:app`, several at a line's end) stay only in apps that have it
+    // Lines marked for one runtime or preset (`<!-- runtime:node -->`, `// preset:app`, `# runtime:workers`, several at a line's end) stay only in apps that have it
     const keeps = { 'runtime:node': runtime !== 'cloudflare', 'runtime:workers': runtime !== 'node', 'preset:api': preset === 'api', 'preset:app': preset === 'app' }
-    const MARK = /^(.*?) (?:<!-- ((?:runtime|preset):\w+) -->|\/\/ ((?:runtime|preset):\w+))$/
+    const MARK = /^(.*?) (?:<!-- ((?:runtime|preset):\w+) -->|\/\/ ((?:runtime|preset):\w+)|# ((?:runtime|preset):\w+))$/
     const unmarked = (line) => {
       const marked = line.match(MARK)
-      return !marked ? [line] : keeps[marked[2] ?? marked[3]] ? unmarked(marked[1]) : []
+      return !marked ? [line] : keeps[marked[2] ?? marked[3] ?? marked[4]] ? unmarked(marked[1]) : []
     }
-    for (const file of ['AGENTS.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts'].map((path) => join(root, path)).filter(existsSync))
+    for (const file of ['AGENTS.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts', '.github/workflows/ci.yml'].map((path) => join(root, path)).filter(existsSync))
       writeFileSync(file, readFileSync(file, 'utf8').split('\n').flatMap(unmarked).join('\n').replaceAll('__worker_dev__', runtime === 'both' ? 'dev:worker' : 'dev'))
     // Coding agents that read .claude/skills find the repository's developer skills through this link
     mkdirSync(join(root, '.claude'), { recursive: true })
@@ -516,7 +516,7 @@ const commands = {
     writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps) }, null, 2) + '\n')
     if (!flags.has('--bare')) addFeature(root, 'notes')
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
-    console.log(`Next: cd ${relative(process.cwd(), root)} && pnpm install${runtime === 'node' ? '' : ' && pnpm migrations'} && pnpm test && pnpm dev`)
+    console.log(`Next: cd ${relative(process.cwd(), root)} && pnpm install && pnpm format${runtime === 'node' ? '' : ' && pnpm migrations'} && pnpm test && pnpm dev`)
   },
 
   adopt,
