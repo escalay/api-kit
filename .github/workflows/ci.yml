@@ -95,8 +95,8 @@ jobs:
         run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.24.3 git /repo --no-banner --redact
 
   # A run started by a dispatch (release.yml does it for the release pull request) reports on the commit, but GitHub does
-  # not count those checks for a pull request. A commit status does, so once everything passed it says so as `test`,
-  # the check the branch rules require, and auto-merge can go ahead
+  # not count those checks for a pull request. Commit statuses do, so once everything passed it sets each check the
+  # branch rules require as one, and auto-merge can go ahead
   dispatched:
     if: github.event_name == 'workflow_dispatch'
     needs: [test, starter, workflows, secrets]
@@ -108,6 +108,9 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # The checks the rules for main require: the jobs above that always run (what `kit repo` requires)
         run: |
-          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
-            -f state=success -f context=test -f description="CI passed on this commit" -f target_url="$RUN"
+          for check in test starter workflows secrets; do
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+              -f state=success -f context="$check" -f description="Passed in a dispatched run" -f target_url="$RUN" >/dev/null
+          done

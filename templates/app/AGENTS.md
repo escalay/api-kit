@@ -24,7 +24,9 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
   `pnpm migrations`, then the error it names.
 - A change goes in through a pull request whose title is a Conventional Commit (`feat: add notes`,
   `fix(notes): keep the order`): CI checks it, and the pull request is squash-merged, so the title is the commit on
-  `main`. Merge only when every check is green.
+  `main`. Merge only when every check is green. `npx @escalay/kit repo apply` sets the repository up that way once
+  it is on GitHub (merges, auto-merge, a read-only Actions token, security alerts, the rules for `main`), and
+  `kit repo check` reports what drifted.
 - Dependabot opens one grouped pull request a month per ecosystem, for versions out at least a week, and security
   fixes at once. Merge it when green; a red one found a real break, so fix it there and never merge it red.
 - Deploy with `pnpm run deploy:env` from a machine that has the secrets, after the merge. <!-- runtime:workers -->
