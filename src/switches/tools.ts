@@ -2,11 +2,12 @@
 import { z } from '@hono/zod-openapi'
 import { mcpTool, type McpTool } from '../mcp/index.js'
 
-type Feature = { key: string; title: string; on: boolean; own: boolean; source: string; scope?: string; changedBy?: string; changedAt?: string; blockedBy: string[]; locked: boolean; overrides: { scope: string; on: boolean }[] }
+type Feature = { key: string; title: string; on: boolean; own: boolean; source: string; requires?: string; licensed?: boolean; scope?: string; changedBy?: string; changedAt?: string; blockedBy: string[]; locked: boolean; overrides: { scope: string; on: boolean }[] }
 /** Who a feature is on or off for and who decided, in words: the store's name never stands alone. */
 const stateWords = (feature: Feature) => {
   const state = feature.own ? 'on' : 'off'
   if (feature.locked) return 'off, locked by FEATURES_OFF in the deployment’s settings'
+  if (feature.licensed === false) return `off, needs a license granting ${feature.requires}`
   if (feature.own && feature.blockedBy.length) return `off, because it needs ${feature.blockedBy.join(', ')}`
   if (feature.source === 'default') return `${state} by default`
   const whom = !feature.scope || feature.scope === 'everyone' ? 'for everyone' : `for ${feature.scope}`

@@ -28,6 +28,8 @@ export const switchRoutes = ({ path, tag, keys }: { path: string; tag: string; k
       locked: z.boolean().openapi({ description: 'Switched off by `FEATURES_OFF` in the environment: no switch here changes it.' }),
       needs: z.array(z.string()).openapi({ description: 'Features it cannot work without.' }),
       alsoOff: z.array(z.string()).openapi({ description: 'Features that stop when this one is switched off.' }),
+      requires: z.string().optional().openapi({ description: 'What a license must grant for it to work at all; absent for a free feature.', example: 'enterprise' }),
+      licensed: z.boolean().optional().openapi({ description: 'Whether this deployment’s license grants what it requires; absent for a free feature.' }),
       overrides: z.array(OverrideSchema).openapi({ description: 'The stored switches for it: everyone’s, and any for one person or key.' }),
       _links: LinksSchema,
     })
@@ -60,6 +62,18 @@ export const switchRoutes = ({ path, tag, keys }: { path: string; tag: string; k
               schema: z
                 .object({
                   count: z.number().int(),
+                  license: z
+                    .object({
+                      status: z.enum(['valid', 'missing', 'expired', 'invalid']),
+                      why: z.string().openapi({ example: 'Licensed to Acme (enterprise).' }),
+                      plan: z.string().nullable(),
+                      licensee: z.string().nullable(),
+                      expiresAt: z.string().nullable(),
+                      grants: z.array(z.string()).openapi({ description: 'What it unlocks: the plan and its grants.' }),
+                      upgrade: z.string().nullable().openapi({ description: 'Where a license is bought or asked for.' }),
+                    })
+                    .nullable()
+                    .openapi({ description: 'The deployment’s license, when the app sells features; null when it has no paid features.' }),
                   providers: z.array(z.string()).openapi({ description: 'Where switches come from, asked in this order.', example: ['database'] }),
                   writable: z.string().nullable().openapi({ description: 'The provider the switch route changes; null: none, switches are changed where they come from.', example: 'database' }),
                   locked: z.array(z.string()).openapi({ description: 'Features switched off by `FEATURES_OFF`.' }),

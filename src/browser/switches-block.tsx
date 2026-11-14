@@ -22,9 +22,13 @@ import { useFeature, useFeatures, useSwitchFeature } from './switches-react'
 
 type Pending = { key: string; changes: FeatureChange[] }
 
+/** A link that reads as a small action, with no component of its own (shadcn's Radix and Base UI buttons differ here). */
+const UPGRADE_LINK = 'text-sm font-medium text-primary underline-offset-4 hover:underline'
+
 /** A feature's state in a few words, beside its switch. */
 const stateLine = (feature: FeatureView, why: string) => {
   if (feature.locked) return 'Off in the deployment’s settings'
+  if (feature.licensed === false) return `Needs a license granting ${feature.requires}`
   if (!feature.on) return why
   return feature.source === 'default' ? 'On' : `On${feature.scope && feature.scope !== 'everyone' ? ' for you' : ''}`
 }
@@ -37,7 +41,7 @@ const stateLine = (feature: FeatureView, why: string) => {
  * <FeatureSwitches canSwitch={isOwner} className="max-w-xl" />
  */
 export const FeatureSwitches = ({ canSwitch = false, className, describe }: { canSwitch?: boolean; className?: string; describe?: (feature: FeatureView) => ReactNode }) => {
-  const { features, status, error } = useFeatures()
+  const { features, status, error, license } = useFeatures()
   const { preview, apply, pending } = useSwitchFeature()
   const [confirming, setConfirming] = useState<Pending | null>(null)
   const list = Object.values(features) as FeatureView[]
@@ -64,12 +68,18 @@ export const FeatureSwitches = ({ canSwitch = false, className, describe }: { ca
                 <span className="text-sm text-muted-foreground">{describe?.(feature) ?? feature.description}</span>
                 <span className="text-xs text-muted-foreground">{stateLine(feature, why)}</span>
               </div>
-              <Switch
-                checked={feature.own}
-                disabled={!canSwitch || feature.locked || pending !== null}
-                aria-label={`${feature.title}: ${feature.own ? 'on' : 'off'}`}
-                onCheckedChange={(on) => void flip(feature, on)}
-              />
+              {feature.licensed === false && license?.upgrade ? (
+                <a href={license.upgrade} className={UPGRADE_LINK}>
+                  Get {feature.requires}
+                </a>
+              ) : (
+                <Switch
+                  checked={feature.own}
+                  disabled={!canSwitch || feature.locked || feature.licensed === false || pending !== null}
+                  aria-label={`${feature.title}: ${feature.own ? 'on' : 'off'}`}
+                  onCheckedChange={(on) => void flip(feature, on)}
+                />
+              )}
             </div>
             {asking && (
               <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted p-3 text-sm">
@@ -103,12 +113,19 @@ export const FeatureSwitches = ({ canSwitch = false, className, describe }: { ca
  */
 export const FeatureDisabledNotice = ({ name, action, className }: { name: string; action?: ReactNode; className?: string }) => {
   const { feature, why } = useFeature(name)
+  const { license } = useFeatures()
+  const unlicensed = feature?.licensed === false
   return (
     <div role="status" className={cn('grid gap-2 rounded-lg border p-6 text-sm', className)}>
       <p className="font-medium">This feature is disabled.</p>
       {why && <p className="text-muted-foreground">{why}</p>}
-      {feature && !feature.locked && <p className="text-muted-foreground">An owner can switch it on under Features.</p>}
-      {action}
+      {feature && !feature.locked && !unlicensed && <p className="text-muted-foreground">An owner can switch it on under Features.</p>}
+      {action ??
+        (unlicensed && license?.upgrade && (
+          <a href={license.upgrade} className={cn(UPGRADE_LINK, 'justify-self-start')}>
+            Get a license
+          </a>
+        ))}
     </div>
   )
 }

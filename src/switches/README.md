@@ -17,6 +17,7 @@ Needs: `db`, `mcp` (for the tools).
 | `repo.ts` | `switchesRepo`, `databaseProvider` (the table as a provider, read whole and kept 5 s) |
 | `routes.ts` | `switchRoutes`: `GET {path}`, `GET` and `PATCH {path}/{key}` |
 | `tools.ts` | `switchTools`: `list_features`, `switch_feature` |
+| `license.ts` | `verifyLicense` (one key, offline, never throws), `licenseOf` (a deployment's license, checked hourly) |
 | `index.ts` | `switches` (`isOn`, `assertOn`, `gate`, `gated`, `set`, `stateOf`, `register`), `SWITCHES_TAG` |
 
 ## The catalog: one file the app owns
@@ -69,6 +70,31 @@ if (await flags.isOn('webhooks')) await pump(db)                    // backgroun
 await flags.assertOn('sending', contextOf(caller), { fresh: true }) // an action that leaves the app, as the caller
 // MCP: tools: [...featureTools, ...switchTools()]; toolsRun samples: list_features: {}, switch_feature: { key, state: 'off', preview: true }
 ```
+
+## Paid features: license keys
+
+A feature can need a license: `requires: 'enterprise'` in the catalog. It is off, whatever is stored, until the
+deployment's license key grants `enterprise` (its plan, or one of its `grants`). The key is an ES256 JWT the product's
+maker signs; the app holds only the public key, and checks it offline every hour.
+
+```bash
+npx @escalay/kit license keys --out .                     # once per product: the private key to a secret store, the public JWK printed
+npx @escalay/kit license mint --private license-private.jwk --product notes --licensee "Acme" --plan enterprise --days 365 [--instance <id>]
+npx @escalay/kit license verify <key> --public public.jwk --product notes
+```
+
+```ts
+const LICENSE_PUBLIC_KEY = { kty: 'EC', crv: 'P-256', x: '…', y: '…' }   // from `license keys`
+switches({ catalog, providers, license: licenseOf({ key: env.LICENSE_KEY, publicKey: LICENSE_PUBLIC_KEY, product: 'notes', upgrade: 'https://example.com/pricing' }) })
+```
+
+- Without a valid key a paid feature answers 403 with `reason: "LICENSE"`, `requires` and `upgrade`; `PATCH` refuses to
+  switch it on (409); `GET /api/features` shows `requires`, `licensed` and the deployment's `license` (never the key).
+- Features that `need` a paid one are off with it (`blockedBy`).
+- `--instance` binds a key to one deployment (`aud`); the app passes its id as `instance`.
+- The browser shows "Get enterprise" instead of the switch and "Get a license" on the notice (`switches-ui`).
+- A self-hosted app's code can be changed by whoever runs it: keys keep honest users honest and say what they paid
+  for; they are not a lock.
 
 ## Routes
 

@@ -553,7 +553,7 @@
       "name": "switches",
       "type": "registry:item",
       "title": "Feature switches",
-      "description": "One catalog of the app's additive features (`defineFeatures`, stable kebab-case keys), each on or off for everyone, one person or one API key; providers in order (`databaseProvider`, `memoryProvider`, `fromSdk` for any flag service), `FEATURES_OFF` locks, `needs`; `gated` routes answer 403 `feature_disabled`, `isOn` for background work; `GET`/`PATCH /api/features` and its MCP tools",
+      "description": "One catalog of the app's additive features (`defineFeatures`, stable kebab-case keys), each on or off for everyone, one person or one API key; providers in order (`databaseProvider`, `memoryProvider`, `fromSdk` for any flag service), `FEATURES_OFF` locks, `needs`, `requires` and offline license keys (`licenseOf`, ES256, `kit license`) for paid features; `gated` routes answer 403 `feature_disabled`, `isOn` for background work; `GET`/`PATCH /api/features` and its MCP tools",
       "registryDependencies": [
         "escalay/api-kit/db",
         "escalay/api-kit/mcp"
@@ -573,6 +573,11 @@
           "path": "src/switches/providers.ts",
           "type": "registry:file",
           "target": "~/src/kit/switches/providers.ts"
+        },
+        {
+          "path": "src/switches/license.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/license.ts"
         },
         {
           "path": "src/switches/repo.ts",

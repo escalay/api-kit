@@ -16,6 +16,8 @@ export type FeatureSpec = {
   needs?: readonly string[]
   /** Keys it had before, still read from stores and `FEATURES_OFF`. */
   renamedFrom?: readonly string[]
+  /** What a license must grant for it to work at all, e.g. `enterprise` (see `license.ts`); free unless given. */
+  requires?: string
 }
 
 export type Catalog = Readonly<Record<string, FeatureSpec>>
@@ -38,6 +40,7 @@ export const defineFeatures = <const C extends Catalog>(catalog: C): C => {
   const oldNames = new Set<string>()
   for (const [key, spec] of Object.entries(catalog)) {
     if (!FEATURE_KEY.test(key)) throw new Error(`Feature key "${key}" is not lowercase words joined by hyphens.`)
+    if (spec.requires !== undefined && !FEATURE_KEY.test(spec.requires)) throw new Error(`Feature "${key}" requires "${spec.requires}", which is not lowercase words joined by hyphens.`)
     for (const need of spec.needs ?? []) if (!keys.includes(need)) throw new Error(`Feature "${key}" needs "${need}", which is not in the catalog.`)
     for (const old of spec.renamedFrom ?? []) {
       if (keys.includes(old) || oldNames.has(old)) throw new Error(`The old name "${old}" of "${key}" is already a key or another feature's old name.`)

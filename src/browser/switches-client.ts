@@ -28,6 +28,10 @@ export type FeatureView<Key extends string = string> = {
   locked: boolean
   needs: Key[]
   alsoOff: Key[]
+  /** What a license must grant for it to work at all; absent for a free feature. */
+  requires?: string
+  /** Whether the deployment's license grants it; absent for a free feature. */
+  licensed?: boolean
   overrides: { scope: string; on: boolean; changedBy: string; changedAt: string }[]
 }
 
@@ -53,9 +57,14 @@ export class FeaturesError extends Error {
   }
 }
 
+/** The deployment's license, as the list says it (never the key). */
+export type LicenseView = { status: 'valid' | 'missing' | 'expired' | 'invalid'; why: string; plan: string | null; licensee: string | null; expiresAt: string | null; grants: string[]; upgrade: string | null }
+
 export type FeaturesState<Key extends string = string> = {
   status: 'loading' | 'ready' | 'error'
   features: Partial<Record<Key, FeatureView<Key>>>
+  /** Null when the app sells no features. */
+  license: LicenseView | null
   /** The last refresh's error, kept beside the last good list. */
   error: FeaturesError | null
 }
@@ -82,7 +91,7 @@ const FOCUS_EVENTS = ['focus', 'visibilitychange'] as const
  * features.isOn('digest') // true
  */
 export const createFeaturesClient = <Key extends string = string>({ path = '/api/features', fetch: send = (...args) => globalThis.fetch(...args), refreshOnFocus = true }: FeaturesClientOptions = {}) => {
-  let state: FeaturesState<Key> = { status: 'loading', features: {}, error: null }
+  let state: FeaturesState<Key> = { status: 'loading', features: {}, license: null, error: null }
   const listeners = new Set<() => void>()
   const disabledListeners = new Set<(problem: FeatureDisabledProblem) => void>()
   const set = (next: Partial<FeaturesState<Key>>) => {
@@ -100,8 +109,8 @@ export const createFeaturesClient = <Key extends string = string>({ path = '/api
   let inFlight: Promise<void> | undefined
   /** Reads the list again; calls made while one is under way share it. */
   const refresh = () =>
-    (inFlight ??= call<{ _embedded: { features: FeatureView<Key>[] } }>(path)
-      .then((list) => set({ status: 'ready', error: null, features: Object.fromEntries(list._embedded.features.map((feature) => [feature.key, feature])) as FeaturesState<Key>['features'] }))
+    (inFlight ??= call<{ license?: LicenseView | null; _embedded: { features: FeatureView<Key>[] } }>(path)
+      .then((list) => set({ status: 'ready', error: null, license: list.license ?? null, features: Object.fromEntries(list._embedded.features.map((feature) => [feature.key, feature])) as FeaturesState<Key>['features'] }))
       .catch((error: unknown) => set({ status: state.status === 'ready' ? 'ready' : 'error', error: error instanceof FeaturesError ? error : new FeaturesError(0, 'network', String(error)) }))
       .finally(() => (inFlight = undefined)))
 
@@ -172,6 +181,7 @@ export const whyOff = <Key extends string>(feature: FeatureView<Key> | undefined
   const cause = feature.blockedBy.length ? features[feature.blockedBy[0]!] : feature
   const offBy = (view: FeatureView<Key> | undefined) => {
     if (!view) return 'is off'
+    if (view.requires && view.licensed === false) return `needs a license granting ${view.requires}`
     if (view.locked) return 'is switched off in the deployment’s settings'
     if (view.source === 'default') return 'is off unless switched on'
     return `is off ${!view.scope || view.scope === 'everyone' ? 'for everyone' : 'for you'}`

@@ -34,13 +34,19 @@
  *                                             merges, the Actions token, security alerts, and the rules for main
  *                                             (required checks: ci.yml's jobs that always run, and for a job calling a
  *                                             reusable workflow, "<job> / <its job>"); check exits 1 on drift
+ *   kit license keys [--out <folder>]         a product's signing key pair: the private key into <folder>/license-private.jwk
+ *                                             (0600, keep it in a secret store), the public JWK printed for the app's code
+ *   kit license mint --private <file> --product <name> --licensee <who> --plan <plan> [--grants a,b] [--days 365] [--instance <id>]
+ *                                             a license key (an ES256 JWT) the app's `licenseOf` accepts; printed, never stored
+ *   kit license verify <key> --public <file> --product <name> [--instance <id>]
+ *                                             what a key grants, or why it is refused
  *
  * @example
  * npx @escalay/kit add core pagination guide mcp testing --dir apps/api/src/kit --install
  * import { createAgentApi } from './kit/index.js'      // in the app
  */
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -84,7 +90,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir'])
+const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 const lockPath = join(dir, 'kit.json')
@@ -770,6 +776,69 @@ const smokeDeploy = async (app, config, pkg) => {
   }
 }
 
+// ---- License keys ----
+
+const base64url = (value) => Buffer.from(value).toString('base64url')
+const jsonOfFile = (path) => JSON.parse(readFileSync(resolve(process.cwd(), path), 'utf8'))
+
+/** A license key: an ES256 JWT over the claims, signed with the product's private JWK. Kept byte-compatible with the kit's `verifyLicense` (jose). */
+const mintLicense = (privateJwk, claims) => {
+  const signed = `${base64url(JSON.stringify({ alg: 'ES256', typ: 'JWT' }))}.${base64url(JSON.stringify(claims))}`
+  const signature = sign('sha256', Buffer.from(signed), { key: createPrivateKey({ key: privateJwk, format: 'jwk' }), dsaEncoding: 'ieee-p1363' })
+  return `${signed}.${signature.toString('base64url')}`
+}
+
+/** What a key says and whether its signature, product, deployment and date hold; for the command line, not for apps. */
+const readLicense = (key, publicJwk, { product, instance, now = Date.now() }) => {
+  const [header, payload, signature] = key.trim().split('.')
+  if (!header || !payload || !signature) return { ok: false, why: 'not a key: it should be three parts joined by dots' }
+  const signed = verify('sha256', Buffer.from(`${header}.${payload}`), { key: createPublicKey({ key: publicJwk, format: 'jwk' }), dsaEncoding: 'ieee-p1363' }, Buffer.from(signature, 'base64url'))
+  if (!signed) return { ok: false, why: 'not signed by this key' }
+  const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+  if (claims.iss !== product) return { ok: false, why: `for ${claims.iss}, not ${product}`, claims }
+  if (claims.exp && claims.exp * 1000 < now) return { ok: false, why: `expired ${new Date(claims.exp * 1000).toISOString()}`, claims }
+  const audience = [claims.aud ?? []].flat()
+  if (audience.length && !audience.includes(instance)) return { ok: false, why: `for deployment ${audience.join(', ')}`, claims }
+  return { ok: true, why: `licensed to ${claims.sub} (${claims.plan})`, claims }
+}
+
+const DAY_SECONDS = 86_400
+
+const licenseCommand = () => {
+  const [mode, key] = names
+  if (mode === 'keys') {
+    const out = resolve(process.cwd(), valueOf('--out') ?? '.')
+    const target = join(out, 'license-private.jwk')
+    if (existsSync(target)) fail(`${relative(process.cwd(), target)} already exists: a new pair would void every key minted with it`)
+    const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+    mkdirSync(out, { recursive: true })
+    writeFileSync(target, `${JSON.stringify(privateKey.export({ format: 'jwk' }))}\n`, { mode: 0o600 })
+    console.log(`Private key: ${relative(process.cwd(), target) || target} (0600). Put it in a secret store and delete the file; it never goes in a repository.`)
+    console.log(`Public key, for the app's code (licenseOf({ publicKey })):\n${JSON.stringify(publicKey.export({ format: 'jwk' }))}`)
+    return
+  }
+  if (mode === 'mint') {
+    const [privatePath, product, licensee, plan] = ['--private', '--product', '--licensee', '--plan'].map(valueOf)
+    if (!privatePath || !product || !licensee || !plan) fail('kit license mint --private <file> --product <name> --licensee <who> --plan <plan> [--grants a,b] [--days 365] [--instance <id>]')
+    const days = Number(valueOf('--days') ?? 365)
+    if (!Number.isInteger(days) || days < 1) fail('--days is a whole number of days from 1')
+    const now = Math.floor(Date.now() / 1000)
+    const grants = (valueOf('--grants') ?? '').split(',').map((grant) => grant.trim()).filter(Boolean)
+    const instance = valueOf('--instance')
+    console.log(mintLicense(jsonOfFile(privatePath), { iss: product, sub: licensee, plan, ...(grants.length ? { grants } : {}), ...(instance ? { aud: instance } : {}), iat: now, exp: now + days * DAY_SECONDS }))
+    return
+  }
+  if (mode === 'verify') {
+    const [publicPath, product] = ['--public', '--product'].map(valueOf)
+    if (!key || !publicPath || !product) fail('kit license verify <key> --public <file> --product <name> [--instance <id>]')
+    const { ok, why, claims } = readLicense(key, jsonOfFile(publicPath), { product, instance: valueOf('--instance') })
+    console.log(ok ? `valid: ${why}, until ${new Date(claims.exp * 1000).toISOString()}; grants ${[claims.plan, ...(claims.grants ?? [])].join(', ')}` : `refused: ${why}`)
+    process.exitCode = ok ? 0 : 1
+    return
+  }
+  fail('kit license keys|mint|verify')
+}
+
 const commands = {
   help: () => console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').match(/\/\*\*([\s\S]*?)\*\//)[1].replace(/^ \* ?/gm, '').trim()),
 
@@ -1031,6 +1100,8 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     console.log(`${basename(app)} is ready for the Deploy to Cloudflare button${url ? `: ${url}` : ''}`)
     if (flags.has('--smoke')) await smokeDeploy(app, config, existsSync(join(app, 'package.json')) ? JSON.parse(readFileSync(join(app, 'package.json'), 'utf8')) : {})
   },
+
+  license: licenseCommand,
 
   feature: () => {
     const [name] = names

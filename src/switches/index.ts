@@ -22,6 +22,7 @@ import { linksOf, originOf } from '../core/hal.js'
 import { ProblemError, problemResponses } from '../core/problem.js'
 import { dependentsOf, keyOf, needsInOrder, type Catalog } from './catalog.js'
 import { contextOf, contextOfScope, isScope, type FlagAnswer, type FlagContext, type FlagOverride, type FlagProvider, type FlagReason, type ResolveOptions } from './providers.js'
+import type { License, LicenseState } from './license.js'
 import { switchRoutes, type SwitchRoutes } from './routes.js'
 
 export { defineFeatures, dependentsOf, keyOf, needsInOrder, parseFeatureList, type Catalog, type FeatureSpec } from './catalog.js'
@@ -29,6 +30,7 @@ export { contextOf, contextOfScope, fromSdk, isScope, memoryProvider, type FlagA
 export { databaseProvider, switchesRepo, type SwitchesRepo } from './repo.js'
 export { switchRoutes, type SwitchRoutes } from './routes.js'
 export { featureSwitches, SWITCH_MIGRATIONS, type FeatureSwitchRow } from './schema.js'
+export { licenseOf, verifyLicense, type License, type LicenseOptions, type LicenseState } from './license.js'
 export { featureTools, switchTools } from './tools.js'
 
 export const SWITCHES_TAG = { name: 'Features', description: 'The switchable features: which are on, for whom, and the owner’s switches.' }
@@ -40,9 +42,9 @@ export type FeatureState = {
   on: boolean
   /** Its own switch alone. */
   own: boolean
-  /** What decided its own switch: `locked` (the environment), a provider's name, or `default` (the catalog). */
+  /** What decided its own switch: `locked` (the environment), `license` (not granted), a provider's name, or `default` (the catalog). */
   source: string
-  reason: FlagReason | 'LOCKED'
+  reason: FlagReason | 'LOCKED' | 'LICENSE'
   /** The stored switch that decided it, when a provider says. */
   scope?: string
   /** Who switched it, and when, when a provider says. */
@@ -60,6 +62,8 @@ export type SwitchesConfig<C extends Catalog> = {
   off?: readonly string[]
   /** Where the switches' routes live, for the `switchOn` link in a 403. `/api/features` unless given. */
   path?: string
+  /** The deployment's license (`licenseOf`): a feature that `requires` what it does not grant is off, whatever is stored. */
+  license?: License
 }
 
 export type SwitchesRegisterOptions = {
@@ -85,6 +89,18 @@ const disabledBecause = (catalog: Catalog, state: FeatureState, cause: FeatureSt
   return cause === state ? `${name(state.key)} ${offBy}.` : `${name(state.key)} needs ${name(cause.key)}, which ${offBy}.`
 }
 
+/** A sentence's closing full stop, dropped when the sentence goes inside another. */
+const FINAL_STOP = /\.$/
+
+/** Why a feature is off for want of a license, and where to get one. */
+const licenseSentences = (catalog: Catalog, state: FeatureState, cause: FeatureState, requires: string, granted: LicenseState | null, upgrade?: string) => {
+  const name = (key: string) => `${catalog[key]?.title ?? key} (\`${key}\`)`
+  const needs = `needs a license granting ${requires}`
+  const what = cause === state ? `${name(state.key)} ${needs}` : `${name(state.key)} needs ${name(cause.key)}, which ${needs}`
+  const have = granted?.status === 'valid' ? `this deployment’s license (${granted.plan ?? 'no plan'}) does not include it` : (granted?.why ?? 'No license key is set.').replace(FINAL_STOP, '').toLowerCase()
+  return `${what}: ${have}. ${upgrade ? `A license is available at ${upgrade}; ` : ''}an owner sets it as the deployment’s license key.`
+}
+
 /** What turns a feature back on, in a sentence. */
 const howToSwitchOn = (cause: FeatureState, switchOn: string) =>
   cause.source === 'locked'
@@ -102,7 +118,7 @@ const nameOf = (caller: Caller | undefined) => (caller?.kind === 'person' ? call
  * const flags = switches({ catalog: CATALOG, providers: [databaseProvider(db)] })
  * await flags.isOn('digest', contextOf(caller)) // true
  */
-export const switches = <C extends Catalog>({ catalog, providers, off = [], path = '/api/features' }: SwitchesConfig<C>) => {
+export const switches = <C extends Catalog>({ catalog, providers, off = [], path = '/api/features', license }: SwitchesConfig<C>) => {
   type Key = keyof C & string
   const keys = Object.keys(catalog)
   const oldNames = Object.fromEntries(keys.map((key) => [key, catalog[key]!.renamedFrom ?? []]))
@@ -114,9 +130,18 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
 
   type Own = Pick<FeatureState, 'own' | 'source' | 'reason' | 'scope' | 'changedBy' | 'changedAt'>
   /** Each feature's own switch: a lock, else the first provider that answers, else the catalog's default. */
+  /** What the license grants now; with no license part, every requirement counts as met. */
+  const licenseState = async (): Promise<LicenseState | null> => (license ? license.state() : null)
+  const unlicensed = (key: string, state: LicenseState | null) => {
+    const requires = catalog[key]?.requires
+    return Boolean(requires && !state?.grants.includes(requires))
+  }
+
   const ownOf = async (context: FlagContext, fresh?: boolean) => {
     const own: Record<string, Own> = {}
     for (const key of locked) own[key] = { own: false, source: 'locked', reason: 'LOCKED' }
+    const granted = await licenseState()
+    for (const key of keys) if (!own[key] && unlicensed(key, granted)) own[key] = { own: false, source: 'license', reason: 'LICENSE' }
     for (const provider of providers) {
       const open = keys.filter((key) => !own[key])
       if (!open.length) break
@@ -149,12 +174,15 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
   const isOn = async (key: Key, context: FlagContext = {}, { fresh }: { fresh?: boolean } = {}) => (await stateOf(context, { fresh }))[key]!.on
 
   /** A 403 that names the feature, who it is off for, who switched it and how it comes back on. */
-  const disabled = (state: FeatureState, all: Record<string, FeatureState>) => {
+  const disabled = async (state: FeatureState, all: Record<string, FeatureState>) => {
     const cause = all[state.blockedBy[0] ?? state.key]!
     const switchOn = `${path}/${cause.key}`
+    const requires = cause.source === 'license' ? catalog[cause.key]!.requires! : undefined
+    const sentences = requires ? licenseSentences(catalog, state, cause, requires, await licenseState(), license?.upgrade) : `${disabledBecause(catalog, state, cause)} ${howToSwitchOn(cause, switchOn)}`
     return new ProblemError('feature_disabled', {
-      detail: `This feature is disabled. ${disabledBecause(catalog, state, cause)} ${howToSwitchOn(cause, switchOn)}`,
+      detail: `This feature is disabled. ${sentences}`,
       extensions: {
+        ...(requires ? { requires, ...(license?.upgrade ? { upgrade: license.upgrade } : {}) } : {}),
         feature: state.key,
         blockedBy: state.blockedBy,
         reason: cause.reason,
@@ -169,7 +197,7 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
   /** Throws `feature_disabled` (403) unless the feature works for the caller. */
   const assertOn = async (key: Key, context: FlagContext = {}, { fresh }: { fresh?: boolean } = {}) => {
     const all = await stateOf(context, { fresh })
-    if (!all[key]!.on) throw disabled(all[key]!, all)
+    if (!all[key]!.on) throw await disabled(all[key]!, all)
   }
 
   /** A route middleware: 403 `feature_disabled` for the caller while the feature is off. Runs after auth, before validation. */
@@ -229,6 +257,8 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
   const refusalOf = async (key: string, scope: string): Promise<ProblemError | undefined> => {
     if (!isScope(scope)) return new ProblemError('bad_request', { detail: `"${scope}" is not a scope: use everyone, person:<email> or key:<name>.` })
     if (locked.has(key)) return new ProblemError('conflict', { detail: `"${key}" is switched off by FEATURES_OFF in the environment; remove it there to switch it here.` })
+    if (unlicensed(key, await licenseState()))
+      return new ProblemError('conflict', { detail: `"${key}" needs a license granting ${catalog[key]!.requires}, which this deployment does not have${license?.upgrade ? `: ${license.upgrade}` : ''}.` })
     if (!writer) return new ProblemError('conflict', { detail: `Switches here come from ${providers.map((provider) => provider.name).join(', ') || 'nothing'}, none of which the API can change.` })
     const elsewhere = await managedElsewhere(key, scope)
     if (elsewhere) return new ProblemError('conflict', { detail: `"${key}" is managed in ${elsewhere} for ${scope}: change it there.` })
@@ -246,6 +276,7 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
   const listFor = async (c: Context) => {
     const state = await stateOf(contextOf(callerOf(c)), { fresh: true })
     const overrides: FlagOverride[] = (await writer?.overrides?.(options(true))) ?? []
+    const granted = await licenseState()
     const origin = originOf(c)
     const featureOf = (key: string) => ({
       ...state[key]!,
@@ -254,11 +285,13 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
       default: catalog[key]!.default ?? true,
       locked: locked.has(key),
       needs: [...(catalog[key]!.needs ?? [])],
+      ...(catalog[key]!.requires ? { requires: catalog[key]!.requires, licensed: !unlicensed(key, granted) } : {}),
       alsoOff: dependentsOf(catalog, key),
       overrides: overrides.filter((override) => override.key === key).map(({ scope, on, changedBy, changedAt }) => ({ scope, on, changedBy, changedAt })),
       _links: linksOf(origin, { self: `${path}/${key}`, switch: `${path}/${key}` }),
     })
-    return { featureOf, overrides }
+    const licenseView = granted && { status: granted.status, why: granted.why, plan: granted.plan, licensee: granted.licensee, expiresAt: granted.expiresAt, grants: granted.grants, upgrade: license?.upgrade ?? null }
+    return { featureOf, overrides, licenseView }
   }
 
   /** Registers `GET {path}`, `GET` and `PATCH {path}/{key}`. */
@@ -271,10 +304,11 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
     }
 
     const list: RouteHandler<SwitchRoutes['list']> = async (c) => {
-      const { featureOf } = await listFor(c)
+      const { featureOf, licenseView } = await listFor(c)
       return c.json(
         {
           count: keys.length,
+          license: licenseView,
           providers: providers.map((provider) => provider.name),
           writable: writer?.name ?? null,
           locked: [...locked],

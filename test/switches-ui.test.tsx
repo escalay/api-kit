@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createFeaturesClient, isFeatureDisabled, whyOff, type FeatureDisabledProblem } from '../src/browser/switches-client.js'
 import { FeatureDisabledNotice, FeatureSwitches } from '../src/browser/switches-block.js'
 import { Feature, featureHooks, FeaturesProvider, useFeature, useFeatureDisabled } from '../src/browser/switches-react.js'
-import { createAgentApi, databaseProvider, defineFeatures, hashApiKey, parseApiKeys, SWITCHES_TAG, switches, testDb } from '../src/index.js'
+import { createAgentApi, databaseProvider, defineFeatures, hashApiKey, licenseOf, parseApiKeys, SWITCHES_TAG, switches, testDb } from '../src/index.js'
 
 const CATALOG = defineFeatures({
   sending: { title: 'Sending', description: 'Mail out from the app.' },
@@ -136,5 +136,31 @@ describe('the React side', () => {
     )
     expect(((await screen.findByRole('switch', { name: 'Sending: off' })) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText('Only an owner can switch features.')).toBeTruthy()
+  })
+})
+
+describe('a paid feature in the browser', () => {
+  it('shows where to get a license instead of a switch, and the notice says why', async () => {
+    const { exportJWK, generateKeyPair } = await import('jose')
+    const { publicKey } = await generateKeyPair('ES256')
+    const PAID = defineFeatures({ audit: { title: 'Audit export', description: 'Every change as a file.', requires: 'enterprise' } })
+    const db = await testDb()
+    const flags = switches({ catalog: PAID, providers: [databaseProvider(db)], license: licenseOf({ key: undefined, publicKey: await exportJWK(publicKey), product: 'notes', upgrade: 'https://example.com/pricing' }) })
+    const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [SWITCHES_TAG], auth: { realm: 'sample', keys: parseApiKeys(`owner:${hashApiKey('owner-key')}`) } })
+    await flags.register(app, { isOwner: () => true })
+    const features = createFeaturesClient<'audit'>({ fetch: async (input, init) => app.request(String(input), { ...init, headers: { authorization: 'Bearer owner-key' } }), refreshOnFocus: false })
+    render(
+      <FeaturesProvider client={features}>
+        <FeatureSwitches canSwitch />
+        <Feature name="audit" off={<FeatureDisabledNotice name="audit" />}>
+          <p>The audit</p>
+        </Feature>
+      </FeaturesProvider>,
+    )
+    expect((await screen.findByRole('link', { name: 'Get enterprise' })).getAttribute('href')).toBe('https://example.com/pricing')
+    expect(screen.queryByRole('switch')).toBeNull()
+    expect(screen.getByText('Audit export needs a license granting enterprise.')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Get a license' })).toBeTruthy()
+    expect(features.getState().license).toMatchObject({ status: 'missing', upgrade: 'https://example.com/pricing' })
   })
 })
