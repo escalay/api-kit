@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.0](https://github.com/escalay/api-kit/compare/v1.20.1...v1.21.0) (2026-11-14)
+
+
+### New
+
+* **switches:** switched-off setup steps, a panel that picks its features, the app preset asking the switches ([#57](https://github.com/escalay/api-kit/issues/57)) ([2aed829](https://github.com/escalay/api-kit/commit/2aed829ba3fe511f8393a2d30b5464bc48be7451))
+
 ## [1.20.1](https://github.com/escalay/api-kit/compare/v1.20.0...v1.20.1) (2026-11-14)
 
 
