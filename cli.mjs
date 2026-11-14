@@ -215,6 +215,8 @@ const adopt = () => {
 
 /** The modules a new app starts with. */
 const APP_MODULES = ['core', 'db', 'oauth', 'guide', 'mcp', 'switches', 'testing']
+/** The browser parts the app preset's web/ starts with. */
+const WEB_APP_MODULES = ['switches-client', 'switches-react']
 const RUNTIME = { '@hono/node-server': '^2.1.8', tsx: '^4.23.15' }
 const DEV = { '@types/node': '^26.6.6', typescript: '^7.0.2', vitest: '^5.1.0' }
 /** What the Cloudflare side adds, at the versions the kit tests with. */
@@ -956,9 +958,11 @@ const commands = {
       console.warn('Could not link .claude/skills to .agents/skills (needs permission to make links): make it by hand.')
     }
     writeGuideModule(join(root, 'guide'), join(root, 'src/guide.gen.ts'))
-    const added = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'add', ...APP_MODULES, '--dir', 'src/kit'], { cwd: root, encoding: 'utf8' })
+    // The app preset's browser asks the switches too: their client and hooks go to web/kit, under the same kit.json
+    const appModules = preset === 'app' ? [...APP_MODULES, ...WEB_APP_MODULES] : APP_MODULES
+    const added = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'add', ...appModules, '--dir', 'src/kit', ...(preset === 'app' ? ['--web-dir', '../../web/kit'] : [])], { cwd: root, encoding: 'utf8' })
     if (added.status !== 0) fail(`copying the kit failed: ${added.stderr}`)
-    const modules = withRequired(APP_MODULES)
+    const modules = withRequired(appModules)
     const runtimeDeps = { ...(runtime === 'cloudflare' ? {} : RUNTIME), ...(preset === 'app' ? WEB_DEPS : {}) }
     const devDeps = { ...DEV, ...LINT_DEV, ...(runtime === 'node' ? {} : WORKERS_DEV), ...(runtime === 'cloudflare' ? { tsx: RUNTIME.tsx } : {}), ...(preset === 'app' ? WEB_DEV : {}) }
     const sorted = (deps) => Object.fromEntries(Object.entries(deps).sort())

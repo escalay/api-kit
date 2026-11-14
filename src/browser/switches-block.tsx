@@ -33,18 +33,23 @@ const stateLine = (feature: FeatureView, why: string) => {
   return feature.source === 'default' ? 'On' : `On${feature.scope && feature.scope !== 'everyone' ? ' for you' : ''}`
 }
 
+/** How many people or keys have a switch of their own for a feature, in words. */
+const exceptionsLine = (count: number) => `Also switched for ${count} ${count === 1 ? 'person or key' : 'people or keys'} on their own, through the API`
+
 /**
- * Every feature with its switch. Switching one off first asks what else stops and shows it in a confirm row; switching
- * on happens at once. Without `canSwitch` the switches are read-only and say who can change them.
+ * Every feature with its switch (for everyone). Switching one off first asks what else stops and shows it in a
+ * confirm row; switching on happens at once. Without `canSwitch` the switches are read-only and say who can change
+ * them. `keys` picks which features to show, in that order (all of them unless given); an owner sees a quiet line
+ * when some person or key has a switch of their own.
  *
  * @example
- * <FeatureSwitches canSwitch={isOwner} className="max-w-xl" />
+ * <FeatureSwitches canSwitch={isOwner} keys={['digest', 'webhooks']} className="max-w-xl" />
  */
-export const FeatureSwitches = ({ canSwitch = false, className, describe }: { canSwitch?: boolean; className?: string; describe?: (feature: FeatureView) => ReactNode }) => {
+export const FeatureSwitches = ({ canSwitch = false, className, describe, keys }: { canSwitch?: boolean; className?: string; describe?: (feature: FeatureView) => ReactNode; keys?: readonly string[] }) => {
   const { features, status, error, license } = useFeatures()
   const { preview, apply, pending } = useSwitchFeature()
   const [confirming, setConfirming] = useState<Pending | null>(null)
-  const list = Object.values(features) as FeatureView[]
+  const list = (keys ? keys.map((key) => features[key]).filter((feature) => feature !== undefined) : Object.values(features)) as FeatureView[]
   const titleOf = (key: string) => (features[key] as FeatureView | undefined)?.title ?? key
 
   const flip = async (feature: FeatureView, on: boolean) => {
@@ -67,6 +72,9 @@ export const FeatureSwitches = ({ canSwitch = false, className, describe }: { ca
                 <span className="font-medium">{feature.title}</span>
                 <span className="text-sm text-muted-foreground">{describe?.(feature) ?? feature.description}</span>
                 <span className="text-xs text-muted-foreground">{stateLine(feature, why)}</span>
+                {canSwitch && feature.overrides.some((override) => override.scope !== 'everyone') && (
+                  <span className="text-xs text-muted-foreground">{exceptionsLine(feature.overrides.filter((override) => override.scope !== 'everyone').length)}</span>
+                )}
               </div>
               {feature.licensed === false && license?.upgrade ? (
                 <a href={license.upgrade} className={UPGRADE_LINK}>

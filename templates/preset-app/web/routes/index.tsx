@@ -1,5 +1,6 @@
 import { queryOptions, useSuspenseQuery } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
+import { useFeatures } from '../lib/features'
 
 const health = queryOptions({
   queryKey: ['health'],
@@ -12,10 +13,16 @@ const health = queryOptions({
 
 const Home = () => {
   const { data } = useSuspenseQuery(health)
+  const { features } = useFeatures()
+  const switchable = Object.values(features).length
   return (
     <>
       <h1 className="text-2xl font-semibold tracking-tight">__title__</h1>
       <p className="mt-2 text-neutral-600">The API says: {data.status}</p>
+      <p className="mt-2 text-sm text-neutral-500">
+        {switchable ? `${switchable} features can be switched off` : 'No feature can be switched off yet'}: list them in
+        src/features/catalog.ts.
+      </p>
       <p className="mt-6 text-sm text-neutral-500">
         Agents start at{' '}
         <a className="underline" href="/llms.txt">

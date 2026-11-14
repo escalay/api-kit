@@ -213,21 +213,24 @@ describe('the team', () => {
 })
 
 describe('the setup checklist', () => {
-  it('checks every step for real, owner only, and never hangs on a slow one', async () => {
+  it('checks every step for real, owner only, never hangs on a slow one, and leaves switched-off steps out of the count', async () => {
     const steps: SetupStep[] = [
       { id: 'domain', title: 'Choose the domain', why: 'Addresses live on it.', minutes: 1, check: async () => ({ ok: true, detail: 'mail.example.com' }) },
       { id: 'routing', title: 'Route mail here', why: 'Or nothing arrives.', minutes: 2, check: async () => ({ ok: false, detail: 'No mail yet.', fixUrl: 'https://dash.example/routing' }) },
       { id: 'broken', title: 'A check that throws', why: 'To prove it is caught.', minutes: 1, optional: true, check: async () => Promise.reject(new Error('boom')) },
+      { id: 'sending', title: 'Send mail', why: 'Replies leave through it.', minutes: 5, optional: true, check: async () => ({ ok: false, detail: 'Switched off under Features.', switchedOff: true }) },
     ]
     const { browser, claimAsOwner } = await setup({ steps })
     const { owner } = await claimAsOwner()
     expect((await browser().call('GET', '/api/setup/checklist')).status).toBe(401)
     const checklist = await owner.json('GET', '/api/setup/checklist')
+    // The switched-off step is listed, and counted neither as done nor as left
     expect(checklist).toMatchObject({ done: 1, total: 3 })
     expect(checklist._embedded.steps).toMatchObject([
       { id: 'domain', ok: true },
       { id: 'routing', ok: false, fixUrl: 'https://dash.example/routing' },
-      { id: 'broken', ok: false, optional: true, detail: 'The check failed: boom' },
+      { id: 'broken', ok: false, optional: true, detail: 'The check failed: boom', switchedOff: false },
+      { id: 'sending', ok: false, switchedOff: true },
     ])
   })
 })

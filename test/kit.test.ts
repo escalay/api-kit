@@ -740,6 +740,10 @@ describe('the copy-in CLI', () => {
       const read = (path: string) => readFile(join(app, path), 'utf8')
       for (const path of ['index.html', 'vite.config.ts', 'tsconfig.web.json', 'web/main.tsx', 'web/router.tsx', 'web/routes/__root.tsx', 'web/routes/index.tsx', 'web/routeTree.gen.ts', 'web/styles.css', 'web/app.test.tsx', 'src/worker.ts', 'wrangler.jsonc']) expect(existsSync(join(app, path)), path).toBe(true)
       for (const path of ['src/server.ts', 'Dockerfile', 'container', 'public']) expect(existsSync(join(app, path)), path).toBe(false)
+      // The browser starts asking the switches: the client and hooks in web/kit, under the one kit.json
+      for (const path of ['web/kit/browser/switches-client.ts', 'web/kit/browser/switches-react.tsx', 'web/lib/features.ts', 'src/features/catalog.ts']) expect(existsSync(join(app, path)), path).toBe(true)
+      expect(JSON.parse(await read('src/kit/kit.json'))).toMatchObject({ webDir: '../../web/kit', modules: expect.arrayContaining(['switches', 'switches-client', 'switches-react']) })
+      expect(await read('web/routes/__root.tsx')).toContain('<FeaturesProvider client={features}>')
       const manifest = JSON.parse(await read('package.json'))
       expect(manifest.scripts).toMatchObject({ dev: 'vite', build: 'vite build', deploy: expect.stringContaining('vite build && wrangler d1 migrations apply DB --remote && wrangler deploy'), typecheck: expect.stringContaining('tsconfig.web.json'), lint: 'oxlint', format: 'oxfmt' })
       // The versions the kit tests with, so an app starts on a set that is known to work together
