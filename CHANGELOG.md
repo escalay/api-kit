@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.0](https://github.com/escalay/api-kit/compare/v1.21.1...v1.22.0) (2026-11-14)
+
+
+### New
+
+* **switches:** the features panel in titled groups, with icons, plan badges and a status line only when it says something ([#61](https://github.com/escalay/api-kit/issues/61)) ([f175abe](https://github.com/escalay/api-kit/commit/f175abe0aa897225481f561f6565176c7d7d3ec8))
+
 ## [1.21.1](https://github.com/escalay/api-kit/compare/v1.21.0...v1.21.1) (2026-11-14)
 
 
