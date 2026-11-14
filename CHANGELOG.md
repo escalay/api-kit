@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.1](https://github.com/escalay/api-kit/compare/v1.21.0...v1.21.1) (2026-11-14)
+
+
+### Fixed
+
+* **switches:** the disabled notice names no page of its own ([#59](https://github.com/escalay/api-kit/issues/59)) ([3252375](https://github.com/escalay/api-kit/commit/325237512d8aac6ca45536c918d4638f89165ba9))
+
 ## [1.21.0](https://github.com/escalay/api-kit/compare/v1.20.1...v1.21.0) (2026-11-14)
 
 
