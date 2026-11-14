@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createFeaturesClient, isFeatureDisabled, whyOff, type FeatureDisabledProblem } from '../src/browser/switches-client.js'
@@ -189,5 +189,43 @@ describe('a paid feature in the browser', () => {
     expect(screen.getByText('Audit export needs a license granting enterprise.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Get a license' })).toBeTruthy()
     expect(features.getState().license).toMatchObject({ status: 'missing', upgrade: 'https://example.com/pricing' })
+  })
+})
+
+describe('the panel in groups', () => {
+  it('puts features in titled cards, nests what needs another, badges paid ones and says where to get them', async () => {
+    const { exportJWK, generateKeyPair } = await import('jose')
+    const { publicKey } = await generateKeyPair('ES256')
+    const GROUPED = defineFeatures({
+      sending: { title: 'Sending', description: 'Mail out.' },
+      digest: { title: 'Daily digest', description: 'One mail a day.', needs: ['sending'] },
+      audit: { title: 'Audit export', description: 'Every change as a file.', requires: 'enterprise' },
+    })
+    const db = await testDb()
+    const flags = switches({ catalog: GROUPED, providers: [databaseProvider(db)], license: licenseOf({ key: undefined, publicKey: await exportJWK(publicKey), product: 'notes', upgrade: 'https://example.com/pricing' }) })
+    const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [SWITCHES_TAG], auth: { realm: 'sample', keys: parseApiKeys(`owner:${hashApiKey('owner-key')}`) } })
+    await flags.register(app, { isOwner: () => true })
+    const features = createFeaturesClient<keyof typeof GROUPED>({ fetch: async (input, init) => app.request(String(input), { ...init, headers: { authorization: 'Bearer owner-key' } }), refreshOnFocus: false })
+    render(
+      <FeaturesProvider client={features}>
+        <FeatureSwitches
+          canSwitch
+          iconOf={(key) => <svg data-icon={key} />}
+          groups={[
+            { title: 'Mail out', description: 'Sending, and what sends.', keys: ['sending', 'digest'] },
+            { title: 'Records', keys: ['audit'] },
+          ]}
+        />
+      </FeaturesProvider>,
+    )
+    const mail = await screen.findByRole('region', { name: 'Mail out' })
+    expect(within(mail).getByText('Sending, and what sends.')).toBeTruthy()
+    const [sending, digest] = within(mail).getAllByRole('listitem')
+    expect([sending!.className.includes('border-l'), digest!.className.includes('border-l')]).toEqual([false, true])
+    expect(mail.querySelectorAll('[data-icon]')).toHaveLength(2)
+    const records = screen.getByRole('region', { name: 'Records' })
+    expect(within(records).getByText('enterprise')).toBeTruthy()
+    expect(within(records).getByText('Audit export is available with enterprise.')).toBeTruthy()
+    expect(within(records).getByRole('link', { name: 'Upgrade' }).getAttribute('href')).toBe('https://example.com/pricing')
   })
 })

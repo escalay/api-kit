@@ -12,7 +12,7 @@ React hooks over them, and an optional shadcn search block. Logic only; each app
 | `boards-react` | `boards-react.ts` | `useBoards`, `useItemBoards` |
 | `switches-client` | `switches-client.ts` | `createFeaturesClient`: the features for the person signed in (`isOn`, refresh on focus, `switch` with `dryRun`, `onDisabled` and `watchFetch` for every 403 `feature_disabled`); `isFeatureDisabled`, `whyOff` |
 | `switches-react` | `switches-react.tsx` | `FeaturesProvider`, `useFeature`, `<Feature>`, `useFeatures`, `useSwitchFeature`, `useFeatureDisabled`, `featureHooks<Key>()` |
-| `switches-ui` | `switches-block.tsx` | `FeatureSwitches` (the owner's panel, everyone's switch per feature, confirming what else stops; `keys` picks which and in what order; a quiet line when a person or key has its own switch) and `FeatureDisabledNotice` (shadcn `button` + `switch`) |
+| `switches-ui` | `switches-block.tsx` | `FeatureSwitches` (the owner's panel, everyone's switch per feature, confirming what else stops: `groups` puts features in titled cards, nesting what needs another, `iconOf` gives each its icon tile, paid ones carry their plan as a badge and a card opens with where to get them; `keys` for one plain card; a status line only when the switch can't say it, such as who switched it off; a quiet line when a person or key has its own switch) and `FeatureDisabledNotice` (shadcn `button` + `switch`) |
 
 ```bash
 # into the frontend, tracked by the API's kit.json
