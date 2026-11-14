@@ -34,7 +34,10 @@ export const switchTools = ({ path = '/api/features', example = 'webhooks' }: { 
     cli: { name: 'feature list', examples: [{ run: 'feature list', about: 'Which features are on' }] },
     call: () => ({ path }),
     summarize: (json: { _embedded: { features: Feature[] }; unknownOff: string[] }) =>
-      [...json._embedded.features.map(line), ...(json.unknownOff.length ? [`FEATURES_OFF names no feature: ${json.unknownOff.join(', ')}.`] : [])].join('\n'),
+      [
+        ...(json._embedded.features.length ? json._embedded.features.map(line) : ['No feature can be switched off here: everything is core.']),
+        ...(json.unknownOff.length ? [`FEATURES_OFF names no feature: ${json.unknownOff.join(', ')}.`] : []),
+      ].join('\n'),
   }),
   mcpTool({
     name: 'switch_feature',

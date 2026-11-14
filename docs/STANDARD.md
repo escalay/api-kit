@@ -313,6 +313,8 @@ fact, steps with checkable done-when criteria.
 10. The command line: `kit sdk` (or `kit cli`), a `cli` name and example on every tool, `cliGaps` empty and
     `commands.json` current in the tests, jobs only for steps agents repeat (§19).
 11. The repository: CI, the pre-push gate, Dependabot and the secrets scan as `init` writes them (§20).
+12. Feature switches (§21): every additive feature in `src/features/catalog.ts` with a title and what switching it off
+    stops, `switch:` on its feature (`kit feature <name> --switch`), and its work outside requests asking `isOn`.
 
 ## 14. Discovery
 

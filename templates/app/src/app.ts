@@ -7,15 +7,18 @@
  * @example
  * const app = await createApp({ db: await openDb('file:.state/state.sqlite'), env: process.env })
  */
+import { CATALOG } from './features/catalog.js'
+import { flagsOf } from './features/flags.js'
 import { FEATURES } from './features/index.js'
 import { GUIDE_FILES } from './guide.gen.js'
-import { accessOwner, createAgentApi, createOAuth, dbGuardStore, dbOAuthStore, parseApiKeys, serveGuide, type Db } from './kit/index.js'
+import { accessOwner, createAgentApi, createOAuth, dbGuardStore, dbOAuthStore, featureTools, parseApiKeys, serveGuide, type Db } from './kit/index.js'
 import { guideSkills, inProcess, mcpServerFactory, mountMcp } from './kit/mcp/index.js'
 
-export type Env = { API_KEYS?: string; OAUTH_SIGNING_KEY?: string; ACCESS_TEAM?: string; ACCESS_AUD?: string; PUBLIC_HOST?: string }
+export type Env = { API_KEYS?: string; OAUTH_SIGNING_KEY?: string; ACCESS_TEAM?: string; ACCESS_AUD?: string; PUBLIC_HOST?: string; FEATURES_OFF?: string }
 
 export const VERSION = '0.1.0'
-export const TOOLS = FEATURES.flatMap((feature) => feature.tools)
+// A switchable feature's tools name their switch, so a 403 from one names a switch an agent can find
+export const TOOLS = FEATURES.flatMap((feature) => (feature.switch ? featureTools(feature.tools, CATALOG, feature.switch) : feature.tools))
 
 export const createApp = async ({ db, env }: { db: Db; env: Env }) => {
   const access = env.ACCESS_TEAM && env.ACCESS_AUD ? { team: env.ACCESS_TEAM, audience: env.ACCESS_AUD } : undefined
@@ -32,7 +35,9 @@ export const createApp = async ({ db, env }: { db: Db; env: Env }) => {
     // In the database, so every instance (each Worker isolate) shares Idempotency-Key answers
     guards: { store: await dbGuardStore(db) },
   })
-  for (const feature of FEATURES) await feature.register(app, { db })
+  // A switchable feature sees the app through its gate, so every route it adds answers 403 feature_disabled while off
+  const flags = flagsOf(db, env)
+  for (const feature of FEATURES) await feature.register(feature.switch ? flags.gated(app, feature.switch) : app, { db, flags })
   // guide/ as a module (`pnpm guide` writes it), so it serves the same on Workers, which can't read a folder
   serveGuide(app, { files: GUIDE_FILES, vars: () => ({}), full: ['llms.txt', 'skills/*'] })
   // The product's own skills (guide/skills/), offered over MCP too: as skills, and each playbook as a prompt

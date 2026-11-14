@@ -15,7 +15,9 @@
  *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--yes]
  *                                             a new app: features/, the kit in src/kit, tests; Node (server.ts, a
  *                                             container) and/or Workers (worker.ts, D1). It never asks; --yes is accepted
- *   kit feature <plural-name> [--app .]       a new feature folder (schema, repo, routes, handlers, tools), listed
+ *   kit feature <plural-name> [--app .] [--switch]
+ *                                             a new feature folder (schema, repo, routes, handlers, tools), listed;
+ *                                             --switch lists it in src/features/catalog.ts so an owner can switch it off
  *   kit guide [--from guide] [--out src/guide.gen.ts]  the guide folder as a module (GUIDE_FILES), for Workers
  *   kit sdk [--app .] [--package name] [--bin name]
  *                                             a typed TypeScript client in sdk/: generated types, a fetch-only core,
@@ -212,7 +214,7 @@ const adopt = () => {
 // ---- Generators: a new app, a new feature ----
 
 /** The modules a new app starts with. */
-const APP_MODULES = ['core', 'db', 'oauth', 'guide', 'mcp', 'testing']
+const APP_MODULES = ['core', 'db', 'oauth', 'guide', 'mcp', 'switches', 'testing']
 const RUNTIME = { '@hono/node-server': '^2.1.8', tsx: '^4.23.15' }
 const DEV = { '@types/node': '^26.6.6', typescript: '^7.0.2', vitest: '^5.1.0' }
 /** What the Cloudflare side adds, at the versions the kit tests with. */
@@ -340,7 +342,7 @@ export const namesOf = (name) => {
   }
 }
 
-const addFeature = (root, name) => {
+const addFeature = (root, name, switchable = false) => {
   const vars = namesOf(name)
   const list = join(root, 'src/features/index.ts')
   if (!existsSync(list)) fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
@@ -350,7 +352,15 @@ const addFeature = (root, name) => {
   if (!text.includes('// kit:imports') || !text.includes('  // kit:features')) fail('src/features/index.ts lost its `// kit:imports` or `// kit:features` line; add the feature there by hand')
   copyTemplate(join(KIT, 'templates/feature'), folder, vars, (file) => (file === 'feature.test.ts' ? `${name}.test.ts` : file))
   writeFileSync(list, text.replace('// kit:imports', `import { feature as ${vars.__camel__} } from './${name}/index.js'\n// kit:imports`).replace('  // kit:features', `  ${vars.__camel__},\n  // kit:features`))
-  console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test) and listed it in src/features/index.ts`)
+  if (switchable) {
+    const catalog = join(root, 'src/features/catalog.ts')
+    const listed = existsSync(catalog) ? readFileSync(catalog, 'utf8') : ''
+    if (!listed.includes('  // kit:catalog')) fail('src/features/catalog.ts lost its `// kit:catalog` line (or is missing): add the feature there by hand')
+    writeFileSync(catalog, listed.replace('  // kit:catalog', `  '${name}': { title: '${vars.__Pascal__}', description: '${vars.__Pascal__}: say here what switching it off stops.' },\n  // kit:catalog`))
+    const index = join(folder, 'index.ts')
+    writeFileSync(index, readFileSync(index, 'utf8').replace(`  name: '${name}',`, `  name: '${name}',\n  switch: '${name}',`))
+  }
+  console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test) and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
 }
 
 /**
@@ -1106,7 +1116,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
   feature: () => {
     const [name] = names
     if (!name) fail('name the feature, plural and kebab-case: feature reading-lists')
-    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name)
+    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, flags.has('--switch'))
   },
 
   update: () => {

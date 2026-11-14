@@ -70,6 +70,6 @@ if (!built.length || stray.length) {
 }
 // Generated code is written in the kit's long-line style: the first format rewrites it, and the app must still take a feature
 run('pnpm', ['format'], app)
-run(process.execPath, [cli, 'feature', 'things'], app)
+run(process.execPath, [cli, 'feature', 'things', '--switch'], app)
 for (const args of [['migrations'], ['typecheck'], ['lint'], ['test']]) run('pnpm', args, app)
 rmSync(parent, { recursive: true, force: true })
