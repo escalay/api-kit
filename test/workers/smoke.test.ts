@@ -100,7 +100,7 @@ describe('feature switches in workerd', () => {
     await env.DB.prepare('insert into feature_switches (key, scope, "on", changed_by, changed_at) values (?, ?, ?, ?, ?)').bind('beta', 'everyone', 0, 'test', new Date().toISOString()).run()
     const refused = await exports.default.fetch('https://kit.test/probe-beta')
     expect(refused.status).toBe(403)
-    expect(await refused.json()).toMatchObject({ code: 'feature_disabled', detail: 'This feature is disabled.', feature: 'beta' })
+    expect(await refused.json()).toMatchObject({ code: 'feature_disabled', detail: expect.stringMatching(/^This feature is disabled\. Beta \(`beta`\) is off for everyone, switched off by test at /), feature: 'beta' })
     expect(await (await exports.default.fetch('https://kit.test/api/features')).json()).toMatchObject({ providers: ['database'], _embedded: { features: [{ key: 'beta', on: false, source: 'database' }] } })
   })
 })
