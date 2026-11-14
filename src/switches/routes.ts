@@ -30,7 +30,7 @@ export const switchRoutes = ({ path, tag, keys }: { path: string; tag: string; k
       alsoOff: z.array(z.string()).openapi({ description: 'Features that stop when this one is switched off.' }),
       requires: z.string().optional().openapi({ description: 'What a license must grant for it to work at all; absent for a free feature.', example: 'enterprise' }),
       licensed: z.boolean().optional().openapi({ description: 'Whether this deployment’s license grants what it requires; absent for a free feature.' }),
-      overrides: z.array(OverrideSchema).openapi({ description: 'The stored switches for it: everyone’s, and any for one person or key.' }),
+      overrides: z.array(OverrideSchema).openapi({ description: 'The stored switches for it: everyone’s and your own; an owner sees every person’s and key’s too.' }),
       _links: LinksSchema,
     })
     .openapi('Feature', { description: 'One switchable feature, as it is for the caller, and the switches stored for it.' })

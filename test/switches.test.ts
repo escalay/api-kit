@@ -95,6 +95,24 @@ describe('switches', () => {
     expect((await run(LAPTOP, 'sending', { n: 'not a number' })).status).toBe(400)
   })
 
+  it('runs a feature’s own middleware only while it is on, so a refused call spends nothing', async () => {
+    const db = await testDb()
+    const flags = switches({ catalog: CATALOG, providers: [databaseProvider(db, { cacheMs: 0 })] })
+    const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`owner:${hashApiKey(OWNER)}`) } })
+    let counted = 0
+    const webhooks = flags.gated(app, 'webhooks')
+    webhooks.use('/api/hooks', async (_c, next) => {
+      counted += 1
+      await next()
+    })
+    webhooks.get('/api/hooks', (c) => c.json({ ok: true }))
+    const call = () => app.request('/api/hooks', { headers: { authorization: `Bearer ${OWNER}` } })
+    expect((await call()).status).toBe(200)
+    await flags.set({ key: 'webhooks', on: false, by: 'owner' })
+    expect((await call()).status).toBe(403)
+    expect(counted).toBe(1)
+  })
+
   it('lets only the owner switch', async () => {
     const { call } = await setup()
     const answer = await call(LAPTOP)('/api/features/webhooks', { method: 'PATCH', body: { on: false } })
@@ -130,6 +148,21 @@ describe('switches', () => {
     expect(await flags.isOn('beta', { targetingKey: 'person:ana@example.com' })).toBe(true)
     expect(await flags.isOn('beta')).toBe(false)
     expect((await flip('beta', { on: true, scope: 'team:x' })).status).toBe(400)
+  })
+
+  it('shows other people’s and keys’ switches only to an owner', async () => {
+    const { flip, call } = await setup()
+    await flip('beta', { on: true, scope: 'key:laptop' })
+    await flip('beta', { on: true, scope: 'person:ana@example.com' })
+    await flip('webhooks', { on: false })
+    const overridesFor = async (key: string, feature: string) => (await (await call(key)(`/api/features/${feature}`)).json()).overrides.map((override: { scope: string }) => override.scope)
+    expect(await overridesFor(OWNER, 'beta')).toEqual(['key:laptop', 'person:ana@example.com'])
+    expect(await overridesFor(LAPTOP, 'beta')).toEqual(['key:laptop'])
+    expect(await overridesFor(CI, 'beta')).toEqual([])
+    expect(await overridesFor(CI, 'webhooks')).toEqual(['everyone'])
+    const listed = JSON.stringify(await (await call(CI)('/api/features')).json())
+    expect(listed).not.toContain('ana@example.com')
+    expect(listed).not.toContain('key:laptop')
   })
 
   it('keeps FEATURES_OFF off whatever is stored, and lists names it does not know', async () => {

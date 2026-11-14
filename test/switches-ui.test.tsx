@@ -60,6 +60,19 @@ describe('the features client', () => {
     features.dispose()
   })
 
+  it('shows a screen when the list cannot be loaded, leaving the API to refuse what is off', async () => {
+    const features = createFeaturesClient<Key>({ fetch: () => Promise.reject(new Error('offline')), refreshOnFocus: false })
+    render(
+      <FeaturesProvider client={features}>
+        <Feature name="digest" off={<p>Disabled</p>}>
+          <p>The digest</p>
+        </Feature>
+      </FeaturesProvider>,
+    )
+    expect(await screen.findByText('The digest')).toBeTruthy()
+    expect(screen.queryByText('Disabled')).toBeNull()
+  })
+
   it('keeps the last good list when a refresh fails, and says why', async () => {
     const { owner } = await server()
     let down = false

@@ -43,8 +43,9 @@ export const useFeatures = <Key extends string = string>() => {
 }
 
 /**
- * One feature for the caller. `on` is false until the list arrived (`ready`), so nothing switchable flashes in;
- * `why` says why it is off, in a sentence.
+ * One feature for the caller. `on` is false until the list arrived (`ready`), so nothing switchable flashes in, and
+ * true when the list could not be loaded (the API still answers 403 for a feature that is off); `why` says why it is
+ * off, in a sentence.
  *
  * @example
  * const { on, ready, why } = useFeature('digest')
@@ -52,7 +53,8 @@ export const useFeatures = <Key extends string = string>() => {
 export const useFeature = <Key extends string = string>(key: Key) => {
   const { features, status } = useFeatures<Key>()
   const feature = features[key]
-  return { on: feature?.on ?? false, ready: status !== 'loading', feature, why: whyOff(feature, features) }
+  // A list that failed to load says nothing about the feature: show it, and let the API's own 403 decide
+  return { on: feature?.on ?? status === 'error', ready: status !== 'loading', feature, why: whyOff(feature, features) }
 }
 
 /**
