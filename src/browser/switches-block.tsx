@@ -114,7 +114,8 @@ export const FeatureSwitches = ({ canSwitch = false, className, describe, keys }
 }
 
 /**
- * The notice for a screen whose feature is off: "This feature is disabled.", why, and the app's own `action`.
+ * The notice for a screen whose feature is off: "This feature is disabled.", why, and the app's own `action` (a link
+ * to where its owner switches features, an upgrade, a sign-up); it names no page of its own.
  *
  * @example
  * <FeatureDisabledNotice name="digest" action={<Button asChild><a href="/upgrade">Upgrade</a></Button>} />
@@ -127,7 +128,7 @@ export const FeatureDisabledNotice = ({ name, action, className }: { name: strin
     <div role="status" className={cn('grid gap-2 rounded-lg border p-6 text-sm', className)}>
       <p className="font-medium">This feature is disabled.</p>
       {why && <p className="text-muted-foreground">{why}</p>}
-      {feature && !feature.locked && !unlicensed && <p className="text-muted-foreground">An owner can switch it on under Features.</p>}
+      {feature && !feature.locked && !unlicensed && <p className="text-muted-foreground">An owner can switch it on.</p>}
       {action ??
         (unlicensed && license?.upgrade && (
           <a href={license.upgrade} className={cn(UPGRADE_LINK, 'justify-self-start')}>
