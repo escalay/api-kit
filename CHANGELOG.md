@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.20.0](https://github.com/escalay/api-kit/compare/v1.19.0...v1.20.0) (2026-11-14)
+
+
+### New
+
+* switches, feature switches with a React client and license keys for paid features ([#53](https://github.com/escalay/api-kit/issues/53)) ([8a70574](https://github.com/escalay/api-kit/commit/8a705744a21fa27bd772bcd3f119b738cf6846a9))
+
 ## [1.19.0](https://github.com/escalay/api-kit/compare/v1.18.0...v1.19.0) (2026-11-13)
 
 
