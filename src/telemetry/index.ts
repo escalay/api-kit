@@ -52,6 +52,11 @@ export type TelemetryConfig = {
   choices?: Record<string, readonly string[]>
   /** For tests: the fetch that sends it. */
   fetch?: typeof fetch
+  /**
+   * The owner's switch kept elsewhere, e.g. a feature switch (`switches` part), so the app has one switch for it, not
+   * two; the report's own `enabled` column is then left alone.
+   */
+  switch?: { isOn: () => boolean | Promise<boolean>; set: (enabled: boolean, by: string) => Promise<void> }
 }
 
 export type TelemetryRegisterOptions = {
@@ -89,6 +94,11 @@ export const coarseReport = (report: Record<string, unknown>, choices: Record<st
     ),
   ) as TelemetryReport
 
+const callerName = (c: Context) => {
+  const caller = c.get('caller' as never) as { kind?: string; name?: string; email?: string; owner?: string } | undefined
+  return caller?.email ?? caller?.owner ?? caller?.name ?? 'unknown'
+}
+
 const processEnv = (): TelemetryEnv => (globalThis as { process?: { env?: TelemetryEnv } }).process?.env ?? {}
 const envOf = (c: Context): TelemetryEnv => {
   const bindings = (c.env ?? {}) as TelemetryEnv
@@ -119,9 +129,15 @@ export const telemetry = (config: TelemetryConfig) => {
   const bodyFor = async (db: Db, row: TelemetryRow): Promise<TelemetryBody> => ({ schema: config.schemaVersion, instance: row.instance, version: config.version, report: coarseReport(await config.collect(db), config.choices) })
 
   /** The body as it would be sent now, made from the app's `collect`. */
+  /** The row, with `enabled` read from the app's own switch when it keeps one. */
+  const stateOf = async (db: Db): Promise<TelemetryRow> => {
+    const row = await telemetryRepo(db).state()
+    return config.switch ? { ...row, enabled: await config.switch.isOn() } : row
+  }
+
   const bodyOf = async (db: Db) => {
     await migrate(db, 'telemetry', TELEMETRY_MIGRATIONS)
-    return bodyFor(db, await telemetryRepo(db).state())
+    return bodyFor(db, await stateOf(db))
   }
 
   /**
@@ -132,7 +148,7 @@ export const telemetry = (config: TelemetryConfig) => {
     try {
       await migrate(db, 'telemetry', TELEMETRY_MIGRATIONS)
       const repo = telemetryRepo(db)
-      const row = await repo.state()
+      const row = await stateOf(db)
       const off = offBecause(env, row)
       if (off) return { sent: false, why: off }
       const now = new Date()
@@ -157,8 +173,8 @@ export const telemetry = (config: TelemetryConfig) => {
     // The first run starts here: the instance id and the 24 hours of quiet
     await repo.state()
     const routes = telemetryRoutes({ path, tag })
-    const stateOf = async (c: Context) => {
-      const row = await repo.state()
+    const reportOf = async (c: Context) => {
+      const row = await stateOf(db)
       const off = offBecause(env(c), row)
       return {
         on: !off,
@@ -173,11 +189,13 @@ export const telemetry = (config: TelemetryConfig) => {
       }
     }
 
-    const get: RouteHandler<TelemetryRoutes['get']> = async (c) => c.json(await stateOf(c), 200, { 'cache-control': 'no-store' })
+    const get: RouteHandler<TelemetryRoutes['get']> = async (c) => c.json(await reportOf(c), 200, { 'cache-control': 'no-store' })
     const update: RouteHandler<TelemetryRoutes['update']> = async (c) => {
       if (!(await isOwner(c))) throw new ProblemError('forbidden', { detail: 'Only the owner can switch the usage report.' })
-      await repo.setEnabled(c.req.valid('json').enabled)
-      return c.json(await stateOf(c), 200, { 'cache-control': 'no-store' })
+      const { enabled } = c.req.valid('json')
+      if (config.switch) await config.switch.set(enabled, callerName(c))
+      else await repo.setEnabled(enabled)
+      return c.json(await reportOf(c), 200, { 'cache-control': 'no-store' })
     }
     app.openapi(routes.get, get)
     app.openapi(routes.update, update)

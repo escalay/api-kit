@@ -550,6 +550,58 @@
       ]
     },
     {
+      "name": "switches",
+      "type": "registry:item",
+      "title": "Feature switches",
+      "description": "One catalog of the app's additive features (`defineFeatures`, stable kebab-case keys), each on or off for everyone, one person or one API key; providers in order (`databaseProvider`, `memoryProvider`, `fromSdk` for any flag service), `FEATURES_OFF` locks, `needs`; `gated` routes answer 403 `feature_disabled`, `isOn` for background work; `GET`/`PATCH /api/features` and its MCP tools",
+      "registryDependencies": [
+        "escalay/api-kit/db",
+        "escalay/api-kit/mcp"
+      ],
+      "files": [
+        {
+          "path": "src/switches/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/index.ts"
+        },
+        {
+          "path": "src/switches/catalog.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/catalog.ts"
+        },
+        {
+          "path": "src/switches/providers.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/providers.ts"
+        },
+        {
+          "path": "src/switches/repo.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/repo.ts"
+        },
+        {
+          "path": "src/switches/routes.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/routes.ts"
+        },
+        {
+          "path": "src/switches/schema.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/schema.ts"
+        },
+        {
+          "path": "src/switches/tools.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/tools.ts"
+        },
+        {
+          "path": "src/switches/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/README.md"
+        }
+      ]
+    },
+    {
       "name": "testing",
       "type": "registry:item",
       "title": "Testing",

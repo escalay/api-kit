@@ -22,8 +22,8 @@ const build = async (env: Env) => {
     title: 'Kit on Workers',
     version: '1.0.0',
     description: 'The kit running in workerd.',
-    tags: [{ name: 'Probe', description: 'The probe.' }, kit.PEOPLE_TAG, kit.SETUP_TAG, kit.TELEMETRY_TAG],
-    auth: { realm: 'probe', keys: kit.parseApiKeys(undefined), open: ['/probe', '/probe/*', '/llms.txt', '/agents/*', '/api/telemetry', ...kit.PEOPLE_OPEN_PATHS, ...kit.SETUP_OPEN_PATHS], session: kit.sessionOf(db) },
+    tags: [{ name: 'Probe', description: 'The probe.' }, kit.PEOPLE_TAG, kit.SETUP_TAG, kit.TELEMETRY_TAG, kit.SWITCHES_TAG],
+    auth: { realm: 'probe', keys: kit.parseApiKeys(undefined), open: ['/probe', '/probe/*', '/llms.txt', '/agents/*', '/api/telemetry', '/api/features', '/probe-beta', ...kit.PEOPLE_OPEN_PATHS, ...kit.SETUP_OPEN_PATHS], session: kit.sessionOf(db) },
     guards: { store: guards },
   })
   // Passkeys run through @simplewebauthn/server on workerd; the code is a test value, never a real secret
@@ -31,6 +31,10 @@ const build = async (env: Env) => {
   await kit.registerSetup(app, { db, code: 'PROBE-CODE', steps: [], guards })
   // Reads DO_NOT_TRACK and TELEMETRY from the Worker's bindings
   await probeTelemetry().register(app, { db, isOwner: (c) => kit.isAdmin(c.get('caller' as never)) })
+  // Switches over D1, read fresh on every call so a row written by the test shows at once
+  const flags = kit.switches({ catalog: kit.defineFeatures({ beta: { title: 'Beta', description: 'A probe feature.' } }), providers: [kit.databaseProvider(db, { cacheMs: 0 })] })
+  await flags.register(app, { isOwner: (c) => kit.isAdmin(c.get('caller' as never)) })
+  flags.gated(app, 'beta').get('/probe-beta', (c) => c.json({ beta: true }))
   // Workers can't read a folder: the guide comes from a module, as `kit guide` writes it
   kit.serveGuide(app, { files: { 'llms.txt': '# Probe\n\nServed from {{origin}}.\n\n{{api.endpoints}}\n', 'agents/notes.md': '# Notes\n' }, vars: () => ({}), full: ['llms.txt', 'agents/*'] })
   app.use('/probe', kit.snapshotEtag(() => 'v1'))

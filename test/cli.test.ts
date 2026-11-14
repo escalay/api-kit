@@ -7,7 +7,7 @@ import { createRoute, z } from '@hono/zod-openapi'
 import { describe, expect, it, vi } from 'vitest'
 import { boardTools } from '../src/boards/index.js'
 import { vectorSearchTools } from '../src/vector-search/index.js'
-import { cliMarkdown, createAgentApi, createOAuth, fallbackCliName, hintsOf, keyTools, teamTools, telemetryTools, generateOAuthKey, HAL_JSON, linksOf, memoryOAuthStore, mintApiKey, originOf, pageOf, pageSchema, parseApiKeys, problemResponses, ProblemError, LinksSchema } from '../src/index.js'
+import { cliMarkdown, createAgentApi, createOAuth, fallbackCliName, hintsOf, keyTools, teamTools, telemetryTools, switchTools, generateOAuthKey, HAL_JSON, linksOf, memoryOAuthStore, mintApiKey, originOf, pageOf, pageSchema, parseApiKeys, problemResponses, ProblemError, LinksSchema } from '../src/index.js'
 import { cliOf, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp } from '../src/mcp/index.js'
 import { CLI_GLOBAL_FLAGS, CLI_RESOURCE_FLAGS, pathKeysOf } from '../src/core/cli.js'
 import { GLOBAL_FLAGS, RESOURCE_FLAGS } from '../templates/sdk/sdk/cli/engine/args.js'
@@ -547,7 +547,7 @@ describe('naming commands', () => {
       'resource r: no cli name (the route rule would call it "thing r"); add cli: \'<noun> <verb>\'',
     ])
     // The kit's own parts name their tools, so an app that adds them stays clean
-    const parts = [...keyTools(), ...teamTools(), ...telemetryTools(), ...boardTools({ noun: 'recipes', label: () => '', suggestions: true }), ...vectorSearchTools({ path: '/api/search', similarPath: '/api/recipes/{slug}/similar', noun: 'recipes', label: () => '' })]
+    const parts = [...keyTools(), ...teamTools(), ...telemetryTools(), ...switchTools(), ...boardTools({ noun: 'recipes', label: () => '', suggestions: true }), ...vectorSearchTools({ path: '/api/search', similarPath: '/api/recipes/{slug}/similar', noun: 'recipes', label: () => '' })]
     expect(cliGaps({ tools: parts })).toEqual([])
     expect(cliSnapshot({ tools: parts }).commands.map((command) => command.name)).toContain('recipe search-by-image')
     expect(cliGaps({ tools: [mcpTool({ ...base, name: 'status', input: z.object({}), cli: { name: 'news view', examples: [{ run: 'news view', about: 'x' }] }, call: () => ({ path: '/n' }) })] })).toEqual([])

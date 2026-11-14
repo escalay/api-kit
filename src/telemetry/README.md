@@ -57,6 +57,10 @@ setInterval(() => void usage.sendDaily(db, process.env), 3_600_000)
 
 `sendDaily` returns `{ sent, why }` for the app's logs.
 
+An app with the `switches` part keeps one switch for the report, not two: pass
+`switch: { isOn: () => flags.isOn('usage-report'), set: (on, by) => flags.set({ key: 'usage-report', on, by }) }`
+and the report's own `enabled` column is left alone.
+
 ## Rules
 
 - Off, and nothing sent, when `DO_NOT_TRACK=1` (or `true`) or `TELEMETRY=off` is set, or the owner switched it off;

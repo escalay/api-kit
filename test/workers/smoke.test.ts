@@ -94,6 +94,17 @@ describe('the usage report in workerd', () => {
   })
 })
 
+describe('feature switches in workerd', () => {
+  it('reads a switch stored in D1 and answers 403 while the feature is off', async () => {
+    expect(await (await exports.default.fetch('https://kit.test/probe-beta')).json()).toEqual({ beta: true })
+    await env.DB.prepare('insert into feature_switches (key, scope, "on", changed_by, changed_at) values (?, ?, ?, ?, ?)').bind('beta', 'everyone', 0, 'test', new Date().toISOString()).run()
+    const refused = await exports.default.fetch('https://kit.test/probe-beta')
+    expect(refused.status).toBe(403)
+    expect(await refused.json()).toMatchObject({ code: 'feature_disabled', detail: 'This feature is disabled.', feature: 'beta' })
+    expect(await (await exports.default.fetch('https://kit.test/api/features')).json()).toMatchObject({ providers: ['database'], _embedded: { features: [{ key: 'beta', on: false, source: 'database' }] } })
+  })
+})
+
 describe('testDb in workerd', () => {
   it('is the D1 binding, through Drizzle', async () => {
     const { testDb } = await import('../../src/index.js')
