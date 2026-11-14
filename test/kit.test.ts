@@ -814,7 +814,7 @@ describe('the copy-in CLI', () => {
         }
       }
       // A part needs other parts by their GitHub address; a bare name is shadcn's own
-      for (const needed of item.registryDependencies ?? []) expect(needed.startsWith('escalay/api-kit/') ? names.includes(needed.slice('escalay/api-kit/'.length)) : ['button', 'input'].includes(needed), `${item.name} → ${needed}`).toBe(true)
+      for (const needed of item.registryDependencies ?? []) expect(needed.startsWith('escalay/api-kit/') ? names.includes(needed.slice('escalay/api-kit/'.length)) : ['button', 'input', 'switch'].includes(needed), `${item.name} → ${needed}`).toBe(true)
     }
     expect(items.filter((item) => item.meta?.root).map((item) => item.name)).toEqual(['npm-release'])
     const block = items.find((item) => item.name === 'vector-search-ui')!

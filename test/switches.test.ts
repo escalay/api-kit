@@ -79,7 +79,7 @@ describe('switches', () => {
     expect(refused.status).toBe(403)
     const problem = await refused.json()
     expect(problem).toMatchObject({ code: 'feature_disabled', feature: 'webhooks', blockedBy: [], scope: 'everyone', changedBy: 'owner', switchOn: '/api/features/webhooks' })
-    expect(problem.detail).toMatch(/^This feature is disabled\. Webhooks \(`webhooks`\) is off for everyone, switched off by owner at \d{4}-\d\d-\d\d \d\d:\d\d UTC\. An owner switches it on with PATCH \/api\/features\/webhooks \{"on": true\} \(the switch_feature tool\); ask them rather than retrying\.$/)
+    expect(problem.detail).toMatch(/^This feature is disabled\. Webhooks \(`webhooks`\) is off for everyone, switched off by owner at \d{4}-\d\d-\d\d \d\d:\d\d UTC\. An owner switches it on with switch_feature \{"key": "webhooks", "state": "on"\} or PATCH \/api\/features\/webhooks \{"on": true\}; ask them rather than retrying, and never switch it yourself to finish a task\.$/)
     expect(switched).toEqual([{ key: 'webhooks', scope: 'everyone', on: false, by: 'owner' }])
     const listed = (await (await owner('/api/features')).json()) as { _embedded: { features: { key: string; on: boolean; overrides: unknown[] }[] } }
     expect(listed._embedded.features.find((feature) => feature.key === 'webhooks')).toMatchObject({ on: false, source: 'database', reason: 'STATIC', overrides: [{ scope: 'everyone', on: false, changedBy: 'owner' }] })

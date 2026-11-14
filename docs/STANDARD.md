@@ -538,3 +538,9 @@ never switchable.
   answers 409 naming it.
 - `GET /api/features` lists every feature, on or off for the caller, what decided it (`source`, `reason`) and the
   stored switches; agents get `list_features` and `switch_feature`.
+- The 403's `detail` starts "This feature is disabled." and goes on to say which feature, for whom, who switched it
+  and when, and how it comes back on; `switch_feature` acts only on the user's word. Each switchable feature's tools
+  say which switch they belong to (`featureTools`).
+- The browser asks the same list (`switches-client`, `switches-react`): `useFeature` and `<Feature>` show a screen
+  only while its feature is on, `useFeatureDisabled` hears every 403 for one alert, and the `switches-ui` block is
+  the owner's panel and the disabled notice.

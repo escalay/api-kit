@@ -716,6 +716,86 @@
       }
     },
     {
+      "name": "switches-client",
+      "type": "registry:item",
+      "title": "Features client",
+      "description": "Browser, no framework: the features for the person signed in from `GET /api/features` (createFeaturesClient: getState, subscribe, isOn, refresh on focus, switch with dryRun, onDisabled and watchFetch for every 403 feature_disabled), isFeatureDisabled, whyOff",
+      "files": [
+        {
+          "path": "src/browser/switches-client.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/switches-client.ts"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "web": true
+      }
+    },
+    {
+      "name": "switches-react",
+      "type": "registry:item",
+      "title": "Feature hooks",
+      "description": "Browser, React: FeaturesProvider, useFeature, <Feature> (children while on, `off` while not), useFeatures, useSwitchFeature (preview and apply), useFeatureDisabled, featureHooks typed by the app's keys; headless",
+      "dependencies": [
+        "react"
+      ],
+      "registryDependencies": [
+        "escalay/api-kit/switches-client"
+      ],
+      "files": [
+        {
+          "path": "src/browser/switches-react.tsx",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/switches-react.tsx"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "web": true
+      }
+    },
+    {
+      "name": "switches-ui",
+      "type": "registry:item",
+      "title": "Features block",
+      "description": "Browser, React + shadcn: FeatureSwitches (every feature with its switch, a confirm naming what else stops; read-only for members) and FeatureDisabledNotice (\"This feature is disabled.\", why, the app's own action) over switches-react",
+      "dependencies": [
+        "react"
+      ],
+      "registryDependencies": [
+        "button",
+        "switch",
+        "escalay/api-kit/switches-react"
+      ],
+      "files": [
+        {
+          "path": "src/browser/switches-block.tsx",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/switches-block.tsx"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "web": true
+      }
+    },
+    {
       "name": "boards-client",
       "type": "registry:item",
       "title": "Boards client",

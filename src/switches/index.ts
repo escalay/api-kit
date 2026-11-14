@@ -89,7 +89,7 @@ const disabledBecause = (catalog: Catalog, state: FeatureState, cause: FeatureSt
 const howToSwitchOn = (cause: FeatureState, switchOn: string) =>
   cause.source === 'locked'
     ? 'Only the deployment’s settings can switch it on: remove it from FEATURES_OFF.'
-    : `An owner switches it on with PATCH ${switchOn} {"on": true} (the switch_feature tool); ask them rather than retrying.`
+    : `An owner switches it on with switch_feature {"key": "${cause.key}", "state": "on"} or PATCH ${switchOn} {"on": true}; ask them rather than retrying, and never switch it yourself to finish a task.`
 
 const callerOf = (c: Context) => c.get('caller' as never) as Caller | undefined
 const nameOf = (caller: Caller | undefined) => (caller?.kind === 'person' ? caller.email : caller?.kind === 'agent' ? caller.owner : (caller?.name ?? 'unknown'))
