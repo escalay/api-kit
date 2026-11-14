@@ -29,7 +29,7 @@ export { contextOf, contextOfScope, fromSdk, isScope, memoryProvider, type FlagA
 export { databaseProvider, switchesRepo, type SwitchesRepo } from './repo.js'
 export { switchRoutes, type SwitchRoutes } from './routes.js'
 export { featureSwitches, SWITCH_MIGRATIONS, type FeatureSwitchRow } from './schema.js'
-export { switchTools } from './tools.js'
+export { featureTools, switchTools } from './tools.js'
 
 export const SWITCHES_TAG = { name: 'Features', description: 'The switchable features: which are on, for whom, and the owner’s switches.' }
 
@@ -45,6 +45,9 @@ export type FeatureState = {
   reason: FlagReason | 'LOCKED'
   /** The stored switch that decided it, when a provider says. */
   scope?: string
+  /** Who switched it, and when, when a provider says. */
+  changedBy?: string
+  changedAt?: string
   /** Features it needs that are off, which turn it off whatever its own switch says. */
   blockedBy: string[]
 }
@@ -67,6 +70,27 @@ export type SwitchesRegisterOptions = {
   tag?: string
 }
 
+/** Who a stored scope switched a feature off for, in words. */
+const forWhom = (scope: string | undefined) => (!scope || scope === 'everyone' ? 'for everyone' : scope.startsWith('key:') ? `for the key ${scope.slice(4)}` : `for ${scope.slice(7)}`)
+
+/** Why a feature is off, in a sentence: its own switch, or the one it needs. @example 'Reading fields (`extract`) is off for everyone, switched off by owner at 2026-11-14 10:02 UTC.' */
+const disabledBecause = (catalog: Catalog, state: FeatureState, cause: FeatureState) => {
+  const name = (key: string) => `${catalog[key]?.title ?? key} (\`${key}\`)`
+  const offBy =
+    cause.source === 'locked'
+      ? 'is switched off by FEATURES_OFF in the deployment’s settings'
+      : cause.source === 'default'
+        ? 'is off unless switched on'
+        : `is off ${forWhom(cause.scope)}${cause.changedBy ? `, switched off by ${cause.changedBy}${cause.changedAt ? ` at ${cause.changedAt.slice(0, 16).replace('T', ' ')} UTC` : ''}` : ` (${cause.source})`}`
+  return cause === state ? `${name(state.key)} ${offBy}.` : `${name(state.key)} needs ${name(cause.key)}, which ${offBy}.`
+}
+
+/** What turns a feature back on, in a sentence. */
+const howToSwitchOn = (cause: FeatureState, switchOn: string) =>
+  cause.source === 'locked'
+    ? 'Only the deployment’s settings can switch it on: remove it from FEATURES_OFF.'
+    : `An owner switches it on with PATCH ${switchOn} {"on": true} (the switch_feature tool); ask them rather than retrying.`
+
 const callerOf = (c: Context) => c.get('caller' as never) as Caller | undefined
 const nameOf = (caller: Caller | undefined) => (caller?.kind === 'person' ? caller.email : caller?.kind === 'agent' ? caller.owner : (caller?.name ?? 'unknown'))
 
@@ -88,7 +112,7 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
   const writer = providers.find((provider) => provider.write)
   const options = (fresh?: boolean): ResolveOptions => ({ fresh, oldNames })
 
-  type Own = Pick<FeatureState, 'own' | 'source' | 'reason' | 'scope'>
+  type Own = Pick<FeatureState, 'own' | 'source' | 'reason' | 'scope' | 'changedBy' | 'changedAt'>
   /** Each feature's own switch: a lock, else the first provider that answers, else the catalog's default. */
   const ownOf = async (context: FlagContext, fresh?: boolean) => {
     const own: Record<string, Own> = {}
@@ -102,7 +126,7 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
       })
       for (const key of open) {
         const answer = answers[key]
-        if (answer) own[key] = { own: answer.value, source: provider.name, reason: answer.reason, ...(answer.scope ? { scope: answer.scope } : {}) }
+        if (answer) own[key] = { own: answer.value, source: provider.name, reason: answer.reason, ...(answer.scope ? { scope: answer.scope } : {}), ...(answer.by ? { changedBy: answer.by } : {}), ...(answer.at ? { changedAt: answer.at } : {}) }
       }
     }
     for (const key of keys) own[key] ??= { own: catalog[key]!.default ?? true, source: 'default', reason: 'DEFAULT' }
@@ -124,16 +148,28 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
   /** Whether one feature works for a caller; `fresh` skips the caches, for an action that leaves the app. */
   const isOn = async (key: Key, context: FlagContext = {}, { fresh }: { fresh?: boolean } = {}) => (await stateOf(context, { fresh }))[key]!.on
 
-  const disabled = (state: FeatureState) =>
-    new ProblemError('feature_disabled', {
-      detail: 'This feature is disabled.',
-      extensions: { feature: state.key, blockedBy: state.blockedBy, ...(state.source === 'locked' ? { locked: true } : {}), switchOn: `${path}/${state.blockedBy[0] ?? state.key}` },
+  /** A 403 that names the feature, who it is off for, who switched it and how it comes back on. */
+  const disabled = (state: FeatureState, all: Record<string, FeatureState>) => {
+    const cause = all[state.blockedBy[0] ?? state.key]!
+    const switchOn = `${path}/${cause.key}`
+    return new ProblemError('feature_disabled', {
+      detail: `This feature is disabled. ${disabledBecause(catalog, state, cause)} ${howToSwitchOn(cause, switchOn)}`,
+      extensions: {
+        feature: state.key,
+        blockedBy: state.blockedBy,
+        reason: cause.reason,
+        ...(cause.scope ? { scope: cause.scope } : {}),
+        ...(cause.changedBy ? { changedBy: cause.changedBy, changedAt: cause.changedAt } : {}),
+        ...(cause.source === 'locked' ? { locked: true } : {}),
+        switchOn,
+      },
     })
+  }
 
   /** Throws `feature_disabled` (403) unless the feature works for the caller. */
   const assertOn = async (key: Key, context: FlagContext = {}, { fresh }: { fresh?: boolean } = {}) => {
-    const state = (await stateOf(context, { fresh }))[key]!
-    if (!state.on) throw disabled(state)
+    const all = await stateOf(context, { fresh })
+    if (!all[key]!.on) throw disabled(all[key]!, all)
   }
 
   /** A route middleware: 403 `feature_disabled` for the caller while the feature is off. Runs after auth, before validation. */

@@ -2,9 +2,16 @@
 import { z } from '@hono/zod-openapi'
 import { mcpTool, type McpTool } from '../mcp/index.js'
 
-type Feature = { key: string; title: string; on: boolean; own: boolean; source: string; blockedBy: string[]; locked: boolean; overrides: { scope: string; on: boolean }[] }
-const stateWords = (feature: Feature) =>
-  feature.on ? 'on' : feature.locked ? 'off (locked by FEATURES_OFF)' : feature.blockedBy.length ? `off (needs ${feature.blockedBy.join(', ')})` : `off (${feature.source})`
+type Feature = { key: string; title: string; on: boolean; own: boolean; source: string; scope?: string; changedBy?: string; changedAt?: string; blockedBy: string[]; locked: boolean; overrides: { scope: string; on: boolean }[] }
+/** Who a feature is on or off for and who decided, in words: the store's name never stands alone. */
+const stateWords = (feature: Feature) => {
+  const state = feature.own ? 'on' : 'off'
+  if (feature.locked) return 'off, locked by FEATURES_OFF in the deployment’s settings'
+  if (feature.own && feature.blockedBy.length) return `off, because it needs ${feature.blockedBy.join(', ')}`
+  if (feature.source === 'default') return `${state} by default`
+  const whom = !feature.scope || feature.scope === 'everyone' ? 'for everyone' : `for ${feature.scope}`
+  return `${state} ${whom}${feature.changedBy ? `, switched by ${feature.changedBy}${feature.changedAt ? ` ${feature.changedAt.slice(0, 16).replace('T', ' ')} UTC` : ''}` : ` (from ${feature.source})`}`
+}
 const line = (feature: Feature) => {
   const others = feature.overrides.filter((override) => override.scope !== 'everyone')
   return `${feature.key} · ${stateWords(feature)} · ${feature.title}${others.length ? ` · ${others.map((override) => `${override.scope} ${override.on ? 'on' : 'off'}`).join(', ')}` : ''}`
@@ -32,7 +39,7 @@ export const switchTools = ({ path = '/api/features', example = 'webhooks' }: { 
     name: 'switch_feature',
     title: 'Switch a feature',
     description:
-      'Switches a feature on or off for everyone, one person (person:<email>) or one API key (key:<name>); state default removes that switch, so the next less specific one decides. Owner only. Features that need it stop too: try with preview first, which changes nothing and lists what would change.',
+      'Switches a feature on or off for everyone, one person (person:<email>) or one API key (key:<name>); state default removes that switch, so the next less specific one decides. Owner only, and only on the user’s word: a feature found off is reported to the user, never switched on to finish a task. Features that need it stop too: try with preview first, which changes nothing and lists what would change.',
     input: z.object({
       key: z.string().describe('The feature’s key, from list_features.'),
       state: z.enum(['on', 'off', 'default']).describe('on, off, or default to remove this scope’s switch.'),
@@ -54,3 +61,13 @@ export const switchTools = ({ path = '/api/features', example = 'webhooks' }: { 
       ].join('\n'),
   }),
 ]
+
+/**
+ * featureTools tells, in each tool's description, which switchable feature it belongs to, so an agent that gets 403
+ * `feature_disabled` from it knows which switch is meant.
+ *
+ * @example
+ * tools: FEATURES.flatMap((feature) => (feature.switch ? featureTools(feature.tools, CATALOG, feature.switch) : feature.tools))
+ */
+export const featureTools = (tools: McpTool[], catalog: Readonly<Record<string, { title: string }>>, key: string): McpTool[] =>
+  tools.map((tool) => ({ ...tool, description: `${tool.description} Part of the feature ${catalog[key]?.title ?? key} (\`${key}\`), which an owner can switch off: then it answers 403 feature_disabled.` }))

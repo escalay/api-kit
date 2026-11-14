@@ -46,7 +46,7 @@ export const databaseProvider = (db: Db, { cacheMs = 5000 }: { cacheMs?: number 
         const find = (scope: string) => names.map((name) => stored.find((row) => row.key === name && row.scope === scope)).find(Boolean)
         const own = context.targetingKey ? find(context.targetingKey) : undefined
         const row = own ?? find('everyone')
-        return row && { value: row.on, reason: own ? 'TARGETING_MATCH' : 'STATIC', scope: row.scope }
+        return row && { value: row.on, reason: own ? 'TARGETING_MATCH' : 'STATIC', scope: row.scope, by: row.changedBy, at: row.changedAt }
       }
       return Object.fromEntries(keys.map((key) => [key, answerFor(key)]))
     },

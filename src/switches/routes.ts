@@ -21,6 +21,8 @@ export const switchRoutes = ({ path, tag, keys }: { path: string; tag: string; k
       source: z.string().openapi({ description: 'What decided its own switch: `locked` (the environment), a provider’s name, or `default`.', example: 'database' }),
       reason: z.string().openapi({ description: 'Why, in OpenFeature’s words: `STATIC` (everyone’s switch), `TARGETING_MATCH` (yours), `DEFAULT`, `LOCKED`.', example: 'STATIC' }),
       scope: z.string().optional().openapi({ description: 'The stored switch that decided it.', example: 'everyone' }),
+      changedBy: z.string().optional().openapi({ description: 'Who switched it, when a store says.', example: 'owner@example.com' }),
+      changedAt: z.string().optional().openapi({ description: 'When it was switched, when a store says.', example: '2026-11-14T09:00:00.000Z' }),
       blockedBy: z.array(z.string()).openapi({ description: 'Features it needs that are off.' }),
       default: z.boolean().openapi({ description: 'Whether it is on when nothing is stored.' }),
       locked: z.boolean().openapi({ description: 'Switched off by `FEATURES_OFF` in the environment: no switch here changes it.' }),

@@ -14,8 +14,8 @@ export type FlagContext = { targetingKey?: string; kind?: 'person' | 'key'; emai
 /** Why a provider answered as it did, in OpenFeature's words. */
 export type FlagReason = 'STATIC' | 'TARGETING_MATCH' | 'DEFAULT' | 'DISABLED' | 'ERROR' | 'CACHED' | 'SPLIT' | 'UNKNOWN'
 
-/** A provider's answer for one key. `scope` is which stored switch decided it (`everyone`, `person:…`), when it knows. */
-export type FlagAnswer = { value: boolean; reason: FlagReason; scope?: string }
+/** A provider's answer for one key. `scope` is which stored switch decided it (`everyone`, `person:…`), and `by` and `at` who switched it and when, when it knows. */
+export type FlagAnswer = { value: boolean; reason: FlagReason; scope?: string; by?: string; at?: string }
 
 /** One stored switch, as a writable provider lists it. */
 export type FlagOverride = { key: string; scope: string; on: boolean; changedBy: string; changedAt: string }

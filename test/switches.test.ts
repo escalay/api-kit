@@ -15,6 +15,7 @@ import {
   switches,
   switchesRepo,
   switchTools,
+  featureTools,
   testDb,
   type FlagProvider,
 } from '../src/index.js'
@@ -76,7 +77,9 @@ describe('switches', () => {
     expect((await flip('webhooks', { on: false })).status).toBe(200)
     const refused = await run(LAPTOP, 'webhooks')
     expect(refused.status).toBe(403)
-    expect(await refused.json()).toMatchObject({ code: 'feature_disabled', detail: 'This feature is disabled.', feature: 'webhooks', blockedBy: [], switchOn: '/api/features/webhooks' })
+    const problem = await refused.json()
+    expect(problem).toMatchObject({ code: 'feature_disabled', feature: 'webhooks', blockedBy: [], scope: 'everyone', changedBy: 'owner', switchOn: '/api/features/webhooks' })
+    expect(problem.detail).toMatch(/^This feature is disabled\. Webhooks \(`webhooks`\) is off for everyone, switched off by owner at \d{4}-\d\d-\d\d \d\d:\d\d UTC\. An owner switches it on with PATCH \/api\/features\/webhooks \{"on": true\} \(the switch_feature tool\); ask them rather than retrying\.$/)
     expect(switched).toEqual([{ key: 'webhooks', scope: 'everyone', on: false, by: 'owner' }])
     const listed = (await (await owner('/api/features')).json()) as { _embedded: { features: { key: string; on: boolean; overrides: unknown[] }[] } }
     expect(listed._embedded.features.find((feature) => feature.key === 'webhooks')).toMatchObject({ on: false, source: 'database', reason: 'STATIC', overrides: [{ scope: 'everyone', on: false, changedBy: 'owner' }] })
@@ -106,7 +109,9 @@ describe('switches', () => {
     expect((await run(LAPTOP, 'digest')).status).toBe(200)
     await flip('sending', { on: false })
     const refused = await run(LAPTOP, 'digest')
-    expect(await refused.json()).toMatchObject({ code: 'feature_disabled', feature: 'digest', blockedBy: ['sending'], switchOn: '/api/features/sending' })
+    const problem = await refused.json()
+    expect(problem).toMatchObject({ code: 'feature_disabled', feature: 'digest', blockedBy: ['sending'], switchOn: '/api/features/sending' })
+    expect(problem.detail).toMatch(/^This feature is disabled\. Daily digest \(`digest`\) needs Sending \(`sending`\), which is off for everyone, switched off by owner at /)
     expect(await flags.stateOf()).toMatchObject({ digest: { on: false, own: true, blockedBy: ['sending'] } })
   })
 
@@ -129,7 +134,7 @@ describe('switches', () => {
 
   it('keeps FEATURES_OFF off whatever is stored, and lists names it does not know', async () => {
     const { run, flip, owner, flags } = await setup({ off: ['hooks', 'sendng'] })
-    expect((await run(LAPTOP, 'webhooks')).status).toBe(403)
+    expect((await (await run(LAPTOP, 'webhooks')).json()).detail).toBe('This feature is disabled. Webhooks (`webhooks`) is switched off by FEATURES_OFF in the deployment’s settings. Only the deployment’s settings can switch it on: remove it from FEATURES_OFF.')
     const refused = await flip('webhooks', { on: true })
     expect(refused.status).toBe(409)
     expect(await refused.json()).toMatchObject({ detail: expect.stringContaining('FEATURES_OFF') })
@@ -194,6 +199,8 @@ describe('switches', () => {
     expect(lintOpenApi(spec)).toEqual([])
     expect(Object.keys(spec.paths['/api/webhooks'].post.responses)).toContain('403')
     expect(toolRoutes(switchTools(), spec)).toEqual([])
+    const [marked] = featureTools(switchTools().slice(0, 1), CATALOG, 'webhooks')
+    expect(marked!.description).toMatch(/Part of the feature Webhooks \(`webhooks`\), which an owner can switch off: then it answers 403 feature_disabled\.$/)
     expect(await toolsRun(switchTools(), app, { list_features: {}, switch_feature: { key: 'webhooks', state: 'off', preview: true } }, { headers: { authorization: `Bearer ${OWNER}` } })).toEqual([])
   })
 })
