@@ -32,6 +32,15 @@ await registerSetup(app, { db, code: env.SETUP_CODE, guards: await dbGuardStore(
 
 Then post the enrolment to `/api/session/passkeys/register/options` and `/verify` (see `people`).
 
+## A step for a feature that can be switched off
+
+A step that sets up a switchable feature (sending, a model) answers `switchedOff: true` while that feature is off:
+it is listed, says so, and is counted neither as done nor as left.
+
+```ts
+check: async () => ((await flags.isOn('sending')) ? checkSending() : { ok: false, detail: 'Switched off under Features.', switchedOff: true })
+```
+
 ## Rules
 
 - **Fails closed:** with no code set, every claim is refused (503, naming the secret to set).

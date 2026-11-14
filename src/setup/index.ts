@@ -41,7 +41,8 @@ export type SetupStep = {
   why: string
   minutes: number
   optional?: boolean
-  check: (c: Context) => Promise<{ ok: boolean; detail: string; fixUrl?: string }>
+  /** `switchedOff`: the feature the step sets up is switched off, so there is nothing to do for it now. */
+  check: (c: Context) => Promise<{ ok: boolean; detail: string; fixUrl?: string; switchedOff?: boolean }>
 }
 
 export type SetupOptions = {
@@ -110,10 +111,12 @@ export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards,
           check(c).catch((error: Error) => ({ ok: false, detail: `The check failed: ${error.message}` })),
           new Promise<{ ok: boolean; detail: string }>((resolve) => setTimeout(() => resolve({ ok: false, detail: 'The check took too long.' }), CHECK_MS)),
         ])
-        return { ...step, optional, ok: found.ok, detail: found.detail, fixUrl: ('fixUrl' in found ? found.fixUrl : undefined) ?? null }
+        return { ...step, optional, ok: found.ok, detail: found.detail, fixUrl: ('fixUrl' in found ? found.fixUrl : undefined) ?? null, switchedOff: ('switchedOff' in found && found.switchedOff) || false }
       }),
     )
-    return c.json({ done: results.filter((step) => step.ok).length, total: results.length, _embedded: { steps: results }, _links: links(c) }, 200, { 'cache-control': 'no-store' })
+    // A switched-off step is listed but counted neither as done nor as left
+    const counted = results.filter((step) => !step.switchedOff)
+    return c.json({ done: counted.filter((step) => step.ok).length, total: counted.length, _embedded: { steps: results }, _links: links(c) }, 200, { 'cache-control': 'no-store' })
   }
 
   app.openapi(routes.status, status)

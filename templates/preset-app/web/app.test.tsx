@@ -7,7 +7,9 @@ import { createAppRouter } from './router'
 afterEach(() => vi.unstubAllGlobals())
 
 test('the home page shows what the API answers', async () => {
-  vi.stubGlobal('fetch', async () => Response.json({ status: 'ok' }))
+  vi.stubGlobal('fetch', async (input: string) =>
+    String(input).startsWith('/api/features') ? Response.json({ count: 0, license: null, _embedded: { features: [] } }) : Response.json({ status: 'ok' }),
+  )
   const queryClient = new QueryClient()
   const router = createAppRouter(queryClient, createMemoryHistory({ initialEntries: ['/app/'] }))
 
@@ -18,4 +20,5 @@ test('the home page shows what the API answers', async () => {
   )
 
   expect(await screen.findByText('The API says: ok')).toBeTruthy()
+  expect(await screen.findByText(/^No feature can be switched off yet/)).toBeTruthy()
 })

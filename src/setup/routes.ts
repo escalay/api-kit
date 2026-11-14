@@ -30,6 +30,7 @@ const StepSchema = z
     ok: z.boolean().openapi({ description: 'Checked just now, for real: true only when it works.' }),
     detail: z.string().openapi({ description: 'What the check found, and what to do when it is not ok.' }),
     fixUrl: z.string().nullable().openapi({ description: 'Where to fix it, when that is a page elsewhere (a dashboard).' }),
+    switchedOff: z.boolean().openapi({ description: 'The feature this step sets up is switched off: nothing to do for it now, and it is not counted as left.' }),
   })
   .openapi('SetupStep', { description: 'One step of the setup, with what a check of it found.' })
 

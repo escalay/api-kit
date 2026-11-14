@@ -123,6 +123,20 @@ describe('the React side', () => {
     await waitFor(() => expect(heard).toEqual(['digest']))
   })
 
+  it('shows only the features asked for, and tells an owner when someone has a switch of their own', async () => {
+    const { owner, flags } = await server()
+    await flags.set({ key: 'beta', scope: 'key:member', on: true, by: 'owner' })
+    const features = createFeaturesClient<Key>({ fetch: owner, refreshOnFocus: false })
+    render(
+      <FeaturesProvider client={features}>
+        <FeatureSwitches canSwitch keys={['beta', 'sending']} />
+      </FeaturesProvider>,
+    )
+    const switches = await screen.findAllByRole('switch')
+    expect(switches.map((one) => one.getAttribute('aria-label'))).toEqual(['Beta: off', 'Sending: on'])
+    expect(screen.getByText('Also switched for 1 person or key on their own, through the API')).toBeTruthy()
+  })
+
   it('lets an owner switch a feature off after saying what else stops, and a member only look', async () => {
     const { owner, member } = await server()
     const features = createFeaturesClient<Key>({ fetch: owner, refreshOnFocus: false })
