@@ -562,7 +562,7 @@ describe('the copy-in CLI', () => {
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
       expect(cli(parent, 'init', 'box', '--preset', 'blog').stderr).toContain('--preset is one of api, app, selfhosted')
-      expect(cli(parent, 'feature', 'reading-lists', '--app', 'demo-api').status).toBe(0)
+      expect(cli(parent, 'feature', 'reading-lists', '--app', 'demo-api', '--switch').status).toBe(0)
       expect(cli(parent, 'feature', 'reading-lists', '--app', 'demo-api').stderr).toContain('already exists')
       expect(cli(parent, 'feature', 'Bad_Name', '--app', 'demo-api').stderr).toContain('plural kebab-case')
       const app = join(parent, 'demo-api')
@@ -570,7 +570,10 @@ describe('the copy-in CLI', () => {
       expect(features).toContain("import { feature as readingLists } from './reading-lists/index.js'")
       expect(await readFile(join(app, 'src/features/reading-lists/schema.ts'), 'utf8')).toContain("sqliteTable('reading_lists'")
       expect(await readFile(join(app, 'src/features/reading-lists/tools.ts'), 'utf8')).toContain("name: 'get_reading_list'")
-      expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'testing'])
+      // --switch: listed in the catalog, so an owner can switch it off, and the feature names its switch
+      expect(await readFile(join(app, 'src/features/catalog.ts'), 'utf8')).toContain("  'reading-lists': { title: 'ReadingLists', description: 'ReadingLists: say here what switching it off stops.' },\n  // kit:catalog")
+      expect(await readFile(join(app, 'src/features/reading-lists/index.ts'), 'utf8')).toContain("  name: 'reading-lists',\n  switch: 'reading-lists',")
+      expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'switches', 'testing'])
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
       // The product's own skill, the place for developer skills, and the link coding agents find them through
       for (const path of ['guide/skills/demo-api/SKILL.md', 'guide/skills/demo-api/references/find-your-way.md', '.agents/skills/README.md']) expect(existsSync(join(app, path)), path).toBe(true)
@@ -584,7 +587,7 @@ describe('the copy-in CLI', () => {
       expect(JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).scripts).toMatchObject({ dev: 'tsx watch src/server.ts', 'dev:worker': 'wrangler dev', deploy: expect.stringContaining('wrangler d1 migrations apply DB --remote') })
       const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
       expect(migrations.status, migrations.stderr).toBe(0)
-      expect((await readdir(join(app, 'migrations'))).sort()).toEqual(['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_guards_1.sql', '0003_notes_1.sql', '0004_reading-lists_1.sql'])
+      expect((await readdir(join(app, 'migrations'))).sort()).toEqual(['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_guards_1.sql', '0003_switches_1.sql', '0004_notes_1.sql', '0005_reading-lists_1.sql'])
       expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).stdout).toContain('current')
       // A database `migrate()` already brought up (local dev) takes the files without a duplicate record
       const { DatabaseSync } = await import('node:sqlite')
@@ -814,7 +817,7 @@ describe('the copy-in CLI', () => {
         }
       }
       // A part needs other parts by their GitHub address; a bare name is shadcn's own
-      for (const needed of item.registryDependencies ?? []) expect(needed.startsWith('escalay/api-kit/') ? names.includes(needed.slice('escalay/api-kit/'.length)) : ['button', 'input'].includes(needed), `${item.name} → ${needed}`).toBe(true)
+      for (const needed of item.registryDependencies ?? []) expect(needed.startsWith('escalay/api-kit/') ? names.includes(needed.slice('escalay/api-kit/'.length)) : ['button', 'input', 'switch'].includes(needed), `${item.name} → ${needed}`).toBe(true)
     }
     expect(items.filter((item) => item.meta?.root).map((item) => item.name)).toEqual(['npm-release'])
     const block = items.find((item) => item.name === 'vector-search-ui')!

@@ -109,6 +109,18 @@ describe('telemetry', () => {
     expect(await unversioned.sendDaily(db)).toEqual({ sent: false, why: 'The version "dev" is not like 1.2.3.' })
   })
 
+  it('reads and writes the owner’s switch where the app keeps it, so there is one switch, not two', async () => {
+    let on = true
+    const changes: string[] = []
+    const { owner, usage, db } = await setup({ switch: { isOn: () => on, set: async (enabled, by) => void changes.push(`${enabled} by ${by}`, String((on = enabled))) } })
+    const answer = await owner({ method: 'PATCH', body: JSON.stringify({ enabled: false }) })
+    expect(await answer.json()).toMatchObject({ on: false, enabled: false, why: 'The owner switched it off.' })
+    expect(changes[0]).toBe('false by owner')
+    expect((await usage.sendDaily(db)).why).toBe('The owner switched it off.')
+    on = true
+    expect(await (await owner()).json()).toMatchObject({ enabled: true })
+  })
+
   it('reports only coarse ranges and booleans, never ids, text or counts', () => {
     expect([0, 1, 10, 11, 100, 101, 1000, 1001, 10_000, 10_001].map(countRange)).toEqual(['0', '1-10', '1-10', '11-100', '11-100', '101-1k', '101-1k', '1k-10k', '1k-10k', '10k+'])
     expect([0, 0.5, 1, 7, 8, 30, 31, 90, 91, 365, 366].map(dayRange)).toEqual(['0', '0', '1-7', '1-7', '8-30', '8-30', '31-90', '31-90', '91-365', '91-365', '365+'])

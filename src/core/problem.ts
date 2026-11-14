@@ -20,6 +20,7 @@ export const PROBLEMS = {
   bad_request: { status: 400, title: 'Bad request', description: 'A parameter or the body is invalid. `errors` lists each one with its path; fix them and retry.' },
   unauthorized: { status: 401, title: 'Unauthorized', description: 'No valid API key. Send `Authorization: Bearer <key>`; keys are issued per client.' },
   forbidden: { status: 403, title: 'Forbidden', description: 'The key is valid but may not do this.' },
+  feature_disabled: { status: 403, title: 'Feature disabled', description: 'This feature is switched off here. `feature` names it, `blockedBy` the features it needs that are off, and an owner switches it on at `switchOn`.' },
   not_found: { status: 404, title: 'Not found', description: 'Nothing at this path or with this id in the current snapshot. Find ids through search or a list, then follow `_links`.' },
   method_not_allowed: { status: 405, title: 'Method not allowed', description: 'This path exists but not with this method.' },
   conflict: { status: 409, title: 'Conflict', description: 'The change clashes with the current state (a name already taken, a stale If-Match).' },

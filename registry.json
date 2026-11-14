@@ -550,6 +550,63 @@
       ]
     },
     {
+      "name": "switches",
+      "type": "registry:item",
+      "title": "Feature switches",
+      "description": "One catalog of the app's additive features (`defineFeatures`, stable kebab-case keys), each on or off for everyone, one person or one API key; providers in order (`databaseProvider`, `memoryProvider`, `fromSdk` for any flag service), `FEATURES_OFF` locks, `needs`, `requires` and offline license keys (`licenseOf`, ES256, `kit license`) for paid features; `gated` routes answer 403 `feature_disabled`, `isOn` for background work; `GET`/`PATCH /api/features` and its MCP tools",
+      "registryDependencies": [
+        "escalay/api-kit/db",
+        "escalay/api-kit/mcp"
+      ],
+      "files": [
+        {
+          "path": "src/switches/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/index.ts"
+        },
+        {
+          "path": "src/switches/catalog.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/catalog.ts"
+        },
+        {
+          "path": "src/switches/providers.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/providers.ts"
+        },
+        {
+          "path": "src/switches/license.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/license.ts"
+        },
+        {
+          "path": "src/switches/repo.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/repo.ts"
+        },
+        {
+          "path": "src/switches/routes.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/routes.ts"
+        },
+        {
+          "path": "src/switches/schema.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/schema.ts"
+        },
+        {
+          "path": "src/switches/tools.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/tools.ts"
+        },
+        {
+          "path": "src/switches/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/switches/README.md"
+        }
+      ]
+    },
+    {
       "name": "testing",
       "type": "registry:item",
       "title": "Testing",
@@ -651,6 +708,86 @@
           "path": "src/browser/vector-search-block.tsx",
           "type": "registry:file",
           "target": "~/src/kit/browser/vector-search-block.tsx"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "web": true
+      }
+    },
+    {
+      "name": "switches-client",
+      "type": "registry:item",
+      "title": "Features client",
+      "description": "Browser, no framework: the features for the person signed in from `GET /api/features` (createFeaturesClient: getState, subscribe, isOn, refresh on focus, switch with dryRun, onDisabled and watchFetch for every 403 feature_disabled), isFeatureDisabled, whyOff",
+      "files": [
+        {
+          "path": "src/browser/switches-client.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/switches-client.ts"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "web": true
+      }
+    },
+    {
+      "name": "switches-react",
+      "type": "registry:item",
+      "title": "Feature hooks",
+      "description": "Browser, React: FeaturesProvider, useFeature, <Feature> (children while on, `off` while not), useFeatures, useSwitchFeature (preview and apply), useFeatureDisabled, featureHooks typed by the app's keys; headless",
+      "dependencies": [
+        "react"
+      ],
+      "registryDependencies": [
+        "escalay/api-kit/switches-client"
+      ],
+      "files": [
+        {
+          "path": "src/browser/switches-react.tsx",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/switches-react.tsx"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "web": true
+      }
+    },
+    {
+      "name": "switches-ui",
+      "type": "registry:item",
+      "title": "Features block",
+      "description": "Browser, React + shadcn: FeatureSwitches (every feature with its switch, a confirm naming what else stops; read-only for members) and FeatureDisabledNotice (\"This feature is disabled.\", why, the app's own action) over switches-react",
+      "dependencies": [
+        "react"
+      ],
+      "registryDependencies": [
+        "button",
+        "switch",
+        "escalay/api-kit/switches-react"
+      ],
+      "files": [
+        {
+          "path": "src/browser/switches-block.tsx",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/switches-block.tsx"
         },
         {
           "path": "src/browser/README.md",

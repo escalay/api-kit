@@ -10,6 +10,9 @@ React hooks over them, and an optional shadcn search block. Logic only; each app
 | `vector-search-ui` | `vector-search-block.tsx` | an optional search block (shadcn `button` + `input`) |
 | `boards-client` | `boards-client.ts` + `../boards/refs.ts` | `createBoardsClient`: list, create, save, unsave, suggestions; `BoardsError` carries the problem |
 | `boards-react` | `boards-react.ts` | `useBoards`, `useItemBoards` |
+| `switches-client` | `switches-client.ts` | `createFeaturesClient`: the features for the person signed in (`isOn`, refresh on focus, `switch` with `dryRun`, `onDisabled` and `watchFetch` for every 403 `feature_disabled`); `isFeatureDisabled`, `whyOff` |
+| `switches-react` | `switches-react.tsx` | `FeaturesProvider`, `useFeature`, `<Feature>`, `useFeatures`, `useSwitchFeature`, `useFeatureDisabled`, `featureHooks<Key>()` |
+| `switches-ui` | `switches-block.tsx` | `FeatureSwitches` (the owner's panel, confirming what else stops) and `FeatureDisabledNotice` (shadcn `button` + `switch`) |
 
 ```bash
 # into the frontend, tracked by the API's kit.json
@@ -24,8 +27,24 @@ const saved = (await boards.list()).find((b) => b.name === 'Saved') ?? (await bo
 await boards.save(saved.id, boardRef('recipe', slug), 'the sun')
 ```
 
+Feature switches in a React app, typed by the API's catalog (`src/features/catalog.ts`):
+
+```tsx
+export type FeatureKey = keyof typeof CATALOG
+export const features = createFeaturesClient<FeatureKey>()
+export const { useFeature, Feature, useSwitchFeature } = featureHooks<FeatureKey>()
+const api = features.watchFetch(fetch)                       // the app's calls: a 403 feature_disabled refreshes the list
+
+<FeaturesProvider client={features}>
+  <Feature name="digest" off={<FeatureDisabledNotice name="digest" action={<UpgradeButton />} />}><Digest /></Feature>
+  <FeatureSwitches canSwitch={me.role === 'owner'} />         // Settings
+</FeaturesProvider>
+useFeatureDisabled((problem) => toast.error(problem.detail)) // one alert for every switched-off call
+```
+
 ## Rules
 
 - The clients use the page's own sign-in (same-origin cookies); a failure is a typed error with the API's `detail`.
 - Typechecked with bundler resolution (`tsconfig.web.json`).
-- Standard: `docs/STANDARD.md` §16.
+- `useFeature` says `on: false` until the list arrived (`ready`), so a switchable screen never flashes in and out.
+- Standard: `docs/STANDARD.md` §16, and §21 for the switches.

@@ -313,6 +313,8 @@ fact, steps with checkable done-when criteria.
 10. The command line: `kit sdk` (or `kit cli`), a `cli` name and example on every tool, `cliGaps` empty and
     `commands.json` current in the tests, jobs only for steps agents repeat (§19).
 11. The repository: CI, the pre-push gate, Dependabot and the secrets scan as `init` writes them (§20).
+12. Feature switches (§21): every additive feature in `src/features/catalog.ts` with a title and what switching it off
+    stops, `switch:` on its feature (`kit feature <name> --switch`), and its work outside requests asking `isOn`.
 
 ## 14. Discovery
 
@@ -512,3 +514,38 @@ What `init` sets up, and what an app keeps:
 - The kit proves it: `scripts/starter-check.mjs` runs `gate` on each new starter, and `scripts/release-smoke.sh` checks
   an app made from the published package.
 
+
+## 21. Feature switches
+
+A feature an app can work without (sending, webhooks, a model, a report) can be switched off, through the API, by
+the owner (`switches` part). The core an app cannot run without (sign-in, its main data, the switches themselves) is
+never switchable.
+
+- **One catalog** (`defineFeatures`), one file the app owns: every switchable feature by a stable kebab-case key, its
+  title, what switching it off stops, its default, the features it `needs`. The key is the one name a database row,
+  `FEATURES_OFF` and a flag service use; it never changes, and a rename keeps the old name in `renamedFrom`.
+- **One line says where switches come from**: `providers`, asked in order, the first answer winning and the catalog's
+  default deciding the rest (`databaseProvider(db)` in the app's own database; `fromSdk` puts any flag service
+  in front of it). A switch is for everyone, one person (`person:<email>`) or one API key (`key:<name>`); the
+  caller's own wins. An OAuth agent counts as the person who approved it; work no caller started (incoming mail,
+  queue jobs, scheduled runs) is resolved for everyone.
+- **Off means listed, answering 403**: every route a feature adds goes through `gated(app, key)` and answers
+  `403 feature_disabled` with `detail` "This feature is disabled.", `feature`, `blockedBy` and `switchOn`. The gate
+  runs after auth and before validation. The routes stay in the OpenAPI document and the tools in the MCP list, each
+  documenting the 403. Background work asks `isOn` and does nothing when off; an action that leaves the app (a send,
+  a delivery) asks with `fresh: true`, past the 5 second cache.
+- A feature is off when any feature it `needs` is off. `PATCH /api/features/{key}` (owner only) with `?dryRun=true`
+  says what else stops first. `FEATURES_OFF` in the environment locks features off whatever is stored; a name it
+  holds that is no feature is listed as `unknownOff`. A switch another provider decides is changed there: the API
+  answers 409 naming it.
+- `GET /api/features` lists every feature, on or off for the caller, what decided it (`source`, `reason`) and the
+  stored switches; agents get `list_features` and `switch_feature`.
+- The 403's `detail` starts "This feature is disabled." and goes on to say which feature, for whom, who switched it
+  and when, and how it comes back on; `switch_feature` acts only on the user's word. Each switchable feature's tools
+  say which switch they belong to (`featureTools`).
+- A paid feature has `requires` in the catalog and is off until the deployment's license key (an ES256 JWT, checked
+  offline against the product's public key: `licenseOf`, `kit license`) grants it. Its 403 says `reason: "LICENSE"`
+  with `requires` and `upgrade`; the owner cannot switch it on (409).
+- The browser asks the same list (`switches-client`, `switches-react`): `useFeature` and `<Feature>` show a screen
+  only while its feature is on, `useFeatureDisabled` hears every 403 for one alert, and the `switches-ui` block is
+  the owner's panel and the disabled notice.
