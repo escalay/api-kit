@@ -210,7 +210,8 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
 
   /**
    * gated is the app as one feature sees it: every route the feature adds through it (`openapi`, `get`, `post`, …)
-   * answers 403 while the feature is off, and documents that 403.
+   * answers 403 while the feature is off, and documents that 403; middleware it adds on a path (`use('/api/x', …)`)
+   * runs only while it is on, so a refused call spends no rate limit.
    */
   const gated = (app: OpenAPIHono, key: Key): OpenAPIHono => {
     const check = gate(key)
@@ -224,6 +225,8 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
             return (target.openapi as (...all: unknown[]) => unknown)({ ...route, middleware, responses }, ...rest)
           }
         if (typeof prop === 'string' && ['get', 'post', 'put', 'patch', 'delete'].includes(prop)) return withGate(prop)
+        // A feature's own middleware on its paths (a rate limit) runs only while it is on, so a refused call costs nothing
+        if (prop === 'use') return (first: unknown, ...rest: unknown[]) => (typeof first === 'string' ? target.use(first, check, ...(rest as [])) : (target.use as (...all: unknown[]) => unknown)(first, ...rest))
         const value = Reflect.get(target, prop, receiver) as unknown
         return typeof value === 'function' ? (value as (...all: unknown[]) => unknown).bind(target) : value
       },
@@ -272,10 +275,15 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
     await writer!.write!({ key, scope, on, by }, options(true))
   }
 
-  /** The list of features as the API shows it to one caller. */
-  const listFor = async (c: Context) => {
-    const state = await stateOf(contextOf(callerOf(c)), { fresh: true })
-    const overrides: FlagOverride[] = (await writer?.overrides?.(options(true))) ?? []
+  /**
+   * The list of features as the API shows it to one caller: everyone's switches and their own; other people's and
+   * other keys' only to an owner.
+   */
+  const listFor = async (c: Context, owner: boolean) => {
+    const context = contextOf(callerOf(c))
+    const state = await stateOf(context, { fresh: true })
+    const visible = (override: FlagOverride) => owner || override.scope === 'everyone' || override.scope === context.targetingKey
+    const overrides: FlagOverride[] = ((await writer?.overrides?.(options(true))) ?? []).filter(visible)
     const granted = await licenseState()
     const origin = originOf(c)
     const featureOf = (key: string) => ({
@@ -304,7 +312,7 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
     }
 
     const list: RouteHandler<SwitchRoutes['list']> = async (c) => {
-      const { featureOf, licenseView } = await listFor(c)
+      const { featureOf, licenseView } = await listFor(c, await isOwner(c))
       return c.json(
         {
           count: keys.length,
@@ -320,7 +328,7 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
         { 'cache-control': 'no-store' },
       )
     }
-    const get: RouteHandler<SwitchRoutes['get']> = async (c) => c.json((await listFor(c)).featureOf(known(c.req.valid('param').key)), 200, { 'cache-control': 'no-store' })
+    const get: RouteHandler<SwitchRoutes['get']> = async (c) => c.json((await listFor(c, await isOwner(c))).featureOf(known(c.req.valid('param').key)), 200, { 'cache-control': 'no-store' })
     const update: RouteHandler<SwitchRoutes['update']> = async (c) => {
       if (!(await isOwner(c))) throw new ProblemError('forbidden', { detail: 'Only the owner can switch features.' })
       const key = known(c.req.valid('param').key)
@@ -328,11 +336,11 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
       const refusal = await refusalOf(key, scope)
       if (refusal) throw refusal
       const changes = await previewOf(key, scope, on)
-      if (c.req.valid('query').dryRun === 'true') return c.json({ dryRun: true, key, scope, on, changes, feature: (await listFor(c)).featureOf(key) }, 200, { 'cache-control': 'no-store' })
+      if (c.req.valid('query').dryRun === 'true') return c.json({ dryRun: true, key, scope, on, changes, feature: (await listFor(c, true)).featureOf(key) }, 200, { 'cache-control': 'no-store' })
       const by = nameOf(callerOf(c))
       await writer!.write!({ key, scope, on, by }, options(true))
       await onSwitch?.({ key, scope, on, by }, c)
-      return c.json({ dryRun: false, key, scope, on, changes, feature: (await listFor(c)).featureOf(key) }, 200, { 'cache-control': 'no-store' })
+      return c.json({ dryRun: false, key, scope, on, changes, feature: (await listFor(c, true)).featureOf(key) }, 200, { 'cache-control': 'no-store' })
     }
     app.openapi(routes.list, list)
     app.openapi(routes.get, get)
