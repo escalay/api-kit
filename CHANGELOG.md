@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.1](https://github.com/escalay/api-kit/compare/v1.22.0...v1.22.1) (2026-11-15)
+
+
+### Fixed
+
+* **setup:** claim errors say what to do next ([#63](https://github.com/escalay/api-kit/issues/63)) ([48273c6](https://github.com/escalay/api-kit/commit/48273c6dc9a9c6f3551419217ed4abd932b10e25))
+
 ## [1.22.0](https://github.com/escalay/api-kit/compare/v1.21.1...v1.22.0) (2026-11-14)
 
 
