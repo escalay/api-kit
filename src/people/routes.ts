@@ -115,7 +115,7 @@ export const peopleRoutes = ({ sessionPath, teamPath, tag }: { sessionPath: stri
           challengeId: z.string(),
           response: z.record(z.string(), z.unknown()).openapi({ description: 'What `navigator.credentials.create` gave back, as JSON.' }),
           enrolment: z.string().optional(),
-          name: z.string().max(60).optional().openapi({ description: 'A name to tell this passkey apart, e.g. "MacBook".' }),
+          name: z.string().max(60).optional().openapi({ description: 'A name to tell this passkey apart, e.g. "Work laptop". Left out, or only a device word ("Mac", "This device"), it is named after the device and browser it was made in ("Mac · Chrome"); a name another of the person\'s passkeys has gets " (2)".' }),
         })
         .openapi('PasskeyRegisterAnswer', { description: 'The browser’s answer to a registration challenge.' }),
     ),

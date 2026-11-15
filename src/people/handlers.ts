@@ -10,6 +10,7 @@ import type { Db } from '../db/index.js'
 import type { PeopleRepo } from './repo.js'
 import type { PeopleRoutes } from './routes.js'
 import type { PersonRow } from './schema.js'
+import { distinctName, passkeyBaseName } from './names.js'
 import { endSession, isAdmin, personOf, startSession } from './session.js'
 
 const NO_STORE = { 'cache-control': 'no-store' }
@@ -102,7 +103,8 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
       deviceType: credentialDeviceType,
       backedUp: credentialBackedUp,
       rpId: rpID,
-      name: name ?? null,
+      // The device and browser unless the person chose a name; numbered so two never read the same
+      name: distinctName(passkeyBaseName(name, c.req.header('user-agent')), (await repo.passkeysOf(challenge.personId)).map((passkey) => passkey.name)),
       createdAt: new Date().toISOString(),
       lastUsedAt: null,
     })

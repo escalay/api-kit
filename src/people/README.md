@@ -52,6 +52,9 @@ CI: claim → `register(options, origin)` → verify → `login(options, origin)
   setup, or sign in through Access and add one.
 - A cookie write must come from the same site (`Sec-Fetch-Site`, else `Origin`); other sites can't post through it.
 - Each challenge is used once and expires in 5 minutes; an enrolment (from setup) in 15.
+- A new passkey is named after the device and browser it was made in (`Mac · Chrome`, from the user agent) unless the
+  person posts a name of their own; a bare device word (`Mac`, `This device`) counts as none. Two of a person's passkeys
+  never share a name: the later one is numbered (`Mac · Chrome (2)`).
 - Team writes are admin only (`isAdmin`: the owner, or a key from `API_KEYS`). The last owner stays an owner, and an
   owner keeps at least one passkey.
 - Registering the part changes Access for the app only when `access.roleOf` is passed: then emails off the team get 403.

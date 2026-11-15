@@ -445,6 +445,11 @@
           "target": "~/src/kit/people/handlers.ts"
         },
         {
+          "path": "src/people/names.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/people/names.ts"
+        },
+        {
           "path": "src/people/repo.ts",
           "type": "registry:file",
           "target": "~/src/kit/people/repo.ts"
