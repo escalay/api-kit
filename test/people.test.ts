@@ -92,13 +92,18 @@ describe('claiming a deployment', () => {
 
   it('makes the first holder of the code the owner, with a passkey and a session', async () => {
     const { browser, claimAsOwner } = await setup()
-    expect((await browser().call('POST', '/api/setup/claim', { code: 'WRONG-CODE', email: 'x@example.com' })).status).toBe(403)
+    const wrong = await browser().call('POST', '/api/setup/claim', { code: 'WRONG-CODE', email: 'x@example.com' })
+    expect(wrong.status).toBe(403)
+    // The error says what to do next, not what the code is
+    expect((await wrong.json()).detail).toBe('That setup code is not right. Check the SETUP_CODE secret on your deployment and try again.')
     const { owner, session } = await claimAsOwner()
     expect(session).toMatchObject({ signedIn: true, person: { email: 'owner@example.com', role: 'owner' }, passkeys: 1 })
     expect(await owner.json('GET', '/api/v1/me')).toEqual({ kind: 'person', email: 'owner@example.com', role: 'owner' })
     expect(await owner.json('GET', '/api/setup')).toMatchObject({ claimed: true, recovery: false })
     // The same code again claims nothing
-    expect((await browser().call('POST', '/api/setup/claim', { code: CODE, email: 'thief@example.com' })).status).toBe(409)
+    const again = await browser().call('POST', '/api/setup/claim', { code: CODE, email: 'thief@example.com' })
+    expect(again.status).toBe(409)
+    expect((await again.json()).detail).toMatch(/^This deployment is already claimed\. Lost the passkey\? Change the SETUP_CODE secret on this deployment/)
   })
 
   it('limits attempts: 5 an hour per address', async () => {

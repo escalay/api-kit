@@ -84,7 +84,7 @@ export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards,
       throw new ProblemError('too_many_requests', { detail: 'Too many setup attempts: wait an hour (or a day, when many were tried) and check the code in the deploy settings.' })
     if (!codeHash) throw new ProblemError('unavailable', { detail: 'No setup code is set, so nobody can claim this deployment. Set the SETUP_CODE secret (`wrangler secret put SETUP_CODE`, or in the dashboard) and try again.' })
     const { code: given, email, name } = c.req.valid('json')
-    if (hashApiKey(given.trim()) !== codeHash) throw new ProblemError('forbidden', { detail: 'That setup code is not right. It is the SETUP_CODE secret set when this was deployed.' })
+    if (hashApiKey(given.trim()) !== codeHash) throw new ProblemError('forbidden', { detail: 'That setup code is not right. Check the SETUP_CODE secret on your deployment and try again.' })
     const state = await stateOf()
     const at = new Date().toISOString()
     if (!state) {
@@ -95,7 +95,7 @@ export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards,
       await db.insert(setupState).values({ id: 1, claimedAt: at, ownerId, codeHash })
       return c.json({ mode: 'claim' as const, enrolment: await startEnrolment(db, ownerId), _links: links(c) }, 200, { 'cache-control': 'no-store' })
     }
-    if (state.codeHash === codeHash) throw new ProblemError('conflict', { detail: 'This deployment is already claimed. To get back in without a passkey, change the SETUP_CODE secret and use the new code here.' })
+    if (state.codeHash === codeHash) throw new ProblemError('conflict', { detail: 'This deployment is already claimed. Lost the passkey? Change the SETUP_CODE secret on this deployment, then use the new code here to make a new one.' })
     const owner = await people.byEmail(email)
     if (owner?.role !== 'owner') throw new ProblemError('forbidden', { detail: 'Recovery is for an owner: use the email the deployment was claimed with.' })
     // The rotated code works once: it becomes the code that last opened setup
