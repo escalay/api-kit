@@ -22,6 +22,7 @@ import { peopleRepo } from './repo.js'
 import { peopleRoutes } from './routes.js'
 import { PEOPLE_MIGRATIONS } from './schema.js'
 
+export { distinctName, passkeyBaseName } from './names.js'
 export { peopleRepo, type PeopleRepo } from './repo.js'
 export { PersonSchema, peopleRoutes, type PeopleRoutes } from './routes.js'
 export { challenges, passkeys, people, PEOPLE_MIGRATIONS, sessions, teamDomains, type PasskeyRow, type PersonRow } from './schema.js'

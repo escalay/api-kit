@@ -5,6 +5,7 @@ import {
   KEYS_TAG,
   memoryGuardStore,
   parseApiKeys,
+  passkeyBaseName,
   PEOPLE_OPEN_PATHS,
   PEOPLE_TAG,
   registerKeys,
@@ -148,6 +149,27 @@ describe('passkeys and the session', () => {
     // A challenge is used once
     expect((await again.call('POST', '/api/session/passkeys/login/verify', { challengeId, response: await authenticator.login(options, ORIGIN) })).status).toBe(400)
     expect(await again.json('GET', '/api/session/passkeys')).toMatchObject({ _embedded: { passkeys: [{ name: 'Laptop', rpId: 'app.test' }] } })
+  })
+
+  it('names a passkey after its device and browser unless the person names it, and never twice the same', async () => {
+    const { browser } = await setup()
+    const owner = browser()
+    const mac = { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
+    const make = async (name?: string, enrolment?: string) => {
+      const { challengeId, options } = await owner.json('POST', '/api/session/passkeys/register/options', enrolment ? { enrolment } : {}, mac)
+      const made = await owner.call('POST', '/api/session/passkeys/register/verify', { challengeId, enrolment, name, response: await (await softAuthenticator()).register(options, ORIGIN) }, mac)
+      expect(made.status).toBe(200)
+    }
+    const { enrolment } = await owner.json('POST', '/api/setup/claim', { code: CODE, email: 'owner@example.com' })
+    await make(undefined, enrolment)
+    // A bare device word says less than the user agent; a chosen name is kept, and numbered when taken
+    await make('Mac')
+    await make('Work laptop')
+    await make('Work laptop')
+    const names = (await owner.json('GET', '/api/session/passkeys'))._embedded.passkeys.map((passkey: { name: string }) => passkey.name)
+    expect(names).toEqual(['Mac · Chrome', 'Mac · Chrome (2)', 'Work laptop', 'Work laptop (2)'])
+    expect(passkeyBaseName(undefined, 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1')).toBe('iPhone · Safari')
+    expect(passkeyBaseName(undefined, undefined)).toBe('Passkey')
   })
 
   it('keeps the enrolment when a passkey fails to register, so the owner can try again', async () => {

@@ -131,6 +131,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   keys, setup, and what the app marks admin). A person with no role (an app without `people`) keeps today's rights.
   Admin checks use `isAdmin(caller, fixedKeys)`: the owner or a key from `API_KEYS`. The last owner cannot be demoted
   or removed, and an owner cannot remove their last passkey (409). Passkeys work only on the host they were made on.
+  A new passkey is named after the device and browser it was made in unless the person names it, and no two of a
+  person's passkeys share a name.
 - **Open without auth:** `/api/health`, `/openapi.json`, `/docs`, `/llms*.txt`, `/agents/*`, `/skills/*`,
   `/problems/*` (no data). In Access, these paths and `/api/*`, `/mcp` bypass SSO; the app's key check
   guards them.
