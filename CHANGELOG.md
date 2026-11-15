@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.0](https://github.com/escalay/api-kit/compare/v1.22.1...v1.23.0) (2026-11-15)
+
+
+### New
+
+* **people:** name each new passkey after its device and browser ([#65](https://github.com/escalay/api-kit/issues/65)) ([16c0a14](https://github.com/escalay/api-kit/commit/16c0a143acf76f8b9919d6427fc61e880a464354))
+
 ## [1.22.1](https://github.com/escalay/api-kit/compare/v1.22.0...v1.22.1) (2026-11-15)
 
 
