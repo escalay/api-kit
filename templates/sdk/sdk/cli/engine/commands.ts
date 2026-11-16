@@ -245,15 +245,15 @@ const quoted = (open: string, close: string, line: string) => (open && !close ? 
 
 /**
  * Text written for MCP clients, as the command line says it. Conservative: only what exactly matches a command
- *   - a tool's MCP name (a whole word; one without an underscore only in backticks) → `` `mailroom address create` ``
+ *   - a tool's MCP name (a whole word; one without an underscore only in backticks) → `` `postbox address create` ``
  *   - a route (`GET /api/addresses`, `{id}` matching any value) → the command whose tool calls it
- *   - a resource URI (`mailroom://messages/{id}/headers`) → `` `mailroom mail headers <id>` ``
+ *   - a resource URI (`postbox://messages/{id}/headers`) → `` `postbox mail headers <id>` ``
  *   - a backticked argument (`` `addressId` ``) of the command shown or of a command named above → `` `--address-id` ``,
  *     and `` `read: false` `` → `` `--no-read` `` (`` `--read` `` for true, `` `--key value` `` otherwise)
  * For help, summaries and error lines only; `--json` and `commands --json` stay as the server wrote them.
  *
  * @example
- * cliWordsOf(commands, 'mailroom')('The address’s id, from create_address.') // → 'The address’s id, from `mailroom address create`.'
+ * cliWordsOf(commands, 'postbox')('The address’s id, from create_address.') // → 'The address’s id, from `postbox address create`.'
  */
 export const cliWordsOf = (commands: Command[], app: string): CliWords => {
   const byTool = new Map(commands.filter((command) => command.tool).map((command) => [command.tool!, command]))

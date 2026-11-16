@@ -10,7 +10,7 @@
  *
  * @example
  * const app = createAgentApi({ …, tags: [...FEATURE_TAGS, KEYS_TAG], auth: { realm, keys: parseApiKeys(env.API_KEYS), storedKeys: storedKeysOf(db) } })
- * await registerKeys(app, { db, fixedKeys: [...parseApiKeys(env.API_KEYS).values()], keyPrefix: 'mr' })
+ * await registerKeys(app, { db, fixedKeys: [...parseApiKeys(env.API_KEYS).values()], keyPrefix: 'pb' })
  * mcpServerFactory({ tools: [...FEATURE_TOOLS, ...keyTools()], … })
  */
 import type { OpenAPIHono } from '@hono/zod-openapi'
@@ -33,7 +33,7 @@ export type KeysConfig = {
   db: Db
   /** The names of the keys in `API_KEYS`: they alone (and signed-in people) may manage keys, and their names are taken. */
   fixedKeys: string[]
-  /** What a new key starts with, e.g. `mr` gives `mr_…` (default `ak`). */
+  /** What a new key starts with, e.g. `pb` gives `pb_…` (default `ak`). */
   keyPrefix?: string
   /** Default `/api/keys` and `/api/me`. */
   path?: string

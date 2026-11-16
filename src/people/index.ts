@@ -13,7 +13,7 @@
  * @example
  * const fixedKeys = [...parseApiKeys(env.API_KEYS).values()]
  * const app = createAgentApi({ …, tags: [...tags, PEOPLE_TAG], auth: { realm, keys, open: [...PEOPLE_OPEN_PATHS], session: sessionOf(db), access: access && { ...access, roleOf: roleOf(db) } } })
- * await registerPeople(app, { db, rpName: 'Mailroom', fixedKeys })
+ * await registerPeople(app, { db, rpName: 'Postbox', fixedKeys })
  */
 import type { OpenAPIHono } from '@hono/zod-openapi'
 import { migrate, type Db } from '../db/index.js'
@@ -37,7 +37,7 @@ export const PEOPLE_OPEN_PATHS = ['/api/session', '/api/session/passkeys/registe
 export type PeopleOptions = {
   /** The app's database; the people tables are migrated into it. */
   db: Db
-  /** The name a passkey prompt shows, e.g. "Mailroom". */
+  /** The name a passkey prompt shows, e.g. "Postbox". */
   rpName: string
   /** The names of the keys in `API_KEYS`: they may change the team like the owner. */
   fixedKeys?: string[]

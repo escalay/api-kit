@@ -103,7 +103,7 @@ List it in `sdk/cli/jobs/index.ts`, run `pnpm sdk:types`, then name the job in t
 
 ```sh
 pnpm dev
-export APP_URL=http://localhost:8787 APP_API_KEY=…   # the bin's prefix: MAILROOM_URL for mailroom
+export APP_URL=http://localhost:8787 APP_API_KEY=…   # the bin's prefix: POSTBOX_URL for postbox
 pnpm exec tsx sdk/cli/bin.ts                          # jobs, then nouns
 pnpm exec tsx sdk/cli/bin.ts help agents
 ```

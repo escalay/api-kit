@@ -17,7 +17,7 @@ API keys the app makes and revokes through its own API, beside the ones it is st
 ```ts
 const fixedKeys = [...parseApiKeys(env.API_KEYS).values()]
 const app = createAgentApi({ …, tags: [...tags, KEYS_TAG], auth: { realm, keys: parseApiKeys(env.API_KEYS), storedKeys: storedKeysOf(db) } })
-await registerKeys(app, { db, fixedKeys, keyPrefix: 'mr' })
+await registerKeys(app, { db, fixedKeys, keyPrefix: 'pb' })
 // MCP: tools: [...featureTools, ...keyTools()]; toolsRun samples: who_am_i, list_keys, get_key, create_key, delete_key
 ```
 

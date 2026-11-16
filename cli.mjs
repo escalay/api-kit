@@ -394,12 +394,12 @@ const sdkMethods = (root) => {
   return lines.length + 1
 }
 
-/** The names the SDK and CLI templates fill: the package, its title, its bin (`mailroom`) and env prefix (`MAILROOM`). */
+/** The names the SDK and CLI templates fill: the package, its title, its bin (`postbox`) and env prefix (`POSTBOX`). */
 const sdkVarsOf = (root, packageName) => {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   const words = basename(pkg.name ?? basename(root)).split(/[-_.]/).filter(Boolean)
   const bin = valueOf('--bin') ?? words.join('-')
-  if (!/^[a-z][a-z0-9-]*$/.test(bin)) fail(`--bin is one lowercase word or kebab-case name, like mailroom`)
+  if (!/^[a-z][a-z0-9-]*$/.test(bin)) fail(`--bin is one lowercase word or kebab-case name, like postbox`)
   return { __package__: packageName ?? valueOf('--package') ?? `${words.join('-')}-client`, __Title__: words.map(capital).join(' '), __Pascal__: words.map(capital).join(''), __camel__: words[0] + words.slice(1).map(capital).join(''), __bin__: bin, __PREFIX__: bin.replace(/-/g, '_').toUpperCase() }
 }
 

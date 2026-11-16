@@ -8,7 +8,7 @@
  *
  * @example
  * expect(cliGaps({ tools: TOOLS, resources: RESOURCES, jobs })).toEqual([])
- * expect(readFileSync('sdk/cli/commands.json', 'utf8')).toBe(`${JSON.stringify(cliSnapshot({ app: 'mailroom', version: VERSION, tools: TOOLS, resources: RESOURCES, jobs }), null, 2)}\n`)
+ * expect(readFileSync('sdk/cli/commands.json', 'utf8')).toBe(`${JSON.stringify(cliSnapshot({ app: 'postbox', version: VERSION, tools: TOOLS, resources: RESOURCES, jobs }), null, 2)}\n`)
  */
 import { z } from '@hono/zod-openapi'
 import { CLI_AUTH_VERBS, CLI_BUILT_INS, CLI_GLOBAL_FLAGS, CLI_RESOURCE_FLAGS, cliOf, hintsOf, routeOf, resourceCli, templateVariables, type CliExample, type CliSpec, type CliTool } from '../core/cli.js'
@@ -132,7 +132,7 @@ const jobCommand = (job: CliJobLike): CliSnapshotCommand => ({
  * Pure, so a test can compare it with the file byte for byte.
  *
  * @example
- * writeFileSync('sdk/cli/commands.json', `${JSON.stringify(cliSnapshot({ app: 'mailroom', version: VERSION, tools: TOOLS, resources: RESOURCES, jobs }), null, 2)}\n`)
+ * writeFileSync('sdk/cli/commands.json', `${JSON.stringify(cliSnapshot({ app: 'postbox', version: VERSION, tools: TOOLS, resources: RESOURCES, jobs }), null, 2)}\n`)
  */
 export const cliSnapshot = ({ app = '', version = '', tools, resources = [], jobs = [] }: { app?: string; version?: string; tools: SnapshotTool[]; resources?: SnapshotResource[]; jobs?: CliJobLike[] }): CliSnapshot => ({
   app,

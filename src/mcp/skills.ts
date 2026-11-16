@@ -107,7 +107,7 @@ const guideOf = (catalog: SkillCatalog): SkillGuide => {
   return guide
 }
 
-/** `skill://mailroom/` → `mailroom`; `undefined` for a URI outside the skills. */
+/** `skill://postbox/` → `postbox`; `undefined` for a URI outside the skills. */
 const pathOf = (uri: string) => (uri.startsWith(BASE) ? uri.slice(BASE.length).replace(/\/+$/, '') : undefined)
 
 /** Where to start, in one sentence: names each `SKILL.md`. */
@@ -119,7 +119,7 @@ const skillFolderText = (catalog: SkillCatalog, uri: string): string | undefined
   const path = pathOf(uri)
   if (path === undefined || !guide.folders.has(path)) return undefined
   const inside = guide.files.filter((file) => !path || file.path.startsWith(`${path}/`))
-  // The skills in this folder, or else the skill this folder is part of (`mailroom/references`)
+  // The skills in this folder, or else the skill this folder is part of (`postbox/references`)
   const under = guide.starts.filter((start) => !path || start.startsWith(`${BASE}${path}/`))
   const first = under.length ? under : guide.starts.filter((start) => `${BASE}${path}/`.startsWith(start.slice(0, -'SKILL.md'.length)))
   return [
@@ -134,8 +134,8 @@ const skillFolderText = (catalog: SkillCatalog, uri: string): string | undefined
  * A server's instructions with one more line when it serves skills: which `SKILL.md` to read first.
  *
  * @example
- * instructionsWithSkills('Mailroom: mail for agents.', skills)
- * // → 'Mailroom: mail for agents.\n\nSkills: read skill://mailroom/SKILL.md first (resources/read); it names the playbook for each job.'
+ * instructionsWithSkills('Postbox: mail for agents.', skills)
+ * // → 'Postbox: mail for agents.\n\nSkills: read skill://postbox/SKILL.md first (resources/read); it names the playbook for each job.'
  */
 export const instructionsWithSkills = (instructions: string, catalog: SkillCatalog | undefined) => {
   const starts = catalog ? guideOf(catalog).starts : []

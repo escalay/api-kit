@@ -62,7 +62,7 @@ export const setupRoutes = ({ path, tag }: { path: string; tag: string }) => ({
             schema: z
               .object({
                 code: z.string().min(1).max(100).openapi({ description: 'The setup code.', example: 'K7Q2-9XMD' }),
-                email: z.email().openapi({ description: 'The owner’s email: where Mailroom-style tools send what is meant for the owner.', example: 'owner@example.com' }),
+                email: z.email().openapi({ description: 'The owner’s email: where the app sends what is meant for the owner.', example: 'owner@example.com' }),
                 name: z.string().max(80).optional(),
               })
               .openapi('SetupClaimInput', { description: 'The setup code and the owner’s email.' }),

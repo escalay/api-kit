@@ -64,7 +64,7 @@ const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 
 const form = (fields: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: new URLSearchParams(fields).toString() })
 
-/** What to run to sign in to `url` again, as a command: `mailroom auth login https://mail.example.com`. */
+/** What to run to sign in to `url` again, as a command: `postbox auth login https://mail.example.com`. */
 const loginAgain = (app: string, url: string) => `run \`${app} auth login ${url}\` again`
 
 export const metadataOf = async (url: string, send: typeof fetch, app: string): Promise<Metadata> => {

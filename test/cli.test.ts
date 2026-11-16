@@ -400,12 +400,12 @@ describe('the command line', () => {
       mcpTool({ ...base, name: 'get_verification', input: z.object({ addressId: z.string().describe('Its id.') }), cli: 'verification code', call: ({ addressId }) => ({ path: `/api/verify/${addressId}` }) }),
       mcpTool({ ...base, name: 'search', input: z.object({ q: z.string().describe('Words.') }), cli: 'mail search', call: () => ({ path: '/api/search' }) }),
     ] }).commands as never
-    const say = cliWordsOf(commands, 'mailroom')
-    expect(say('The address’s id (`adr_…`), from create_address.')).toBe('The address’s id (`adr_…`), from `mailroom address create`.')
-    expect(say('Call `get_verification` again with `addressId`.')).toBe('Call `mailroom verification code` again with `--address-id`.')
+    const say = cliWordsOf(commands, 'postbox')
+    expect(say('The address’s id (`adr_…`), from create_address.')).toBe('The address’s id (`adr_…`), from `postbox address create`.')
+    expect(say('Call `get_verification` again with `addressId`.')).toBe('Call `postbox verification code` again with `--address-id`.')
     // Not a tool name, part of a longer word, a key of no tool named, or a plain word that is a tool name without backticks
     expect(say('Call get_verifications, or create_address_v2, with addressId; search first, or `label`.')).toBe('Call get_verifications, or create_address_v2, with addressId; search first, or `label`.')
-    expect(say('Use `search`.')).toBe('Use `mailroom mail search`.')
+    expect(say('Use `search`.')).toBe('Use `postbox mail search`.')
     // The command being shown counts as named
     const shown = (commands as { name: string }[]).find((command) => command.name === 'address create') as never
     expect(say('Give it a `label`.', shown)).toBe('Give it a `--label`.')
@@ -418,9 +418,9 @@ describe('the command line', () => {
         mcpTool({ ...base, name: 'get_address', input: z.object({ id: z.string().describe('Id.') }), cli: 'address view', call: ({ id }) => ({ path: `/api/addresses/${id}` }) }),
         mcpTool({ ...base, name: 'wait_for_event', input: z.object({ after: z.string().optional().describe('A cursor.'), read: z.boolean().optional().describe('Read ones too.') }), cli: 'event wait', call: (query) => ({ path: '/api/events/next', query }) }),
       ],
-      resources: [mcpResource({ name: 'mail_headers', title: 'Headers', description: 'H', uriTemplate: 'mailroom://messages/{id}/headers', cli: 'mail headers', read: () => [] })],
+      resources: [mcpResource({ name: 'mail_headers', title: 'Headers', description: 'H', uriTemplate: 'postbox://messages/{id}/headers', cli: 'mail headers', read: () => [] })],
     })
-    const say = cliWordsOf(commands as never, 'mailroom')
+    const say = cliWordsOf(commands as never, 'postbox')
     const wait = (commands as { name: string }[]).find((command) => command.name === 'event wait') as never
     // The command a result came from: its own keys, and `key: value` as the flag it means
     expect(say('Cursor 20: pass it as `after` to continue.', wait)).toBe('Cursor 20: pass it as `--after` to continue.')
@@ -428,9 +428,9 @@ describe('the command line', () => {
     expect(say('Pass it as `after`.')).toBe('Pass it as `after`.')
     // Routes, matched with their placeholders or real values; a route no tool calls stays
     expect(say('No address adr_9. GET /api/addresses lists them; `GET /api/addresses/{id}` shows one, as GET /api/addresses/adr_1 does. DELETE /api/addresses is not a route here.')).toBe(
-      'No address adr_9. `mailroom address list` lists them; `mailroom address view <id>` shows one, as `mailroom address view adr_1` does. DELETE /api/addresses is not a route here.',
+      'No address adr_9. `postbox address list` lists them; `postbox address view <id>` shows one, as `postbox address view adr_1` does. DELETE /api/addresses is not a route here.',
     )
-    expect(say('Attach the resource `mailroom://messages/{id}/headers`, or read mailroom://messages/msg_1/headers.')).toBe('Attach `mailroom mail headers <id>`, or read `mailroom mail headers msg_1`.')
+    expect(say('Attach the resource `postbox://messages/{id}/headers`, or read postbox://messages/msg_1/headers.')).toBe('Attach `postbox mail headers <id>`, or read `postbox mail headers msg_1`.')
     expect(say('Open https://example.com/x, or other://messages/1.')).toBe('Open https://example.com/x, or other://messages/1.')
   })
 
@@ -448,7 +448,7 @@ describe('the command line', () => {
       run: async () => {},
     })
     const command = { ...cliSnapshot({ tools: [], jobs: [job] }).commands[0]!, flags: cliSnapshot({ tools: [], jobs: [job] }).commands[0]!.flags.map((flag) => (flag.key === 'kind' ? { ...flag, enum: ['disposable', 'permanent'] } : flag)) }
-    const help = commandHelp('mailroom', command as never, paintFor(false))
+    const help = commandHelp('postbox', command as never, paintFor(false))
     expect(help).toMatch(/^ {2}--no-wait +Return at once\.$/m)
     expect(help).not.toContain('--[no-]no-wait')
     expect(help.match(/default 20/g)).toHaveLength(1)

@@ -37,7 +37,7 @@ const app = createAgentApi({ …, tags: [...tags, PEOPLE_TAG, SETUP_TAG], auth: 
   realm, keys, open: [...PEOPLE_OPEN_PATHS, ...SETUP_OPEN_PATHS], session: sessionOf(db),
   access: access && { ...access, roleOf: roleOf(db) },
 } })
-await registerPeople(app, { db, rpName: 'Mailroom', fixedKeys })
+await registerPeople(app, { db, rpName: 'Postbox', fixedKeys })
 await registerSetup(app, { db, code: env.SETUP_CODE, guards: await dbGuardStore(db), fixedKeys, steps })
 // MCP: tools: [...featureTools, ...teamTools()]
 // The browser: @simplewebauthn/browser's startRegistration / startAuthentication with `options`, then post the answer
