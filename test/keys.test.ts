@@ -8,9 +8,10 @@ const setup = async () => {
   const db = await testDb()
   const keys = parseApiKeys(`owner:${hashApiKey(KEY)}`)
   const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [KEYS_TAG], auth: { realm: 'sample', keys, storedKeys: storedKeysOf(db) } })
-  await registerKeys(app, { db, fixedKeys: [...keys.values()], keyPrefix: 'sk' })
+  const changes: unknown[] = []
+  await registerKeys(app, { db, fixedKeys: [...keys.values()], keyPrefix: 'sk', onKeyChange: (change) => void changes.push(change) })
   const as = (key: string) => (path: string, init: RequestInit = {}) => app.request(path, { ...init, headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' } })
-  return { app, owner: as(KEY), as }
+  return { app, owner: as(KEY), as, changes }
 }
 
 describe('keys', () => {
@@ -37,6 +38,17 @@ describe('keys', () => {
     expect((await owner(`/api/keys/${key.id}`, { method: 'DELETE' })).status).toBe(204)
     expect((await billing('/api/me')).status).toBe(401)
     expect((await owner(`/api/keys/${key.id}`)).status).toBe(404)
+  })
+
+  it('tells the app about every key made or deleted, by id and name, never its value', async () => {
+    const { owner, changes } = await setup()
+    const made = (await (await owner('/api/keys', { method: 'POST', body: JSON.stringify({ name: 'ci' }) })).json()) as { id: string; key: string }
+    await owner(`/api/keys/${made.id}`, { method: 'DELETE' })
+    expect(changes).toEqual([
+      { id: made.id, name: 'ci', action: 'created', by: 'owner' },
+      { id: made.id, name: 'ci', action: 'deleted', by: 'owner' },
+    ])
+    expect(JSON.stringify(changes)).not.toContain(made.key)
   })
 
   it('refuses a name already taken, by a made key or the deployment', async () => {

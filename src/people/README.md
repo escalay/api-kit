@@ -58,4 +58,6 @@ CI: claim → `register(options, origin)` → verify → `login(options, origin)
 - Team writes are admin only (`isAdmin`: the owner, or a key from `API_KEYS`). The last owner stays an owner, and an
   owner keeps at least one passkey.
 - Registering the part changes Access for the app only when `access.roleOf` is passed: then emails off the team get 403.
+- `onTeamChange` hears each change to the team (`{ who, from, to, by }`: an email or `@domain`, the role before and
+  after, null when off the team); an unchanged role or a domain already listed is not a change. Log it with the app's events.
 - Standard: `docs/STANDARD.md` §7 (auth).

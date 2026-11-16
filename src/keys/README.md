@@ -28,4 +28,5 @@ await registerKeys(app, { db, fixedKeys, keyPrefix: 'mr' })
 - Only a key from `API_KEYS` or a signed-in person may make or revoke keys. A key made through the API cannot make
   another, and neither can an OAuth token, so a token's expiry still bounds what an approved agent can do.
 - A key is shown once, in the answer that makes it. Names are unique, and a deployment key's name is taken.
+- `onKeyChange` hears each key made or deleted (`{ id, name, action, by }`, never the value): log it with the app's events.
 - Standard: `docs/STANDARD.md` §7 (auth).

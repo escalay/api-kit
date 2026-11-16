@@ -17,11 +17,13 @@
  */
 import type { OpenAPIHono } from '@hono/zod-openapi'
 import { migrate, type Db } from '../db/index.js'
-import { peopleHandlers } from './handlers.js'
+import type { Context } from 'hono'
+import { peopleHandlers, type TeamChange } from './handlers.js'
 import { peopleRepo } from './repo.js'
 import { peopleRoutes } from './routes.js'
 import { PEOPLE_MIGRATIONS } from './schema.js'
 
+export type { TeamChange } from './handlers.js'
 export { distinctName, passkeyBaseName } from './names.js'
 export { peopleRepo, type PeopleRepo } from './repo.js'
 export { PersonSchema, peopleRoutes, type PeopleRoutes } from './routes.js'
@@ -47,12 +49,14 @@ export type PeopleOptions = {
   /** The cookie's name, prefixed `__Host-` on https. Default `session`. */
   cookie?: string
   tag?: string
+  /** Told about every change to the team (added, role changed, removed), e.g. to log an event. */
+  onTeamChange?: (change: TeamChange, c: Context) => void | Promise<void>
 }
 
 /** Registers the people routes on the app, after migrating their tables. Call it after `createAgentApi`. */
-export const registerPeople = async (app: OpenAPIHono, { db, rpName, fixedKeys = [], sessionPath = '/api/session', teamPath = '/api/team', cookie = 'session', tag = PEOPLE_TAG.name }: PeopleOptions) => {
+export const registerPeople = async (app: OpenAPIHono, { db, rpName, fixedKeys = [], sessionPath = '/api/session', teamPath = '/api/team', cookie = 'session', tag = PEOPLE_TAG.name, onTeamChange }: PeopleOptions) => {
   await migrate(db, 'people', PEOPLE_MIGRATIONS)
   const routes = peopleRoutes({ sessionPath, teamPath, tag })
-  const handle = peopleHandlers(peopleRepo(db), { db, rpName, sessionPath, teamPath, cookie, fixedKeys })
+  const handle = peopleHandlers(peopleRepo(db), { db, rpName, sessionPath, teamPath, cookie, fixedKeys, onTeamChange })
   for (const name of Object.keys(routes) as (keyof typeof routes)[]) app.openapi(routes[name], handle[name] as never)
 }

@@ -46,7 +46,8 @@ const setup = async (options: { code?: string | undefined; steps?: SetupStep[] }
       access: { team: 'example', audience: 'aud', verify: async (token) => (token.startsWith('ok:') ? token.slice(3) : null), roleOf: roleOf(db) },
     },
   })
-  await registerPeople(app, { db, rpName: 'Sample', fixedKeys })
+  const teamChanges: unknown[] = []
+  await registerPeople(app, { db, rpName: 'Sample', fixedKeys, onTeamChange: (change) => void teamChanges.push(change) })
   await registerSetup(app, { db, code, steps, guards: memoryGuardStore(), fixedKeys })
   await registerKeys(app, { db, fixedKeys })
   app.get('/api/v1/me', (c) => c.json(c.get('caller' as never)))
@@ -78,7 +79,7 @@ const setup = async (options: { code?: string | undefined; steps?: SetupStep[] }
     const session = await owner.json('POST', '/api/session/passkeys/register/verify', { challengeId, enrolment, response: await authenticator.register(options, ORIGIN), name: 'Laptop' })
     return { owner, authenticator, session }
   }
-  return { app, db, browser, asKey, claimAsOwner }
+  return { app, db, browser, asKey, claimAsOwner, teamChanges }
 }
 
 describe('claiming a deployment', () => {
@@ -224,6 +225,30 @@ describe('the team', () => {
     // A key from API_KEYS administers the team like the owner
     expect((await asKey('/api/team', { method: 'DELETE' })).status).toBe(404)
     expect((await asKey('/api/team/domains/partner.example', { method: 'DELETE' })).status).toBe(204)
+  })
+
+  it('tells the app about every change to the team, with the role before and after', async () => {
+    const { asKey, teamChanges } = await setup()
+    const send = (method: string, path: string, body?: unknown) => asKey(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) })
+    await send('POST', '/api/team', { email: 'ana@example.org' })
+    await send('POST', '/api/team', { domain: 'partner.example' })
+    // Adding a domain already on the team changes nothing, so it is not told
+    await send('POST', '/api/team', { domain: 'partner.example' })
+    const ana = (await (await asKey('/api/team')).json()).people.find((person: { email: string }) => person.email === 'ana@example.org')
+    await send('PATCH', `/api/team/people/${ana.id}`, { role: 'owner' })
+    await send('PATCH', `/api/team/people/${ana.id}`, { role: 'owner' })
+    // The last owner stays, so another comes first
+    await send('POST', '/api/team', { email: 'bo@example.org', role: 'owner' })
+    await send('DELETE', `/api/team/people/${ana.id}`)
+    await send('DELETE', '/api/team/domains/partner.example')
+    expect(teamChanges).toEqual([
+      { who: 'ana@example.org', from: null, to: 'member', by: 'owner-key' },
+      { who: '@partner.example', from: null, to: 'member', by: 'owner-key' },
+      { who: 'ana@example.org', from: 'member', to: 'owner', by: 'owner-key' },
+      { who: 'bo@example.org', from: null, to: 'owner', by: 'owner-key' },
+      { who: 'ana@example.org', from: 'owner', to: null, by: 'owner-key' },
+      { who: '@partner.example', from: 'member', to: null, by: 'owner-key' },
+    ])
   })
 
   it('documents every route, and every team tool runs', async () => {

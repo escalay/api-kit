@@ -1,5 +1,6 @@
 /** The key routes' handlers: request → repo → HAL answer. */
 import type { RouteHandler } from '@hono/zod-openapi'
+import type { Context } from 'hono'
 import { mintApiKey, type Caller } from '../core/auth.js'
 import { linksOf, originOf } from '../core/hal.js'
 import { newId } from '../core/ids.js'
@@ -21,7 +22,10 @@ export const holderOf = (caller: Caller | undefined, fixedKeys: string[]) => {
   throw new ProblemError('forbidden', { detail: 'Only a key set in the deployment (API_KEYS) or a signed-in person can make or revoke keys. Keys made through the API and OAuth tokens cannot: ask the owner.' })
 }
 
-export const keyHandlers = (repo: KeysRepo, { path, mePath, fixedKeys, keyPrefix }: { path: string; mePath: string; fixedKeys: string[]; keyPrefix: string }) => {
+/** A key made or deleted, for the app's log: its id and name and who did it, never its value. @example { id: 'key_1', name: 'ci', action: 'created', by: 'owner@example.com' } */
+export type KeyChange = { id: string; name: string; action: 'created' | 'deleted'; by: string }
+
+export const keyHandlers = (repo: KeysRepo, { path, mePath, fixedKeys, keyPrefix, onKeyChange }: { path: string; mePath: string; fixedKeys: string[]; keyPrefix: string; onKeyChange?: (change: KeyChange, c: Context) => void | Promise<void> }) => {
   const cardOf = (origin: string, { hash: _hash, ...row }: KeyRow) => ({ ...row, _links: linksOf(origin, { self: `${path}/${row.id}`, list: path }) })
   const missing = (id: string) => new ProblemError('not_found', { detail: `No key ${id}. GET ${path} lists them.` })
 
@@ -54,13 +58,16 @@ export const keyHandlers = (repo: KeysRepo, { path, mePath, fixedKeys, keyPrefix
     const { key, hash } = mintApiKey(keyPrefix)
     const row: KeyRow = { id: newId('key'), name, hash, start: key.slice(0, keyPrefix.length + 5), createdAt: new Date().toISOString(), createdBy, lastUsedAt: null }
     await repo.create(row)
+    await onKeyChange?.({ id: row.id, name, action: 'created', by: createdBy }, c)
     return c.json({ ...cardOf(originOf(c), row), key }, 201, { location: `${path}/${row.id}`, ...NO_STORE })
   }
   const remove: RouteHandler<KeyRoutes['remove']> = async (c) => {
-    holderOf(c.get('caller' as never), fixedKeys)
+    const by = holderOf(c.get('caller' as never), fixedKeys)
     const { id } = c.req.valid('param')
-    if (!(await repo.get(id))) throw missing(id)
+    const row = await repo.get(id)
+    if (!row) throw missing(id)
     await repo.remove(id)
+    await onKeyChange?.({ id, name: row.name, action: 'deleted', by }, c)
     return c.body(null, 204)
   }
   return { list, get, me, create, remove }
