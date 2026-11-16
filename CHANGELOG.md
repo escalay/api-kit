@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.25.0](https://github.com/escalay/api-kit/compare/v1.24.0...v1.25.0) (2026-11-16)
+
+
+### New
+
+* **people:** adding a person takes notify, passed to the app's team hook ([#70](https://github.com/escalay/api-kit/issues/70)) ([7f964e6](https://github.com/escalay/api-kit/commit/7f964e64b4e37b3b191fc731bc470395f17e344e))
+
 ## [1.24.0](https://github.com/escalay/api-kit/compare/v1.23.0...v1.24.0) (2026-11-16)
 
 
