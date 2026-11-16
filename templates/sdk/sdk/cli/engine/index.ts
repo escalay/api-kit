@@ -6,7 +6,7 @@
  *
  * @example
  * import snapshot from '../commands.json' with { type: 'json' }
- * const cli = createCli({ name: 'mailroom', envPrefix: 'MAILROOM', version: '0.3.0', snapshot, jobs })
+ * const cli = createCli({ name: 'postbox', envPrefix: 'POSTBOX', version: '0.3.0', snapshot, jobs })
  * process.exitCode = await cli.run(process.argv.slice(2))
  */
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -26,9 +26,9 @@ type Out = { write: (text: string) => unknown; isTTY?: boolean }
 type In = NodeJS.ReadableStream & { isTTY?: boolean }
 
 export type CliOptions = {
-  /** The command's name, as people type it: `mailroom`. */
+  /** The command's name, as people type it: `postbox`. */
   name: string
-  /** Of the environment overrides: `MAILROOM` reads `MAILROOM_URL`, `MAILROOM_API_KEY`, `MAILROOM_PROFILE`. */
+  /** Of the environment overrides: `POSTBOX` reads `POSTBOX_URL`, `POSTBOX_API_KEY`, `POSTBOX_PROFILE`. */
   envPrefix: string
   version: string
   /** `commands.json`: the commands before sign-in. */

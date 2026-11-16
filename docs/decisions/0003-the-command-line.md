@@ -22,15 +22,15 @@ few task-sized jobs, and the kit checks the result like it checks the guide and 
 2. **Names are noun then verb, as `gh` writes them**, and each tool declares its own: `cli: 'mail wait'`. Nouns are
    singular (`address`, `mail`, `webhook`); verbs are `gh`'s where one fits (`list`, `view`, `create`, `edit`,
    `delete`) and the task's own word otherwise (`wait`, `reply`, `mark-read`). A rule from the route
-   (`GET /api/addresses/{id}` → `address view`) is only the fallback for a tool without a name: tried on Mailroom's 54
+   (`GET /api/addresses/{id}` → `address view`) is only the fallback for a tool without a name: tried on the first app's 54
    tools it collided on 10 and misnamed every wait. The tool's MCP name stays a hidden alias
-   (`mailroom wait-for-message` and `mailroom tool wait_for_message '{…}'` both work), so an agent that learnt the
+   (`postbox wait-for-message` and `postbox tool wait_for_message '{…}'` both work), so an agent that learnt the
    MCP names is never stuck.
 
 3. **Arguments come from the input schema.** The input keys the call puts in its path are positional, in path order
-   (found by running `call` on placeholders, not read from `route`, whose names may differ: Mailroom's
+   (found by running `call` on placeholders, not read from `route`, whose names may differ: the first app's
    `wait_for_message` takes `address` for `{id}`; `cli.positional` overrides it, and the route's names are used only
-   when `call` can't run on placeholders), as in `mailroom mail view msg_123`, and work as flags too; every
+   when `call` can't run on placeholders), as in `postbox mail view msg_123`, and work as flags too; every
    property is a `--kebab-case` flag with its description as help; booleans take `--flag` / `--no-flag`; arrays repeat the flag; numbers and enums are checked
    before the call; nested objects come only through `--input -`, which reads the input as a JSON object from stdin
    (or a file), **under** the flags: a flag wins over the same field in the JSON. Examples come from the tool
@@ -48,7 +48,7 @@ few task-sized jobs, and the kit checks the result like it checks the guide and 
    for a failed call: it answers `{ text, json, isError, problem }`), `read(uri)`, `print`, `json`, `progress`,
    `fail(problem)`, an abort signal, and whether it is `interactive` or in `jsonMode`. A job has no `--dry-run`: its
    calls depend on each other's answers.
-   Jobs sit at the top level (`mailroom signup`), are listed first by `mailroom` alone, and each does one task. The
+   Jobs sit at the top level (`postbox signup`), are listed first by `postbox` alone, and each does one task. The
    growth loop: a playbook step the agent test shows agents doing in three calls becomes a job, and the playbook then
    names the job.
 
@@ -116,5 +116,5 @@ few task-sized jobs, and the kit checks the result like it checks the guide and 
   and `cliGaps` tells them what to name.
 - The kit ships a skill, `api-kit-cli`, that adds the CLI to an app, names its tools and writes its jobs;
   `api-kit-feature` asks for a `cli` name per new tool and `api-kit-review` runs `cliGaps`.
-- Mailroom is the first app (its decision 0003), the way it was for `people`, `setup` and `telemetry`: it uses the
+- One app used it first (its own decision 0003), as with `people`, `setup` and `telemetry`: it uses the
   kit from a local checkout, goes live, then the kit is released.

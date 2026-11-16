@@ -9,7 +9,7 @@
  *   GET  {path}/checklist  every step, checked now (owner only)
  *
  * @example
- * await registerPeople(app, { db, rpName: 'Mailroom', fixedKeys })
+ * await registerPeople(app, { db, rpName: 'Postbox', fixedKeys })
  * await registerSetup(app, { db, code: env.SETUP_CODE, guards: await dbGuardStore(db), fixedKeys, steps: [
  *   { id: 'domain', title: 'Choose the mail domain', why: 'Addresses are made on it.', minutes: 1, check: async () => ({ ok: domains.length > 0, detail: … }) },
  * ] })

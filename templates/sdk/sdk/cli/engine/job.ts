@@ -1,5 +1,5 @@
 /**
- * Jobs: one task, one command (`mailroom signup`). A job makes the few calls a playbook makes every time, through the
+ * Jobs: one task, one command (`postbox signup`). A job makes the few calls a playbook makes every time, through the
  * same MCP tools an agent would call, and prints only the answer. Written by the app in `cli/jobs/`; this file is the
  * kit's and imports nothing from Node, so scripts can load the jobs cheaply.
  *

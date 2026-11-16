@@ -40,8 +40,8 @@ mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools: [getNote]
 - A resource template's query variables (`{?format}`) may be left out of a URI.
 - Skills are findable from `resources/list` alone, without the extension's methods: each `SKILL.md` is listed as
   `<name> skill: start here` with its frontmatter description, and its `references/*.md` too while a skill has at
-  most 20; the `skill://{+path}` template's description names the start URI; reading a folder (`skill://`, `skill://mailroom`,
-  `skill://mailroom/references`) answers a Markdown list of its files as `skill://` URIs; a miss names the start URI;
+  most 20; the `skill://{+path}` template's description names the start URI; reading a folder (`skill://`, `skill://postbox`,
+  `skill://postbox/references`) answers a Markdown list of its files as `skill://` URIs; a miss names the start URI;
   the server's `instructions` get one line naming each `SKILL.md`. `skills/list`, `skills/get` and
   `resources/directory/read` work as the extension defines them.
 - Every tool runs in the app's tests: `toolsRun` (testing module). Standard: `docs/STANDARD.md` §11 and §19.
