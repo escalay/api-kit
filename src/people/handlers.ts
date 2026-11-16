@@ -23,7 +23,14 @@ const inMinutes = (minutes: number) => new Date(Date.now() + minutes * 60_000).t
  * One change to the team, for the app's log: `who` is an email, or `@domain` for everyone there; `from` and `to` are the
  * role before and after, null when not on the team. @example { who: 'ana@example.com', from: null, to: 'member', by: 'owner@example.com' }
  */
-export type TeamChange = { who: string; from: 'owner' | 'member' | null; to: 'owner' | 'member' | null; by: string }
+export type TeamChange = {
+  who: string
+  from: 'owner' | 'member' | null
+  to: 'owner' | 'member' | null
+  by: string
+  /** For a person just added: whether to let them know (an invite, if the app sends one); false when the caller said not to. */
+  notify?: boolean
+}
 
 export type PeopleConfig = { db: Db; rpName: string; sessionPath: string; teamPath: string; cookie: string; fixedKeys: string[]; onTeamChange?: (change: TeamChange, c: Context) => void | Promise<void> }
 
@@ -175,7 +182,7 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
   const team: RouteHandler<PeopleRoutes['team']> = async (c) => c.json(await teamBody(c), 200, NO_STORE)
   const addToTeam: RouteHandler<PeopleRoutes['addToTeam']> = async (c) => {
     const by = adminOnly(c)
-    const { email, domain, role, name } = c.req.valid('json')
+    const { email, domain, role, name, notify } = c.req.valid('json')
     if (!email === !domain) throw new ProblemError('bad_request', { detail: 'Send either an email or a domain.' })
     if (domain && !(await repo.hasDomain(domain))) {
       await repo.addDomain(domain, by)
@@ -184,7 +191,7 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     if (email) {
       if (await repo.byEmail(email)) throw new ProblemError('conflict', { detail: `${email} is already on the team: change their role instead.` })
       await repo.add({ id: newId('prs'), email, role: role ?? 'member', name: name ?? null, createdAt: new Date().toISOString(), lastSeenAt: null })
-      await onTeamChange?.({ who: email, from: null, to: role ?? 'member', by }, c)
+      await onTeamChange?.({ who: email, from: null, to: role ?? 'member', by, notify: notify ?? true }, c)
     }
     return c.json(await teamBody(c), 201, NO_STORE)
   }

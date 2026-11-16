@@ -34,6 +34,7 @@ export const teamTools = ({ path = '/api/team' }: { path?: string } = {}): McpTo
         email: z.string().optional().describe('A person to let in.'),
         domain: z.string().optional().describe('Or a whole email domain, as members.'),
         role: z.enum(['owner', 'member']).optional().describe('owner or member (the default).'),
+        notify: z.boolean().optional().describe('For a person: false tells the app not to let them know they were added. True unless given.'),
       }),
       annotations: { openWorldHint: false },
       cli: { name: 'team add', examples: [{ run: 'team add --email ana@example.com', about: 'Let Ana in as a member' }, { run: 'team add --domain example.com', about: 'Let everyone at example.com in' }] },
