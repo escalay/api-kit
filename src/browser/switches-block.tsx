@@ -33,6 +33,7 @@ const stateLine = (feature: FeatureView, why: string) => {
   if (feature.locked) return 'Off in the deployment’s settings'
   if (feature.licensed === false) return `Needs a license granting ${feature.requires}`
   if (feature.own && !feature.on) return why
+  if (feature.unavailable) return feature.unavailable
   if (feature.scope && feature.scope !== 'everyone') return `${feature.own ? 'On' : 'Off'} for you`
   if (!feature.own && feature.changedBy) return `Switched off by ${feature.changedBy}`
   return ''

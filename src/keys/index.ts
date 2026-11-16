@@ -15,12 +15,13 @@
  */
 import type { OpenAPIHono } from '@hono/zod-openapi'
 import { migrate, type Db } from '../db/index.js'
-import { keyHandlers } from './handlers.js'
+import type { Context } from 'hono'
+import { keyHandlers, type KeyChange } from './handlers.js'
 import { keysRepo } from './repo.js'
 import { keyRoutes } from './routes.js'
 import { KEYS_MIGRATIONS } from './schema.js'
 
-export { holderOf } from './handlers.js'
+export { holderOf, type KeyChange } from './handlers.js'
 export { keysRepo, type KeysRepo } from './repo.js'
 export { keyRoutes, keySchemaOf, type KeyRoutes } from './routes.js'
 export { apiKeys, KEYS_MIGRATIONS, type KeyRow } from './schema.js'
@@ -39,16 +40,18 @@ export type KeysConfig = {
   path?: string
   mePath?: string
   tag?: string
+  /** Told about every key made or deleted (its id and name, never its value), e.g. to log an event. */
+  onKeyChange?: (change: KeyChange, c: Context) => void | Promise<void>
 }
 
 /** storedKeysOf is the lookup `createAgentApi`'s auth takes as `storedKeys`: a key's hash → its name, or undefined. */
 export const storedKeysOf = (db: Db) => keysRepo(db).nameOf
 
 /** Registers the key routes on the app, after migrating the keys table. Call it after `createAgentApi`. */
-export const registerKeys = async (app: OpenAPIHono, { db, fixedKeys, keyPrefix = 'ak', path = '/api/keys', mePath = '/api/me', tag = KEYS_TAG.name }: KeysConfig) => {
+export const registerKeys = async (app: OpenAPIHono, { db, fixedKeys, keyPrefix = 'ak', path = '/api/keys', mePath = '/api/me', tag = KEYS_TAG.name, onKeyChange }: KeysConfig) => {
   await migrate(db, 'keys', KEYS_MIGRATIONS)
   const routes = keyRoutes({ path, mePath, tag, keyPrefix })
-  const handle = keyHandlers(keysRepo(db), { path, mePath, fixedKeys, keyPrefix })
+  const handle = keyHandlers(keysRepo(db), { path, mePath, fixedKeys, keyPrefix, onKeyChange })
   app.openapi(routes.list, handle.list)
   app.openapi(routes.me, handle.me)
   app.openapi(routes.get, handle.get)

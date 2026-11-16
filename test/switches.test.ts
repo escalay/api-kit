@@ -133,6 +133,29 @@ describe('switches', () => {
     expect(await flags.stateOf()).toMatchObject({ digest: { on: false, own: true, blockedBy: ['sending'] } })
   })
 
+  it('lists a feature that is on but waits on something outside the switches, and those that need it, gating nothing', async () => {
+    const db = await testDb()
+    let waiting = true
+    const flags = switches({ catalog: CATALOG, providers: [databaseProvider(db)], unavailable: async () => (waiting ? { sending: 'No mail domain is set up, so nothing is sent.' } : {}) })
+    const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [SWITCHES_TAG], auth: { realm: 'sample', keys: parseApiKeys(`owner:${hashApiKey(OWNER)}`) } })
+    await flags.register(app, { isOwner: () => true })
+    flags.gated(app, 'sending').get('/api/send', (c) => c.json({ sent: true }))
+    const featuresOf = async () => ((await (await app.request('/api/features', { headers: { authorization: `Bearer ${OWNER}` } })).json()) as { _embedded: { features: { key: string; on: boolean; unavailable: string | null }[] } })._embedded.features
+    const byKey = (features: Awaited<ReturnType<typeof featuresOf>>) => Object.fromEntries(features.map((feature) => [feature.key, feature]))
+    const listed = byKey(await featuresOf())
+    expect(listed.sending).toMatchObject({ on: true, unavailable: 'No mail domain is set up, so nothing is sent.' })
+    expect(listed.digest).toMatchObject({ on: true, unavailable: 'Daily digest needs Sending, which cannot work now: No mail domain is set up, so nothing is sent.' })
+    expect(listed.webhooks!.unavailable).toBeNull()
+    // Off is said as off: what it waits on is for when it is on
+    expect(listed.beta!.unavailable).toBeNull()
+    expect((await app.request('/api/send', { headers: { authorization: `Bearer ${OWNER}` } })).status).toBe(200)
+    const list = switchTools()[0]!
+    const said = list.summarize!(await (await app.request('/api/features', { headers: { authorization: `Bearer ${OWNER}` } })).json(), {} as never)
+    expect(said).toContain('sending · on, but cannot work now: No mail domain is set up, so nothing is sent · Sending')
+    waiting = false
+    expect(byKey(await featuresOf()).sending!.unavailable).toBeNull()
+  })
+
   it('switches for one person or one key, the caller’s own switch winning over everyone’s', async () => {
     const { run, flip, flags } = await setup()
     expect((await run(LAPTOP, 'beta')).status).toBe(403)

@@ -28,6 +28,8 @@ export type FeatureView<Key extends string = string> = {
   locked: boolean
   needs: Key[]
   alsoOff: Key[]
+  /** Why it cannot do its work now though it is on (a setting or a binding outside the switches); null when nothing stops it. */
+  unavailable: string | null
   /** What a license must grant for it to work at all; absent for a free feature. */
   requires?: string
   /** Whether the deployment's license grants it; absent for a free feature. */

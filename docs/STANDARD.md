@@ -133,6 +133,10 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   or removed, and an owner cannot remove their last passkey (409). Passkeys work only on the host they were made on.
   A new passkey is named after the device and browser it was made in unless the person names it, and no two of a
   person's passkeys share a name.
+- **Who changed access is on the record:** `registerPeople` takes `onTeamChange` (each person or domain added, its
+  role changed, or removed: `who`, the role `from` and `to`, `by`) and `registerKeys` takes `onKeyChange` (each key
+  made or deleted: its id, name and `by`, never its value). An app logs them where it logs the rest, so an owner can
+  see who was let in.
 - **Open without auth:** `/api/health`, `/openapi.json`, `/docs`, `/llms*.txt`, `/agents/*`, `/skills/*`,
   `/problems/*` (no data). In Access, these paths and `/api/*`, `/mcp` bypass SSO; the app's key check
   guards them.
@@ -542,6 +546,9 @@ never switchable.
   answers 409 naming it.
 - `GET /api/features` lists every feature, on or off for the caller, what decided it (`source`, `reason`) and the
   stored switches; agents get `list_features` and `switch_feature`.
+- A feature that is on but cannot do its work now, for want of something outside the switches (a setting, a binding),
+  says so in the list as `unavailable` (one sentence, from the app's `unavailable` hook), and so do the features that
+  need it. It gates nothing: the feature stays on and its own routes answer as they would, saying the same.
 - The 403's `detail` starts "This feature is disabled." and goes on to say which feature, for whom, who switched it
   and when, and how it comes back on; `switch_feature` acts only on the user's word. Each switchable feature's tools
   say which switch they belong to (`featureTools`).

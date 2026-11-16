@@ -2,13 +2,16 @@
 import { z } from '@hono/zod-openapi'
 import { mcpTool, type McpTool } from '../mcp/index.js'
 
-type Feature = { key: string; title: string; on: boolean; own: boolean; source: string; requires?: string; licensed?: boolean; scope?: string; changedBy?: string; changedAt?: string; blockedBy: string[]; locked: boolean; overrides: { scope: string; on: boolean }[] }
+type Feature = { key: string; title: string; on: boolean; own: boolean; source: string; requires?: string; licensed?: boolean; scope?: string; changedBy?: string; changedAt?: string; blockedBy: string[]; locked: boolean; unavailable?: string | null; overrides: { scope: string; on: boolean }[] }
+/** A sentence's closing full stop, dropped when the sentence goes inside a line. */
+const FINAL_STOP = /\.$/
 /** Who a feature is on or off for and who decided, in words: the store's name never stands alone. */
 const stateWords = (feature: Feature) => {
   const state = feature.own ? 'on' : 'off'
   if (feature.locked) return 'off, locked by FEATURES_OFF in the deployment’s settings'
   if (feature.licensed === false) return `off, needs a license granting ${feature.requires}`
   if (feature.own && feature.blockedBy.length) return `off, because it needs ${feature.blockedBy.join(', ')}`
+  if (feature.unavailable) return `on, but cannot work now: ${feature.unavailable.replace(FINAL_STOP, '')}`
   if (feature.source === 'default') return `${state} by default`
   const whom = !feature.scope || feature.scope === 'everyone' ? 'for everyone' : `for ${feature.scope}`
   return `${state} ${whom}${feature.changedBy ? `, switched by ${feature.changedBy}${feature.changedAt ? ` ${feature.changedAt.slice(0, 16).replace('T', ' ')} UTC` : ''}` : ` (from ${feature.source})`}`
@@ -28,7 +31,7 @@ export const switchTools = ({ path = '/api/features', example = 'webhooks' }: { 
   mcpTool({
     name: 'list_features',
     title: 'Features',
-    description: 'Every feature that can be switched off, whether it works for you and why (its own switch, a feature it needs, or FEATURES_OFF). A feature that is off answers its tools with 403 feature_disabled.',
+    description: 'Every feature that can be switched off, whether it works for you and why (its own switch, a feature it needs, or FEATURES_OFF), and when one that is on cannot work now, what it waits on. A feature that is off answers its tools with 403 feature_disabled.',
     input: z.object({}),
     annotations: { readOnlyHint: true, openWorldHint: false },
     cli: { name: 'feature list', examples: [{ run: 'feature list', about: 'Which features are on' }] },

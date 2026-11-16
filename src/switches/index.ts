@@ -64,6 +64,13 @@ export type SwitchesConfig<C extends Catalog> = {
   path?: string
   /** The deployment's license (`licenseOf`): a feature that `requires` what it does not grant is off, whatever is stored. */
   license?: License
+  /**
+   * Why a feature that is on cannot do its work now, per key: something outside the switches it waits on (a setting, a
+   * missing binding). Asked when the list is shown and said there as `unavailable`; it gates nothing, so the
+   * feature's own routes still answer, and say the same when called.
+   * @example unavailable: async () => (await modelsOff() ? { extract: 'Model calls are off, so no fields are read.' } : {})
+   */
+  unavailable?: (context: FlagContext) => Promise<Partial<Record<string, string>>>
 }
 
 export type SwitchesRegisterOptions = {
@@ -118,7 +125,7 @@ const nameOf = (caller: Caller | undefined) => (caller?.kind === 'person' ? call
  * const flags = switches({ catalog: CATALOG, providers: [databaseProvider(db)] })
  * await flags.isOn('digest', contextOf(caller)) // true
  */
-export const switches = <C extends Catalog>({ catalog, providers, off = [], path = '/api/features', license }: SwitchesConfig<C>) => {
+export const switches = <C extends Catalog>({ catalog, providers, off = [], path = '/api/features', license, unavailable }: SwitchesConfig<C>) => {
   type Key = keyof C & string
   const keys = Object.keys(catalog)
   const oldNames = Object.fromEntries(keys.map((key) => [key, catalog[key]!.renamedFrom ?? []]))
@@ -286,6 +293,19 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
     const overrides: FlagOverride[] = ((await writer?.overrides?.(options(true))) ?? []).filter(visible)
     const granted = await licenseState()
     const origin = originOf(c)
+    const waits: Partial<Record<string, string>> = unavailable
+      ? await unavailable(context).catch((error: Error) => {
+          console.warn(`flags: unavailable skipped: ${error.message}`)
+          return {}
+        })
+      : {}
+    /** Why a feature that is on cannot work now: its own wait, or the first feature it needs that waits. */
+    const unavailableOf = (key: string) => {
+      if (!state[key]!.on) return null
+      if (waits[key]) return waits[key]!
+      const need = needsInOrder(catalog, key).find((other) => waits[other])
+      return need ? `${catalog[key]!.title} needs ${catalog[need]!.title}, which cannot work now: ${waits[need]}` : null
+    }
     const featureOf = (key: string) => ({
       ...state[key]!,
       title: catalog[key]!.title,
@@ -295,6 +315,7 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
       needs: [...(catalog[key]!.needs ?? [])],
       ...(catalog[key]!.requires ? { requires: catalog[key]!.requires, licensed: !unlicensed(key, granted) } : {}),
       alsoOff: dependentsOf(catalog, key),
+      unavailable: unavailableOf(key),
       overrides: overrides.filter((override) => override.key === key).map(({ scope, on, changedBy, changedAt }) => ({ scope, on, changedBy, changedAt })),
       _links: linksOf(origin, { self: `${path}/${key}`, switch: `${path}/${key}` }),
     })
