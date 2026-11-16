@@ -134,7 +134,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   A new passkey is named after the device and browser it was made in unless the person names it, and no two of a
   person's passkeys share a name.
 - **Who changed access is on the record:** `registerPeople` takes `onTeamChange` (each person or domain added, its
-  role changed, or removed: `who`, the role `from` and `to`, `by`) and `registerKeys` takes `onKeyChange` (each key
+  role changed, or removed: `who`, the role `from` and `to`, `by`, and for a person added `notify`, false when the
+  caller asked that they not be told) and `registerKeys` takes `onKeyChange` (each key
   made or deleted: its id, name and `by`, never its value). An app logs them where it logs the rest, so an owner can
   see who was let in.
 - **Open without auth:** `/api/health`, `/openapi.json`, `/docs`, `/llms*.txt`, `/agents/*`, `/skills/*`,

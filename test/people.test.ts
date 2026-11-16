@@ -238,14 +238,14 @@ describe('the team', () => {
     await send('PATCH', `/api/team/people/${ana.id}`, { role: 'owner' })
     await send('PATCH', `/api/team/people/${ana.id}`, { role: 'owner' })
     // The last owner stays, so another comes first
-    await send('POST', '/api/team', { email: 'bo@example.org', role: 'owner' })
+    await send('POST', '/api/team', { email: 'bo@example.org', role: 'owner', notify: false })
     await send('DELETE', `/api/team/people/${ana.id}`)
     await send('DELETE', '/api/team/domains/partner.example')
     expect(teamChanges).toEqual([
-      { who: 'ana@example.org', from: null, to: 'member', by: 'owner-key' },
+      { who: 'ana@example.org', from: null, to: 'member', by: 'owner-key', notify: true },
       { who: '@partner.example', from: null, to: 'member', by: 'owner-key' },
       { who: 'ana@example.org', from: 'member', to: 'owner', by: 'owner-key' },
-      { who: 'bo@example.org', from: null, to: 'owner', by: 'owner-key' },
+      { who: 'bo@example.org', from: null, to: 'owner', by: 'owner-key', notify: false },
       { who: 'ana@example.org', from: 'owner', to: null, by: 'owner-key' },
       { who: '@partner.example', from: 'member', to: null, by: 'owner-key' },
     ])

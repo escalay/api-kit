@@ -62,6 +62,7 @@ const TeamInputSchema = z
       .openapi({ description: 'Or a whole email domain, as members.', example: 'example.com' }),
     role: role.optional().openapi({ description: 'For a person: `member` unless given.' }),
     name: z.string().max(80).optional(),
+    notify: z.boolean().optional().openapi({ description: 'For a person: false tells the app not to let them know they were added (an invite, if the app sends one). True unless given.' }),
   })
   .openapi('TeamInput', { description: 'A person (email, role) or an email domain to add to the team.' })
 
