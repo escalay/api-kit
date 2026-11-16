@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.24.0](https://github.com/escalay/api-kit/compare/v1.23.0...v1.24.0) (2026-11-16)
+
+
+### New
+
+* say why a feature that is on cannot work now, and tell apps about team and key changes ([#67](https://github.com/escalay/api-kit/issues/67)) ([066dfa0](https://github.com/escalay/api-kit/commit/066dfa07dc49f4bf54c3d0e011d48876c8a9beb9))
+
+
+### Documentation
+
+* a neutral example app name in comments, docs and tests ([#68](https://github.com/escalay/api-kit/issues/68)) ([fd6246a](https://github.com/escalay/api-kit/commit/fd6246a508de11431b02b0441e0d1089298e04e4))
+
 ## [1.23.0](https://github.com/escalay/api-kit/compare/v1.22.1...v1.23.0) (2026-11-15)
 
 
