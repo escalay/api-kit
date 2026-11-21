@@ -51,7 +51,8 @@ CI: claim → `register(options, origin)` → verify → `login(options, origin)
 - Passkeys are bound to the host (`rpID` = the request's hostname). A new domain means new passkeys: recover through
   setup, or sign in through Access and add one.
 - A cookie write must come from the same site (`Sec-Fetch-Site`, else `Origin`); other sites can't post through it.
-- Each challenge is used once and expires in 5 minutes; an enrolment (from setup) in 15.
+- Each challenge is used once and expires in 5 minutes; an enrolment (from setup) in 15. A valid enrolment is used
+  for its person even in a browser that is still signed in, so a recovery made there completes and is told as one.
 - A new passkey is named after the device and browser it was made in (`Mac · Chrome`, from the user agent) unless the
   person posts a name of their own; a bare device word (`Mac`, `This device`) counts as none. Two of a person's passkeys
   never share a name: the later one is numbered (`Mac · Chrome (2)`).
@@ -64,6 +65,6 @@ CI: claim → `register(options, origin)` → verify → `login(options, origin)
 - `onPasskeyChange` hears each passkey added or removed (`{ action, who, id, name, by, via }`: `who` is the email it
   belongs to, `name` the device and browser it was made in unless its person named it, `via`, for one added, how its
   maker got in: `session`, or an enrolment from `claim` or `recovery`). It is told once the passkey and the session
-  exist, so a hook that throws can't spend an enrolment for nothing. Passkeys removed with their person are a team
+  exist, and a hook that throws is logged, never answered: the passkey stays made. Passkeys removed with their person are a team
   change, not told here. Log it, and alert the person from it: a passkey they did not add is someone else's way in.
 - Standard: `docs/STANDARD.md` §7 (auth).
