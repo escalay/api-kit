@@ -25,6 +25,7 @@ import { lintOpenApi, softAuthenticator, toolRoutes, toolsRun } from '../src/tes
 const KEY = 'deploy-key'
 const CODE = 'K7Q2-9XMD'
 const ORIGIN = 'http://app.test'
+const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1'
 
 const setup = async (options: { code?: string | undefined; steps?: SetupStep[] } = {}) => {
   const code = 'code' in options ? options.code : CODE
@@ -47,8 +48,10 @@ const setup = async (options: { code?: string | undefined; steps?: SetupStep[] }
     },
   })
   const teamChanges: unknown[] = []
-  await registerPeople(app, { db, rpName: 'Sample', fixedKeys, onTeamChange: (change) => void teamChanges.push(change) })
-  await registerSetup(app, { db, code, steps, guards: memoryGuardStore(), fixedKeys })
+  const passkeyChanges: unknown[] = []
+  const recoveries: unknown[] = []
+  await registerPeople(app, { db, rpName: 'Sample', fixedKeys, onTeamChange: (change) => void teamChanges.push(change), onPasskeyChange: (change) => void passkeyChanges.push(change) })
+  await registerSetup(app, { db, code, steps, guards: memoryGuardStore(), fixedKeys, onRecovery: (recovery) => void recoveries.push(recovery) })
   await registerKeys(app, { db, fixedKeys })
   app.get('/api/v1/me', (c) => c.json(c.get('caller' as never)))
   app.post('/api/v1/things', (c) => c.json({ ok: true }, 201))
@@ -79,7 +82,7 @@ const setup = async (options: { code?: string | undefined; steps?: SetupStep[] }
     const session = await owner.json('POST', '/api/session/passkeys/register/verify', { challengeId, enrolment, response: await authenticator.register(options, ORIGIN), name: 'Laptop' })
     return { owner, authenticator, session }
   }
-  return { app, db, browser, asKey, claimAsOwner, teamChanges }
+  return { app, db, browser, asKey, claimAsOwner, teamChanges, passkeyChanges, recoveries }
 }
 
 describe('claiming a deployment', () => {
@@ -115,20 +118,37 @@ describe('claiming a deployment', () => {
     expect((await guesser.call('POST', '/api/setup/claim', { code: CODE, email: 'g@example.com' })).status).toBe(429)
   })
 
-  it('lets the owner back in after the setup code is changed, once', async () => {
+  it('lets the owner back in after the setup code is changed, once, and tells the app when it starts and completes', async () => {
     const first = await setup()
     await first.claimAsOwner()
     // The same database with a rotated secret, as after `wrangler secret put SETUP_CODE`
     const rotated = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [PEOPLE_TAG, SETUP_TAG], auth: { realm: 'sample', keys: new Map(), open: [...PEOPLE_OPEN_PATHS, ...SETUP_OPEN_PATHS], session: sessionOf(first.db) } })
-    await registerPeople(rotated, { db: first.db, rpName: 'Sample' })
-    await registerSetup(rotated, { db: first.db, code: 'NEW1-CODE', steps: [], guards: memoryGuardStore() })
-    const post = (body: unknown) => rotated.request(`${ORIGIN}/api/setup/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    const recoveries: unknown[] = []
+    const passkeyChanges: unknown[] = []
+    await registerPeople(rotated, { db: first.db, rpName: 'Sample', onPasskeyChange: (change) => void passkeyChanges.push(change) })
+    await registerSetup(rotated, { db: first.db, code: 'NEW1-CODE', steps: [], guards: memoryGuardStore(), onRecovery: (recovery) => void recoveries.push(recovery) })
+    const post = (path: string, body: unknown) => rotated.request(`${ORIGIN}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', 'user-agent': IPHONE }, body: JSON.stringify(body) })
     expect(await (await rotated.request(`${ORIGIN}/api/setup`)).json()).toMatchObject({ claimed: true, recovery: true })
-    expect((await post({ code: 'NEW1-CODE', email: 'someone@example.com' })).status).toBe(403)
-    const recovered = await (await post({ code: 'NEW1-CODE', email: 'owner@example.com' })).json()
+    expect((await post('/api/setup/claim', { code: 'NEW1-CODE', email: 'someone@example.com' })).status).toBe(403)
+    expect(recoveries).toEqual([])
+    const recovered = await (await post('/api/setup/claim', { code: 'NEW1-CODE', email: 'owner@example.com' })).json()
     expect(recovered).toMatchObject({ mode: 'recover' })
     expect(recovered.enrolment).toEqual(expect.any(String))
-    expect((await post({ code: 'NEW1-CODE', email: 'owner@example.com' })).status).toBe(409)
+    expect(recoveries).toEqual([{ stage: 'started', who: 'owner@example.com' }])
+    expect((await post('/api/setup/claim', { code: 'NEW1-CODE', email: 'owner@example.com' })).status).toBe(409)
+    // The enrolment makes the new passkey: the recovery is complete, told once, with the passkey it made
+    const { enrolment } = recovered
+    const { challengeId, options } = await (await post('/api/session/passkeys/register/options', { enrolment })).json()
+    const made = await post('/api/session/passkeys/register/verify', { challengeId, enrolment, response: await (await softAuthenticator()).register(options, ORIGIN) })
+    expect(made.status).toBe(200)
+    const passkey = { id: expect.any(String), name: 'iPhone · Safari' }
+    expect(recoveries).toEqual([
+      { stage: 'started', who: 'owner@example.com' },
+      { stage: 'completed', who: 'owner@example.com', passkey },
+    ])
+    expect(passkeyChanges).toEqual([{ action: 'added', who: 'owner@example.com', ...passkey, by: 'owner@example.com', via: 'recovery' }])
+    // The first app's own claim was no recovery
+    expect(first.recoveries).toEqual([])
   })
 })
 
@@ -171,6 +191,22 @@ describe('passkeys and the session', () => {
     expect(names).toEqual(['Mac · Chrome', 'Mac · Chrome (2)', 'Work laptop', 'Work laptop (2)'])
     expect(passkeyBaseName(undefined, 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1')).toBe('iPhone · Safari')
     expect(passkeyBaseName(undefined, undefined)).toBe('Passkey')
+  })
+
+  it('tells the app about every passkey added or removed, whose it is and how its maker got in', async () => {
+    const { claimAsOwner, passkeyChanges } = await setup()
+    const { owner } = await claimAsOwner()
+    // Signed in, the owner adds a second passkey from another device, then removes the first
+    const { challengeId, options } = await owner.json('POST', '/api/session/passkeys/register/options', {}, { 'user-agent': IPHONE })
+    expect((await owner.call('POST', '/api/session/passkeys/register/verify', { challengeId, response: await (await softAuthenticator()).register(options, ORIGIN) }, { 'user-agent': IPHONE })).status).toBe(200)
+    const [laptop] = (await owner.json('GET', '/api/session/passkeys'))._embedded.passkeys
+    expect((await owner.call('DELETE', `/api/session/passkeys/${encodeURIComponent(laptop.id)}`)).status).toBe(204)
+    const who = 'owner@example.com'
+    expect(passkeyChanges).toEqual([
+      { action: 'added', who, id: laptop.id, name: 'Laptop', by: who, via: 'claim' },
+      { action: 'added', who, id: expect.any(String), name: 'iPhone · Safari', by: who, via: 'session' },
+      { action: 'removed', who, id: laptop.id, name: 'Laptop', by: who },
+    ])
   })
 
   it('keeps the enrolment when a passkey fails to register, so the owner can try again', async () => {

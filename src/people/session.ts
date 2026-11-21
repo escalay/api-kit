@@ -61,9 +61,28 @@ export const roleOf = (db: Db) => async (email: string): Promise<Role | null> =>
 export const isAdmin = (caller: Caller | undefined, fixedKeys: string[] = []) =>
   (caller?.kind === 'person' && caller.role === 'owner') || (caller?.kind === 'key' && fixedKeys.includes(caller.name))
 
-/** startEnrolment lets a person who is not signed in add their first passkey (after claiming or recovering a deployment); it returns the one-time enrolment. */
-export const startEnrolment = async (db: Db, personId: string) => {
+/** Why an enrolment was given: the deployment was claimed, or an owner is recovering it. */
+export type EnrolmentPurpose = 'claim' | 'recovery'
+
+/**
+ * startEnrolment lets a person who is not signed in add their first passkey (after claiming or recovering a
+ * deployment); it returns the one-time enrolment. Its purpose is kept with it and told with the passkey it makes.
+ *
+ * @example
+ * const enrolment = await startEnrolment(db, owner.id, 'recovery')
+ */
+export const startEnrolment = async (db: Db, personId: string, purpose: EnrolmentPurpose = 'claim') => {
   const token = randomToken()
-  await peopleRepo(db).addChallenge({ id: hashApiKey(token), kind: 'enrol', challenge: '', personId, expiresAt: new Date(Date.now() + ENROLMENT_MINUTES * 60_000).toISOString() })
+  // An enrolment has no WebAuthn challenge of its own, so the column holds its purpose
+  await peopleRepo(db).addChallenge({ id: hashApiKey(token), kind: 'enrol', challenge: purpose, personId, expiresAt: new Date(Date.now() + ENROLMENT_MINUTES * 60_000).toISOString() })
   return token
 }
+
+/** The purpose an enrolment row was given; one made before purposes were kept counts as a claim. */
+export const enrolmentPurposeOf = (row: { challenge: string }): EnrolmentPurpose => (row.challenge === 'recovery' ? 'recovery' : 'claim')
+
+/** What `setup` is told when a recovery's enrolment made its passkey: whose, and which passkey. */
+export type RecoveryListener = (done: { who: string; passkey: { id: string; name: string } }, c: Context) => void | Promise<void>
+
+/** Per app, the setup part's listener for a finished recovery: `registerSetup` sets it, the people routes call it. */
+export const recoveryListeners = new WeakMap<object, RecoveryListener>()

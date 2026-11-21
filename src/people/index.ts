@@ -13,22 +13,23 @@
  * @example
  * const fixedKeys = [...parseApiKeys(env.API_KEYS).values()]
  * const app = createAgentApi({ …, tags: [...tags, PEOPLE_TAG], auth: { realm, keys, open: [...PEOPLE_OPEN_PATHS], session: sessionOf(db), access: access && { ...access, roleOf: roleOf(db) } } })
- * await registerPeople(app, { db, rpName: 'Postbox', fixedKeys })
+ * await registerPeople(app, { db, rpName: 'Postbox', fixedKeys, onPasskeyChange: (change) => log('passkey', change) })
  */
 import type { OpenAPIHono } from '@hono/zod-openapi'
 import { migrate, type Db } from '../db/index.js'
 import type { Context } from 'hono'
-import { peopleHandlers, type TeamChange } from './handlers.js'
+import { peopleHandlers, type PasskeyChange, type TeamChange } from './handlers.js'
+import { recoveryListeners } from './session.js'
 import { peopleRepo } from './repo.js'
 import { peopleRoutes } from './routes.js'
 import { PEOPLE_MIGRATIONS } from './schema.js'
 
-export type { TeamChange } from './handlers.js'
+export type { PasskeyChange, TeamChange } from './handlers.js'
 export { distinctName, passkeyBaseName } from './names.js'
 export { peopleRepo, type PeopleRepo } from './repo.js'
 export { PersonSchema, peopleRoutes, type PeopleRoutes } from './routes.js'
 export { challenges, passkeys, people, PEOPLE_MIGRATIONS, sessions, teamDomains, type PasskeyRow, type PersonRow } from './schema.js'
-export { endSession, isAdmin, personOf, roleOf, SESSION_DAYS, sessionOf, startEnrolment, startSession } from './session.js'
+export { endSession, isAdmin, personOf, roleOf, SESSION_DAYS, sessionOf, startEnrolment, startSession, type EnrolmentPurpose } from './session.js'
 export { teamTools } from './tools.js'
 
 export const PEOPLE_TAG = { name: 'People', description: 'Signing in with a passkey, the browser session, and the team.' }
@@ -51,12 +52,15 @@ export type PeopleOptions = {
   tag?: string
   /** Told about every change to the team (added, role changed, removed), e.g. to log an event. */
   onTeamChange?: (change: TeamChange, c: Context) => void | Promise<void>
+  /** Told about every passkey added or removed (whose, its id and name, by whom, and how its maker got in), e.g. to alert its person. */
+  onPasskeyChange?: (change: PasskeyChange, c: Context) => void | Promise<void>
 }
 
 /** Registers the people routes on the app, after migrating their tables. Call it after `createAgentApi`. */
-export const registerPeople = async (app: OpenAPIHono, { db, rpName, fixedKeys = [], sessionPath = '/api/session', teamPath = '/api/team', cookie = 'session', tag = PEOPLE_TAG.name, onTeamChange }: PeopleOptions) => {
+export const registerPeople = async (app: OpenAPIHono, { db, rpName, fixedKeys = [], sessionPath = '/api/session', teamPath = '/api/team', cookie = 'session', tag = PEOPLE_TAG.name, onTeamChange, onPasskeyChange }: PeopleOptions) => {
   await migrate(db, 'people', PEOPLE_MIGRATIONS)
   const routes = peopleRoutes({ sessionPath, teamPath, tag })
-  const handle = peopleHandlers(peopleRepo(db), { db, rpName, sessionPath, teamPath, cookie, fixedKeys, onTeamChange })
+  const onRecovered = () => recoveryListeners.get(app)
+  const handle = peopleHandlers(peopleRepo(db), { db, rpName, sessionPath, teamPath, cookie, fixedKeys, onTeamChange, onPasskeyChange, onRecovered })
   for (const name of Object.keys(routes) as (keyof typeof routes)[]) app.openapi(routes[name], handle[name] as never)
 }
