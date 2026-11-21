@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.0](https://github.com/escalay/api-kit/compare/v1.25.0...v1.26.0) (2026-11-21)
+
+
+### New
+
+* **people:** tell the app when a passkey changes or an owner recovers ([#72](https://github.com/escalay/api-kit/issues/72)) ([85e4b5a](https://github.com/escalay/api-kit/commit/85e4b5a9f4a13ec92117759158734f6fc71a8eb6))
+
 ## [1.25.0](https://github.com/escalay/api-kit/compare/v1.24.0...v1.25.0) (2026-11-16)
 
 
