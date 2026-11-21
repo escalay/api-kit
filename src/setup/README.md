@@ -24,7 +24,7 @@ GET  /api/setup/checklist  every step, checked now (admin only)
 
 ```ts
 await registerPeople(app, { db, rpName: 'Postbox', fixedKeys })
-await registerSetup(app, { db, code: env.SETUP_CODE, guards: await dbGuardStore(db), fixedKeys, steps: [
+await registerSetup(app, { db, code: env.SETUP_CODE, guards: await dbGuardStore(db), fixedKeys, onRecovery: (recovery, c) => log('recovery', recovery), steps: [
   { id: 'domain', title: 'Choose the mail domain', why: 'Addresses are made on it.', minutes: 1,
     check: async () => ({ ok: domains.length > 0, detail: domains.join(', ') || 'None set.', fixUrl: '…' }) },
 ] })
@@ -47,5 +47,12 @@ check: async () => ((await flags.isOn('sending')) ? checkSending() : { ok: false
 - Attempts are limited: 5 an hour per address, 20 a day in all (429). A wrong code is 403.
 - A claimed deployment answers its own code with 409. A **different** code (the secret was rotated) opens recovery
   for an existing owner's email, once: it becomes the code on record.
+- `onRecovery` hears an owner getting back in, in two stages (`{ stage, who, passkey }`): `started` when a rotated code
+  is accepted for their email, `completed` when the enrolment it gave makes a passkey (named). Log both, and alert the
+  owner on `started`: only someone holding the deployment's secrets can start one, and it may not be them.
+  Why one hook named after the act: recovery is the word this part already uses (`recovery` in the status, `mode:
+  recover`), and one hook with a `stage` keeps a started recovery and its end in one place, as `onKeyChange` does with
+  its `action`. A recovery is not a change of state the app could ask for later, so it is not `onRecoveryChange`; and
+  claiming is not covered, since the first owner is the one who reads the log.
 - Each step's check runs on every look, with a 5 second limit; a throw or a timeout shows as not ok, never as a 500.
 - Standard: `docs/STANDARD.md` §7 (auth).

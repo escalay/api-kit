@@ -10,7 +10,7 @@
  *
  * @example
  * await registerPeople(app, { db, rpName: 'Postbox', fixedKeys })
- * await registerSetup(app, { db, code: env.SETUP_CODE, guards: await dbGuardStore(db), fixedKeys, steps: [
+ * await registerSetup(app, { db, code: env.SETUP_CODE, guards: await dbGuardStore(db), fixedKeys, onRecovery: (recovery) => log('recovery', recovery), steps: [
  *   { id: 'domain', title: 'Choose the mail domain', why: 'Addresses are made on it.', minutes: 1, check: async () => ({ ok: domains.length > 0, detail: … }) },
  * ] })
  */
@@ -24,6 +24,7 @@ import { newId } from '../core/ids.js'
 import { ProblemError } from '../core/problem.js'
 import { migrate, type Db } from '../db/index.js'
 import { isAdmin, peopleRepo, startEnrolment } from '../people/index.js'
+import { recoveryListeners } from '../people/session.js'
 import { setupRoutes, type SetupRoutes } from './routes.js'
 import { SETUP_MIGRATIONS, setupState } from './schema.js'
 
@@ -45,6 +46,18 @@ export type SetupStep = {
   check: (c: Context) => Promise<{ ok: boolean; detail: string; fixUrl?: string; switchedOff?: boolean }>
 }
 
+/**
+ * One step of an owner getting back in: `started` when a rotated setup code was accepted for their email (an
+ * enrolment was given), `completed` when that enrolment made a passkey, which it names.
+ * @example { stage: 'completed', who: 'owner@example.com', passkey: { id: 'cred-2', name: 'iPhone · Safari' } }
+ */
+export type Recovery = {
+  stage: 'started' | 'completed'
+  /** The owner's email. */
+  who: string
+  passkey?: { id: string; name: string }
+}
+
 export type SetupOptions = {
   db: Db
   /** The setup code from the environment (`env.SETUP_CODE`). Unset: claiming is refused. */
@@ -55,6 +68,8 @@ export type SetupOptions = {
   fixedKeys?: string[]
   path?: string
   tag?: string
+  /** Told when an owner starts and completes a recovery, e.g. to log it and alert them. */
+  onRecovery?: (recovery: Recovery, c: Context) => void | Promise<void>
 }
 
 const PER_ADDRESS = { limit: 5, windowMs: 3_600_000 }
@@ -62,8 +77,11 @@ const IN_ALL = { limit: 20, windowMs: 86_400_000 }
 const CHECK_MS = 5000
 
 /** Registers the setup routes, after migrating the setup table. Needs `registerPeople` first. */
-export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards, fixedKeys = [], path = '/api/setup', tag = SETUP_TAG.name }: SetupOptions) => {
+export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards, fixedKeys = [], path = '/api/setup', tag = SETUP_TAG.name, onRecovery }: SetupOptions) => {
   await migrate(db, 'setup', SETUP_MIGRATIONS)
+  // The passkey that completes a recovery is made by the people routes, which call this
+  if (onRecovery) recoveryListeners.set(app, ({ who, passkey }, c) => onRecovery({ stage: 'completed', who, passkey }, c))
+  else recoveryListeners.delete(app)
   const routes = setupRoutes({ path, tag })
   const people = peopleRepo(db)
   const stateOf = async () => (await db.select().from(setupState).where(eq(setupState.id, 1)))[0]
@@ -100,7 +118,9 @@ export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards,
     if (owner?.role !== 'owner') throw new ProblemError('forbidden', { detail: 'Recovery is for an owner: use the email the deployment was claimed with.' })
     // The rotated code works once: it becomes the code that last opened setup
     await db.update(setupState).set({ codeHash, recoveredAt: at }).where(eq(setupState.id, 1))
-    return c.json({ mode: 'recover' as const, enrolment: await startEnrolment(db, owner.id), _links: links(c) }, 200, { 'cache-control': 'no-store' })
+    const enrolment = await startEnrolment(db, owner.id, 'recovery')
+    await onRecovery?.({ stage: 'started', who: owner.email }, c)
+    return c.json({ mode: 'recover' as const, enrolment, _links: links(c) }, 200, { 'cache-control': 'no-store' })
   }
 
   const checklist: RouteHandler<SetupRoutes['checklist']> = async (c) => {

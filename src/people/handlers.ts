@@ -11,7 +11,7 @@ import type { PeopleRepo } from './repo.js'
 import type { PeopleRoutes } from './routes.js'
 import type { PersonRow } from './schema.js'
 import { distinctName, passkeyBaseName } from './names.js'
-import { endSession, isAdmin, personOf, startSession } from './session.js'
+import { endSession, enrolmentPurposeOf, isAdmin, personOf, startSession, type EnrolmentPurpose, type RecoveryListener } from './session.js'
 
 const NO_STORE = { 'cache-control': 'no-store' }
 const CHALLENGE_MINUTES = 5
@@ -32,9 +32,35 @@ export type TeamChange = {
   notify?: boolean
 }
 
-export type PeopleConfig = { db: Db; rpName: string; sessionPath: string; teamPath: string; cookie: string; fixedKeys: string[]; onTeamChange?: (change: TeamChange, c: Context) => void | Promise<void> }
+/**
+ * One passkey added or removed, for the app's log and any alert: `who` is the email it belongs to, `name` the one it
+ * shows (the device and browser it was made in, unless its person named it), `by` who did it. For a passkey added,
+ * `via` says how its maker got in: signed in, or with an enrolment from claiming or recovering the deployment.
+ * @example { action: 'added', who: 'owner@example.com', id: 'cred-1', name: 'iPhone · Safari', by: 'owner@example.com', via: 'session' }
+ */
+export type PasskeyChange = {
+  action: 'added' | 'removed'
+  who: string
+  id: string
+  name: string
+  by: string
+  via?: 'session' | EnrolmentPurpose
+}
 
-export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, teamPath, cookie, fixedKeys, onTeamChange }: PeopleConfig) => {
+export type PeopleConfig = {
+  db: Db
+  rpName: string
+  sessionPath: string
+  teamPath: string
+  cookie: string
+  fixedKeys: string[]
+  onTeamChange?: (change: TeamChange, c: Context) => void | Promise<void>
+  onPasskeyChange?: (change: PasskeyChange, c: Context) => void | Promise<void>
+  /** Told when a recovery's enrolment made its passkey (`setup` listens through `recoveryListeners`). */
+  onRecovered?: () => RecoveryListener | undefined
+}
+
+export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, teamPath, cookie, fixedKeys, onTeamChange, onPasskeyChange, onRecovered }: PeopleConfig) => {
   /** The host a passkey is made for and used on: the page's own (`rpID`), and the origin the browser reports. */
   const hostOf = (c: Context) => {
     const origin = originOf(c)
@@ -89,7 +115,7 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
   }
 
   const registerVerify: RouteHandler<PeopleRoutes['registerVerify']> = async (c) => {
-    const { challengeId, response, enrolment, name } = c.req.valid('json')
+    const { challengeId, response, enrolment, name: asked } = c.req.valid('json')
     const challenge = await repo.takeChallenge(challengeId, 'register')
     if (!challenge?.personId) throw new ProblemError('bad_request', { detail: 'This challenge expired or was used: ask for new options.' })
     const signedIn = await personOf(c, db, cookie)
@@ -105,8 +131,10 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     })
     if (!verified.verified || !verified.registrationInfo) throw new ProblemError('bad_request', { detail: 'The passkey could not be checked.' })
     const { credential, credentialDeviceType, credentialBackedUp } = verified.registrationInfo
-    if (byEnrolment && (await repo.takeChallenge(hashApiKey(enrolment!), 'enrol'))?.personId !== challenge.personId)
-      throw new ProblemError('unauthorized', { detail: 'This enrolment was just used: sign in with the passkey it made.' })
+    const taken = byEnrolment ? await repo.takeChallenge(hashApiKey(enrolment!), 'enrol') : undefined
+    if (byEnrolment && taken?.personId !== challenge.personId) throw new ProblemError('unauthorized', { detail: 'This enrolment was just used: sign in with the passkey it made.' })
+    // The device and browser unless the person chose a name; numbered so two never read the same
+    const name = distinctName(passkeyBaseName(asked, c.req.header('user-agent')), (await repo.passkeysOf(challenge.personId)).map((passkey) => passkey.name))
     await repo.addPasskey({
       id: credential.id,
       personId: challenge.personId,
@@ -116,13 +144,19 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
       deviceType: credentialDeviceType,
       backedUp: credentialBackedUp,
       rpId: rpID,
-      // The device and browser unless the person chose a name; numbered so two never read the same
-      name: distinctName(passkeyBaseName(name, c.req.header('user-agent')), (await repo.passkeysOf(challenge.personId)).map((passkey) => passkey.name)),
+      name,
       createdAt: new Date().toISOString(),
       lastUsedAt: null,
     })
     await startSession(c, db, challenge.personId, cookie)
-    return c.json(await sessionBody(c, (await repo.get(challenge.personId)) ?? null), 200, NO_STORE)
+    const person = (await repo.get(challenge.personId)) ?? null
+    // Told once the passkey and the session exist: a hook that throws can't leave a spent enrolment and no passkey
+    if (person) {
+      const via = taken ? enrolmentPurposeOf(taken) : 'session'
+      await onPasskeyChange?.({ action: 'added', who: person.email, id: credential.id, name, by: person.email, via }, c)
+      if (via === 'recovery') await onRecovered?.()?.({ who: person.email, passkey: { id: credential.id, name } }, c)
+    }
+    return c.json(await sessionBody(c, person), 200, NO_STORE)
   }
 
   const loginOptions: RouteHandler<PeopleRoutes['loginOptions']> = async (c) => {
@@ -176,6 +210,7 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     if (!own.some((key) => key.id === id)) throw new ProblemError('not_found', { detail: `No passkey ${id} of yours. GET ${sessionPath}/passkeys lists them.` })
     if (own.length === 1 && person.role === 'owner') throw new ProblemError('conflict', { detail: 'This is your last passkey: add another first, or you can only get back in by recovering on /setup.' })
     await repo.removePasskey(id)
+    await onPasskeyChange?.({ action: 'removed', who: person.email, id, name: own.find((key) => key.id === id)?.name ?? '', by: person.email }, c)
     return c.body(null, 204)
   }
 

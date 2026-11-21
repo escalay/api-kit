@@ -135,9 +135,11 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   person's passkeys share a name.
 - **Who changed access is on the record:** `registerPeople` takes `onTeamChange` (each person or domain added, its
   role changed, or removed: `who`, the role `from` and `to`, `by`, and for a person added `notify`, false when the
-  caller asked that they not be told) and `registerKeys` takes `onKeyChange` (each key
+  caller asked that they not be told), `onPasskeyChange` (each passkey added or removed: whose, its id and name, `by`,
+  and for one added `via`: `session`, `claim` or `recovery`), `registerSetup` takes `onRecovery` (an owner's recovery
+  `started` with a rotated code and `completed` with the passkey it made) and `registerKeys` takes `onKeyChange` (each key
   made or deleted: its id, name and `by`, never its value). An app logs them where it logs the rest, so an owner can
-  see who was let in.
+  see who was let in, and alerts the person whose way in changed.
 - **Open without auth:** `/api/health`, `/openapi.json`, `/docs`, `/llms*.txt`, `/agents/*`, `/skills/*`,
   `/problems/*` (no data). In Access, these paths and `/api/*`, `/mcp` bypass SSO; the app's key check
   guards them.
