@@ -49,7 +49,8 @@ check: async () => ((await flags.isOn('sending')) ? checkSending() : { ok: false
   for an existing owner's email, once: it becomes the code on record.
 - `onRecovery` hears an owner getting back in, in two stages (`{ stage, who, passkey }`): `started` when a rotated code
   is accepted for their email, `completed` when the enrolment it gave makes a passkey (named). Log both, and alert the
-  owner on `started`: only someone holding the deployment's secrets can start one, and it may not be them.
+  owner on `started`: only someone holding the deployment's secrets can start one, and it may not be them. A hook
+  that throws is logged, never answered: the rotated code is spent by then, so the owner still gets the enrolment.
   Why one hook named after the act: recovery is the word this part already uses (`recovery` in the status, `mode:
   recover`), and one hook with a `stage` keeps a started recovery and its end in one place, as `onKeyChange` does with
   its `action`. A recovery is not a change of state the app could ask for later, so it is not `onRecoveryChange`; and

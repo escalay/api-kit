@@ -24,7 +24,7 @@ import { newId } from '../core/ids.js'
 import { ProblemError } from '../core/problem.js'
 import { migrate, type Db } from '../db/index.js'
 import { isAdmin, peopleRepo, startEnrolment } from '../people/index.js'
-import { recoveryListeners } from '../people/session.js'
+import { recoveryListeners, tellApp } from '../people/session.js'
 import { setupRoutes, type SetupRoutes } from './routes.js'
 import { SETUP_MIGRATIONS, setupState } from './schema.js'
 
@@ -119,7 +119,8 @@ export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards,
     // The rotated code works once: it becomes the code that last opened setup
     await db.update(setupState).set({ codeHash, recoveredAt: at }).where(eq(setupState.id, 1))
     const enrolment = await startEnrolment(db, owner.id, 'recovery')
-    await onRecovery?.({ stage: 'started', who: owner.email }, c)
+    // The rotated code is spent: a hook that throws must not keep the enrolment from the owner
+    await tellApp('onRecovery', () => onRecovery?.({ stage: 'started', who: owner.email }, c))
     return c.json({ mode: 'recover' as const, enrolment, _links: links(c) }, 200, { 'cache-control': 'no-store' })
   }
 

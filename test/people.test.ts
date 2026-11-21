@@ -152,6 +152,58 @@ describe('claiming a deployment', () => {
   })
 })
 
+describe('recovering with a session still open, and hooks that fail', () => {
+  /** The first app's database with a rotated code, its hooks given; `post` keeps one browser's cookie. */
+  const rotate = async (db: Awaited<ReturnType<typeof setup>>['db'], hooks: Parameters<typeof registerPeople>[1] & Partial<Parameters<typeof registerSetup>[1]>) => {
+    const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [PEOPLE_TAG, SETUP_TAG], auth: { realm: 'sample', keys: new Map(), open: [...PEOPLE_OPEN_PATHS, ...SETUP_OPEN_PATHS], session: sessionOf(db) } })
+    await registerPeople(app, hooks)
+    await registerSetup(app, { db, code: 'NEW1-CODE', steps: [], guards: memoryGuardStore(), onRecovery: hooks.onRecovery })
+    return app
+  }
+  const browserOn = (app: Awaited<ReturnType<typeof rotate>>, cookie = '') => {
+    const json = async (path: string, body: unknown) => {
+      const answer = await app.request(`${ORIGIN}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', 'user-agent': IPHONE, ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) })
+      const set = answer.headers.get('set-cookie')
+      if (set) cookie = set.split(';')[0]!
+      return { status: answer.status, body: (await answer.json()) as any }
+    }
+    const recover = async () => {
+      const { body: claimed } = await json('/api/setup/claim', { code: 'NEW1-CODE', email: 'owner@example.com' })
+      const { body: options } = await json('/api/session/passkeys/register/options', { enrolment: claimed.enrolment })
+      const made = await json('/api/session/passkeys/register/verify', { challengeId: options.challengeId, enrolment: claimed.enrolment, response: await (await softAuthenticator()).register(options.options, ORIGIN) })
+      return { claimed, made }
+    }
+    return { json, recover }
+  }
+
+  it('completes a recovery made in a browser still signed in, and spends its enrolment', async () => {
+    const first = await setup()
+    const { owner } = await first.claimAsOwner()
+    const recoveries: unknown[] = []
+    const passkeyChanges: { via?: string }[] = []
+    const app = await rotate(first.db, { db: first.db, rpName: 'Sample', onPasskeyChange: (change) => void passkeyChanges.push(change), onRecovery: (recovery) => void recoveries.push(recovery) })
+    const { claimed, made } = await browserOn(app, owner.cookie()).recover()
+    expect(made.status).toBe(200)
+    expect(passkeyChanges.map((change) => change.via)).toEqual(['recovery'])
+    expect(recoveries).toMatchObject([{ stage: 'started' }, { stage: 'completed', passkey: { name: 'iPhone · Safari' } }])
+    // The enrolment is spent, so nobody can make a second passkey with it
+    expect((await browserOn(app).json('/api/session/passkeys/register/options', { enrolment: claimed.enrolment })).status).toBe(401)
+  })
+
+  it('keeps sign-in and recovery working when the app\'s hooks throw', async () => {
+    const first = await setup()
+    await first.claimAsOwner()
+    const fail = () => {
+      throw new Error('the log is down')
+    }
+    const app = await rotate(first.db, { db: first.db, rpName: 'Sample', onPasskeyChange: fail, onRecovery: fail })
+    const { claimed, made } = await browserOn(app).recover()
+    // The rotated code is spent either way, so the owner must still get the enrolment and their passkey
+    expect(claimed).toMatchObject({ mode: 'recover', enrolment: expect.any(String) })
+    expect(made).toMatchObject({ status: 200, body: { signedIn: true, passkeys: 2 } })
+  })
+})
+
 describe('passkeys and the session', () => {
   it('signs back in with the passkey after signing out, and refuses writes from another site', async () => {
     const { browser, claimAsOwner } = await setup()

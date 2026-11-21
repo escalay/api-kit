@@ -11,7 +11,7 @@ import type { PeopleRepo } from './repo.js'
 import type { PeopleRoutes } from './routes.js'
 import type { PersonRow } from './schema.js'
 import { distinctName, passkeyBaseName } from './names.js'
-import { endSession, enrolmentPurposeOf, isAdmin, personOf, startSession, type EnrolmentPurpose, type RecoveryListener } from './session.js'
+import { endSession, enrolmentPurposeOf, isAdmin, personOf, startSession, tellApp, type EnrolmentPurpose, type RecoveryListener } from './session.js'
 
 const NO_STORE = { 'cache-control': 'no-store' }
 const CHALLENGE_MINUTES = 5
@@ -94,7 +94,8 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     const { enrolment } = c.req.valid('json')
     const signedIn = await personOf(c, db, cookie)
     const enrolled = enrolment ? await repo.peekChallenge(hashApiKey(enrolment), 'enrol') : undefined
-    const person = signedIn ?? (enrolled?.personId ? await repo.get(enrolled.personId) : undefined)
+    // An enrolment names its person, signed in or not; without one, the passkey is for whoever is signed in
+    const person = (enrolled?.personId ? await repo.get(enrolled.personId) : undefined) ?? signedIn
     if (!person) throw new ProblemError('unauthorized', { detail: enrolment ? 'This enrolment has expired or was used: claim or recover again on /setup.' : 'Sign in first, or start from /setup with an enrolment.' })
     const { rpID } = hostOf(c)
     const options = await generateRegistrationOptions({
@@ -118,13 +119,13 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     const { challengeId, response, enrolment, name: asked } = c.req.valid('json')
     const challenge = await repo.takeChallenge(challengeId, 'register')
     if (!challenge?.personId) throw new ProblemError('bad_request', { detail: 'This challenge expired or was used: ask for new options.' })
-    const signedIn = await personOf(c, db, cookie)
-    // Not signed in: the enrolment is the proof. It is used up only once a passkey is made, so a failed try can be retried
-    const byEnrolment = signedIn?.id !== challenge.personId
-    if (byEnrolment) {
-      const enrolled = enrolment ? await repo.peekChallenge(hashApiKey(enrolment), 'enrol') : undefined
-      if (enrolled?.personId !== challenge.personId) throw new ProblemError('unauthorized', { detail: 'Sign in first, or start from /setup with an enrolment.' })
-    }
+    const signedIn = (await personOf(c, db, cookie))?.id === challenge.personId
+    // A valid enrolment for this person is the proof, and is used, whether or not they are signed in too: a recovery
+    // made in a browser that still holds a session completes like any other. It is used up only once a passkey is
+    // made, so a failed try can be retried
+    const enrolled = enrolment ? await repo.peekChallenge(hashApiKey(enrolment), 'enrol') : undefined
+    const byEnrolment = enrolled?.personId === challenge.personId
+    if (!signedIn && !byEnrolment) throw new ProblemError('unauthorized', { detail: 'Sign in first, or start from /setup with an enrolment.' })
     const { origin, rpID } = hostOf(c)
     const verified = await verifyRegistrationResponse({ response: response as never, expectedChallenge: challenge.challenge, expectedOrigin: origin, expectedRPID: rpID, requireUserVerification: false }).catch((error: Error) => {
       throw new ProblemError('bad_request', { detail: `The passkey could not be checked: ${error.message}` })
@@ -132,7 +133,8 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     if (!verified.verified || !verified.registrationInfo) throw new ProblemError('bad_request', { detail: 'The passkey could not be checked.' })
     const { credential, credentialDeviceType, credentialBackedUp } = verified.registrationInfo
     const taken = byEnrolment ? await repo.takeChallenge(hashApiKey(enrolment!), 'enrol') : undefined
-    if (byEnrolment && taken?.personId !== challenge.personId) throw new ProblemError('unauthorized', { detail: 'This enrolment was just used: sign in with the passkey it made.' })
+    const usedEnrolment = taken?.personId === challenge.personId
+    if (!signedIn && !usedEnrolment) throw new ProblemError('unauthorized', { detail: 'This enrolment was just used: sign in with the passkey it made.' })
     // The device and browser unless the person chose a name; numbered so two never read the same
     const name = distinctName(passkeyBaseName(asked, c.req.header('user-agent')), (await repo.passkeysOf(challenge.personId)).map((passkey) => passkey.name))
     await repo.addPasskey({
@@ -150,11 +152,11 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     })
     await startSession(c, db, challenge.personId, cookie)
     const person = (await repo.get(challenge.personId)) ?? null
-    // Told once the passkey and the session exist: a hook that throws can't leave a spent enrolment and no passkey
+    // Told once the passkey and the session exist, and a hook that throws is only logged: the passkey stays made
     if (person) {
-      const via = taken ? enrolmentPurposeOf(taken) : 'session'
-      await onPasskeyChange?.({ action: 'added', who: person.email, id: credential.id, name, by: person.email, via }, c)
-      if (via === 'recovery') await onRecovered?.()?.({ who: person.email, passkey: { id: credential.id, name } }, c)
+      const via = usedEnrolment ? enrolmentPurposeOf(taken!) : 'session'
+      await tellApp('onPasskeyChange', () => onPasskeyChange?.({ action: 'added', who: person.email, id: credential.id, name, by: person.email, via }, c))
+      if (via === 'recovery') await tellApp('onRecovery', () => onRecovered?.()?.({ who: person.email, passkey: { id: credential.id, name } }, c))
     }
     return c.json(await sessionBody(c, person), 200, NO_STORE)
   }
@@ -210,7 +212,7 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     if (!own.some((key) => key.id === id)) throw new ProblemError('not_found', { detail: `No passkey ${id} of yours. GET ${sessionPath}/passkeys lists them.` })
     if (own.length === 1 && person.role === 'owner') throw new ProblemError('conflict', { detail: 'This is your last passkey: add another first, or you can only get back in by recovering on /setup.' })
     await repo.removePasskey(id)
-    await onPasskeyChange?.({ action: 'removed', who: person.email, id, name: own.find((key) => key.id === id)?.name ?? '', by: person.email }, c)
+    await tellApp('onPasskeyChange', () => onPasskeyChange?.({ action: 'removed', who: person.email, id, name: own.find((key) => key.id === id)?.name ?? '', by: person.email }, c))
     return c.body(null, 204)
   }
 
