@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.1](https://github.com/escalay/api-kit/compare/v1.26.0...v1.26.1) (2026-11-21)
+
+
+### Fixed
+
+* **people:** use an enrolment even when signed in, and never fail on a hook ([#74](https://github.com/escalay/api-kit/issues/74)) ([9d969bf](https://github.com/escalay/api-kit/commit/9d969bfcc65c3dc252902fe63b1fcc590b49e93e))
+
 ## [1.26.0](https://github.com/escalay/api-kit/compare/v1.25.0...v1.26.0) (2026-11-21)
 
 
