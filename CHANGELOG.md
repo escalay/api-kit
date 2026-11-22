@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.27.0](https://github.com/escalay/api-kit/compare/v1.26.1...v1.27.0) (2026-11-22)
+
+
+### New
+
+* **mcp:** add a structured option for when structuredContent is sent ([#78](https://github.com/escalay/api-kit/issues/78)) ([58f82b9](https://github.com/escalay/api-kit/commit/58f82b9ed86e0885fd3eb3420739a6188887f9fb))
+
+
+### Fixed
+
+* **cli:** count an unchanged file as unchanged, and exit 1 when update keeps one the kit changed ([#79](https://github.com/escalay/api-kit/issues/79)) ([c5663e9](https://github.com/escalay/api-kit/commit/c5663e9c247ac6495a95546404a31ad5094416ba))
+* **core:** drop the example noun from the write scope's text ([#77](https://github.com/escalay/api-kit/issues/77)) ([5a7d033](https://github.com/escalay/api-kit/commit/5a7d03382c96d43b2562dd8fd896ebfff2d04e14))
+* **oauth:** know a caller by its client and sign-in, not its name ([#81](https://github.com/escalay/api-kit/issues/81)) ([ffd00b1](https://github.com/escalay/api-kit/commit/ffd00b1cf3da80a1dfc3121a8fe28e1429043341))
+
 ## [1.26.1](https://github.com/escalay/api-kit/compare/v1.26.0...v1.26.1) (2026-11-21)
 
 
