@@ -6,7 +6,7 @@
  * `/llms-full.txt` is assembled from them in the order given, so it never drifts from its parts. `{{origin}}` and any
  * `{{dotted.path}}` from `vars()` are filled per request; a placeholder with no value is left visible and reported by
  * `fillTemplate`, which the tests check. The parts that must match the code are generated, never written by hand:
- * `{{api.endpoints}}`, `{{api.tag.<slug>}}`, `{{api.unblock}}`, `{{mcp.tools}}`, `{{cli.commands}}`, `{{skills.<name>.playbooks}}`
+ * `{{api.endpoints}}`, `{{api.tag.<slug>}}`, `{{api.unblock}}`, `{{mcp.tools}}`, `{{mcp.toolsets}}`, `{{cli.commands}}`, `{{skills.<name>.playbooks}}`
  * (see `reference.ts`). Each skill folder is also published for discovery: `/.well-known/agent-skills/index.json`
  * and a deterministic archive per skill with references, or its SKILL.md alone.
  *
@@ -108,7 +108,8 @@ export const serveGuide = (app: Hono<any, any, any> & Requester, { vars, full, c
   }
   const credentialsOf = (c: Context) => Object.fromEntries((['authorization', 'cookie', 'cf-access-jwt-assertion'] as const).flatMap((name) => (c.req.header(name) ? [[name, c.req.header(name)!]] : [])))
   const render = async (origin: string, name: string, credentials: Record<string, string> = {}) => {
-    const generated = generatedVars({ origin, doc: await docOf(origin, credentials), tools: mountedOf(app).mcp?.tools, resources: mountedOf(app).mcp?.resources, commands: commands?.commands, files })
+    const mcp = mountedOf(app).mcp
+    const generated = generatedVars({ origin, doc: await docOf(origin, credentials), tools: mcp?.tools, resources: mcp?.resources, toolsets: mcp?.toolsets?.(), mcpPath: mcp?.path, commands: commands?.commands, files })
     return fillTemplate(files.get(name)!, { origin, ...generated, ...vars() }).text
   }
   const send = (c: Context, body: string) => c.body(body, 200, { 'content-type': MARKDOWN, 'cache-control': CACHE.docs })

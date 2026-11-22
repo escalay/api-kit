@@ -35,6 +35,7 @@ An `edited` line is fine when the edit is deliberate. Say which ones are, and wh
 | `guide.gen.ts` equals `guideModuleSource(...)` | `guide/` changed after the last `pnpm guide` |
 | `cliGaps({ tools, resources, jobs })` | a tool or resource has no `cli` name or example, a name is taken twice or shadows a built-in or job, a noun is plural, an argument has no description |
 | `sdk/cli/commands.json` equals `cliSnapshot(...)` | a tool or job changed after the last `pnpm sdk:types` |
+| `toolsetSizes(TOOLS)` holds `core` under budget | `core` grew past about 30 KB or 25 tools: trim descriptions or move a job's tools to their own set (`api-kit-feature`, `references/toolsets.md`) |
 
 If a check is absent from the tests, add it (`src/kit/testing/README.md`) before reviewing further.
 
@@ -49,6 +50,8 @@ If a check is absent from the tests, add it (`src/kit/testing/README.md`) before
 3. `GET /openapi.json` is OpenAPI 3.1. An unknown query parameter on any route answers 400 and names the valid ones.
 4. A list follows `_links.next` to the end. An unknown id answers 404 with a `detail` that says what to do next.
 5. `POST /mcp` with `tools/list` returns every tool; each carries its route in `_meta["api-kit/route"]` (a tool without one needs `route` set) and its command in `_meta["api-kit/cli"]`.
+   `npx @escalay/kit mcp size` shows the toolsets; with more than `core`, `POST /mcp?tools=core` lists only `core` and
+   its instructions name every set, and the main playbook works on `core` alone.
 6. With `<APP>_URL` and `<APP>_API_KEY` set, the app's CLI (`sdk/cli/bin.ts`): `doctor` prints no `fail` and no drift,
    a missing id exits 3 with one line on stderr, and a destructive command without `--yes` exits 1.
 

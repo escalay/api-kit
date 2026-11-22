@@ -67,6 +67,8 @@ describe('OAuth for agents', () => {
     const { app } = await sampleApi()
     expect((await app.request('/api/v1/things')).headers.get('www-authenticate')).toContain(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource"`)
     expect((await app.request('/mcp', { method: 'POST' })).headers.get('www-authenticate')).toContain(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`)
+    // A toolset selection keeps the path, so the resource is the same
+    expect((await app.request('/mcp?tools=core,flows', { method: 'POST' })).headers.get('www-authenticate')).toContain(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`)
   })
 
   it('runs authorization code with PKCE, refresh and revocation, with the owner approving', async () => {

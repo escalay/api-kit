@@ -8,4 +8,8 @@
 
 ## MCP tools
 
+Connect with the toolsets a job needs; `/mcp` lists every tool.
+
+{{mcp.toolsets}}
+
 {{mcp.tools}}

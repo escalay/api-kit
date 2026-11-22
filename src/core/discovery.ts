@@ -22,7 +22,7 @@
 import { createHash } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import type { Context, Hono } from 'hono'
-import type { CliSpec } from './cli.js'
+import { TOOLSETS_META, type CliSpec } from './cli.js'
 import { originOf } from './hal.js'
 
 /** What a discovery document links to; the kit serves each of these. */
@@ -223,7 +223,14 @@ export type ServerCardInfo = { name: string; version: string; title?: string; de
 /** `cookbook.example.com` + `cookbook` → `com.example.cookbook/cookbook`: the reverse-DNS name the card spec asks for. */
 export const reverseDnsName = (origin: string, name: string) => `${new URL(origin).hostname.split('.').reverse().join('.')}/${name}`
 
-export const serverCard = (origin: string, path: string, info: ServerCardInfo, protocolVersions: string[]) => ({
+/** A toolset as the catalogs list it: its name, its tools' names, and the bytes a model reads of them. */
+export type ToolsetSummary = { name: string; tools: string[]; bytes: number }
+
+/**
+ * The card; with `toolsets` (a server that has more than `core`), `_meta["api-kit/toolsets"]` lists each set with
+ * its size and the URL that selects it.
+ */
+export const serverCard = (origin: string, path: string, info: ServerCardInfo, protocolVersions: string[], toolsets: ToolsetSummary[] = []) => ({
   $schema: SERVER_CARD_SCHEMA,
   name: reverseDnsName(origin, info.name),
   version: info.version,
@@ -247,6 +254,7 @@ export const serverCard = (origin: string, path: string, info: ServerCardInfo, p
       supportedProtocolVersions: protocolVersions,
     },
   ],
+  ...(toolsets.length > 1 ? { _meta: { [TOOLSETS_META]: toolsets.map((set) => ({ name: set.name, tools: set.tools.length, bytes: set.bytes, url: `${origin}${path}?tools=${set.name}` })) } } : {}),
 })
 
 // ---- What an app has mounted, for the catalogs ----
@@ -260,7 +268,7 @@ type Mounted = {
   skills?: (origin: string) => SkillArtifact[]
   /** Builds the skill artifacts for an origin (they are rendered per origin and per data snapshot). */
   refreshSkills?: (origin: string, credentials?: Record<string, string>) => Promise<SkillArtifact[]>
-  mcp?: { path: string; card: (origin: string) => ReturnType<typeof serverCard>; tools: ToolLike[]; resources?: ResourceLike[] }
+  mcp?: { path: string; card: (origin: string) => ReturnType<typeof serverCard>; tools: ToolLike[]; resources?: ResourceLike[]; toolsets?: () => ToolsetSummary[] }
 }
 const mountedByApp = new WeakMap<object, Mounted>()
 
