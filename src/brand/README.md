@@ -26,6 +26,9 @@ const app = createAgentApi({ …, brand: createBrand(BRAND, BRAND_ASSETS) })
 own SVG, then `npx @escalay/kit brand` renders it again. `kit init` makes every new app with them and an SVG-only
 `src/brand.gen.ts` until the first `kit brand`.
 
+`src/app.ts` imports `../brand/brand.js`, so `brand/` ships with the app: an app with its own Dockerfile adds
+`COPY brand brand` beside `COPY src src` (new apps' Dockerfile has it). Workers bundle it from `main` and need nothing.
+
 ## What it serves and who reads it
 
 | Surface | From the brand |

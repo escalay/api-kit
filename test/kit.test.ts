@@ -1039,6 +1039,27 @@ describe('the npm-release item', () => {
   })
 })
 
+describe('the app template’s container', () => {
+  const kitDir = join(import.meta.dirname, '..')
+
+  it('copies every top-level folder the app’s src/ imports from', async () => {
+    const copied = new Set([...readFileSync(join(kitDir, 'templates/app/Dockerfile'), 'utf8').matchAll(/^COPY (\S+) \1$/gm)].map(([, folder]) => folder))
+    // Every template that writes into the app's src/; Workers bundle from `main`, the container runs src/ as it is
+    const imported = new Set<string>()
+    for (const template of ['app', 'runtime-cloudflare']) {
+      const src = join(kitDir, 'templates', template, 'src')
+      for (const file of (await readdir(src, { recursive: true })).filter((path) => /\.tsx?$/.test(path))) {
+        for (const [, specifier] of readFileSync(join(src, file), 'utf8').matchAll(/\bfrom '(\.{1,2}\/[^']+)'/g)) {
+          const [top] = join('src', file, '..', specifier!).split(/[\\/]/)
+          if (top !== 'src') imported.add(top!)
+        }
+      }
+    }
+    expect(imported).toContain('brand')
+    for (const folder of imported) expect(copied, `templates/app/Dockerfile copies ${folder}/`).toContain(folder)
+  })
+})
+
 describe('a guide\'s skills over MCP', () => {
   it('offers each skill folder as a skill and each playbook as a prompt, from a folder or a module', async () => {
     const files = {

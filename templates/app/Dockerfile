@@ -4,6 +4,7 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml* ./
 RUN pnpm install --prod
 COPY src src
+COPY brand brand
 COPY guide guide
 COPY container container
 ENV PORT=80 STATE_DIR=/state
