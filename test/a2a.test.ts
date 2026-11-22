@@ -3,6 +3,7 @@ import { z } from '@hono/zod-openapi'
 import { mountA2A } from '../src/a2a/index.js'
 import { createAgentApi, createOAuth, generateOAuthKey, hashApiKey, memoryOAuthStore, parseApiKeys } from '../src/index.js'
 import { inProcess, mcpTool } from '../src/mcp/index.js'
+import { oauthApp, signedIn } from './oauth-store-contract.js'
 
 const ORIGIN = 'http://localhost'
 const KEY = 'agent-key'
@@ -106,6 +107,20 @@ describe('A2A', () => {
     expect(await code(rpc('Nope', {}))).toBe(-32601)
     expect(await code({ ...rpc('SendMessage', {}), body: 'not json' })).toBe(-32700)
     expect(await code({ ...rpc('SendMessage', {}), body: '[]' })).toBe(-32600)
+  })
+
+  it('keeps two OAuth clients that register the same name out of each other’s tasks', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    app.get('/api/v1/ideas', (c) => c.json({ query: c.req.query('q'), products: [] }))
+    const tool = mcpTool({ name: 'explore_idea', title: 'Who already does an idea', description: 'Products for an idea.', input: z.object({ idea: z.string().min(2) }), call: ({ idea }) => ({ path: '/api/v1/ideas', query: { q: idea } }), summarize: (json) => String(json.query) })
+    mountA2A(app, { info: { name: 'Sample', description: 'One tool.', version: '1.0.0' }, skills: [{ tool, text: 'idea', tags: ['research'] }], callApi: inProcess(app), waitMs: 0 })
+    const one = await signedIn(app, { name: 'Sample' })
+    const two = await signedIn(app, { name: 'Sample' })
+    const task = (await (await app.request('/a2a', rpc('SendMessage', send('split a bill'), { key: one.tokens.access_token }))).json()).result.task
+    expect((await (await app.request('/a2a', rpc('GetTask', { id: task.id }, { key: one.tokens.access_token }))).json()).result.id).toBe(task.id)
+    expect((await (await app.request('/a2a', rpc('GetTask', { id: task.id }, { key: two.tokens.access_token }))).json()).error.code).toBe(-32001)
+    expect((await (await app.request('/a2a', rpc('ListTasks', {}, { key: two.tokens.access_token }))).json()).result.tasks).toEqual([])
+    expect((await (await app.request('/a2a', rpc('CancelTask', { id: task.id }, { key: two.tokens.access_token }))).json()).error.code).toBe(-32001)
   })
 
 })

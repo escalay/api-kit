@@ -21,5 +21,8 @@ mountA2A(app, {
 ## Rules
 
 - Pick the 1–3 tools another agent would delegate to; the first skill answers a message that names none.
+- A task belongs to the caller that sent it, and only it may get, list or cancel it. An OAuth agent is its client and
+  grant (`agent:<client_id>/<grant>`, as the guards key it), never the name it registered, so two clients that call
+  themselves the same are two owners. An API key is its key name.
 - Spec source of truth: `a2aproject/A2A` `specification/a2a.proto` (JSON is camelCase, enums SCREAMING_CASE, header
   `A2A-Version: 1.0`).
