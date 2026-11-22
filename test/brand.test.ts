@@ -207,6 +207,13 @@ describe('brand', () => {
     expect((await get(await branded(), '/icon-512.png')).headers.get('content-security-policy')).toBeNull()
   })
 
+  it('answers a weak or a wildcard If-None-Match with 304, as RFC 9110 compares them', async () => {
+    const app = await branded()
+    const etag = (await get(app, '/icon.svg')).headers.get('etag')!
+    for (const sent of [`W/${etag}`, '*', `"other", W/${etag}`]) expect((await get(app, '/icon.svg', { 'if-none-match': sent })).status, sent).toBe(304)
+    expect((await get(app, '/icon.svg', { 'if-none-match': 'W/"other"' })).status).toBe(200)
+  })
+
   it('in a private service, needs credentials for the brand’s files, keeps them same-site and never lets a shared cache keep them', async () => {
     const app = await branded({ private: true })
     expect((await get(app, '/favicon.ico')).status).toBe(401)

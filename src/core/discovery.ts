@@ -60,7 +60,8 @@ export const sha256 = (bytes: string | Uint8Array) => createHash('sha256').updat
 export const sendPublic = (c: Context, body: string | Uint8Array, type: string) => {
   const etag = `"${sha256(body).slice(0, 32)}"`
   const headers = { 'content-type': type, 'cache-control': PUBLIC_CACHE, etag, ...CORS }
-  const sent = c.req.header('if-none-match')?.split(',').map((value) => value.trim())
+  // RFC 9110: If-None-Match compares weakly (W/ dropped), and * matches any
+  const sent = c.req.header('if-none-match')?.split(',').map((value) => value.trim().replace(/^W\//, ''))
   if (sent?.includes(etag) || sent?.includes('*')) return c.body(null, 304, headers)
   return c.body(typeof body === 'string' ? body : (body as Uint8Array<ArrayBuffer>), 200, headers)
 }

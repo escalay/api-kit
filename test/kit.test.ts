@@ -355,8 +355,12 @@ describe('discovery', () => {
     })
     expect((await get(app, '/.well-known/mcp/server-card.json')).status).toBe(200)
     expect((await app.request('/mcp/server-card', { headers: { 'if-none-match': card.headers.get('etag')! } })).status).toBe(200)
-    const same = await app.request('/.well-known/mcp/server-card.json', { headers: { 'if-none-match': (await app.request('/.well-known/mcp/server-card.json')).headers.get('etag')! } })
+    const etag = (await app.request('/.well-known/mcp/server-card.json')).headers.get('etag')!
+    const same = await app.request('/.well-known/mcp/server-card.json', { headers: { 'if-none-match': etag } })
     expect(same.status).toBe(304)
+    // RFC 9110: If-None-Match compares weakly, and * matches any
+    for (const sent of [`W/${etag}`, '*', `"other", W/${etag}`]) expect((await app.request('/.well-known/mcp/server-card.json', { headers: { 'if-none-match': sent } })).status, sent).toBe(304)
+    expect((await app.request('/.well-known/mcp/server-card.json', { headers: { 'if-none-match': 'W/"other"' } })).status).toBe(200)
   })
 
   it('lists the API, the MCP server and each skill in an AI Catalog', async () => {

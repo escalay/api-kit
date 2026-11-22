@@ -214,7 +214,8 @@ export const createBrand = (brand: Brand, assets: BrandAssets): AgentBrand => {
     const headers = new Headers(prepared)
     for (const [name, value] of Object.entries({ 'content-type': file.type, 'cache-control': CACHE, etag, 'access-control-allow-origin': '*', 'cross-origin-resource-policy': resourcePolicy })) headers.set(name, value)
     if (file.type === 'image/svg+xml') headers.set('content-security-policy', SVG_POLICY)
-    const fresh = c.req.header('if-none-match')?.split(',').some((value) => value.trim() === etag)
+    // RFC 9110: If-None-Match compares weakly (W/ dropped), and * matches any
+    const fresh = c.req.header('if-none-match')?.split(',').some((value) => ['*', etag].includes(value.trim().replace(/^W\//, '')))
     return new Response(fresh ? null : (body as BodyInit), { status: fresh ? 304 : 200, headers })
   }
   return {
