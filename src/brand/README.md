@@ -30,7 +30,7 @@ own SVG, then `npx @escalay/kit brand` renders it again. `kit init` makes every 
 
 | Surface | From the brand |
 |---|---|
-| `/favicon.ico` (16, 32, 48 PNGs in one ICO), `/icon.svg`, `/icon-192.png`, `/icon-512.png`, `/apple-touch-icon.png` (180, opaque), `/og.png` (1200×630), `/site.webmanifest`, and `/icon-dark*` with a dark icon | the files; open without a key unless the app is private, a week of caching, an ETag from the inputs' hash |
+| `/favicon.ico` (16, 32, 48 PNGs in one ICO), `/icon.svg`, `/icon-192.png`, `/icon-512.png`, `/apple-touch-icon.png` (180, opaque), `/og.png` (1200×630), `/site.webmanifest`, and `/icon-dark*` with a dark icon | the files; open without a key unless the app is private (behind Access, bypass SSO for these paths as STANDARD §7 lists them), a week of caching, an ETag of each file's bytes |
 | MCP `serverInfo` (`server/discover`, 2025's `initialize`) and the Server Card | `title`, `description`, `websiteUrl` (where `info` leaves them out), `icons` |
 | OpenAPI `info` | `x-logo` (the 512 PNG, else the SVG, on `background`) and `termsOfService` from `termsUrl` |
 | A2A Agent Card | `iconUrl` |
@@ -67,8 +67,11 @@ Serve the same icon there too; `kit doctor` notes it for a host on a subdomain.
 - On MCP 2026-07-28 the inline icon rides only on `server/discover` (and 2025's `initialize`); the serverInfo stamped
   on every other answer leaves it out, since it weighs kilobytes.
 - A path the app serves itself (a route, or a file in the front door's folder) stays the app's.
+- Headers set before the brand answers (the request id, an app's own) stay on its files.
 - No brand, no change: every surface is byte for byte what it was.
 - `kit brand` hashes `brand.ts`, the SVGs and its own output spec (never the rendered bytes, which differ between
-  machines); `kit doctor` and `kit brand --check` call `src/brand.gen.ts` stale when the hash no longer matches. The OG
-  card's text uses the machine's sans-serif font (none is bundled), so render where that font looks right.
+  machines); `kit doctor` and `kit brand --check` call `src/brand.gen.ts` stale when the hash no longer matches
+  (`doctor` looks at `brand/` only in an app with the brand part or a `src/brand.gen.ts`). The HTTP ETag is of the
+  bytes served, so a new render reaches browsers. The OG card's text uses the machine's sans-serif font (none is
+  bundled), so render where that font looks right.
 - STANDARD §22 (Identity).

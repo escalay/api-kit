@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createBrand, defineBrand, type BrandAssets } from '../src/brand/index.js'
 import { mcpServerFactory } from '../src/mcp/index.js'
 import { guideGaps, lintOpenApi } from '../src/testing/index.js'
-import { ASSETS, AUTH, cookbookApi, mcpCall, surfacesOf } from './brand-fixture.js'
+import { ASSETS, AUTH, cookbookApi, mcpCall, pngOf, surfacesOf } from './brand-fixture.js'
 
 const ORIGIN = 'https://gw.example.com'
 const PROXIED = { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'gw.example.com' }
@@ -112,6 +112,30 @@ describe('brand', () => {
     })
   })
 
+  it('changes a file’s ETag when its bytes change under the same inputs, as after the first `kit brand` or a new renderer', async () => {
+    const svgOnly = await branded({}, { inputsHash: ASSETS.inputsHash, svg: ASSETS.svg })
+    const rendered = await branded()
+    const before = (await get(svgOnly, '/site.webmanifest')).headers.get('etag')!
+    expect((await get(rendered, '/site.webmanifest', { 'if-none-match': before })).status).toBe(200)
+    const og = (await get(rendered, '/og.png')).headers.get('etag')!
+    const rerendered = await branded({}, { ...ASSETS, og: Buffer.from(pngOf(1200, 630, [220, 38, 38, 255])).toString('base64') })
+    expect((await get(rerendered, '/og.png', { 'if-none-match': og })).status).toBe(200)
+    // The same bytes keep their ETag
+    expect((await get(await branded(), '/og.png', { 'if-none-match': og })).status).toBe(304)
+  })
+
+  it('keeps the headers set before it answers, such as the request id', async () => {
+    const app = await branded()
+    expect((await get(app, '/api/health')).headers.get('x-request-id')).toBeTruthy()
+    for (const path of ['/favicon.ico', '/icon.svg']) {
+      const response = await get(app, path)
+      expect(response.headers.get('x-request-id'), path).toBeTruthy()
+      expect(response.headers.get('content-type'), path).not.toMatch(/problem/)
+      const fresh = await get(app, path, { 'if-none-match': response.headers.get('etag')! })
+      expect([fresh.status, Boolean(fresh.headers.get('x-request-id'))], path).toEqual([304, true])
+    }
+  })
+
   it('documents the logo and terms in OpenAPI, and the lint finds nothing new', async () => {
     const doc = await (await get(await branded(), '/openapi.json', AUTH)).json()
     expect(doc.info).toEqual({ title: 'Cookbook', version: '1.0.0', description: 'Recipes and menus.', 'x-logo': { url: `${ORIGIN}/icon-512.png`, backgroundColor: '#ffffff', altText: 'Cookbook' }, termsOfService: 'https://cookbook.example.com/terms' })
@@ -129,6 +153,13 @@ describe('brand', () => {
     const landing = await (await get(app, '/')).text()
     expect(landing).toContain('href="/mine.png"')
     expect(landing).not.toContain('/favicon.ico')
+  })
+
+  it('puts the head tags only in a head, never in a header element', async () => {
+    const headless = '<!doctype html><body><header>Menu</header>the front page</body>'
+    const app = await branded({ frontDoor: { 'landing.html': headless, 'index.html': '<!doctype html><html><head lang="en"><title>Cookbook</title></head><body>the app</body></html>' } })
+    expect(await (await get(app, '/')).text()).toBe(headless)
+    expect(await (await get(app, '/app', AUTH)).text()).toContain('<head lang="en"><link rel="icon" href="/favicon.ico" sizes="32x32">')
   })
 
   it('gives the A2A card the icon', async () => {

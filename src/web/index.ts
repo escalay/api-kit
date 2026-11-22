@@ -81,7 +81,7 @@ export const serveFrontDoor = (app: Hono<any, any, any>, { dir, base = '/app', m
   const branded = (page: string, c: Context) => {
     const brand = mountedOf(app).brand
     if (!brand || /<link[^>]*\brel=["']?(?:shortcut )?icon\b/i.test(page)) return page
-    return page.replace(/<head[^>]*>/i, (head) => head + brand.headTags(originOf(c)))
+    return page.replace(/<head(?:\s[^>]*)?>/i, (head) => head + brand.headTags(originOf(c)))
   }
 
   app.use(`${immutable}*`, async (c, next) => {

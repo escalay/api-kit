@@ -165,6 +165,17 @@ export const webManifest = (brand: Brand, assets: BrandAssets) => ({
 const FORMAT = 1
 const CACHE = 'public, max-age=604800'
 
+/** 16 hex characters of the bytes served (two FNV-1a passes with different bases): a new render under the same inputs gets a new ETag. */
+const fingerprintOf = (body: Uint8Array | string) => {
+  const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body
+  let [high, low] = [0x811c9dc5, 0x01000193 ^ 0x9e3779b9]
+  for (const byte of bytes) {
+    high = Math.imul(high ^ byte, 0x01000193)
+    low = Math.imul(low ^ byte, 0x01000193)
+  }
+  return (high >>> 0).toString(16).padStart(8, '0') + (low >>> 0).toString(16).padStart(8, '0')
+}
+
 /**
  * The brand as `createAgentApi({ brand })` takes it: the files it serves and what the other parts read. Decoded on the
  * first request, never at global scope.
@@ -190,14 +201,18 @@ export const createBrand = (brand: Brand, assets: BrandAssets): AgentBrand => {
     ...(assets.pngDark ? { '/icon-dark-192.png': { type: 'image/png', body: dark(192) }, '/icon-dark-512.png': { type: 'image/png', body: dark(512) } } : {}),
     ...(assets.og ? { '/og.png': { type: 'image/png', body: () => bytesOf(assets.og!) } } : {}),
   }
-  const etag = `"${assets.inputsHash.slice(0, 16)}-${FORMAT}"`
-  const made = new Map<string, Uint8Array | string>()
-  const send = (c: Context, path: string) => {
+  const made = new Map<string, { body: Uint8Array | string; etag: string }>()
+  const send = (c: Context, path: string, prepared: Headers) => {
     const file = files[path]!
-    if (!made.has(path)) made.set(path, file.body())
-    const headers = { 'content-type': file.type, 'cache-control': CACHE, etag, 'access-control-allow-origin': '*' }
+    if (!made.has(path)) {
+      const body = file.body()
+      made.set(path, { body, etag: `"${fingerprintOf(body)}-${FORMAT}"` })
+    }
+    const { body, etag } = made.get(path)!
+    const headers = new Headers(prepared)
+    for (const [name, value] of Object.entries({ 'content-type': file.type, 'cache-control': CACHE, etag, 'access-control-allow-origin': '*' })) headers.set(name, value)
     const fresh = c.req.header('if-none-match')?.split(',').some((value) => value.trim() === etag)
-    return new Response(fresh ? null : (made.get(path)! as BodyInit), { status: fresh ? 304 : 200, headers })
+    return new Response(fresh ? null : (body as BodyInit), { status: fresh ? 304 : 200, headers })
   }
   return {
     name: brand.name,
@@ -216,8 +231,12 @@ export const createBrand = (brand: Brand, assets: BrandAssets): AgentBrand => {
           // After the app's own routes and files: only a path nothing else answered gets the brand's
           await next()
           if (c.res.status !== 404) return
+          // Keep what middleware set before answering (the request id, security headers), not what describes the 404
+          const prepared = new Headers(c.res.headers)
+          for (const name of ['content-type', 'content-length', 'content-language', 'content-encoding']) prepared.delete(name)
+          // Cleared first, or Hono copies the 404's headers over the file's
           c.res = undefined as never
-          c.res = send(c, path)
+          c.res = send(c, path, prepared)
         })
     },
   }

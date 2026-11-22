@@ -256,7 +256,7 @@ export const createAgentApi = (config: AgentApiConfig) => {
     app.get('/docs', async (c, next) => {
       const page = (await docs(c, next)) as Response | undefined
       if (!page?.headers.get('content-type')?.startsWith('text/html')) return page
-      return c.html((await page.text()).replace(/<head[^>]*>/i, (head) => head + brand.headTags(originOf(c))), page.status as 200)
+      return c.html((await page.text()).replace(/<head(?:\s[^>]*)?>/i, (head) => head + brand.headTags(originOf(c))), page.status as 200)
     })
 
   app.get(WELL_KNOWN.apiCatalog, (c) => sendPublic(c, JSON.stringify(apiCatalog(originOf(c)), null, 2), API_CATALOG_TYPE))
