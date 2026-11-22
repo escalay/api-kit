@@ -453,20 +453,33 @@ console.log(JSON.stringify(cliGaps({ tools, resources, jobs: ${jobs} })))
   return (gaps ?? []).map((gap) => `cli      ${gap}`)
 }
 
+/** The text of each `createAgentApi(…)` call in a file, to its closing parenthesis. */
+const agentApiCalls = (text) =>
+  [...text.matchAll(/\bcreateAgentApi\(/g)].map(({ index }) => {
+    const open = index + 'createAgentApi'.length
+    let depth = 0
+    for (let at = open; at < text.length; at++) {
+      if (text[at] === '(') depth++
+      else if (text[at] === ')' && --depth === 0) return text.slice(open, at + 1)
+    }
+    return text.slice(open)
+  })
+
 /**
  * A hint, not a finding: an app served on Node whose code names no `address` counts anonymous callers by headers as
- * sent. Reads the app's own files under `src/` (the kit folder left out).
+ * sent. Reads the app's own files under the nearest `src/` above the kit folder, else `./src` (the kit folder left out).
  */
 const addressNotes = () => {
-  const src = join(resolve(dir, '../..'), 'src')
-  if (!existsSync(src) || !dir.startsWith(src)) return []
+  const srcAbove = (path) => (basename(path) === 'src' ? path : dirname(path) === path ? undefined : srcAbove(dirname(path)))
+  const src = srcAbove(dirname(dir)) ?? resolve(process.cwd(), 'src')
+  if (!existsSync(src)) return []
   const texts = readdirSync(src, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && /\.(m?ts|m?js|tsx)$/.test(entry.name))
     .map((entry) => join(entry.parentPath, entry.name))
-    .filter((path) => !path.startsWith(dir) && !path.includes('node_modules'))
+    .filter((path) => relative(dir, path).startsWith('..') && !path.includes('node_modules'))
     .map((path) => readFileSync(path, 'utf8'))
   const onNode = texts.some((text) => text.includes('@hono/node-server'))
-  const named = texts.some((text) => /createAgentApi\(/.test(text) && /\baddress\s*[:,}]/.test(text))
+  const named = texts.some((text) => agentApiCalls(text).some((call) => /\baddress\s*[:,}]/.test(call)))
   return onNode && !named ? ["note     the app runs on Node (@hono/node-server) and names no source for the caller's address, so anonymous callers are counted by cf-connecting-ip or x-forwarded-for as sent: set createAgentApi({ address }) to the header your proxy writes, or 'socket' with nothing in front (STANDARD §9)"] : []
 }
 
