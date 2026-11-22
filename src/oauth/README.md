@@ -117,6 +117,8 @@ Defaults that change when an app takes this version:
 - Rate limits, stored idempotency answers and A2A task ownership key an OAuth agent by `client` and `grant`, not by
   its name: same-named clients stop sharing a bucket or each other's tasks. A2A tasks stored under the old key (kept a
   day) are no longer found by their agent.
+- MCP's `authInfo.clientId` is an OAuth agent's client_id (before, the name it registered). A tool that showed or
+  stored the name reads `authInfo.extra.name`; the grant is `authInfo.extra.grant`.
 - `verify` refuses a token whose grant was revoked at once (before, up to an hour), including after a refresh token is
   replayed. A claimed agent's identity assertion is refused once its grant is revoked: it registers again.
 - A code sent twice with its verifier revokes its sign-in.
