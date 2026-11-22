@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import BRAND from '../brand/brand.js'
 import { createApp, TOOLS } from '../src/app.js'
+import { BRAND_ASSETS } from '../src/brand.gen.js'
 import { FEATURES } from '../src/features/index.js'
 import { guideFiles, guideModuleSource, hashApiKey, testDb } from '../src/kit/index.js'
 import { cliGaps, guideGaps, lintOpenApi, toolRoutes, toolsRun } from '../src/kit/testing/index.js'
@@ -29,7 +31,16 @@ describe('the API', () => {
   })
 
   it('fills every placeholder in the agent guide', async () => {
-    expect(guideGaps(guideFiles(GUIDE_DIR), {}, { doc: await doc(), tools: TOOLS })).toEqual([])
+    expect(guideGaps(guideFiles(GUIDE_DIR), {}, { doc: await doc(), tools: TOOLS, brand: BRAND })).toEqual([])
+  })
+
+  it('names itself with brand/ on MCP and the Server Card, and serves its icon', async () => {
+    expect((await app.request('/icon.svg')).status).toBe(200)
+    const card = await (await app.request('/mcp/server-card')).json()
+    expect(card).toMatchObject({ title: BRAND.title, description: BRAND.description })
+    // The SVG last; once `npx @escalay/kit brand` has rendered the PNGs, the inline one Claude shows comes first
+    expect(card.icons.at(-1)).toMatchObject({ mimeType: 'image/svg+xml' })
+    expect(card.icons[0].src.startsWith('data:image/png;base64,')).toBe('png' in BRAND_ASSETS)
   })
 
   it('offers its skill to install, with every playbook, and links each from the skill', async () => {

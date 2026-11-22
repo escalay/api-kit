@@ -2,7 +2,9 @@
 /**
  * Makes one app per preset with `create-escalay` in the OS temp folder, installs it and runs its own CI's checks: format,
  * typecheck, lint, format check and tests for both, and for `api` a client made with `kit sdk` and its command line, built and run. For the `app` preset also the build (its files must land under /app/assets/, the one prefix
- * the Worker leaves to files), a dry-run deploy, and that a formatted app still takes a new feature and passes.
+ * the Worker leaves to files, its brand's at the root), a dry-run deploy, and that a formatted app still takes a new feature and passes. The
+ * `api` starter's brand is rendered with `kit brand` (its PNGs then served on Node and in workerd); the `app` starter
+ * keeps the SVG-only brand a new app starts with, as the canaries and the release smoke test do.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -18,11 +20,18 @@ const run = (command, args, cwd) => {
   if (status !== 0) process.exit(status ?? 1)
 }
 const cli = fileURLToPath(new URL('../cli.mjs', import.meta.url))
-const check = (name, preset, more = []) => {
+const RESVG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).devDependencies['@resvg/resvg-js']
+const check = (name, preset, more = [], { brand = false } = {}) => {
   const app = join(parent, name)
   run(process.execPath, [create, name, '--preset', preset, '--yes'], parent)
+  run('pnpm', ['install'], app)
+  // What init's Brand line says: the renderer, then the PNGs into src/brand.gen.ts
+  if (brand) {
+    run('pnpm', ['add', '-D', `@resvg/resvg-js@${RESVG}`], app)
+    run(process.execPath, [cli, 'brand'], app)
+  }
   // init's last line, then what the app's CI and its pre-push hook run: `pnpm gate`
-  for (const args of [['install'], ['format'], ['migrations'], ['gate'], ...more]) run('pnpm', args, app)
+  for (const args of [['format'], ['migrations'], ['gate'], ...more]) run('pnpm', args, app)
   // A feature that names Cloudflare is refused by lint; the same import in a binding is allowed
   const probe = (path) => join(app, path)
   writeFileSync(probe('src/features/provider-probe.ts'), "import { env } from 'cloudflare:workers'\nexport const probe = env\n")
@@ -52,7 +61,7 @@ const check = (name, preset, more = []) => {
   }
   return app
 }
-const api = check('starter-api', 'api')
+const api = check('starter-api', 'api', [], { brand: true })
 // A typed client: made, generated, and every route covered from the start
 run(process.execPath, [cli, 'sdk'], api)
 for (const args of [['sdk:types'], ['typecheck'], ['lint'], ['test']]) run('pnpm', args, api)
@@ -63,9 +72,11 @@ run(process.execPath, [cli, 'doctor'], api)
 run(process.execPath, ['sdk/dist/cli/bin.js', 'note', 'list', '--help'], api)
 const app = check('starter-app', 'app', [['exec', 'oxfmt', '--check', 'web', 'vite.config.ts', 'tsconfig.web.json', 'index.html'], ['exec', 'wrangler', 'deploy', '--dry-run']])
 const built = [...readFileSync(join(app, 'dist/client/index.html'), 'utf8').matchAll(/(?:src|href)="(\/[^"]+)"/g)].map(([, path]) => path)
-const stray = built.filter((path) => !path.startsWith('/app/assets/') || !existsSync(join(app, 'dist/client', path)))
-if (!built.length || stray.length) {
-  console.error(`the built page must load its files from /app/assets/: ${JSON.stringify(built.length ? stray : 'no files')}`)
+// The brand's files are the Worker's, at the root, never built (the dev server leaves them there with vite-ignore)
+const BRAND_PATHS = ['/favicon.ico', '/icon.svg', '/icon-dark.svg', '/icon-192.png', '/icon-512.png', '/icon-dark-192.png', '/icon-dark-512.png', '/apple-touch-icon.png', '/og.png', '/site.webmanifest']
+const stray = built.filter((path) => !BRAND_PATHS.includes(path) && (!path.startsWith('/app/assets/') || !existsSync(join(app, 'dist/client', path))))
+if (!built.some((path) => path.startsWith('/app/assets/')) || stray.length) {
+  console.error(`the built page must load its files from /app/assets/: ${JSON.stringify(stray.length ? stray : 'no files')}`)
   process.exit(1)
 }
 // Generated code is written in the kit's long-line style: the first format rewrites it, and the app must still take a feature

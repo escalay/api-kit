@@ -141,8 +141,10 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   made or deleted: its id, name and `by`, never its value). An app logs them where it logs the rest, so an owner can
   see who was let in, and alerts the person whose way in changed.
 - **Open without auth:** `/api/health`, `/openapi.json`, `/docs`, `/llms*.txt`, `/agents/*`, `/skills/*`,
-  `/problems/*` (no data). In Access, these paths and `/api/*`, `/mcp` bypass SSO; the app's key check
-  guards them.
+  `/problems/*` (no data), and with a brand (§22) its files: `/favicon.ico`, `/icon.svg`, `/icon-192.png`,
+  `/icon-512.png`, `/apple-touch-icon.png`, `/og.png`, `/site.webmanifest`, and `/icon-dark.svg`,
+  `/icon-dark-192.png`, `/icon-dark-512.png` with a dark icon. In Access, these paths and `/api/*`, `/mcp` bypass SSO;
+  the app's key check guards them.
 - A 401 carries `WWW-Authenticate: Bearer realm="<app>"` (plus `error="invalid_token"` for a wrong key). Keys never go
   in URLs or logs.
 - **Agents that get their own token (optional, `oauth.ts`):** the app is its own OAuth server. MCP clients follow the
@@ -348,6 +350,7 @@ fact, steps with checkable done-when criteria.
 11. The repository: CI, the pre-push gate, Dependabot and the secrets scan as `init` writes them (§20).
 12. Feature switches (§21): every additive feature in `src/features/catalog.ts` with a title and what switching it off
     stops, `switch:` on its feature (`kit feature <name> --switch`), and its work outside requests asking `isOn`.
+13. The brand (§22): `brand/brand.ts` and `brand/icon.svg`, rendered with `kit brand`, passed as `createAgentApi({ brand })`.
 
 ## 14. Discovery
 
@@ -585,3 +588,30 @@ never switchable.
 - The browser asks the same list (`switches-client`, `switches-react`): `useFeature` and `<Feature>` show a screen
   only while its feature is on, `useFeatureDisabled` hears every 403 for one alert, and the `switches-ui` block is
   the owner's panel and the disabled notice.
+
+## 22. Identity
+
+One brand names the service everywhere (`brand` part): the app owns `brand/brand.ts` (`defineBrand`: name, title, a
+description of at most 100 characters, an accent) and `brand/icon.svg`, and `createAgentApi({ brand })` hands it to
+every surface, so none of them can disagree.
+
+- **Rendered at build time, committed.** `kit brand` turns the SVG into the PNGs and the OG card (`src/brand.gen.ts`);
+  nothing rasterises at runtime. The module records a hash of its inputs, and `kit doctor` calls it stale when they
+  changed.
+- **The same identity on every surface:** MCP `serverInfo` (`server/discover`, 2025's `initialize`) and the Server Card
+  (`title`, `description`, `websiteUrl`, `icons`), OpenAPI's `x-logo`, the A2A card's `iconUrl`, the guide's
+  `{{brand.*}}`, and the favicon, manifest and Open Graph tags of the pages the app serves.
+- **PNG first, SVG last.** Icons go in this order: the 96 px PNG inline (the only kind Claude shows: a `data:` PNG
+  under 10 KB), then the 192 and 512 PNGs on the server's own host (VS Code takes no SVG and no other host), then the
+  SVG. A dark variant adds entries with `theme: 'dark'`, never a second inline icon. On 2026-07-28 the inline icon
+  rides on `server/discover` only, not on the serverInfo every answer carries.
+- `/favicon.ico` (16, 32 and 48 px), `/icon.svg`, `/icon-192.png`, `/icon-512.png`, `/apple-touch-icon.png`, `/og.png` and
+  `/site.webmanifest` (and `/icon-dark.svg`, `/icon-dark-192.png`, `/icon-dark-512.png` with a dark icon) are public
+  (credentials first when the service is private), cached a week with an ETag of the bytes served, and
+  `cross-origin-resource-policy: cross-origin`, so other sites can show them (`same-site` when the service is
+  private), the SVGs with `content-security-policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`, so a
+  script in one never runs in the API's origin; a path the app serves itself stays the app's. Behind Access they bypass SSO with §7's open paths, or the icons clients fetch from
+  the server's host and the pages' head tags get the sign-in page.
+- Connector lists in claude.ai and Claude Desktop show the favicon of the address's **root domain**, whatever the
+  server says: serve the same icon there. `kit doctor` notes a host on a subdomain.
+- No brand changes nothing: every document is byte for byte what it was without one.

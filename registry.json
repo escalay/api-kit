@@ -320,6 +320,27 @@
       ]
     },
     {
+      "name": "brand",
+      "type": "registry:item",
+      "title": "Brand",
+      "description": "One brand on every surface: defineBrand (the app's brand/brand.ts) and createBrand for createAgentApi({ brand }): the favicon, PNG and SVG icons, manifest and OG card rendered at build time by `kit brand`, and MCP serverInfo, the Server Card, OpenAPI x-logo, the A2A card, the guide and head tags read it",
+      "registryDependencies": [
+        "escalay/api-kit/core"
+      ],
+      "files": [
+        {
+          "path": "src/brand/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/brand/index.ts"
+        },
+        {
+          "path": "src/brand/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/brand/README.md"
+        }
+      ]
+    },
+    {
       "name": "boards",
       "type": "registry:item",
       "title": "Boards",

@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AuthInfo } from '@modelcontextprotocol/server'
 import type { Context, Hono } from 'hono'
-import { sendPublic, WELL_KNOWN } from '../core/discovery.js'
+import { mountedOf, sendPublic, WELL_KNOWN, type AgentBrand } from '../core/discovery.js'
 import { originOf } from '../core/hal.js'
 import { callWaiting, FORWARDED, problemText, type CallApi, type McpTool } from '../mcp/index.js'
 import { memoryStore, type KeyValueStore } from '../core/kv.js'
@@ -46,6 +46,8 @@ export type A2AConfig = {
   oauth?: boolean
   /** How long `SendMessage` waits for a slow route before answering with a working task. */
   waitMs?: number
+  /** The card's `iconUrl`; `mountA2A` takes the app's (`createAgentApi({ brand })`) when this is left out. */
+  brand?: AgentBrand
 }
 
 type Part = { text?: string; data?: unknown; url?: string; raw?: string; mediaType?: string; filename?: string; metadata?: Record<string, unknown> }
@@ -87,13 +89,14 @@ const rpcError = (id: unknown, [code, message, reason]: readonly [number, string
 const agentMessage = (text: string, task: Pick<Task, 'id' | 'contextId'>): Message => ({ messageId: randomUUID(), role: 'ROLE_AGENT', parts: [{ text }], taskId: task.id, contextId: task.contextId })
 
 /** The Agent Card (spec §4.4.1) for this origin. */
-export const agentCard = (origin: string, { path = '/a2a', info, skills, oauth }: A2AConfig) => ({
+export const agentCard = (origin: string, { path = '/a2a', info, skills, oauth, brand }: A2AConfig) => ({
   name: info.name,
   description: info.description,
   supportedInterfaces: [{ url: origin + path, protocolBinding: 'JSONRPC', protocolVersion: A2A_VERSION }],
   provider: { organization: info.organization ?? info.name, url: origin },
   version: info.version,
   documentationUrl: origin + WELL_KNOWN.guide,
+  ...(brand ? { iconUrl: origin + brand.logo } : {}),
   capabilities: { streaming: false, pushNotifications: false, extendedAgentCard: false },
   securitySchemes: {
     ...(oauth
@@ -122,7 +125,7 @@ export const mountA2A = (app: Hono<any, any, any>, config: A2AConfig) => {
   if (!config.store && globalThis.navigator?.userAgent === 'Cloudflare-Workers') console.warn('mountA2A: tasks are kept in memory; on Workers pass a store in the database (dbOAuthStore(db) fits)')
   const byId = new Map(skills.map((skill) => [skill.tool.name, skill]))
 
-  app.get(WELL_KNOWN.agentCard, (c: Context) => sendPublic(c, JSON.stringify(agentCard(originOf(c), config), null, 2), 'application/json'))
+  app.get(WELL_KNOWN.agentCard, (c: Context) => sendPublic(c, JSON.stringify(agentCard(originOf(c), { ...config, brand: config.brand ?? mountedOf(app).brand }), null, 2), 'application/json'))
 
   /** Whose tasks these are: an OAuth agent by its client and grant (as the guards key it), never by its display name. */
   const ownerOf = (c: Context) => {

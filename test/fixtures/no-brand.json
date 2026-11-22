@@ -1,0 +1,179 @@
+{
+  "openapi": {
+    "status": 200,
+    "type": "application/json",
+    "body": "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"Cookbook\",\"version\":\"1.0.0\",\"description\":\"Recipes and menus.\"},\"servers\":[{\"url\":\"https://gw.example.com\",\"description\":\"This server\"}],\"security\":[{\"apiKey\":[]}],\"tags\":[{\"name\":\"Recipes\",\"description\":\"The recipes.\"},{\"name\":\"Meta\",\"description\":\"Health and errors.\"}],\"externalDocs\":{\"url\":\"https://gw.example.com/llms.txt\",\"description\":\"Agent guide: concepts, every endpoint with examples, trust and limits, and task playbooks.\"},\"components\":{\"securitySchemes\":{\"apiKey\":{\"type\":\"http\",\"scheme\":\"bearer\",\"description\":\"An API key per client: `Authorization: Bearer <key>`. People reach the same routes through the single sign-on in front of the site.\"}},\"schemas\":{\"Health\":{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\",\"enum\":[\"ok\"]},\"version\":{\"type\":\"string\"}},\"required\":[\"status\",\"version\"],\"additionalProperties\":{},\"description\":\"Up, with the version it runs and what it serves.\"},\"Problem\":{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"format\":\"uri\",\"description\":\"URI of the problem type; its last segment is `code`, and it opens a page describing it.\",\"example\":\"https://api.example.com/problems/not_found\"},\"code\":{\"type\":\"string\",\"enum\":[\"bad_request\",\"unauthorized\",\"forbidden\",\"feature_disabled\",\"not_found\",\"method_not_allowed\",\"conflict\",\"gone\",\"payload_too_large\",\"unsupported_media_type\",\"unprocessable\",\"too_many_requests\",\"spend_cap\",\"internal\",\"upstream\",\"unavailable\"],\"description\":\"Stable machine-readable code. Branch on this, not on `title`.\"},\"title\":{\"type\":\"string\",\"description\":\"Short, human summary of the problem type.\",\"example\":\"Not found\"},\"status\":{\"type\":\"integer\",\"description\":\"The HTTP status, repeated for convenience.\",\"example\":404},\"detail\":{\"type\":\"string\",\"description\":\"What went wrong this time and what to do next.\",\"example\":\"No item 42.\"},\"instance\":{\"type\":\"string\",\"description\":\"The request id; quote it when reporting a bug.\",\"example\":\"req_01J…\"},\"errors\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"in\":{\"type\":\"string\",\"enum\":[\"path\",\"query\",\"header\",\"body\"]},\"path\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"}},\"required\":[\"path\",\"message\"]},\"description\":\"For `bad_request`: every invalid field, where it is (`in`) and why.\"}},\"required\":[\"type\",\"code\",\"title\",\"status\"],\"additionalProperties\":{},\"description\":\"An error, as RFC 9457 problem details (`application/problem+json`).\"}},\"parameters\":{}},\"paths\":{\"/api/health\":{\"get\":{\"operationId\":\"getHealth\",\"summary\":\"Health check\",\"description\":\"Answers without a key: `ok` while the service can serve, with the version it runs.\",\"tags\":[\"Meta\"],\"security\":[],\"responses\":{\"200\":{\"description\":\"The service is up.\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/Health\"}}}},\"503\":{\"description\":\"`upstream`: A service this call depends on (a model, storage) failed. Retry after `Retry-After` seconds. `unavailable`: The data is still loading or being replaced. Retry after `Retry-After` seconds.\",\"content\":{\"application/problem+json\":{\"schema\":{\"$ref\":\"#/components/schemas/Problem\"}}}}}}}},\"webhooks\":{}}"
+  },
+  "docs": {
+    "status": 200,
+    "type": "text/html; charset=UTF-8",
+    "body": "<!doctype html>\n<html>\n  <head>\n    <title>Cookbook — API</title>\n    <meta charset=\"utf-8\" />\n    <meta\n      name=\"viewport\"\n      content=\"width=device-width, initial-scale=1\" />\n    <style type=\"text/css\">\n      /* Custom Theme */\n      \n      \n      .dark-mode {\n        color-scheme: dark;\n        --scalar-color-1: rgba(255, 255, 245, .86);\n        --scalar-color-2: rgba(255, 255, 245, .6);\n        --scalar-color-3: rgba(255, 255, 245, .38);\n        --scalar-color-disabled: rgba(255, 255, 245, .25);\n        --scalar-color-ghost: rgba(255, 255, 245, .25);\n        --scalar-color-accent: #e36002;\n        --scalar-background-1: #1e1e20;\n        --scalar-background-2: #2a2a2a;\n        --scalar-background-3: #505053;\n        --scalar-background-4: rgba(255, 255, 255, 0.06);\n        --scalar-background-accent: #e360021f;\n      \n        --scalar-border-color: rgba(255, 255, 255, 0.1);\n        --scalar-scrollbar-color: rgba(255, 255, 255, 0.24);\n        --scalar-scrollbar-color-active: rgba(255, 255, 255, 0.48);\n        --scalar-backdrop-brightness: 0.5;\n      \n        --scalar-shadow-1: 0 1px 3px 0 rgb(0, 0, 0, 0.1);\n        --scalar-shadow-2: rgba(15, 15, 15, 0.2) 0px 3px 6px,\n          rgba(15, 15, 15, 0.4) 0px 9px 24px, 0 0 0 1px rgba(255, 255, 255, 0.1);\n      \n        --scalar-button-1: #f6f6f6;\n        --scalar-button-1-color: #000;\n        --scalar-button-1-hover: #e7e7e7;\n      \n        --scalar-color-green: #3dd68c;\n        --scalar-color-red: #f66f81;\n        --scalar-color-yellow: #f9b44e;\n        --scalar-color-blue: #788beb;\n        --scalar-color-orange: #ff8d4d;\n        --scalar-color-purple: #b191f9;\n      }\n      /* Sidebar */\n      .dark-mode .sidebar {\n        --scalar-sidebar-background-1: #161618;\n        --scalar-sidebar-item-hover-color: var(--scalar-color-accent);\n        --scalar-sidebar-item-hover-background: transparent;\n        --scalar-sidebar-item-active-background: transparent;\n        --scalar-sidebar-border-color: transparent;\n        --scalar-sidebar-color-1: var(--scalar-color-1);\n        --scalar-sidebar-color-2: var(--scalar-color-2);\n        --scalar-sidebar-color-active: var(--scalar-color-accent);\n        --scalar-sidebar-search-background: #252529;\n        --scalar-sidebar-search-border-color: transparent;\n        --scalar-sidebar-search-color: var(--scalar-color-3);\n      }\n      \n    </style>\n  </head>\n  <body>\n    <div id=\"app\"></div>\n    <!-- Load the Scalar API Reference -->\n    <script type=\"module\">\n      import { createApiReference } from 'https://cdn.jsdelivr.net/npm/@scalar/api-reference/esm.js'\n\n      createApiReference('#app', {\n        \"_integration\": \"hono\",\n        \"url\": \"/openapi.json\",\n        \"hideClientButton\": false,\n        \"defaultOpenAllTags\": false\n      })\n    </script>\n  </body>\n</html>"
+  },
+  "llms": {
+    "status": 200,
+    "type": "text/markdown; charset=utf-8",
+    "body": "# Cookbook\n\n> Recipes at https://gw.example.com.\n"
+  },
+  "serverCard": {
+    "status": 200,
+    "type": "application/mcp-server-card+json",
+    "body": "{\n  \"$schema\": \"https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json\",\n  \"name\": \"com.example.gw/cookbook\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Cookbook\",\n  \"title\": \"Cookbook\",\n  \"websiteUrl\": \"https://gw.example.com/llms.txt\",\n  \"remotes\": [\n    {\n      \"type\": \"streamable-http\",\n      \"url\": \"https://gw.example.com/mcp\",\n      \"headers\": [\n        {\n          \"name\": \"Authorization\",\n          \"description\": \"An API key issued per client by the owner.\",\n          \"isRequired\": true,\n          \"isSecret\": true,\n          \"value\": \"Bearer {api_key}\",\n          \"variables\": {\n            \"api_key\": {\n              \"description\": \"Your API key.\",\n              \"isRequired\": true,\n              \"isSecret\": true\n            }\n          }\n        }\n      ],\n      \"supportedProtocolVersions\": [\n        \"2026-07-28\",\n        \"2025-11-25\",\n        \"2025-06-18\",\n        \"2025-03-26\",\n        \"2024-11-05\",\n        \"2024-10-07\"\n      ]\n    }\n  ]\n}"
+  },
+  "aiCatalog": {
+    "status": 200,
+    "type": "application/ai-catalog+json",
+    "body": "{\n  \"specVersion\": \"1.0\",\n  \"host\": {\n    \"displayName\": \"Cookbook\",\n    \"identifier\": \"did:web:gw.example.com\",\n    \"documentationUrl\": \"https://gw.example.com/llms.txt\"\n  },\n  \"entries\": [\n    {\n      \"identifier\": \"urn:air:gw.example.com:api:openapi\",\n      \"displayName\": \"Cookbook\",\n      \"type\": \"application/vnd.oai.openapi+json;version=3.1\",\n      \"url\": \"https://gw.example.com/openapi.json\",\n      \"representativeQueries\": [\n        \"find a soup recipe\"\n      ]\n    },\n    {\n      \"identifier\": \"urn:air:gw.example.com:mcp:cookbook\",\n      \"displayName\": \"Cookbook\",\n      \"type\": \"application/mcp-server-card+json\",\n      \"url\": \"https://gw.example.com/mcp/server-card\",\n      \"representativeQueries\": [\n        \"find a soup recipe\"\n      ]\n    }\n  ]\n}"
+  },
+  "agentCard": {
+    "status": 200,
+    "type": "application/json",
+    "body": "{\n  \"name\": \"Cookbook\",\n  \"description\": \"Recipes.\",\n  \"supportedInterfaces\": [\n    {\n      \"url\": \"https://gw.example.com/a2a\",\n      \"protocolBinding\": \"JSONRPC\",\n      \"protocolVersion\": \"1.0\"\n    }\n  ],\n  \"provider\": {\n    \"organization\": \"Cookbook\",\n    \"url\": \"https://gw.example.com\"\n  },\n  \"version\": \"1.0.0\",\n  \"documentationUrl\": \"https://gw.example.com/llms.txt\",\n  \"capabilities\": {\n    \"streaming\": false,\n    \"pushNotifications\": false,\n    \"extendedAgentCard\": false\n  },\n  \"securitySchemes\": {\n    \"apiKey\": {\n      \"httpAuthSecurityScheme\": {\n        \"description\": \"An API key from the owner, as a bearer token.\",\n        \"scheme\": \"Bearer\"\n      }\n    }\n  },\n  \"securityRequirements\": [\n    {\n      \"schemes\": {\n        \"apiKey\": {\n          \"list\": []\n        }\n      }\n    }\n  ],\n  \"defaultInputModes\": [\n    \"text/plain\",\n    \"application/json\"\n  ],\n  \"defaultOutputModes\": [\n    \"text/plain\",\n    \"application/json\"\n  ],\n  \"skills\": [\n    {\n      \"id\": \"list_recipes\",\n      \"name\": \"List recipes\",\n      \"description\": \"Every recipe.\",\n      \"tags\": [\n        \"recipes\"\n      ]\n    }\n  ]\n}"
+  },
+  "landing": {
+    "status": 200,
+    "type": "text/html; charset=UTF-8",
+    "body": "<!doctype html><html><head><title>Cookbook</title></head><body>the front page</body></html>"
+  },
+  "page": {
+    "status": 200,
+    "type": "text/html; charset=UTF-8",
+    "body": "<!doctype html><html><head><title>Cookbook</title></head><body>the app</body></html>"
+  },
+  "favicon": 401,
+  "icon": 401,
+  "manifest": 401,
+  "discover": {
+    "result": {
+      "supportedVersions": [
+        "2026-07-28"
+      ],
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "Find recipes.",
+      "resultType": "complete",
+      "ttlMs": 3600000,
+      "cacheScope": "private",
+      "_meta": {
+        "io.modelcontextprotocol/serverInfo": {
+          "name": "cookbook",
+          "version": "1.0.0",
+          "title": "Cookbook"
+        }
+      }
+    },
+    "jsonrpc": "2.0",
+    "id": 1
+  },
+  "greeting": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "protocolVersion": "2026-07-28",
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "serverInfo": {
+        "name": "cookbook",
+        "version": "1.0.0",
+        "title": "Cookbook"
+      },
+      "instructions": "Find recipes.\n\nThis server speaks MCP 2026-07-28, which is stateless: no initialize or session is needed. Call tools/list or any method directly with the MCP-Protocol-Version and Mcp-Method headers (server/discover returns this same information)."
+    }
+  },
+  "toolsList": {
+    "result": {
+      "tools": [
+        {
+          "name": "list_recipes",
+          "title": "List recipes",
+          "description": "Every recipe.",
+          "inputSchema": {
+            "type": "object",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {}
+          },
+          "annotations": {
+            "title": "List recipes",
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          },
+          "_meta": {
+            "api-kit/route": "GET /api/v1/recipes",
+            "api-kit/cli": {
+              "name": "recipe list",
+              "positional": [],
+              "examples": []
+            },
+            "api-kit/tools-hash": "361062aead98cfa5"
+          }
+        }
+      ],
+      "resultType": "complete",
+      "ttlMs": 3600000,
+      "cacheScope": "private",
+      "_meta": {
+        "io.modelcontextprotocol/serverInfo": {
+          "name": "cookbook",
+          "version": "1.0.0",
+          "title": "Cookbook"
+        }
+      }
+    },
+    "jsonrpc": "2.0",
+    "id": 1
+  },
+  "toolsCall": {
+    "result": {
+      "_meta": {
+        "api-kit/tools-hash": "361062aead98cfa5",
+        "io.modelcontextprotocol/serverInfo": {
+          "name": "cookbook",
+          "version": "1.0.0",
+          "title": "Cookbook"
+        }
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Soup"
+        }
+      ],
+      "structuredContent": {
+        "recipes": [
+          {
+            "id": "r1",
+            "name": "Soup"
+          }
+        ]
+      },
+      "resultType": "complete"
+    },
+    "jsonrpc": "2.0",
+    "id": 1
+  },
+  "legacyInitialize": {
+    "result": {
+      "protocolVersion": "2025-06-18",
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "serverInfo": {
+        "name": "cookbook",
+        "version": "1.0.0",
+        "title": "Cookbook"
+      },
+      "instructions": "Find recipes."
+    },
+    "jsonrpc": "2.0",
+    "id": 1
+  }
+}

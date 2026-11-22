@@ -24,6 +24,7 @@ npx @escalay/kit feature reading-lists           # a new feature folder, listed 
 npx @escalay/kit sdk                             # a typed TypeScript client in sdk/, a method per operation
 gh repo create my-api --private --source . --push && npx @escalay/kit repo apply   # CI runs; the repository set up as §20 says
 npx @escalay/kit button --check && npx @escalay/kit button --write                 # the Deploy to Cloudflare button, ready and in the README
+pnpm add -D @resvg/resvg-js && npx @escalay/kit brand    # brand/ (a monogram to start) rendered: favicon, PNG icons, OG card
 ```
 
 Every new app is a git repository with CI (`.github/workflows/ci.yml`), monthly Dependabot, a secrets scan, a
@@ -111,6 +112,7 @@ The full standard: [docs/STANDARD.md](docs/STANDARD.md). Why the layout is what 
 | `vectors` | Gemini Embedding 2 look and meaning vectors: ledgers that never pay twice, `nearest`, `standouts` | [vectors](src/vectors/README.md) |
 | `vector-search` | search by words, picture and likeness: three routes and their tools | [vector-search](src/vector-search/README.md) |
 | `web` | the front door: a public `/` or none, the browser app under `/app` | [web](src/web/README.md) |
+| `brand` | one brand on every surface: `brand/brand.ts` and `icon.svg`, rendered by `kit brand` into the favicon, PNG icons and OG card; MCP serverInfo, the Server Card, OpenAPI's `x-logo` and the A2A card read it | [brand](src/brand/README.md) |
 | `keys` | API keys made and revoked through the app's own API beside `API_KEYS`, `GET /api/me`, their MCP tools | [keys](src/keys/README.md) |
 | `boards` | the owner's collections of items with notes; `boardRef` / `parseBoardRef`; the reference feature shape | [boards](src/boards/README.md) |
 | `telemetry` | a daily anonymous usage report (coarse ranges only) to the product's collector, the owner's switch, `GET /api/telemetry` showing exactly what is sent | [telemetry](src/telemetry/README.md) |

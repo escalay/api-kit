@@ -20,7 +20,7 @@ import { fillTemplate } from '../guide/guide.js'
 import type { ResourceLike, ToolLike } from '../core/discovery.js'
 import { pathWith } from '../core/hal.js'
 import { PROBLEM_JSON } from '../core/problem.js'
-import { generatedVars, toolRoute, type CliCommandLike, type OpenApiDoc } from '../guide/reference.js'
+import { brandVars, generatedVars, toolRoute, type CliCommandLike, type OpenApiDoc } from '../guide/reference.js'
 
 type Operation = {
   operationId?: string
@@ -85,13 +85,13 @@ export const guideRoutes = (files: Map<string, string>, doc: Document, prefix = 
 
 /**
  * Placeholders a guide uses that nothing fills: not `vars`, and not the kit's generated parts when `doc` (and `tools`)
- * are given, so a typo like `{{api.endpoint}}` is caught too.
+ * are given, so a typo like `{{api.endpoint}}` is caught too. `brand`: the app's (`defineBrand`), for `{{brand.*}}`.
  */
-export const guideGaps = (files: Map<string, string>, vars: Record<string, unknown>, { doc, tools, resources, commands }: { doc?: OpenApiDoc; tools?: ToolLike[]; resources?: ResourceLike[]; commands?: CliCommandLike[] } = {}) => {
+export const guideGaps = (files: Map<string, string>, vars: Record<string, unknown>, { doc, tools, resources, commands, brand }: { doc?: OpenApiDoc; tools?: ToolLike[]; resources?: ResourceLike[]; commands?: CliCommandLike[]; brand?: { name: string; title: string; description: string } } = {}) => {
   const generated = doc ? generatedVars({ origin: 'https://example.test', doc, tools, resources, commands, files }) : {}
   const skipped = doc ? [] : ['api.', 'mcp.', 'skills.', 'cli.']
   return [...files].flatMap(([file, text]) =>
-    fillTemplate(text, { origin: 'https://example.test', ...generated, ...vars })
+    fillTemplate(text, { origin: 'https://example.test', ...generated, ...(brand ? { brand: brandVars(brand) } : {}), ...vars })
       .missing.filter((name) => !skipped.some((root) => name.startsWith(root)))
       .map((name) => `${file}: {{${name}}}`),
   )

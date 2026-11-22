@@ -24,7 +24,9 @@ import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { serveStatic } from '@hono/node-server/serve-static'
-import type { Hono } from 'hono'
+import type { Context, Hono } from 'hono'
+import { mountedOf } from '../core/discovery.js'
+import { originOf } from '../core/hal.js'
 
 export type FrontDoorConfig = {
   /** The built app: `index.html`, optionally `landing.html`, and its files. */
@@ -75,6 +77,12 @@ export const serveFrontDoor = (app: Hono<any, any, any>, { dir, base = '/app', m
   const noindex = (page: string) => (hidden && !page.includes('name="robots"') ? page.replace(/<head>/i, '<head><meta name="robots" content="noindex, nofollow">') : page)
   const html = noindex(versionAssets(readFileSync(index, 'utf8'), dir, immutable))
   const landing = !hidden && existsSync(join(dir, 'landing.html')) ? versionAssets(readFileSync(join(dir, 'landing.html'), 'utf8'), dir, immutable) : null
+  // The app's brand (`createAgentApi({ brand })`) in each page's head, unless the page names an icon of its own
+  const branded = (page: string, c: Context) => {
+    const brand = mountedOf(app).brand
+    if (!brand || /<link[^>]*\brel=["']?(?:shortcut )?icon\b/i.test(page)) return page
+    return page.replace(/<head(?:\s[^>]*)?>/i, (head) => head + brand.headTags(originOf(c)))
+  }
 
   app.use(`${immutable}*`, async (c, next) => {
     await next()
@@ -84,7 +92,7 @@ export const serveFrontDoor = (app: Hono<any, any, any>, { dir, base = '/app', m
     // `/?item=…` was a deep link into the app before it moved
     const search = new URL(c.req.url).search
     if (search || !landing) return c.redirect(`${base}${search}`, search ? 301 : 302)
-    return c.html(landing, 200, { 'cache-control': 'no-cache' })
+    return c.html(branded(landing, c), 200, { 'cache-control': 'no-cache' })
   })
   // A plain viewer refers to its files relatively, so `/app/app.js` is `/app.js`; `/app` itself is the page below
   const appFiles = serveStatic({ root: dir, rewriteRequestPath: (path) => path.slice(base.length), onFound: (_path, c) => c.header('cache-control', 'no-cache') })
@@ -92,7 +100,7 @@ export const serveFrontDoor = (app: Hono<any, any, any>, { dir, base = '/app', m
   app.use('*', serveStatic({ root: dir, onFound: (path, c) => { if (!path.includes(immutable)) c.header('cache-control', 'no-cache') } }))
   app.get('*', (c, next) => {
     const path = c.req.path
-    if (path === base || path.startsWith(`${base}/`)) return c.html(html, 200, { 'cache-control': 'no-cache' })
+    if (path === base || path.startsWith(`${base}/`)) return c.html(branded(html, c), 200, { 'cache-control': 'no-cache' })
     if (moved.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) return c.redirect(`${base}${path}${new URL(c.req.url).search}`, 301)
     return next()
   })

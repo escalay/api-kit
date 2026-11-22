@@ -22,7 +22,7 @@ import { secureHeaders } from 'hono/secure-headers'
 import { authenticate, OAUTH_OPEN_PATHS, SCOPES, type OAuthServer } from './auth.js'
 import { cacheControl, CACHE } from './cache.js'
 import { idempotency, type AddressTrust, type GuardStore, type IdempotencyOptions } from './guards.js'
-import { API_CATALOG_TYPE, apiCatalog, LINK_HEADER, markdownTokens, MARKDOWN_TYPE, poppyJson, robotsTxt, sendPublic, sitemapXml, WELL_KNOWN, wantsMarkdown, type DiscoveryConfig } from './discovery.js'
+import { API_CATALOG_TYPE, apiCatalog, LINK_HEADER, markdownTokens, MARKDOWN_TYPE, poppyJson, recordMounted, robotsTxt, sendPublic, sitemapXml, WELL_KNOWN, wantsMarkdown, type AgentBrand, type DiscoveryConfig } from './discovery.js'
 import { HAL_JSON, originOf } from './hal.js'
 import { errorHandler, notFoundHandler, PROBLEMS, problemResponse, problemResponses, validationHook, type ProblemCode } from './problem.js'
 
@@ -45,6 +45,11 @@ export type AgentApiConfig = {
   home?: 'docs' | 'app' | false
   /** The service as its own OAuth server (`createOAuth`): mounted here, its tokens accepted beside keys. */
   oauth?: OAuthServer
+  /**
+   * The app's brand (`createBrand` from the `brand` part): its favicon, icons, manifest and OG card served (and open,
+   * unless private), OpenAPI's `x-logo`, the docs page's head tags, and what MCP, A2A, the guide and the front door read.
+   */
+  brand?: AgentBrand
   /**
    * Idempotency-Key: where answers are kept (`store`, default this process's memory; on Workers `dbGuardStore(db)`),
    * which statuses are kept (`keep`, default a success), and more paths never kept (`skip`, beside the OAuth ones).
@@ -145,11 +150,12 @@ const markdownForAgents = (app: { request: (input: string, init?: RequestInit) =
 export const createAgentApi = (config: AgentApiConfig) => {
   const app = new OpenAPIHono({ defaultHook: validationHook as never })
   const home = config.home ?? 'docs'
+  const brand = config.brand
   // Discovery is public: what exists and how to reach it, never the data
   const discovery = ['/robots.txt', '/sitemap.xml', '/.well-known/*', '*/server-card', ...(home ? ['/'] : []), ...(home === 'app' ? ['/app'] : [])]
   const open = config.private
     ? [...PRIVATE_OPEN, ...(config.oauth ? PRIVATE_OAUTH_OPEN : []), ...(config.auth.open ?? [])]
-    : ['/api/health', '/openapi.json', '/docs', '/llms.txt', '/llms-full.txt', '/agents/*', '/skills/*', '/problems/*', ...discovery, ...(config.oauth ? OAUTH_OPEN_PATHS : []), ...(config.auth.open ?? [])]
+    : ['/api/health', '/openapi.json', '/docs', '/llms.txt', '/llms-full.txt', '/agents/*', '/skills/*', '/problems/*', ...discovery, ...(config.oauth ? OAUTH_OPEN_PATHS : []), ...(config.brand?.paths ?? []), ...(config.auth.open ?? [])]
 
   // First, so every guard and part after it reads the address from the source the app named
   if (config.address) {
@@ -236,7 +242,7 @@ export const createAgentApi = (config: AgentApiConfig) => {
   app.get('/openapi.json', (c) => {
     const doc = app.getOpenAPI31Document({
       openapi: '3.1.0',
-      info: { title: config.title, version: config.version, description: config.description },
+      info: { title: config.title, version: config.version, description: config.description, ...(brand ? { 'x-logo': { url: originOf(c) + brand.logo, backgroundColor: brand.background, altText: brand.title }, ...(brand.termsUrl ? { termsOfService: brand.termsUrl } : {}) } : {}) },
       servers: [{ url: originOf(c), description: 'This server' }],
       security: [{ [SECURITY_SCHEME]: [] }, ...(config.oauth ? [{ oauth: [...SCOPES] }] : [])],
       tags: [...config.tags, { name: 'Meta', description: 'Health and errors.' }],
@@ -244,7 +250,14 @@ export const createAgentApi = (config: AgentApiConfig) => {
     }) as unknown as OpenApiDocument
     return c.json({ ...hoistParameterDocs(doc), ...(config.tagGroups ? { 'x-tagGroups': [...config.tagGroups, { name: 'Meta', tags: ['Meta'] }] } : {}) })
   })
-  app.get('/docs', Scalar({ url: '/openapi.json', pageTitle: `${config.title} — API`, hideClientButton: false, defaultOpenAllTags: false }))
+  const docs = Scalar({ url: '/openapi.json', pageTitle: `${config.title} — API`, hideClientButton: false, defaultOpenAllTags: false })
+  if (!brand) app.get('/docs', docs)
+  else
+    app.get('/docs', async (c, next) => {
+      const page = (await docs(c, next)) as Response | undefined
+      if (!page?.headers.get('content-type')?.startsWith('text/html')) return page
+      return c.html((await page.text()).replace(/<head(?:\s[^>]*)?>/i, (head) => head + brand.headTags(originOf(c))), page.status as 200)
+    })
 
   app.get(WELL_KNOWN.apiCatalog, (c) => sendPublic(c, JSON.stringify(apiCatalog(originOf(c)), null, 2), API_CATALOG_TYPE))
   app.get('/robots.txt', (c) => sendPublic(c, robotsTxt(config.private ? { private: true } : (config.discovery ?? {}), originOf(c)), 'text/plain; charset=utf-8'))
@@ -254,6 +267,10 @@ export const createAgentApi = (config: AgentApiConfig) => {
   if (home) app.get('/', (c) => c.redirect(home === 'app' ? '/app/' : '/docs', 302))
   // The app's files are served under /app/, so the bare path is sent there too
   if (home === 'app') app.get('/app', (c) => c.redirect('/app/', 302))
+  if (brand) {
+    recordMounted(app, { brand })
+    brand.mount(app, { private: config.private })
+  }
 
   return app
 }

@@ -355,8 +355,12 @@ describe('discovery', () => {
     })
     expect((await get(app, '/.well-known/mcp/server-card.json')).status).toBe(200)
     expect((await app.request('/mcp/server-card', { headers: { 'if-none-match': card.headers.get('etag')! } })).status).toBe(200)
-    const same = await app.request('/.well-known/mcp/server-card.json', { headers: { 'if-none-match': (await app.request('/.well-known/mcp/server-card.json')).headers.get('etag')! } })
+    const etag = (await app.request('/.well-known/mcp/server-card.json')).headers.get('etag')!
+    const same = await app.request('/.well-known/mcp/server-card.json', { headers: { 'if-none-match': etag } })
     expect(same.status).toBe(304)
+    // RFC 9110: If-None-Match compares weakly, and * matches any
+    for (const sent of [`W/${etag}`, '*', `"other", W/${etag}`]) expect((await app.request('/.well-known/mcp/server-card.json', { headers: { 'if-none-match': sent } })).status, sent).toBe(304)
+    expect((await app.request('/.well-known/mcp/server-card.json', { headers: { 'if-none-match': 'W/"other"' } })).status).toBe(200)
   })
 
   it('lists the API, the MCP server and each skill in an AI Catalog', async () => {
@@ -730,7 +734,13 @@ describe('the copy-in CLI', () => {
       // --switch: listed in the catalog, so an owner can switch it off, and the feature names its switch
       expect(await readFile(join(app, 'src/features/catalog.ts'), 'utf8')).toContain("  'reading-lists': { title: 'ReadingLists', description: 'ReadingLists: say here what switching it off stops.' },\n  // kit:catalog")
       expect(await readFile(join(app, 'src/features/reading-lists/index.ts'), 'utf8')).toContain("  name: 'reading-lists',\n  switch: 'reading-lists',")
-      expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'switches', 'testing'])
+      expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'brand', 'switches', 'testing'])
+      // The starter brand: a monogram of the title, served as SVG until `kit brand` renders it
+      expect(await readFile(join(app, 'brand/brand.ts'), 'utf8')).toContain("  name: 'demo-api',\n  title: 'Demo API',")
+      expect(await readFile(join(app, 'brand/icon.svg'), 'utf8')).toContain('>D</text>')
+      expect(await readFile(join(app, 'src/brand.gen.ts'), 'utf8')).not.toContain('png:')
+      const doctor = cli(app, 'doctor')
+      expect(doctor.stdout).toContain('note     brand: src/brand.gen.ts has the SVG only')
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
       // The product's own skill, the place for developer skills, and the link coding agents find them through
       for (const path of ['guide/skills/demo-api/SKILL.md', 'guide/skills/demo-api/references/find-your-way.md', '.agents/skills/README.md']) expect(existsSync(join(app, path)), path).toBe(true)
@@ -760,7 +770,7 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+11 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+13 passed/)
 
       // The client and its command line: `kit sdk` makes both; the CLI compiles on its own and offers the app's tools
       const sdk = cli(parent, 'sdk', '--app', 'demo-api')
@@ -1030,6 +1040,27 @@ describe('the npm-release item', () => {
     // The manifest and every published package agree, or the release pull request would bump them apart
     const manifest = JSON.parse(await read('.release-please-manifest.json'))
     for (const path of ['package.json', 'packages/create-escalay/package.json']) expect(JSON.parse(await read(path)).version, path).toBe(manifest['.'])
+  })
+})
+
+describe('the app template’s container', () => {
+  const kitDir = join(import.meta.dirname, '..')
+
+  it('copies every top-level folder the app’s src/ imports from', async () => {
+    const copied = new Set([...readFileSync(join(kitDir, 'templates/app/Dockerfile'), 'utf8').matchAll(/^COPY (\S+) \1$/gm)].map(([, folder]) => folder))
+    // Every template that writes into the app's src/; Workers bundle from `main`, the container runs src/ as it is
+    const imported = new Set<string>()
+    for (const template of ['app', 'runtime-cloudflare']) {
+      const src = join(kitDir, 'templates', template, 'src')
+      for (const file of (await readdir(src, { recursive: true })).filter((path) => /\.tsx?$/.test(path))) {
+        for (const [, specifier] of readFileSync(join(src, file), 'utf8').matchAll(/\bfrom '(\.{1,2}\/[^']+)'/g)) {
+          const [top] = join('src', file, '..', specifier!).split(/[\\/]/)
+          if (top !== 'src') imported.add(top!)
+        }
+      }
+    }
+    expect(imported).toContain('brand')
+    for (const folder of imported) expect(copied, `templates/app/Dockerfile copies ${folder}/`).toContain(folder)
   })
 })
 

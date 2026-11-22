@@ -1,5 +1,6 @@
 import { exports } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
+import { BRAND_ASSETS } from '../../src/brand.gen.js'
 import { TEST_KEY } from './key.js'
 
 const headers = { authorization: `Bearer ${TEST_KEY}`, 'content-type': 'application/json' }
@@ -7,7 +8,15 @@ const headers = { authorization: `Bearer ${TEST_KEY}`, 'content-type': 'applicat
 // worker.ts in workerd over D1, brought up by migrations/: what a deploy runs
 describe('__title__ on Workers', () => {
   it('starts and serves the standard routes and the guide', async () => {
-    for (const path of ['/api/health', '/openapi.json', '/llms.txt', '/.well-known/api-catalog']) expect((await exports.default.fetch(`https://api.test${path}`, { headers })).status, path).toBe(200)
+    for (const path of ['/api/health', '/openapi.json', '/llms.txt', '/.well-known/api-catalog', '/icon.svg', '/site.webmanifest']) expect((await exports.default.fetch(`https://api.test${path}`, { headers })).status, path).toBe(200)
+  })
+
+  it('serves the brand from src/brand.gen.ts, the PNGs once `npx @escalay/kit brand` has rendered them', async () => {
+    const favicon = await exports.default.fetch('https://api.test/favicon.ico')
+    expect(favicon.headers.get('content-type') === 'image/x-icon').toBe('png' in BRAND_ASSETS)
+    const card = (await (await exports.default.fetch('https://api.test/mcp/server-card')).json()) as { icons: { src: string }[] }
+    expect(card.icons.map((icon) => icon.src)).toContain('https://api.test/icon.svg')
+    expect(card.icons.some((icon) => icon.src === 'https://api.test/icon-192.png')).toBe('png' in BRAND_ASSETS)
   })
 
   it('answers every feature list route with a key, and refuses without one', async () => {

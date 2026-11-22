@@ -13,14 +13,14 @@
  * // a stdio client on a laptop: the same tools over HTTP with its own key
  * serveStdio(mcpServerFactory({ info, instructions, tools, callApi: overHttp(origin, process.env.COOKBOOK_API_KEY!) }))
  */
-import { createMcpHandler, McpServer, originValidationResponse, ResourceTemplate, SUPPORTED_PROTOCOL_VERSIONS, UriTemplate, type AuthInfo, type CallToolResult, type McpServerFactory } from '@modelcontextprotocol/server'
+import { createMcpHandler, McpServer, originValidationResponse, ResourceTemplate, SUPPORTED_PROTOCOL_VERSIONS, UriTemplate, type AuthInfo, type CallToolResult, type McpRequestContext, type McpServerFactory } from '@modelcontextprotocol/server'
 import type { SkillCatalog } from '@modelcontextprotocol/server/ext/skills'
 import { createHash } from 'node:crypto'
 import { z } from '@hono/zod-openapi'
 import type { Context, Hono } from 'hono'
 import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, TOOLS_HASH_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
 import { attachSkills, instructionsWithSkills } from './skills.js'
-import { MODERN_PROTOCOL_VERSION, mountedOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN } from '../core/discovery.js'
+import { MODERN_PROTOCOL_VERSION, mountedOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN, type AgentBrand, type ServerIcon } from '../core/discovery.js'
 import { originOf, pathWith } from '../core/hal.js'
 
 type Query = Record<string, string | number | boolean | string[] | null | undefined>
@@ -79,7 +79,28 @@ export const mcpResource = (resource: McpResource) => resource
 
 export type McpPrompt = { name: string; title: string; description: string; arguments?: z.ZodObject; text: (args: Record<string, string>) => string }
 
-export type McpServerInfo = { name: string; version: string; title?: string; description?: string; websiteUrl?: string; icons?: { src: string; mimeType?: string; sizes?: string[] }[] }
+export type McpServerInfo = { name: string; version: string; title?: string; description?: string; websiteUrl?: string; icons?: ServerIcon[] }
+
+/**
+ * The server's identity with the brand's title, description, website and icons where `info` leaves them out, for the
+ * origin it is served at. `inline: false` leaves the data icon out (what rides on every answer); no brand, `info` as it is.
+ *
+ * @example
+ * serverInfoOf({ name: 'cookbook', version: '1.0.0' }, brand, 'https://cookbook.example.com').icons?.[0].src // 'data:image/png;base64,…'
+ */
+export const serverInfoOf = (info: McpServerInfo, brand: AgentBrand | undefined, origin: string | null, { inline = true }: { inline?: boolean } = {}): McpServerInfo => {
+  if (!brand) return info
+  const websiteUrl = info.websiteUrl ?? brand.websiteUrl
+  const icons = info.icons ?? brand.icons(origin, { inline })
+  return { ...info, title: info.title ?? brand.title, description: info.description ?? brand.description, ...(websiteUrl ? { websiteUrl } : {}), ...(icons.length ? { icons } : {}) }
+}
+
+/** The public origin of the request MCP serves, as `mountMcp` forwards it; none over stdio. */
+const originOfRequest = (request: Request | undefined) => {
+  if (!request) return null
+  const url = new URL(request.url)
+  return `${request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() ?? url.protocol.replace(':', '')}://${request.headers.get('x-forwarded-host') ?? url.host}`
+}
 
 const HOUR = 3_600_000
 
@@ -163,21 +184,27 @@ export const toolsHashOf = (tools: McpTool[], resources: McpResource[] = []) => 
 }
 
 /** A factory that also carries its server info and tools, so `mountMcp` can publish the card and the guide can list the tools. */
-export type AgentMcpFactory = McpServerFactory & { info: McpServerInfo; tools: McpTool[]; resources: McpResource[]; instructions?: string; prompts?: McpPrompt[] }
+export type AgentMcpFactory = McpServerFactory & { info: McpServerInfo; tools: McpTool[]; resources: McpResource[]; instructions?: string; prompts?: McpPrompt[]; brand?: AgentBrand }
 
 /**
  * The MCP server over the tools. `toolsTtlMs`: how long clients may cache `tools/list` (default an hour); shorter when
  * the tools change without a deploy. `structured`: when a tool's JSON answer rides as `structuredContent`: `'always'`
  * (the default; the app's CLI reads it for `--json`), or `'withOutput'`, only for a tool with an `output` schema, for
- * clients that show `structuredContent` instead of the text.
+ * clients that show `structuredContent` instead of the text. `brand`: the server's title, description, website and icons
+ * (`mountMcp` passes the app's own, from `createAgentApi({ brand })`, so give it here only for a stdio server).
  *
  * @example
  * mcpServerFactory({ info, instructions, tools, callApi: inProcess(app), structured: 'withOutput' })
  */
-export const mcpServerFactory = ({ info, instructions, tools, resources = [], prompts = [], skills, callApi, waitMs = 60_000, toolsTtlMs = HOUR, structured = 'always' }: { info: McpServerInfo; instructions: string; tools: McpTool[]; resources?: McpResource[]; prompts?: McpPrompt[]; skills?: SkillCatalog; callApi: CallApi; waitMs?: number; toolsTtlMs?: number; structured?: 'always' | 'withOutput' }): AgentMcpFactory => Object.assign(() => {
+export const mcpServerFactory = ({ info, instructions, tools, resources = [], prompts = [], skills, callApi, waitMs = 60_000, toolsTtlMs = HOUR, structured = 'always', brand: ownBrand }: { info: McpServerInfo; instructions: string; tools: McpTool[]; resources?: McpResource[]; prompts?: McpPrompt[]; skills?: SkillCatalog; callApi: CallApi; waitMs?: number; toolsTtlMs?: number; structured?: 'always' | 'withOutput'; brand?: AgentBrand }): AgentMcpFactory => Object.assign((ctx?: McpRequestContext & { brand?: AgentBrand }) => {
   // Lists only change with a deploy: let clients cache them for an hour
   const cached = { ttlMs: HOUR, cacheScope: 'private' as const }
-  const server = new McpServer(info, { instructions: instructionsWithSkills(instructions, skills), cacheHints: { 'server/discover': cached, 'tools/list': { ...cached, ttlMs: toolsTtlMs }, 'prompts/list': cached, 'resources/list': cached, 'resources/templates/list': cached } })
+  // 2026-07-28 stamps serverInfo on every answer: the inline icon (kilobytes) rides only on discover; 2025's initialize takes it whole
+  const brand = ctx?.brand ?? ownBrand
+  // No request (stdio): this server is the connection's only identity, so it takes the whole of it
+  const whole = ctx?.era !== 'modern' || !ctx.requestInfo || ctx.requestInfo.headers.get('mcp-method') === 'server/discover'
+  const identity = serverInfoOf(info, brand, originOfRequest(ctx?.requestInfo), { inline: whole })
+  const server = new McpServer(identity, { instructions: instructionsWithSkills(instructions, skills), cacheHints: { 'server/discover': cached, 'tools/list': { ...cached, ttlMs: toolsTtlMs }, 'prompts/list': cached, 'resources/list': cached, 'resources/templates/list': cached } })
   // Clients that cache the list learn from any answer that it changed
   const listed = { [TOOLS_HASH_META]: toolsHashOf(tools, resources) }
   for (const tool of tools) {
@@ -230,7 +257,7 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
   }
   if (skills) attachSkills(server, skills)
   return server
-}, { info, tools, resources, instructions: instructionsWithSkills(instructions, skills), prompts })
+}, { info, tools, resources, instructions: instructionsWithSkills(instructions, skills), prompts, ...(ownBrand ? { brand: ownBrand } : {}) })
 
 /**
  * The tools and resources `mountMcp` serves on an app, as they were given: for the CLI snapshot and `cliGaps`.
@@ -268,7 +295,7 @@ export const overHttp = (origin: string, key: string, fetchImpl: typeof fetch = 
  * 2026-07-28 has no `initialize` (`server/discover` replaced it), so the SDK answers -32601, which reads to an agent as
  * a broken server. Agents still open with it out of habit: answer with what `server/discover` would, and say so.
  */
-const modernInitialize = async (c: Context, factory: AgentMcpFactory) => {
+const modernInitialize = async (c: Context, factory: AgentMcpFactory, brand: AgentBrand | undefined) => {
   if (c.req.method !== 'POST' || c.req.header('mcp-protocol-version') !== MODERN_PROTOCOL_VERSION) return null
   const message = (await c.req.raw.clone().json().catch(() => null)) as { jsonrpc?: string; id?: string | number; method?: string } | null
   if (message?.method !== 'initialize' || message.id === undefined) return null
@@ -276,7 +303,7 @@ const modernInitialize = async (c: Context, factory: AgentMcpFactory) => {
     protocolVersion: MODERN_PROTOCOL_VERSION,
     // As the server itself declares them: an app may announce changes on a listen stream (`handler.notify`)
     capabilities: { tools: { listChanged: true }, ...(factory.prompts?.length ? { prompts: { listChanged: true } } : {}), ...(factory.resources.length ? { resources: { listChanged: true } } : {}) },
-    serverInfo: factory.info,
+    serverInfo: serverInfoOf(factory.info, brand, originOf(c)),
     instructions: `${factory.instructions ?? ''}\n\nThis server speaks MCP ${MODERN_PROTOCOL_VERSION}, which is stateless: no initialize or session is needed. Call tools/list or any method directly with the MCP-Protocol-Version and Mcp-Method headers (server/discover returns this same information).`.trim(),
   }
   return c.json({ jsonrpc: '2.0', id: message.id, result })
@@ -288,15 +315,17 @@ const modernInitialize = async (c: Context, factory: AgentMcpFactory) => {
  * them. Browsers' Origin is checked against `allowedHostnames`.
  */
 export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, allowedHostnames }: { path?: string; factory: AgentMcpFactory; allowedHostnames: string[] }) => {
-  const handler = createMcpHandler(factory, { responseMode: 'auto' })
+  // The app's brand (`createAgentApi({ brand })`) unless the factory was given its own
+  const brandOf = () => factory.brand ?? mountedOf(app).brand
+  const handler = createMcpHandler((ctx) => factory({ ...ctx, brand: brandOf() } as McpRequestContext), { responseMode: 'auto' })
   // The Server Card (SEP-2127): at its reserved place beside the endpoint, and where domain scanners look
-  const card = (origin: string) => serverCard(origin, path, factory.info, [MODERN_PROTOCOL_VERSION, ...SUPPORTED_PROTOCOL_VERSIONS])
+  const card = (origin: string) => serverCard(origin, path, serverInfoOf(factory.info, brandOf(), origin), [MODERN_PROTOCOL_VERSION, ...SUPPORTED_PROTOCOL_VERSIONS])
   recordMounted(app, { mcp: { path, card, tools: factory.tools, resources: factory.resources } })
   for (const at of [`${path}/server-card`, WELL_KNOWN.serverCard]) app.get(at, (c: Context) => sendPublic(c, JSON.stringify(card(originOf(c)), null, 2), SERVER_CARD_TYPE))
   app.all(path, async (c: Context) => {
     const rejected = originValidationResponse(c.req.raw, allowedHostnames)
     if (rejected) return rejected
-    const greeting = await modernInitialize(c, factory)
+    const greeting = await modernInitialize(c, factory, brandOf())
     if (greeting) return greeting
     const caller = c.get('caller' as never) as { kind: string; name?: string; email?: string; client?: string; grant?: string } | undefined
     const authInfo: AuthInfo = {

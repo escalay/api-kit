@@ -7,11 +7,13 @@
  * @example
  * const app = await createApp({ db: await openDb('file:.state/state.sqlite'), env: process.env })
  */
+import BRAND from '../brand/brand.js'
+import { BRAND_ASSETS } from './brand.gen.js'
 import { CATALOG } from './features/catalog.js'
 import { flagsOf } from './features/flags.js'
 import { FEATURES } from './features/index.js'
 import { GUIDE_FILES } from './guide.gen.js'
-import { accessOwner, createAgentApi, createOAuth, dbGuardStore, dbOAuthStore, featureTools, parseApiKeys, serveGuide, type Db } from './kit/index.js'
+import { accessOwner, createAgentApi, createBrand, createOAuth, dbGuardStore, dbOAuthStore, featureTools, parseApiKeys, serveGuide, type Db } from './kit/index.js'
 import { guideSkills, inProcess, mcpServerFactory, mountMcp } from './kit/mcp/index.js'
 
 export type Env = { API_KEYS?: string; OAUTH_SIGNING_KEY?: string; ACCESS_TEAM?: string; ACCESS_AUD?: string; PUBLIC_HOST?: string; FEATURES_OFF?: string }
@@ -30,6 +32,8 @@ export const createApp = async ({ db, env }: { db: Db; env: Env }) => {
     tags: FEATURES.map((feature) => feature.tag),
     auth: { realm: '__name__', keys: parseApiKeys(env.API_KEYS), access },
     oauth,
+    // brand/ (`npx @escalay/kit brand` renders it): the favicon and icons, and the name MCP, the docs and the guide show
+    brand: createBrand(BRAND, BRAND_ASSETS),
     // People who open the address land in the browser app (web/, under /app); agents asking for Markdown get the guide // preset:app
     home: 'app', // preset:app
     // In the database, so every instance (each Worker isolate) shares Idempotency-Key answers
@@ -42,7 +46,7 @@ export const createApp = async ({ db, env }: { db: Db; env: Env }) => {
   serveGuide(app, { files: GUIDE_FILES, vars: () => ({}), full: ['llms.txt', 'skills/*'] })
   // The product's own skills (guide/skills/), offered over MCP too: as skills, and each playbook as a prompt
   const { prompts, skills } = await guideSkills({ files: GUIDE_FILES })
-  const factory = mcpServerFactory({ info: { name: '__name__', title: '__title__', version: VERSION }, instructions: '__title__: read the guide at /llms.txt first.', tools: TOOLS, prompts, skills, callApi: inProcess(app) })
+  const factory = mcpServerFactory({ info: { name: '__name__', version: VERSION }, instructions: '__title__: read the guide at /llms.txt first.', tools: TOOLS, prompts, skills, callApi: inProcess(app) })
   mountMcp(app, { factory, allowedHostnames: [env.PUBLIC_HOST ?? 'localhost', 'localhost', '127.0.0.1'] })
   return app
 }

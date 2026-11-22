@@ -18,6 +18,8 @@ mountA2A(app, {
 })
 ```
 
+With `createAgentApi({ brand })` the card's `iconUrl` is the brand's 512 PNG (else its SVG); `brand` here overrides it.
+
 ## Rules
 
 - Pick the 1–3 tools another agent would delegate to; the first skill answers a message that names none.
