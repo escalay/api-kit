@@ -457,6 +457,19 @@ describe('OAuth callers: the client and the grant, not the name', () => {
     expect((await callerWith(app, rotated.access_token)).status).toBe(200)
     expect((await (await refreshWith(app, fresh.refresh_token)).json()).error).toBe('invalid_grant')
     expect((await callerWith(app, rotated.access_token)).status).toBe(401)
+
+    const { registration, granted } = await claimed(app)
+    expect(granted.access_token).toBeTruthy()
+    const claimPoll = () => app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))
+    expect((await (await claimPoll()).json()).error).toBe('expired_token')
+
+    const device = 'urn:ietf:params:oauth:grant-type:device_code'
+    const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+    const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+    await app.request('/oauth/device', { ...form({ user_code, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+    const devicePoll = () => app.request('/oauth/token', form({ grant_type: device, device_code, client_id }))
+    expect((await (await devicePoll()).json()).access_token).toBeTruthy()
+    expect((await (await devicePoll()).json()).error).toBe('invalid_grant')
   })
 })
 
