@@ -192,6 +192,15 @@ describe('kit brand', () => {
     expect(stale.stdout).toContain('stale    brand/ changed since src/brand.gen.ts was written: `kit brand` renders it again')
   })
 
+  it('doctor reads a two-label public suffix as part of the root domain', async () => {
+    for (const [host, note] of [['example.co.uk', null], ['www.example.co.uk', null], ['gw.example.co.uk', 'example.co.uk'], ['gw.example.com.au', 'example.com.au'], ['example.com', null]] as const) {
+      const app = await brandedApp(`suffix-${host}`, { dark: false, websiteUrl: `https://${host}` })
+      expect(cli(app, 'add', 'core', 'brand').status).toBe(0)
+      const lines = cli(app, 'doctor').stdout.split('\n').filter((line) => line.includes('claude.ai shows'))
+      expect(lines, host).toEqual(note ? [`note     claude.ai shows the favicon of ${note} in its connector list, not this server's icon: serve the same icon there (${host} is a subdomain)`] : [])
+    }
+  })
+
   it('doctor leaves brand files alone in an app without the brand part, until it has a brand module', async () => {
     const app = await brandedApp('not-installed', { dark: false })
     expect(cli(app, 'add', 'core').status).toBe(0)

@@ -603,6 +603,9 @@ const brandHosts = (root) => {
   return [...hosts]
 }
 
+/** Public suffixes of two labels, so `example.co.uk` is a root domain; the common ones, not the whole list. */
+const TWO_LABEL_SUFFIXES = ['co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'net.au', 'org.au', 'co.jp', 'co.nz', 'com.br', 'co.za', 'com.mx', 'co.in', 'com.cn', 'com.tr']
+
 /** What `doctor` and `kit brand --check` say of the brand: findings fail, notes never do; nothing for brand files an app without the part or a module keeps. */
 const brandFindings = (root, installed) => {
   const files = brandFiles(root)
@@ -617,10 +620,11 @@ const brandFindings = (root, installed) => {
   const inline = module?.match(/\n {2}png: \{[^}]*?\n {4}96: (["'])([A-Za-z0-9+/=]*)\1/)?.[2]
   const bytes = inline ? Buffer.from(inline, 'base64').length : 0
   if (bytes > INLINE_LIMIT) findings.push(`brand    the inline icon is ${(bytes / 1024).toFixed(1)} KB, over the 10 KB Claude shows: simplify brand/icon.svg (flat colours, no filters, gradients or embedded images), then \`kit brand\``)
-  // claude.ai's connector list asks Google for the favicon of the address's last two labels
+  // claude.ai's connector list asks Google for the favicon of the address's root domain
   for (const host of brandHosts(root)) {
     const labels = host.split('.')
-    if (labels.length > 2 && labels[0] !== 'www' && !/^[\d.]+$/.test(host)) notes.push(`note     claude.ai shows the favicon of ${labels.slice(-2).join('.')} in its connector list, not this server's icon: serve the same icon there (${host} is a subdomain)`)
+    const rootLabels = TWO_LABEL_SUFFIXES.includes(labels.slice(-2).join('.')) ? 3 : 2
+    if (labels.length > rootLabels && labels[0] !== 'www' && !/^[\d.]+$/.test(host)) notes.push(`note     claude.ai shows the favicon of ${labels.slice(-rootLabels).join('.')} in its connector list, not this server's icon: serve the same icon there (${host} is a subdomain)`)
   }
   return { findings, notes }
 }
