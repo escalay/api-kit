@@ -564,9 +564,10 @@ const brandHosts = (root) => {
   return [...hosts]
 }
 
-/** What `doctor` and `kit brand --check` say of the brand: findings fail, notes never do. */
+/** What `doctor` and `kit brand --check` say of the brand: findings fail, notes never do; nothing for brand files an app without the part or a module keeps. */
 const brandFindings = (root, installed) => {
   const files = brandFiles(root)
+  if (!installed && !existsSync(files.module)) return { findings: [], notes: [] }
   if (!existsSync(files.brand) || !existsSync(files.icon)) return { findings: [], notes: installed ? ['note     brand: no brand/brand.ts and brand/icon.svg: `kit add brand` scaffolds them (a brand is optional)'] : [] }
   const findings = []
   const notes = []

@@ -139,6 +139,20 @@ describe('kit brand', () => {
     expect(stale.stdout).toContain('stale    brand/ changed since src/brand.gen.ts was written: `kit brand` renders it again')
   })
 
+  it('doctor leaves brand files alone in an app without the brand part, until it has a brand module', async () => {
+    const app = await brandedApp('not-installed', { dark: false })
+    expect(cli(app, 'add', 'core').status).toBe(0)
+    const plain = cli(app, 'doctor')
+    expect(plain.status, plain.stdout).toBe(0)
+    expect(plain.stdout).not.toMatch(/brand/)
+    // A module the app wrote is checked like any other
+    expect(cli(app, 'brand').status).toBe(0)
+    await writeFile(join(app, 'brand/icon.svg'), ICON.replace('#ffffff', '#000000'))
+    const stale = cli(app, 'doctor')
+    expect(stale.status).toBe(1)
+    expect(stale.stdout).toContain('stale    brand/ changed since src/brand.gen.ts was written: `kit brand` renders it again')
+  })
+
   it('doctor notes an installed brand part with no brand files, without failing', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-brand-'))
     expect(cli(app, 'add', 'core', 'brand').status).toBe(0)
