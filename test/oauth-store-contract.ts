@@ -332,6 +332,24 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect((await claimPoll(app, registration.claim_token)).status).toBe(200)
     })
 
+    it('keeps one grant per registration when two different claim codes are approved at once', async () => {
+      const inner = await make()
+      const families = new Set<string>()
+      const store: OAuthStore = {
+        ...inner,
+        put: async (kind, id, value, expires) => {
+          if (kind === 'registration' && typeof value.family === 'string') families.add(value.family)
+          return inner.put(kind, id, value, expires)
+        },
+      }
+      const { app } = await oauthApp(store)
+      const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+      const { claim_attempt } = await (await app.request('/agent/identity/claim', json({ claim_token: registration.claim_token }))).json()
+      await Promise.all([typeClaim(app, registration.claim), typeClaim(app, claim_attempt)])
+      expect(families.size).toBe(1)
+      expect((await claimPoll(app, registration.claim_token)).status).toBe(200)
+    })
+
     it('makes one code when the consent form is posted twice at once', async () => {
       const { app } = await oauthApp(await make())
       const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Sample', redirect_uris: [REDIRECT] }))).json()
