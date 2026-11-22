@@ -85,7 +85,9 @@ for a look at the kit on Workers by hand)
   `./kit/testing/index.js`); its container build needs nothing from this repo.
 - A new app: `npm create escalay <name>` (`init <dir>`); a new feature in it: `feature <plural-name>`.
 - The app owns the copy. Before taking a new kit version: `doctor`, `diff --patch`, then `update`; edits are kept unless
-  `--force`. A fix that belongs to every app goes back into the kit, with a test.
+  `--force`. When a kept file was changed by the kit since the version `kit.json` records, `update` exits 1 and leaves
+  `kit.json` at that version: `--force`, then make the edits again. A fix that belongs to every app goes back into
+  the kit, with a test.
 
 ## Releasing
 
