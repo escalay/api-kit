@@ -1110,6 +1110,19 @@ describe('guards', () => {
     expect((await refused.json()).code).toBe('too_many_requests')
   })
 
+  it('passes keep and skip to idempotency', async () => {
+    const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`tester:${hash}`) }, guards: { keep: (status) => status < 500, skip: ['/join/*'] } })
+    let runs = 0
+    app.post('/api/v1/missing', (c) => c.json({ run: ++runs }, 404))
+    app.post('/join/abc', (c) => c.json({ run: ++runs }, 201))
+    const send = (path: string) => app.request(path, { method: 'POST', headers: { ...auth, 'idempotency-key': 'k1', 'content-type': 'application/json' }, body: '{}' })
+    await send('/api/v1/missing')
+    expect((await send('/api/v1/missing')).headers.get('idempotent-replayed')).toBe('true')
+    await send('/join/abc')
+    expect((await send('/join/abc')).headers.get('idempotent-replayed')).toBeNull()
+    expect(runs).toBe(3)
+  })
+
   it('offers sortBy and order as one helper', () => {
     const schema = z.object(sortQuery(['saves', 'name'], 'saves'))
     expect(schema.parse({})).toEqual({ sortBy: 'saves' })
