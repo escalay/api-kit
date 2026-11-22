@@ -445,7 +445,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         else await store.put('claim-attempt', key, { ...attempt, tries }, now() + CLAIM_TTL)
         return c.html(page('Wrong code', `<h1>That code doesn’t match</h1><p>${tries >= 5 ? 'Too many tries: ask the agent for a new code.' : 'Check the code the agent gave you and try again.'}</p>`), 400)
       }
-      await store.delete('claim-attempt', key)
+      // Single use: the same form posted twice at once (a double-click) approves once; the other finds the code spent
+      if (!(await take('claim-attempt', key))) return c.html(page('Expired', '<h1>This code expired</h1><p>Ask the agent for a new one.</p>'), 410)
       const registration = await store.get('registration', String(attempt.registration))
       if (!registration) return c.html(page('Expired', '<h1>This registration expired</h1>'), 410)
       // One approval per registration: a second would give its jwt-bearer tokens a grant its claim and refresh tokens lack

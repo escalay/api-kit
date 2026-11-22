@@ -89,6 +89,8 @@ a write there could reset a successor already used.
 - A device code and a claim token give tokens once, however many polls arrive together: the owner's device answer is
   marked collected, and the claim token is taken. The polls that lose hear `invalid_grant` (device) or `expired_token`
   (claim).
+- An approval form posted twice at once (a double-clicked Approve) approves once: the claim page takes the claim
+  attempt, and the other post gets the "This code expired" page (410).
 - Revoking an access token (`/oauth/revoke`) ends only that token; `revokeGrant` ends the sign-in.
 - The store makes single use hold under concurrent requests: `markUsed` (codes, refresh tokens) and `take` are one
   statement each in `dbOAuthStore`, honour expiry, and read a row with no `used` key (a sign-in from before) as

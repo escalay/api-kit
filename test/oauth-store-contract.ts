@@ -323,6 +323,15 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect([raced.status, (await raced.json()).error]).toEqual([400, 'invalid_grant'])
     })
 
+    it('approves a claim code once when the same form is posted twice at once', async () => {
+      const { app } = await oauthApp(await make())
+      const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+      const answers = await Promise.all([typeClaim(app, registration.claim), typeClaim(app, registration.claim)])
+      expect(answers.map((answer) => answer.status).sort()).toEqual([200, 410])
+      expect(await answers.find((answer) => answer.status === 410)!.text()).toContain('This code expired')
+      expect((await claimPoll(app, registration.claim_token)).status).toBe(200)
+    })
+
     it('issues one sign-in for a claim polled from two places at once', async () => {
       const { app } = await oauthApp(await make())
       const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
