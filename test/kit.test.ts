@@ -1093,6 +1093,40 @@ describe('MCP (2026-07-28)', () => {
     const { app } = await sampleApi()
     expect((await app.request('/mcp', { headers: auth })).status).toBe(405)
   })
+
+  /** The sample's routes behind two tools, one with an output schema and one without. */
+  const twoTools = async (structured?: 'always' | 'withOutput') => {
+    const sample = await sampleApi()
+    const getApp = sample.tools[0]!
+    const listApps = mcpTool({ name: 'list_apps', title: 'List apps', description: 'Every app.', input: z.object({}), call: () => ({ path: '/api/v1/apps' }), summarize: (page) => `${page.count} app(s)` })
+    const app = new Hono()
+    mountMcp(app, { factory: mcpServerFactory({ info: { name: 'sample', version: '1.0.0' }, instructions: 'Find apps.', tools: [getApp, listApps], callApi: inProcess(sample.app), ...(structured ? { structured } : {}) }), allowedHostnames: ['localhost'] })
+    const call = async (name: string, args: Record<string, unknown>) => (await (await rpc(app as never, 'tools/call', { name, arguments: args })).json()).result
+    return { app, call }
+  }
+
+  it('by default every JSON answer carries structuredContent', async () => {
+    for (const { call } of [await twoTools(), await twoTools('always')]) {
+      expect((await call('get_app', { id: 'a2' })).structuredContent).toMatchObject({ id: 'a2', name: 'Bravo' })
+      const listed = await call('list_apps', {})
+      expect(listed.content[0]).toEqual({ type: 'text', text: '1 app(s)' })
+      expect(listed.structuredContent).toMatchObject({ count: 1, _embedded: { apps: [{ id: 'a1' }] } })
+    }
+  })
+
+  it('with structured withOutput, a tool without an output schema answers text only, and one with it answers both', async () => {
+    const { app, call } = await twoTools('withOutput')
+    const listed = await call('list_apps', {})
+    expect(listed.content).toEqual([{ type: 'text', text: '1 app(s)' }])
+    expect(listed).not.toHaveProperty('structuredContent')
+    const one = await call('get_app', { id: 'a2' })
+    expect(one.content[0]).toEqual({ type: 'text', text: 'Bravo (a2)' })
+    expect(one.structuredContent).toMatchObject({ id: 'a2', name: 'Bravo' })
+    // Listings are unchanged: the schema is still declared where a tool has one
+    const { tools } = (await (await rpc(app as never, 'tools/list')).json()).result
+    expect(tools.find((tool: { name: string }) => tool.name === 'get_app').outputSchema).toMatchObject({ type: 'object' })
+    expect(tools.find((tool: { name: string }) => tool.name === 'list_apps')).not.toHaveProperty('outputSchema')
+  })
 })
 
 describe('people through Cloudflare Access', () => {

@@ -36,7 +36,7 @@ export type McpTool<Input extends z.ZodObject = z.ZodObject> = {
   /** When to use it and what comes back — the model chooses tools by this. */
   description: string
   input: Input
-  /** The route's 200 schema, when its shape is fixed: the JSON (always sent as `structuredContent`) must match it. */
+  /** The route's 200 schema, when its shape is fixed: the JSON (sent as `structuredContent`) must match it. */
   output?: z.ZodTypeAny
   annotations?: ToolAnnotations
   call: (args: z.infer<Input>) => ApiCall
@@ -164,8 +164,16 @@ export const toolsHashOf = (tools: McpTool[], resources: McpResource[] = []) => 
 /** A factory that also carries its server info and tools, so `mountMcp` can publish the card and the guide can list the tools. */
 export type AgentMcpFactory = McpServerFactory & { info: McpServerInfo; tools: McpTool[]; resources: McpResource[]; instructions?: string; prompts?: McpPrompt[] }
 
-/** `toolsTtlMs`: how long clients may cache `tools/list` (default an hour); shorter when the tools change without a deploy. */
-export const mcpServerFactory = ({ info, instructions, tools, resources = [], prompts = [], skills, callApi, waitMs = 60_000, toolsTtlMs = HOUR }: { info: McpServerInfo; instructions: string; tools: McpTool[]; resources?: McpResource[]; prompts?: McpPrompt[]; skills?: SkillCatalog; callApi: CallApi; waitMs?: number; toolsTtlMs?: number }): AgentMcpFactory => Object.assign(() => {
+/**
+ * The MCP server over the tools. `toolsTtlMs`: how long clients may cache `tools/list` (default an hour); shorter when
+ * the tools change without a deploy. `structured`: when a tool's JSON answer rides as `structuredContent`: `'always'`
+ * (the default; the app's CLI reads it for `--json`), or `'withOutput'`, only for a tool with an `output` schema, for
+ * clients that show `structuredContent` instead of the text.
+ *
+ * @example
+ * mcpServerFactory({ info, instructions, tools, callApi: inProcess(app), structured: 'withOutput' })
+ */
+export const mcpServerFactory = ({ info, instructions, tools, resources = [], prompts = [], skills, callApi, waitMs = 60_000, toolsTtlMs = HOUR, structured = 'always' }: { info: McpServerInfo; instructions: string; tools: McpTool[]; resources?: McpResource[]; prompts?: McpPrompt[]; skills?: SkillCatalog; callApi: CallApi; waitMs?: number; toolsTtlMs?: number; structured?: 'always' | 'withOutput' }): AgentMcpFactory => Object.assign(() => {
   // Lists only change with a deploy: let clients cache them for an hour
   const cached = { ttlMs: HOUR, cacheScope: 'private' as const }
   const server = new McpServer(info, { instructions: instructionsWithSkills(instructions, skills), cacheHints: { 'server/discover': cached, 'tools/list': { ...cached, ttlMs: toolsTtlMs }, 'prompts/list': cached, 'resources/list': cached, 'resources/templates/list': cached } })
@@ -184,7 +192,7 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
         if (!response.ok) return { isError: true, content: [{ type: 'text', text: problemText(json, response.status) }], _meta: { [PROBLEM_META]: problemOf(json, response.status), ...listed } }
         return {
           content: [{ type: 'text', text: tool.summarize(json, args as never) }, ...(tool.links?.(json) ?? []).map((link) => ({ type: 'resource_link' as const, ...link }))],
-          ...(json && typeof json === 'object' ? { structuredContent: json } : {}),
+          ...(json && typeof json === 'object' && (structured === 'always' || tool.output) ? { structuredContent: json } : {}),
           _meta: listed,
         }
       },

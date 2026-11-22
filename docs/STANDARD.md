@@ -244,7 +244,9 @@ fact, steps with checkable done-when criteria.
 - **Tools are thin calls to the routes**, run in-process with the caller's credentials (`inProcess(app)`), so the API
   and MCP cannot drift. Names `snake_case` verbs (`search_recipes`); `title`, a description that says when to use it;
   `annotations` (read-only, idempotent, closed-world unless a tool writes or calls out); `outputSchema` = the route's
-  2xx schema, with its JSON as `structuredContent`; a short text summary first; images as `resource_link`s.
+  2xx schema, with its JSON as `structuredContent`; a short text summary first; images as `resource_link`s. An app
+  whose clients show `structuredContent` instead of the text may send it only for tools with an output schema
+  (`structured: 'withOutput'`); the default sends it with every JSON answer, which the app's CLI reads for `--json`.
 - Errors are tool results with `isError: true` and the problem's one-line summary, never protocol errors; the problem
   itself (with its `status`) rides in `_meta["api-kit/problem"]`. Hints: read-only by default only for a `GET`.
 - `instructions` on discover: what the server is for and the order to use tools in (not a repeat of descriptions).
