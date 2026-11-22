@@ -53,6 +53,12 @@ describe('OAuth for agents', () => {
     expect(text).toContain('/oauth/device_authorization')
   })
 
+  it('names no example resource in the scopes of the OpenAPI document', async () => {
+    const { app } = await sampleApi()
+    const doc = await (await app.request('/openapi.json')).json()
+    expect(doc.components.securitySchemes.oauth.flows.authorizationCode.scopes).toEqual({ read: 'Read everything', write: 'Make changes' })
+  })
+
   it('publishes a sitemap and a Personal Agent Protocol document bound to the issuer', async () => {
     const { app } = await sampleApi()
     expect(await (await app.request('/sitemap.xml')).text()).toContain(`<loc>${ORIGIN}/llms.txt</loc>`)
