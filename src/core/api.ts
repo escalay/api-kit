@@ -182,7 +182,7 @@ export const createAgentApi = (config: AgentApiConfig) => {
     app.openAPIRegistry.registerComponent('securitySchemes', 'oauth', {
       type: 'oauth2',
       description: 'An OAuth token the owner approved: authorization code with PKCE (clients register at `/oauth/register`), or agent registration as `/auth.md` describes.',
-      flows: { authorizationCode: { authorizationUrl: '/oauth/authorize', tokenUrl: '/oauth/token', refreshUrl: '/oauth/token', scopes: Object.fromEntries(SCOPES.map((scope) => [scope, scope === 'read' ? 'Read everything' : 'Make changes (boards)'])) } },
+      flows: { authorizationCode: { authorizationUrl: '/oauth/authorize', tokenUrl: '/oauth/token', refreshUrl: '/oauth/token', scopes: Object.fromEntries(SCOPES.map((scope) => [scope, scope === 'read' ? 'Read everything' : 'Make changes'])) } },
     })
     config.oauth.mount(app)
   }
