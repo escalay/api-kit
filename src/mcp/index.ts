@@ -298,15 +298,18 @@ export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, all
     if (rejected) return rejected
     const greeting = await modernInitialize(c, factory)
     if (greeting) return greeting
-    const caller = c.get('caller' as never) as { kind: string; name?: string; email?: string } | undefined
+    const caller = c.get('caller' as never) as { kind: string; name?: string; email?: string; client?: string; grant?: string } | undefined
     const authInfo: AuthInfo = {
       token: (c.req.header('authorization') ?? '').replace(/^bearer\s+/i, ''),
-      clientId: caller?.name ?? caller?.email ?? 'anonymous',
+      // An OAuth agent by its client_id: the name is the one it gave itself, for display
+      clientId: caller?.client ?? caller?.name ?? caller?.email ?? 'anonymous',
       scopes: [],
       // A static key never expires; the SDK treats a missing expiry as expired
       expiresAt: Math.floor(Date.now() / 1000) + 3600,
       // Tools call the routes in-process: pass the caller's credentials, and the public origin so links stay absolute
       extra: {
+        ...(caller?.grant ? { grant: caller.grant } : {}),
+        ...(caller?.name ? { name: caller.name } : {}),
         headers: {
           ...Object.fromEntries(FORWARDED.flatMap((name) => (c.req.header(name) ? [[name, c.req.header(name)!]] : []))),
           'x-forwarded-proto': new URL(originOf(c)).protocol.replace(':', ''),

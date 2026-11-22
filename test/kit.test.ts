@@ -14,6 +14,8 @@ import { guideSkills, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMc
 import { guideGaps, guideRoutes, lintOpenApi, toolRoutes } from '../src/testing/index.js'
 import { migrate, openDb } from '../src/db/index.js'
 import { OAUTH_MIGRATIONS } from '../src/oauth/schema.js'
+import { memoryOAuthStore } from '../src/oauth/index.js'
+import { oauthApp, signedIn } from './oauth-store-contract.js'
 
 const { key, hash } = mintApiKey('test')
 
@@ -1189,6 +1191,19 @@ describe('MCP (2026-07-28)', () => {
     expect(withoutLogo.result.contents).toHaveLength(1)
     expect((await (await rpc(app, 'resources/read', { uri: 'sample://apps/a9' })).json()).error.message).toContain('404 not_found')
     expect(await (await app.request('/agents/mcp.md')).text()).toContain('- `sample://apps/{id}` — An app: The app and its logo.')
+  })
+
+  it('names the OAuth client_id in authInfo, not the display name, and still forwards the request headers', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    const seen: { clientId?: string; extra?: Record<string, unknown> }[] = []
+    const callInProcess = inProcess(app)
+    const whoAmI = mcpTool({ name: 'who_am_i', title: 'Who am I', description: 'The caller.', input: z.object({}), call: () => ({ path: '/api/v1/things' }), summarize: (json) => String((json.caller as { client: string }).client) })
+    mountMcp(app, { factory: mcpServerFactory({ info: { name: 'sample', version: '1.0.0' }, instructions: 'Sample.', tools: [whoAmI], callApi: (call, auth) => (seen.push({ clientId: auth?.clientId, extra: auth?.extra }), callInProcess(call, auth)) }), allowedHostnames: ['localhost'] })
+    const { client_id, tokens } = await signedIn(app, { name: 'Sample' })
+    const call = await (await rpc(app, 'tools/call', { name: 'who_am_i', arguments: {} }, { authorization: `Bearer ${tokens.access_token}` })).json()
+    // The tool's in-process call reached the route as the same caller: the headers rode along
+    expect(call.result.content[0]).toEqual({ type: 'text', text: client_id })
+    expect(seen[0]).toMatchObject({ clientId: client_id, extra: { name: 'Sample', grant: expect.any(String), headers: { authorization: `Bearer ${tokens.access_token}` } } })
   })
 
   it('answers GET with 405 as the spec asks', async () => {

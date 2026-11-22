@@ -124,8 +124,10 @@ export const mountA2A = (app: Hono<any, any, any>, config: A2AConfig) => {
 
   app.get(WELL_KNOWN.agentCard, (c: Context) => sendPublic(c, JSON.stringify(agentCard(originOf(c), config), null, 2), 'application/json'))
 
+  /** Whose tasks these are: an OAuth agent by its client and grant (as the guards key it), never by its display name. */
   const ownerOf = (c: Context) => {
-    const caller = c.get('caller' as never) as { kind: string; name?: string; email?: string } | undefined
+    const caller = c.get('caller' as never) as { kind: string; name?: string; email?: string; client?: string; grant?: string } | undefined
+    if (caller?.kind === 'agent' && caller.client) return `agent:${caller.client}/${caller.grant ?? '-'}`
     return `${caller?.kind ?? 'anonymous'}:${caller?.name ?? caller?.email ?? ''}`
   }
   const authOf = (c: Context): AuthInfo => ({

@@ -66,8 +66,10 @@ export const memoryGuardStore = ({ maxEntries = 2000 }: { maxEntries?: number } 
   }
 }
 
+/** Who the guards count: an OAuth agent by its client and grant (never the name it gave itself), else name or email. */
 const callerOf = (c: Context) => {
-  const caller = c.get('caller' as never) as { kind: string; name?: string; email?: string } | undefined
+  const caller = c.get('caller' as never) as { kind: string; name?: string; email?: string; client?: string; grant?: string } | undefined
+  if (caller?.kind === 'agent' && caller.client) return `agent:${caller.client}/${caller.grant ?? '-'}`
   return caller ? `${caller.kind}:${caller.name ?? caller.email}` : `ip:${c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? 'local'}`
 }
 

@@ -14,13 +14,17 @@
  * request; refresh tokens (30 days, rotated on each use; a used one sent again revokes every refresh token of that
  * sign-in), codes and registrations live in the app's store as hashes. Nothing is granted before a person approves: an
  * unclaimed registration can't get a token.
+ * A caller is known by its client (the client_id) and its grant (one approval: every token from one sign-in, rotated
+ * or not, shares it), never by the name it registered, which is for display. Revoking a grant ends its access tokens
+ * at once. Single use under concurrent requests (codes, refresh tokens) and replay handling follow rules after
+ * cloudflare/workers-oauth-provider and better-auth (both MIT), written again here with their tests.
  *
  * @example
  * const oauth = createOAuth({ name: 'Cookbook', signingKey: env.OAUTH_SIGNING_KEY, store, owner: (c) => ownerOf(c) })
  * oauth.mount(app)                                                    // the metadata, the endpoints and auth.md
  * app.use('*', authenticate({ realm: 'cookbook', keys, tokens: oauth.verify, resourceMetadata: oauth.resourceMetadataFor }))
  */
-import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
 import type { Context, Hono } from 'hono'
 import { calculateJwkThumbprint, exportJWK, importJWK, jwtVerify, SignJWT, type JWK } from 'jose'
 import { OAUTH_OPEN_PATHS, SCOPES } from '../core/auth.js'
@@ -46,6 +50,8 @@ const DEVICE_INTERVAL = 5
 /** Wrong device codes a signed-in person may type in a window before the page refuses for the rest of it. */
 const DEVICE_TRIES = 5
 const DEVICE_TRIES_WINDOW = 600
+/** A revoke marker outlives anything issued behind it: a code or device approval collected late, then its refresh token. */
+const REVOKED_TTL = REFRESH_TTL + CODE_TTL + DEVICE_TTL
 /** No vowels (no words), nothing that reads as another letter or a digit (RFC 8628 §6.1). */
 const USER_CODE_ALPHABET = 'BCDFGHJKLMNPQRSTVWXZ'
 
@@ -61,13 +67,21 @@ export type OAuthConfig = {
   owners?: string[]
   /** Extra fields for the authorization server metadata, e.g. `poppy_domains`. */
   metadata?: Record<string, unknown>
+  /**
+   * Seconds in which a used refresh token sent again (a client that lost the answer and retried) gets the same
+   * successor, never a second one. 0 (the default): any replay revokes the grant.
+   */
+  reuseGraceSeconds?: number
 }
 
-export type TokenCaller = { kind: 'agent'; name: string; scopes: string[]; owner: string }
-type Grant = { client: string; name: string; owner: string; scopes: string[] }
+/** An OAuth caller: `client` is its client_id, `grant` the approval its token came from, `name` only for display. */
+export type TokenCaller = { kind: 'agent'; name: string; client: string; grant?: string; scopes: string[]; owner: string }
+/** What a token is issued for; `grant` is the approval (stored as `family` on refresh rows). */
+type Grant = { client: string; name: string; owner: string; scopes: string[]; grant: string }
 
 const now = () => Math.floor(Date.now() / 1000)
 const token = (prefix: string) => `${prefix}_${randomBytes(24).toString('base64url')}`
+const newGrant = () => randomBytes(12).toString('base64url')
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
 const escape = (text: string) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`)
@@ -114,8 +128,12 @@ input{background:var(--bg);color:var(--fg);letter-spacing:.3em;width:9ch;text-al
 
 export const createOAuth = (config: OAuthConfig) => {
   const { store } = config
+  const jwk = JSON.parse(config.signingKey) as JWK
+  // A secret of its own, from the signing key: successors are derived, so a retry gets the same one and none is stored
+  const successorSecret = createHash('sha256').update(`api-kit refresh successor\0${jwk.d ?? config.signingKey}`).digest()
+  const successorOf = (refresh: string) => `rt_${createHmac('sha256', successorSecret).update(refresh).digest('base64url')}`
+  const reuseGrace = config.reuseGraceSeconds ?? 0
   const ready = (async () => {
-    const jwk = JSON.parse(config.signingKey) as JWK
     const privateKey = await importJWK(jwk, 'ES256')
     const { d: _d, ...publicJwk } = jwk
     const kid = await calculateJwkThumbprint(publicJwk)
@@ -128,19 +146,40 @@ export const createOAuth = (config: OAuthConfig) => {
     return new SignJWT(claims).setProtectedHeader({ alg: 'ES256', kid }).setIssuer(origin).setIssuedAt().setExpirationTime(now() + ttl).sign(privateKey)
   }
 
-  const issue = async (origin: string, grant: { client: string; name: string; owner: string; scopes: string[]; resource?: string }) => {
+  const issue = async (origin: string, grant: Grant) => {
     const jti = randomBytes(12).toString('base64url')
-    const access = await sign({ sub: grant.owner, client_id: grant.client, name: grant.name, scope: grant.scopes.join(' '), jti }, ACCESS_TTL, origin)
-    await store.put('access', jti, { client: grant.client }, now() + ACCESS_TTL)
+    const access = await sign({ sub: grant.owner, client_id: grant.client, name: grant.name, grant: grant.grant, scope: grant.scopes.join(' '), jti }, ACCESS_TTL, origin)
+    await store.put('access', jti, { client: grant.client, grant: grant.grant }, now() + ACCESS_TTL)
     return { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL, scope: grant.scopes.join(' ') }
   }
 
-  /** A new refresh token in a family: every token rotated from one sign-in shares it, so a replay can revoke them all. */
-  const refreshFor = async (grant: Grant, family = randomBytes(12).toString('base64url')) => {
-    const refresh = token('rt')
-    await store.put('refresh', sha(refresh), { ...grant, family, used: false }, now() + REFRESH_TTL)
+  /** A refresh token in its grant's family: every token rotated from one sign-in shares it, so a replay can revoke them all. */
+  const refreshFor = async ({ grant, ...rest }: Grant, refresh = token('rt')) => {
+    await store.put('refresh', sha(refresh), { ...rest, family: grant, used: false }, now() + REFRESH_TTL)
     return refresh
   }
+
+  /** The store's own `markUsed`, or a read then a write: safe only one request at a time. */
+  const markUsed = (kind: string, id: string, keepUntil?: number) =>
+    store.markUsed
+      ? store.markUsed(kind, id, keepUntil)
+      : store.get(kind, id).then(async (value) => {
+          if (!value || value.used) return null
+          const marked = { ...value, used: true, usedAt: now() }
+          await store.put(kind, id, marked, keepUntil ?? now() + CODE_TTL)
+          return marked
+        })
+
+  /** The store's own `take`, or a read then a delete: safe only one request at a time. */
+  const take = async (kind: string, id: string) => {
+    if (store.take) return store.take(kind, id)
+    const value = await store.get(kind, id)
+    if (value) await store.delete(kind, id)
+    return value
+  }
+
+  /** Ends one approval at once: its access tokens fail `verify`, its refresh tokens are refused. */
+  const revokeGrant = (grant: string) => store.put('revoked-family', grant, {}, now() + REVOKED_TTL)
 
   /** The protected-resource metadata URL for a request: suffixed with `/mcp` for MCP, the bare one elsewhere. */
   const resourceMetadataFor = (c: Context) => `${originOf(c)}/.well-known/oauth-protected-resource${c.req.path.startsWith('/mcp') ? '/mcp' : ''}`
@@ -151,9 +190,12 @@ export const createOAuth = (config: OAuthConfig) => {
     const origin = originOf(c)
     const { payload } = await jwtVerify(jwt, publicKey, { issuer: origin, algorithms: ['ES256'] }).catch(() => ({ payload: null }))
     if (!payload || typeof payload.jti !== 'string' || typeof payload.client_id !== 'string') return null
-    if (!(await store.get('access', payload.jti))) return null
-    if (await store.get('revoked-client', payload.client_id)) return null
-    return { kind: 'agent', name: String(payload.name ?? payload.client_id), scopes: String(payload.scope ?? '').split(' ').filter(Boolean), owner: String(payload.sub) }
+    // Tokens from before grants carry none: they run to their hour, known by their client
+    const grant = typeof payload.grant === 'string' ? payload.grant : undefined
+    // One round trip: the issued row and both revocation markers at once
+    const [issued, revokedClient, revokedGrant] = await Promise.all([store.get('access', payload.jti), store.get('revoked-client', payload.client_id), grant ? store.get('revoked-family', grant) : null])
+    if (!issued || revokedClient || revokedGrant) return null
+    return { kind: 'agent', name: String(payload.name ?? payload.client_id), client: payload.client_id, ...(grant ? { grant } : {}), scopes: String(payload.scope ?? '').split(' ').filter(Boolean), owner: String(payload.sub) }
   }
 
   const authorizationServer = (origin: string) => ({
@@ -230,7 +272,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
    (\`authorization_pending\` until they do). Success returns an access token, a \`refresh_token\` and an \`identity_assertion\`.
 5. When the access token expires, refresh it: \`grant_type=refresh_token&refresh_token=…\` (30 days, a new one each
    time: keep only the newest; sending a used one again revokes them all). Within a day of the claim, the assertion
-   works too: \`grant_type=${JWT_BEARER}&assertion=…\`.
+   works too, until the sign-in is revoked: \`grant_type=${JWT_BEARER}&assertion=…\`.
 
 ## C. A device or CLI without a browser (RFC 8628)
 
@@ -253,7 +295,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
 | \`authorization_pending\` | the owner hasn't approved yet; keep polling at \`interval\` |
 | \`slow_down\` | you polled faster than \`interval\`; wait the new \`interval\` (5 seconds more) from now on |
 | \`expired_token\` | the 10-minute code window passed; ask for a new claim or device code |
-| \`invalid_grant\` | the code, refresh token or assertion is used, expired or revoked; start again (a refresh token sent twice revokes its whole sign-in) |
+| \`invalid_grant\` | the code, refresh token, assertion or claim token is used, expired or revoked; start again (a code or a refresh token sent twice revokes its whole sign-in) |
 | \`access_denied\` | the owner said no |
 `
 
@@ -323,15 +365,17 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if (!owner || (site && site !== 'same-origin')) return c.html(page('Not allowed', '<h1>Not allowed</h1><p>Approve from the page this site showed you, signed in.</p>'), 403)
       const body = await bodyOf(c)
       const consent = body.ticket ? await store.get('consent', body.ticket) : null
-      if (!consent || consent.owner !== owner) return c.html(page('Expired', '<h1>This approval expired</h1><p>Start again from the app that asked.</p>'), 400)
-      await store.delete('consent', body.ticket!)
+      const expired = () => c.html(page('Expired', '<h1>This approval expired</h1><p>Start again from the app that asked.</p>'), 400)
+      if (!consent || consent.owner !== owner) return expired()
+      // Single use: a double-clicked Allow makes one code, never two grants
+      if (!(await take('consent', body.ticket!))) return expired()
       const params = consent as Record<string, string>
       const origin = originOf(c)
       if (body.decision !== 'allow') return c.redirect(backTo(params.redirect_uri!, origin, { error: 'access_denied', error_description: 'The owner said no.', state: params.state }), 302)
       const checked = await authorizeParams(c, params)
       if ('error' in checked) return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(checked.error!)}</p>`), 400)
       const code = token('code')
-      await store.put('code', sha(code), { client: params.client_id, redirectUri: params.redirect_uri, challenge: params.code_challenge, scopes: checked.scopes, owner, name: checked.client.name, resource: params.resource ?? null }, now() + CODE_TTL)
+      await store.put('code', sha(code), { client: params.client_id, redirectUri: params.redirect_uri, challenge: params.code_challenge, scopes: checked.scopes, owner, name: checked.client.name, resource: params.resource ?? null, grant: newGrant(), used: false }, now() + CODE_TTL)
       return c.redirect(backTo(params.redirect_uri!, origin, { code, state: params.state }), 302)
     })
 
@@ -346,7 +390,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const claimToken = token('clm')
       const expires = now() + REGISTRATION_TTL
       const name = typeof body.client_name === 'string' && body.client_name.trim() ? body.client_name.trim().slice(0, 80) : `Agent ${registrationId.slice(4, 10)}`
-      await store.put('registration', registrationId, { name, type: body.type, claimed: false, email: body.login_hint ?? null }, expires)
+      // Its grant from the start, so approvals racing for it can't write two
+      await store.put('registration', registrationId, { name, type: body.type, claimed: false, email: body.login_hint ?? null, family: newGrant() }, expires)
       await store.put('claim-token', sha(claimToken), { registration: registrationId }, expires)
       const assertion = await sign({ sub: registrationId, typ: 'agent_identity' }, REGISTRATION_TTL, origin)
       const base = { registration_id: registrationId, registration_type: body.type, claim_url: `${origin}/agent/identity/claim`, claim_token: claimToken, claim_token_expires: new Date(expires * 1000).toISOString(), post_claim_scopes: [...SCOPES] }
@@ -403,10 +448,14 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         else await store.put('claim-attempt', key, { ...attempt, tries }, now() + CLAIM_TTL)
         return c.html(page('Wrong code', `<h1>That code doesn’t match</h1><p>${tries >= 5 ? 'Too many tries: ask the agent for a new code.' : 'Check the code the agent gave you and try again.'}</p>`), 400)
       }
-      await store.delete('claim-attempt', key)
+      // Single use: the same form posted twice at once (a double-click) approves once; the other finds the code spent
+      if (!(await take('claim-attempt', key))) return c.html(page('Expired', '<h1>This code expired</h1><p>Ask the agent for a new one.</p>'), 410)
       const registration = await store.get('registration', String(attempt.registration))
       if (!registration) return c.html(page('Expired', '<h1>This registration expired</h1>'), 410)
-      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner }, now() + REGISTRATION_TTL)
+      // One approval per registration: a second would give its jwt-bearer tokens a grant its claim and refresh tokens lack
+      if (registration.claimed) return c.html(page('Already approved', `<h1>Already approved</h1><p>${escape(String(registration.name))} was approved already; this code is spent. You can close this page.</p>`), 409)
+      // One grant for the claim: its claim, refresh and jwt-bearer tokens all carry it (made at registration; older rows get one here)
+      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: registration.family ?? newGrant() }, now() + REGISTRATION_TTL)
       return c.html(page('Approved', `<h1>Approved</h1><p>${escape(String(registration.name))} can now use ${escape(config.name)}. You can close this page.</p>`))
     })
 
@@ -455,6 +504,9 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         await store.put('device-tries', triesKey, { count: Number(tries?.count ?? 0) + 1, until }, until)
         return { refused: c.html(deviceForm(typed, 'That code doesn’t match a device waiting here. Check it, or ask the device for a new one.'), 400) }
       }
+      // The client was revoked (or its registration expired) while the device waited: nothing to approve
+      const [client, revoked] = await Promise.all([store.get('client', String(record.client)), store.get('revoked-client', String(record.client))])
+      if (!client || revoked) return { refused: c.html(page('No longer allowed', '<h1>This device can’t be connected</h1><p>Its app was revoked or its registration expired. Start again on the device.</p>'), 400) }
       return { record, deviceKey: String(entry.device) }
     }
 
@@ -486,8 +538,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const found = await deviceFor(c, approver.owner, body.user_code ?? '')
       if ('refused' in found) return found.refused
       if (body.decision !== 'allow' && body.decision !== 'deny') return c.html(deviceConsent(found.record, body.user_code ?? '', approver.owner))
-      // Single use: the typed code is gone either way, and the device's code goes when it collects the answer
-      await store.delete('device-user', userCodeKey(body.user_code ?? ''))
+      // Single use: the typed code is gone either way, and the device's code goes when it collects the answer. Taken, so
+      // two posts at once (a double-click, or Allow and Deny from two tabs) write one answer
+      if (!(await take('device-user', userCodeKey(body.user_code ?? ''))))
+        return c.html(deviceForm(body.user_code ?? '', 'That code was just answered. Ask the device for a new one if it still waits.'), 400)
       // Its own row: the device's polls rewrite the device row, and must never write over the answer
       await store.put('device-decision', found.deviceKey, { status: body.decision === 'allow' ? 'approved' : 'denied', owner: approver.owner }, Number(found.record.expiresAt) + DEVICE_TTL)
       if (body.decision === 'deny') return c.html(page('Denied', `<h1>Denied</h1><p>${escape(String(found.record.name))} gets nothing. You can close this page.</p>`))
@@ -499,40 +553,66 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const origin = originOf(c)
       switch (body.grant_type) {
         case 'authorization_code': {
-          const grant = body.code ? await store.get('code', sha(body.code)) : null
-          if (!grant) return oauthError(c, 400, 'invalid_grant', 'This code is used, expired or unknown.')
-          await store.delete('code', sha(body.code!))
-          if (grant.client !== body.client_id || grant.redirectUri !== body.redirect_uri) return oauthError(c, 400, 'invalid_grant', 'client_id or redirect_uri differ from the authorization request.')
-          const challenge = createHash('sha256').update(body.code_verifier ?? '').digest('base64url')
-          if (!body.code_verifier || !same(challenge, String(grant.challenge))) return oauthError(c, 400, 'invalid_grant', 'The code_verifier doesn’t match the code_challenge.')
-          const issued = { client: String(grant.client), name: String(grant.name), owner: String(grant.owner), scopes: grant.scopes as string[] }
+          const key = sha(body.code ?? '')
+          const row = body.code ? await store.get('code', key) : null
+          if (!row) return oauthError(c, 400, 'invalid_grant', 'This code is used, expired or unknown.')
+          // Codes from before grants carry none: the code's own hash names it, so a replay still finds it
+          const grant = String(row.grant ?? key)
+          const verified = Boolean(body.code_verifier) && same(createHash('sha256').update(body.code_verifier ?? '').digest('base64url'), String(row.challenge))
+          // PKCE binds the code, so redirect_uri is checked only when sent (OAuth 2.1 §10.2)
+          const sameRequest = row.client === body.client_id && (!body.redirect_uri || body.redirect_uri === row.redirectUri)
+          // Used once, even by a failed exchange, and kept until it expires: a second valid request for it ends the
+          // grant the first one got, since either could be the thief (OAuth 2.1 §4.1.3); a wrong verifier ends nothing
+          if (!(await markUsed('code', key))) {
+            if (verified && sameRequest) await revokeGrant(grant)
+            return oauthError(c, 400, 'invalid_grant', 'This code is used, expired or unknown.')
+          }
+          if (!sameRequest) return oauthError(c, 400, 'invalid_grant', 'client_id or redirect_uri differ from the authorization request.')
+          if (!verified) return oauthError(c, 400, 'invalid_grant', 'The code_verifier doesn’t match the code_challenge.')
+          if (await store.get('revoked-client', String(row.client))) return oauthError(c, 400, 'invalid_grant', 'This client was revoked: register again.')
+          const issued = { client: String(row.client), name: String(row.name), owner: String(row.owner), scopes: row.scopes as string[], grant }
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
         }
         case 'refresh_token': {
-          const key = sha(body.refresh_token ?? '')
-          const held = body.refresh_token ? await store.get('refresh', key) : null
+          const refresh = body.refresh_token ?? ''
+          const key = sha(refresh)
+          const held = refresh ? await store.get('refresh', key) : null
           if (!held) return oauthError(c, 400, 'invalid_grant', 'This refresh token is expired, revoked or unknown: authorize again.')
           // Rows from before families carry none: the token's own hash starts one
-          const family = String(held.family ?? key)
-          if (held.used) {
-            await store.put('revoked-family', family, {}, now() + REFRESH_TTL)
+          const grant = String(held.family ?? key)
+          if ((await store.get('revoked-family', grant)) || (await store.get('revoked-client', String(held.client)))) return oauthError(c, 400, 'invalid_grant', 'This refresh token is revoked: authorize again.')
+          const issued = { client: String(held.client), name: String(held.name), owner: String(held.owner), scopes: held.scopes as string[], grant }
+          const successor = successorOf(refresh)
+          // Kept as used, not deleted, so a replay is recognised for as long as the newest token of its family lives
+          if (!(await markUsed('refresh', key, now() + REFRESH_TTL))) {
+            // A retry inside the window gets the successor the first answer held, while it is unused: never a second branch
+            const usedAt = Number((await store.get('refresh', key))?.usedAt ?? 0)
+            if (reuseGrace > 0 && usedAt && now() - usedAt <= reuseGrace && !(await store.get('refresh', sha(successor)))?.used)
+              return c.json({ ...(await issue(origin, issued)), refresh_token: successor }, 200, { 'cache-control': 'no-store' })
+            await revokeGrant(grant)
             return oauthError(c, 400, 'invalid_grant', 'This refresh token was already used, so every refresh token from this sign-in is revoked: authorize again.')
           }
-          if ((await store.get('revoked-family', family)) || (await store.get('revoked-client', String(held.client)))) return oauthError(c, 400, 'invalid_grant', 'This refresh token is revoked: authorize again.')
-          // Kept as used, not deleted, so a replay is recognised for as long as the newest token of its family lives
-          await store.put('refresh', key, { ...held, used: true }, now() + REFRESH_TTL)
-          const issued = { client: String(held.client), name: String(held.name), owner: String(held.owner), scopes: held.scopes as string[] }
-          return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued, family) }, 200, { 'cache-control': 'no-store' })
+          return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued, successor) }, 200, { 'cache-control': 'no-store' })
         }
         case CLAIM_GRANT: {
           const held = body.claim_token ? await store.get('claim-token', sha(body.claim_token)) : null
           if (!held) return oauthError(c, 400, 'expired_token', 'The claim window closed: register again.')
-          const registration = await store.get('registration', String(held.registration))
+          const client = String(held.registration)
+          // revokeClient drops the registration: its marker says so before the registration reads as expired
+          const [registration, revokedClient] = await Promise.all([store.get('registration', client), store.get('revoked-client', client)])
+          if (revokedClient) return oauthError(c, 400, 'invalid_grant', 'This agent was revoked: register again.')
           if (!registration) return oauthError(c, 400, 'expired_token', 'The registration expired: register again.')
           if (!registration.claimed) return oauthError(c, 400, 'authorization_pending', 'The owner hasn’t typed the code yet.')
-          await store.delete('claim-token', sha(body.claim_token!))
-          const issued = { client: String(held.registration), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES] }
-          const assertion = await sign({ sub: held.registration, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
+          // Single use under concurrent polls: only the one that takes the claim token gets tokens
+          if (!(await take('claim-token', sha(body.claim_token!)))) return oauthError(c, 400, 'expired_token', 'The claim window closed: register again.')
+          // A registration claimed before grants carries none: its id is the grant, the same in every token
+          const grant = String(registration.family ?? client)
+          // Read after the take, so a revoke that landed while this poll ran is seen: a refresh row issued into a revoked
+          // grant would outlive the marker and undo the revoke
+          const [revokedGrant, revokedLate] = await Promise.all([store.get('revoked-family', grant), store.get('revoked-client', client)])
+          if (revokedGrant || revokedLate) return oauthError(c, 400, 'invalid_grant', 'This sign-in is revoked: register again.')
+          const issued = { client, name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant }
+          const assertion = await sign({ sub: client, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued), identity_assertion: assertion, assertion_expires: new Date((now() + REGISTRATION_TTL) * 1000).toISOString() }, 200, { 'cache-control': 'no-store' })
         }
         case DEVICE_GRANT: {
@@ -540,18 +620,25 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const record = body.device_code ? await store.get('device', key) : null
           if (!record || record.client !== body.client_id) return oauthError(c, 400, 'invalid_grant', 'This device_code is unknown or belongs to another client_id: start again at /oauth/device_authorization.')
           const keepUntil = Number(record.expiresAt) + DEVICE_TTL
+          if (await store.get('revoked-client', String(record.client))) {
+            await store.delete('device', key)
+            return oauthError(c, 400, 'invalid_grant', 'This client was revoked: register again.')
+          }
           if (now() >= Number(record.expiresAt)) {
             await store.delete('device', key)
             return oauthError(c, 400, 'expired_token', 'The code expired before the owner approved it: start again at /oauth/device_authorization.')
           }
+          // The owner's answer is collected once, however many polls arrive together: the decision row is marked used
+          // and kept, so a poll that lost the race hears invalid_grant rather than waiting
           const decision = await store.get('device-decision', key)
           if (decision) {
+            const collected = await markUsed('device-decision', key, keepUntil)
+            if (!collected) return oauthError(c, 400, 'invalid_grant', 'This device_code was already used: start again at /oauth/device_authorization.')
             await store.delete('device', key)
-            await store.delete('device-decision', key)
           }
           if (decision?.status === 'denied') return oauthError(c, 400, 'access_denied', 'The owner said no.')
           if (decision?.status === 'approved') {
-            const issued = { client: String(record.client), name: String(record.name), owner: String(decision.owner), scopes: record.scopes as string[] }
+            const issued = { client: String(record.client), name: String(record.name), owner: String(decision.owner), scopes: record.scopes as string[], grant: newGrant() }
             return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
           }
           const interval = Number(record.interval)
@@ -568,7 +655,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const registration = payload?.typ === 'agent_identity' && typeof payload.sub === 'string' ? await store.get('registration', payload.sub) : null
           if (!registration || (await store.get('revoked-client', String(payload!.sub)))) return oauthError(c, 400, 'invalid_grant', 'This assertion is expired, revoked or unknown: register again.')
           if (!registration.claimed) return oauthError(c, 400, 'invalid_grant', 'Not claimed yet: an unclaimed registration has no scopes. Run the claim (auth.md step B2).')
-          return c.json(await issue(origin, { client: String(payload!.sub), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES] }), 200, { 'cache-control': 'no-store' })
+          const grant = String(registration.family ?? payload!.sub)
+          // The assertion belongs to the claim's sign-in: once that grant is revoked it buys nothing, never a dead token
+          if (await store.get('revoked-family', grant)) return oauthError(c, 400, 'invalid_grant', 'This sign-in is revoked (a used refresh token came back, or the owner ended it): register again.')
+          return c.json(await issue(origin, { client: String(payload!.sub), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant }), 200, { 'cache-control': 'no-store' })
         }
         default:
           return oauthError(c, 400, 'unsupported_grant_type', `grant_type must be one of: authorization_code, refresh_token, ${DEVICE_GRANT}, ${JWT_BEARER}, ${CLAIM_GRANT}.`)
@@ -581,7 +671,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const value = body.token ?? ''
       const refresh = await store.get('refresh', sha(value))
       if (refresh) {
-        await store.put('revoked-family', String(refresh.family ?? sha(value)), {}, now() + REFRESH_TTL)
+        await revokeGrant(String(refresh.family ?? sha(value)))
         await store.delete('refresh', sha(value))
       }
       const { publicKey } = await ready
@@ -591,10 +681,17 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     })
   }
 
-  /** Revokes every token a client or agent registration holds (the owner's kill switch). */
-  const revokeClient = (clientId: string) => store.put('revoked-client', clientId, {}, now() + REFRESH_TTL)
+  /**
+   * Revokes every token a client or agent registration holds and drops the registration (the owner's kill switch): a
+   * revoked client registers again and gets a new id.
+   */
+  const revokeClient = async (clientId: string) => {
+    await store.put('revoked-client', clientId, {}, now() + REVOKED_TTL)
+    await store.delete('client', clientId)
+    await store.delete('registration', clientId)
+  }
 
-  return { mount, verify, resourceMetadataFor, revokeClient, authorizationServer, protectedResource, authMd }
+  return { mount, verify, resourceMetadataFor, revokeGrant, revokeClient, authorizationServer, protectedResource, authMd }
 }
 
 export type OAuth = ReturnType<typeof createOAuth>
