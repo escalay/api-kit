@@ -176,8 +176,8 @@ const statusOf = (lock, expected) =>
     const kit = expected[file] === undefined ? null : sha(expected[file])
     if (local !== null && local === kit) return { file, state: 'unchanged', edited: false, changed: false }
     const edited = local !== null && recorded !== null && local !== recorded
-    // At this kit's version the kit has not changed a file since kit.json recorded it, so an edited file's other hash is a wrong record
-    const changed = kit !== recorded && !(edited && lock.version === VERSION)
+    // A part's file is fixed per kit version, so at kit.json's version an edited one's other hash is a wrong record; index.ts also follows the parts
+    const changed = kit !== recorded && !(edited && lock.version === VERSION && file !== 'index.ts')
     const state = local === null ? 'missing' : recorded === null ? 'new in kit' : kit === null ? 'dropped by kit' : edited && changed ? 'both changed' : edited ? 'you edited' : changed ? 'kit changed' : 'unchanged'
     return { file, state, edited, changed }
   })

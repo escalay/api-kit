@@ -551,6 +551,19 @@ describe('the copy-in CLI', () => {
     expect(JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8'))).toMatchObject({ version: KIT_VERSION, files: { 'core/cache.ts': hashOfText(await kitText('core/cache.ts')) } })
   })
 
+  it('update that adds a part keeps an edited index.ts and says so, at the same kit version', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'core', '--dir', 'kit')
+    const edited = (await readFile(join(app, 'kit/index.ts'), 'utf8')) + '// mine\n'
+    await writeFile(join(app, 'kit/index.ts'), edited)
+    const added = cli(app, 'update', 'pagination', '--dir', 'kit')
+    expect(added.status).toBe(1)
+    expect(added.stdout).toContain('1 file kept at kit')
+    expect(added.stdout).toContain(': index.ts.')
+    expect(await readFile(join(app, 'kit/index.ts'), 'utf8')).toBe(edited)
+    expect(cli(app, 'doctor', '--dir', 'kit').stdout).toMatch(/edited {3}index\.ts: you edited it, and kit/)
+  })
+
   it('adopts parts copied by the shadcn CLI: writes the record from what is on disk', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     const registry = JSON.parse(await readFile(join(import.meta.dirname, '..', 'registry.json'), 'utf8'))
