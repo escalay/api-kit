@@ -228,4 +228,28 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect((await callerWith(app, other.tokens.access_token)).status).toBe(200)
       expect((await refreshWith(app, other.tokens.refresh_token)).status).toBe(200)
     })
+
+    it('issues one sign-in for a device approval polled from three places at once', async () => {
+      const { app } = await oauthApp(await make())
+      const device = 'urn:ietf:params:oauth:grant-type:device_code'
+      const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+      const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+      await app.request('/oauth/device', { ...form({ user_code, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+      const poll = () => app.request('/oauth/token', form({ grant_type: device, device_code, client_id }))
+      const answers = await Promise.all([poll(), poll(), poll()])
+      expect(answers.map((answer) => answer.status).sort()).toEqual([200, 400, 400])
+      for (const loser of answers.filter((answer) => answer.status === 400)) expect((await loser.json()).error).toBe('invalid_grant')
+      expect((await (await poll()).json()).error).toBe('invalid_grant')
+    })
+
+    it('issues one sign-in for a claim polled from two places at once', async () => {
+      const { app } = await oauthApp(await make())
+      const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+      const claim_attempt_token = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
+      await app.request('/oauth/claim', { ...form({ claim_attempt_token, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+      const poll = () => app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))
+      const answers = await Promise.all([poll(), poll()])
+      expect(answers.map((answer) => answer.status).sort()).toEqual([200, 400])
+      expect((await answers.find((answer) => answer.status === 400)!.json()).error).toBe('expired_token')
+    })
   })

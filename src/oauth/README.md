@@ -38,8 +38,11 @@ An OAuth caller is `{ kind: 'agent', client, grant, name, scopes, owner }`:
   `authInfo.clientId` key on it, with `grant`; `name` is what the client called itself, for display only, so two
   clients that register the same name are two callers.
 - `grant` is one approval: every token from one sign-in (a code, a device approval, a claim), rotated or not, carries
-  it. A claimed agent's claim, refresh and jwt-bearer tokens share one. Tokens issued before grants have none and run to
-  their hour, known by `client`; a claim from before grants uses its registration id.
+  it. A claimed agent's claim, refresh and jwt-bearer tokens share one, so once that grant is revoked (a replayed
+  refresh token, `revokeGrant`) its identity assertion is refused too: the agent registers again. Tokens issued before
+  grants have none and run to their hour, known by `client`; a claim from before grants uses its registration id.
+- `verify` reads the issued row and both revocation markers (the client's, and the grant's when the token has one) in
+  one round trip: three row reads per request with a grant, two without.
 
 ```ts
 await oauth.revokeGrant(caller.grant)   // ends that sign-in at once: its access tokens fail now, its refresh tokens too
@@ -49,7 +52,10 @@ await oauth.revokeClient(clientId)      // every sign-in of the client, and drop
 `createOAuth({ …, reuseGraceSeconds: 30 })`: a used refresh token sent again inside the window (a client that lost the
 answer and retried) gets the same successor, an HMAC of the used token under a secret derived from the signing key, so
 none is stored. Never a second branch: once that successor is used, or the window has passed, it is reuse. The default
-is 0: any replay revokes the grant.
+is 0: any replay revokes the grant. The successor is written by the first request, after it marks the used token: if
+that request dies in between, a retry in the window gets a successor no row backs, and its next refresh is
+`invalid_grant` (with 0 the retry would have revoked the grant instead). The retry never writes the row itself, since
+a write there could reset a successor already used.
 
 | File | What |
 |---|---|
@@ -59,7 +65,8 @@ is 0: any replay revokes the grant.
 
 ## Rules
 
-- The signing key lives in the app's secrets, never in the repo; rotating it signs everyone out.
+- The signing key lives in the app's secrets, never in the repo; rotating it signs everyone out. `createOAuth` parses
+  it when called: a malformed key throws there, at start, not on the first OAuth request.
 - `owner` decides who may approve: behind Cloudflare Access, `accessOwner(access)` (the signed-in email).
 - Refresh tokens last 30 days and rotate on each use; MCP clients and claimed agents both get one. Only their hashes
   are kept. A used token sent again revokes its grant (every refresh token of that sign-in, and its access tokens at
@@ -67,7 +74,12 @@ is 0: any replay revokes the grant.
   unless `reuseGraceSeconds` covers it.
 - A code is used once, even by a failed exchange, and kept until its 10 minutes end. Sent again with the right client
   and verifier, it revokes the grant the first exchange got (OAuth 2.1 §4.1.3); with a wrong verifier it revokes
-  nothing. `redirect_uri` at the token endpoint is checked when sent and may be left out (PKCE binds the code).
+  nothing. The trade: someone who sees the code in the redirect (a log, a Referer, a shared history) and sends it
+  first with any verifier spends it, so the real client's exchange fails and the person connects again. Nothing is
+  issued or exposed. `redirect_uri` at the token endpoint is checked when sent and may be left out (PKCE binds the code).
+- A device code and a claim token give tokens once, however many polls arrive together: the owner's device answer is
+  marked collected, and the claim token is taken. The polls that lose hear `invalid_grant` (device) or `expired_token`
+  (claim).
 - Revoking an access token (`/oauth/revoke`) ends only that token; `revokeGrant` ends the sign-in.
 - The store makes single use hold under concurrent requests: `markUsed` (codes, refresh tokens) and `take` are one
   statement each in `dbOAuthStore`, honour expiry, and read a row with no `used` key (a sign-in from before) as
@@ -84,3 +96,19 @@ is 0: any replay revokes the grant.
   `/oauth/device*` would also gate `/oauth/device_authorization` and break every device.
 - Keep the OAuth paths open (`OAUTH_OPEN_PATHS`); `createAgentApi` does it when `oauth` is set, private mode included.
 - Standard: `docs/STANDARD.md` §7.
+
+## Upgrading to grants
+
+Defaults that change when an app takes this version:
+
+- Rate limits, stored idempotency answers and A2A task ownership key an OAuth agent by `client` and `grant`, not by
+  its name: same-named clients stop sharing a bucket or each other's tasks. A2A tasks stored under the old key (kept a
+  day) are no longer found by their agent.
+- `verify` refuses a token whose grant was revoked at once (before, up to an hour), including after a refresh token is
+  replayed. A claimed agent's identity assertion is refused once its grant is revoked: it registers again.
+- A code sent twice with its verifier revokes its sign-in.
+- `revokeClient` deletes the registration: a revoked client registers again.
+- `createOAuth` throws on a malformed signing key when called. On Node a bad key already stopped the process at start
+  (an unhandled rejection); on Workers the app now fails to build instead of failing only its OAuth requests.
+
+Tokens, codes, refresh rows and claims from before grants keep working.

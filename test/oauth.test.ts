@@ -175,13 +175,16 @@ describe('OAuth for agents', () => {
     expect(replay).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
     expect((await (await refresh(second.refresh_token)).json()).error).toBe('invalid_grant')
 
-    // Another sign-in of the same agent is untouched by that, and the owner's kill switch ends it too
+    // The identity assertion is part of that same sign-in, so it is refused too, never answered with a dead token
     const other = await (await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: granted.identity_assertion }))).json()
-    expect(other.access_token).toBeTruthy()
+    expect(other.error).toBe('invalid_grant')
+    // Another agent's sign-in is untouched by that, and the owner's kill switch ends it
     const registration2 = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER }))).json()
     const attempt2 = new URL(registration2.claim.verification_uri).searchParams.get('claim_attempt_token')!
     await app.request('/oauth/claim', { ...form({ claim_attempt_token: attempt2, user_code: registration2.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
     const granted2 = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration2.claim_token }))).json()
+    expect((await app.request('/api/v1/things', { headers: { authorization: `Bearer ${granted2.access_token}` } })).status).toBe(200)
+    expect((await (await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: granted2.identity_assertion }))).json()).access_token).toBeTruthy()
     await oauth.revokeClient(registration2.registration_id)
     expect((await refresh(granted2.refresh_token)).status).toBe(400)
   })
@@ -405,6 +408,18 @@ describe('OAuth callers: the client and the grant, not the name', () => {
     const fromBearer = await callerOf(app, (await (await bearer(app, granted.identity_assertion)).json()).access_token)
     const fromRefresh = await callerOf(app, (await (await refreshWith(app, granted.refresh_token)).json()).access_token)
     expect([fromBearer.grant, fromRefresh.grant]).toEqual([fromClaim.grant, fromClaim.grant])
+  })
+
+  it('refuses a claimed agent’s identity assertion once its grant is revoked, never handing out a dead token', async () => {
+    const { app, oauth } = await oauthApp(memoryOAuthStore())
+    const replayed = await claimed(app)
+    expect((await refreshWith(app, replayed.granted.refresh_token)).status).toBe(200)
+    expect((await refreshWith(app, replayed.granted.refresh_token)).status).toBe(400)
+    expect(await (await bearer(app, replayed.granted.identity_assertion)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('revoked') })
+
+    const revoked = await claimed(app)
+    await oauth.revokeGrant((await callerOf(app, revoked.granted.access_token)).grant)
+    expect((await (await bearer(app, revoked.granted.identity_assertion)).json()).error).toBe('invalid_grant')
   })
 
   it('uses a claimed registration’s id as the grant when it was claimed before grants', async () => {

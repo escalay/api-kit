@@ -168,6 +168,14 @@ export const createOAuth = (config: OAuthConfig) => {
           return marked
         })
 
+  /** The store's own `take`, or a read then a delete: safe only one request at a time. */
+  const take = async (kind: string, id: string) => {
+    if (store.take) return store.take(kind, id)
+    const value = await store.get(kind, id)
+    if (value) await store.delete(kind, id)
+    return value
+  }
+
   /** Ends one approval at once: its access tokens fail `verify`, its refresh tokens are refused. */
   const revokeGrant = (grant: string) => store.put('revoked-family', grant, {}, now() + REFRESH_TTL)
 
@@ -180,11 +188,11 @@ export const createOAuth = (config: OAuthConfig) => {
     const origin = originOf(c)
     const { payload } = await jwtVerify(jwt, publicKey, { issuer: origin, algorithms: ['ES256'] }).catch(() => ({ payload: null }))
     if (!payload || typeof payload.jti !== 'string' || typeof payload.client_id !== 'string') return null
-    if (!(await store.get('access', payload.jti))) return null
-    if (await store.get('revoked-client', payload.client_id)) return null
     // Tokens from before grants carry none: they run to their hour, known by their client
     const grant = typeof payload.grant === 'string' ? payload.grant : undefined
-    if (grant && (await store.get('revoked-family', grant))) return null
+    // One round trip: the issued row and both revocation markers at once
+    const [issued, revokedClient, revokedGrant] = await Promise.all([store.get('access', payload.jti), store.get('revoked-client', payload.client_id), grant ? store.get('revoked-family', grant) : null])
+    if (!issued || revokedClient || revokedGrant) return null
     return { kind: 'agent', name: String(payload.name ?? payload.client_id), client: payload.client_id, ...(grant ? { grant } : {}), scopes: String(payload.scope ?? '').split(' ').filter(Boolean), owner: String(payload.sub) }
   }
 
@@ -262,7 +270,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
    (\`authorization_pending\` until they do). Success returns an access token, a \`refresh_token\` and an \`identity_assertion\`.
 5. When the access token expires, refresh it: \`grant_type=refresh_token&refresh_token=…\` (30 days, a new one each
    time: keep only the newest; sending a used one again revokes them all). Within a day of the claim, the assertion
-   works too: \`grant_type=${JWT_BEARER}&assertion=…\`.
+   works too, until the sign-in is revoked: \`grant_type=${JWT_BEARER}&assertion=…\`.
 
 ## C. A device or CLI without a browser (RFC 8628)
 
@@ -578,7 +586,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const registration = await store.get('registration', String(held.registration))
           if (!registration) return oauthError(c, 400, 'expired_token', 'The registration expired: register again.')
           if (!registration.claimed) return oauthError(c, 400, 'authorization_pending', 'The owner hasn’t typed the code yet.')
-          await store.delete('claim-token', sha(body.claim_token!))
+          // Single use under concurrent polls: only the one that takes the claim token gets tokens
+          if (!(await take('claim-token', sha(body.claim_token!)))) return oauthError(c, 400, 'expired_token', 'The claim window closed: register again.')
           // A registration claimed before grants carries none: its id is the grant, the same in every token
           const issued = { client: String(held.registration), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant: String(registration.family ?? held.registration) }
           const assertion = await sign({ sub: held.registration, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
@@ -593,10 +602,13 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
             await store.delete('device', key)
             return oauthError(c, 400, 'expired_token', 'The code expired before the owner approved it: start again at /oauth/device_authorization.')
           }
+          // The owner's answer is collected once, however many polls arrive together: the decision row is marked used
+          // and kept, so a poll that lost the race hears invalid_grant rather than waiting
           const decision = await store.get('device-decision', key)
           if (decision) {
+            const collected = await markUsed('device-decision', key, keepUntil)
+            if (!collected) return oauthError(c, 400, 'invalid_grant', 'This device_code was already used: start again at /oauth/device_authorization.')
             await store.delete('device', key)
-            await store.delete('device-decision', key)
           }
           if (decision?.status === 'denied') return oauthError(c, 400, 'access_denied', 'The owner said no.')
           if (decision?.status === 'approved') {
@@ -617,7 +629,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const registration = payload?.typ === 'agent_identity' && typeof payload.sub === 'string' ? await store.get('registration', payload.sub) : null
           if (!registration || (await store.get('revoked-client', String(payload!.sub)))) return oauthError(c, 400, 'invalid_grant', 'This assertion is expired, revoked or unknown: register again.')
           if (!registration.claimed) return oauthError(c, 400, 'invalid_grant', 'Not claimed yet: an unclaimed registration has no scopes. Run the claim (auth.md step B2).')
-          return c.json(await issue(origin, { client: String(payload!.sub), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant: String(registration.family ?? payload!.sub) }), 200, { 'cache-control': 'no-store' })
+          const grant = String(registration.family ?? payload!.sub)
+          // The assertion belongs to the claim's sign-in: once that grant is revoked it buys nothing, never a dead token
+          if (await store.get('revoked-family', grant)) return oauthError(c, 400, 'invalid_grant', 'This sign-in is revoked (a used refresh token came back, or the owner ended it): register again.')
+          return c.json(await issue(origin, { client: String(payload!.sub), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant }), 200, { 'cache-control': 'no-store' })
         }
         default:
           return oauthError(c, 400, 'unsupported_grant_type', `grant_type must be one of: authorization_code, refresh_token, ${DEVICE_GRANT}, ${JWT_BEARER}, ${CLAIM_GRANT}.`)
