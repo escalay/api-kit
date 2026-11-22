@@ -156,7 +156,12 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   signed-in person again; **nothing is granted before a person approves** (an unclaimed registration has no scopes).
   Tokens: ES256 JWTs for an hour (`OAUTH_SIGNING_KEY`, a private JWK in your secret store), checked against a revocation list
   on every request. Refresh tokens (30 days, MCP clients and claimed agents alike) rotate on each use and are kept only as
-  hashes; a used one sent again revokes every refresh token of that sign-in, and so does revoking any of them. Scopes: `read` for safe methods, `write` for the rest; the relay endpoints (`/mcp`, `/a2a`,
+  hashes; a used one sent again revokes every refresh token of that sign-in, and so does revoking any of them. **An
+  OAuth caller is known by its client_id and its grant (one approval, every token of one sign-in), never by the name it
+  registered; the name is for display.** Rate limits, idempotency and MCP key on them, and revoking a grant ends its
+  access tokens at once (`revokeGrant`); `revokeClient` also drops the registration. A code and a refresh token are
+  used once under concurrent requests: a second valid exchange of a code, or a refresh token sent again (outside an
+  optional `reuseGraceSeconds`, default 0), revokes the grant. OAuth rows live in SQLite or D1, never KV. Scopes: `read` for safe methods, `write` for the rest; the relay endpoints (`/mcp`, `/a2a`,
   `auth.relay`) need only `read`, since each call they make reaches a route that checks its own scope. In Access, only
   `/oauth/authorize`, `/oauth/claim` and `/oauth/device` stay gated; `/oauth/register|token|revoke|device_authorization`,
   `/agent/identity*`, `/auth.md` and `/.well-known/*` bypass it.
@@ -178,7 +183,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   (follow `_links.result`) or `failed`.
 - The guards below keep their state where every instance of the app sees it: memory is right for one Node process;
   on Workers (an isolate each) they use the database (`dbGuardStore(db)`), never KV, which is eventually consistent.
-- Every `POST` and `PATCH` honours `Idempotency-Key` (kept 24 h per caller): a retry gets the first answer
+- Every `POST` and `PATCH` honours `Idempotency-Key` (kept 24 h per caller; an OAuth agent is its client and grant): a retry gets the first answer
   (`Idempotent-Replayed: true`), the key with another body is a `422`, one in flight a `409`. `/openapi.json` documents
   the header on each of them.
 - Paid routes sit behind `rateLimit` per caller, with the `RateLimit-Policy` / `RateLimit` headers and a `429` with

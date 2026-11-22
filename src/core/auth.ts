@@ -33,7 +33,7 @@ export type OAuthServer = {
 /** A person's role, when the app keeps a team (`people` part): the owner may do everything, a member everything but admin. */
 export type Role = 'owner' | 'member'
 
-export type Caller = { kind: 'key'; name: string } | { kind: 'person'; email: string; role?: Role } | { kind: 'agent'; name: string; scopes: string[]; owner: string }
+export type Caller = { kind: 'key'; name: string } | { kind: 'person'; email: string; role?: Role } | { kind: 'agent'; name: string; client?: string; grant?: string; scopes: string[]; owner: string }
 
 export const hashApiKey = (key: string) => createHash('sha256').update(key).digest('hex')
 
@@ -109,7 +109,7 @@ export type AuthOptions = {
   access?: AccessOptions
   open?: string[]
   /** OAuth access tokens (`oauth.ts`): a JWT → its caller, or null. Keys still work beside them. */
-  tokens?: (jwt: string, c: Context) => Promise<{ kind: 'agent'; name: string; scopes: string[]; owner: string } | null>
+  tokens?: (jwt: string, c: Context) => Promise<{ kind: 'agent'; name: string; client?: string; grant?: string; scopes: string[]; owner: string } | null>
   /** Where a 401 points (`WWW-Authenticate: … resource_metadata=`): a URL, or one per request. */
   resourceMetadata?: string | ((c: Context) => string)
   /** Endpoints that POST but only relay to routes in-process (MCP, A2A): a token needs just `read` there, each route checks its own scope. */

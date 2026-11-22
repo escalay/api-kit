@@ -30,10 +30,31 @@ POST /oauth/token                 grant_type=urn:ietf:params:oauth:grant-type:de
 
 Nothing to wire: `mount` adds it, and the metadata names `device_authorization_endpoint`.
 
+## Callers, grants and revoking
+
+An OAuth caller is `{ kind: 'agent', client, grant, name, scopes, owner }`:
+
+- `client` is the client_id (a registration id for a claimed agent). Rate limits, idempotency answers and MCP's
+  `authInfo.clientId` key on it, with `grant`; `name` is what the client called itself, for display only, so two
+  clients that register the same name are two callers.
+- `grant` is one approval: every token from one sign-in (a code, a device approval, a claim), rotated or not, carries
+  it. A claimed agent's claim, refresh and jwt-bearer tokens share one. Tokens issued before grants have none and run to
+  their hour, known by `client`; a claim from before grants uses its registration id.
+
+```ts
+await oauth.revokeGrant(caller.grant)   // ends that sign-in at once: its access tokens fail now, its refresh tokens too
+await oauth.revokeClient(clientId)      // every sign-in of the client, and drops its registration: it registers again
+```
+
+`createOAuth({ …, reuseGraceSeconds: 30 })`: a used refresh token sent again inside the window (a client that lost the
+answer and retried) gets the same successor, an HMAC of the used token under a secret derived from the signing key, so
+none is stored. Never a second branch: once that successor is used, or the window has passed, it is reuse. The default
+is 0: any replay revokes the grant.
+
 | File | What |
 |---|---|
 | `index.ts` | `createOAuth` (the server; `revokeClient` is the owner's kill switch), `generateOAuthKey` (a new signing key) |
-| `store.ts` | `dbOAuthStore(db)` (in the app's database; drops expired rows at start), `memoryOAuthStore` |
+| `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take` and `markUsed`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start), `memoryOAuthStore` |
 | `schema.ts` | the `oauth` table and `OAUTH_MIGRATIONS` |
 
 ## Rules
@@ -41,8 +62,20 @@ Nothing to wire: `mount` adds it, and the metadata names `device_authorization_e
 - The signing key lives in the app's secrets, never in the repo; rotating it signs everyone out.
 - `owner` decides who may approve: behind Cloudflare Access, `accessOwner(access)` (the signed-in email).
 - Refresh tokens last 30 days and rotate on each use; MCP clients and claimed agents both get one. Only their hashes
-  are kept. A used token sent again revokes every refresh token of that sign-in (its family), as does revoking any
-  one of them; access tokens already out run to their hour.
+  are kept. A used token sent again revokes its grant (every refresh token of that sign-in, and its access tokens at
+  once), as does revoking any one of them. Two refreshes of one token at once rotate once: the second is that replay,
+  unless `reuseGraceSeconds` covers it.
+- A code is used once, even by a failed exchange, and kept until its 10 minutes end. Sent again with the right client
+  and verifier, it revokes the grant the first exchange got (OAuth 2.1 §4.1.3); with a wrong verifier it revokes
+  nothing. `redirect_uri` at the token endpoint is checked when sent and may be left out (PKCE binds the code).
+- Revoking an access token (`/oauth/revoke`) ends only that token; `revokeGrant` ends the sign-in.
+- The store makes single use hold under concurrent requests: `markUsed` (codes, refresh tokens) and `take` are one
+  statement each in `dbOAuthStore`, honour expiry, and read a row with no `used` key (a sign-in from before) as
+  unused. A store without them falls back to a read then a write, safe only one request at a time: tests.
+- OAuth rows live in SQLite or D1, never Workers KV: KV is eventually consistent, so a new code reads as unknown and a
+  revoke can be undone.
+- `test/oauth-store-contract.ts` is what every store must pass, with the attacks on the token endpoint; it runs on
+  memory, node:sqlite and D1. Rules after cloudflare/workers-oauth-provider and better-auth (both MIT).
 - Device codes: 8 letters from `BCDFGHJKLMNPQRSTVWXZ` (no vowels), shown as `XXXX-XXXX`, case and dashes ignored;
   10 minutes; single use; only hashes kept. A signed-in person may type 5 wrong codes in 10 minutes, then 429. When
   `owners` is set, only they may approve. Polling sooner than `interval` answers `slow_down` and adds 5 seconds.

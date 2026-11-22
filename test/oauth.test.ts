@@ -4,7 +4,9 @@ import { mkdtemp } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, parseApiKeys, dbOAuthStore, openDb, type OAuthStore } from '../src/index.js'
+import { SignJWT, importJWK } from 'jose'
+import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, memoryStore, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore } from '../src/index.js'
+import { approvedCode, callerWith, oauthApp, oauthStoreContract, refreshWith, signedIn } from './oauth-store-contract.js'
 
 const OWNER = 'owner@example.test'
 const ORIGIN = 'http://localhost'
@@ -116,11 +118,14 @@ describe('OAuth for agents', () => {
 
     const rotated = await (await app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }))).json()
     expect(rotated.access_token).toBeTruthy()
-    expect((await app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }))).status).toBe(400)
 
     expect((await app.request('/oauth/revoke', form({ token: tokens.access_token }))).status).toBe(200)
     expect((await app.request('/api/v1/things', { headers: auth })).status).toBe(401)
     expect((await app.request('/api/v1/things', { headers: { authorization: `Bearer ${rotated.access_token}` } })).status).toBe(200)
+
+    // A used refresh token sent again ends the whole grant, its access tokens at once
+    expect((await app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token }))).status).toBe(400)
+    expect((await app.request('/api/v1/things', { headers: { authorization: `Bearer ${rotated.access_token}` } })).status).toBe(401)
   })
 
   it('registers an agent by auth.md and grants nothing until the owner types its code', async () => {
@@ -340,6 +345,108 @@ describe('OAuth for agents', () => {
     expect((await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: granted.identity_assertion }))).status).toBe(400)
   })
 })
+
+describe('OAuth callers: the client and the grant, not the name', () => {
+  const claimed = async (app: Awaited<ReturnType<typeof oauthApp>>['app'], name = 'Night shift') => {
+    const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: name }))).json()
+    const attemptToken = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
+    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attemptToken, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    const granted = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))).json()
+    return { registration, granted }
+  }
+  const bearer = (app: Awaited<ReturnType<typeof oauthApp>>['app'], assertion: string) => app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }))
+  const callerOf = async (app: Awaited<ReturnType<typeof oauthApp>>['app'], accessToken: string) => (await (await callerWith(app, accessToken)).json()).caller
+
+  it('names an agent by its client_id and grant, with its registered name for display', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    const { client_id, tokens } = await signedIn(app, { name: 'Sample' })
+    expect(await callerOf(app, tokens.access_token)).toEqual({ kind: 'agent', name: 'Sample', client: client_id, grant: expect.any(String), scopes: ['read', 'write'], owner: OWNER })
+  })
+
+  it('keeps two clients that register the same name apart: their rate windows and idempotency answers', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    let notes = 0
+    app.use('/api/v1/notes', rateLimit({ policy: 'notes', limit: 1, windowSeconds: 60 }))
+    app.post('/api/v1/notes', (c) => c.json({ count: ++notes }, 201))
+    const one = await signedIn(app, { name: 'Sample' })
+    const two = await signedIn(app, { name: 'Sample' })
+    const callers = [await callerOf(app, one.tokens.access_token), await callerOf(app, two.tokens.access_token)]
+    expect(callers[0].client).not.toBe(callers[1].client)
+    expect(callers[0].grant).not.toBe(callers[1].grant)
+    const post = (accessToken: string) => app.request('/api/v1/notes', { method: 'POST', headers: { authorization: `Bearer ${accessToken}`, 'idempotency-key': 'same-key', 'content-type': 'application/json' }, body: '{}' })
+    const first = await post(one.tokens.access_token)
+    const second = await post(two.tokens.access_token)
+    expect([first.status, second.status]).toEqual([201, 201])
+    expect(second.headers.get('idempotent-replayed')).toBeNull()
+    expect([await first.json(), await second.json()]).toEqual([{ count: 1 }, { count: 2 }])
+    expect((await app.request('/api/v1/notes', { method: 'POST', headers: { authorization: `Bearer ${one.tokens.access_token}` } })).status).toBe(429)
+  })
+
+  it('makes a revoked client register again', async () => {
+    const { app, oauth } = await oauthApp(memoryOAuthStore())
+    const { client_id, tokens } = await signedIn(app)
+    await oauth.revokeClient(client_id)
+    expect((await callerWith(app, tokens.access_token)).status).toBe(401)
+    expect((await refreshWith(app, tokens.refresh_token)).status).toBe(400)
+    const query = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: 'http://localhost:7777/cb', code_challenge: 'x'.repeat(43), code_challenge_method: 'S256' })
+    const page = await app.request(`/oauth/authorize?${query}`, { headers: { 'x-test-owner': OWNER } })
+    expect([page.status, await page.text()]).toEqual([400, expect.stringContaining('not registered')])
+    // Registering again gives a new id that works
+    const again = await signedIn(app)
+    expect(again.client_id).not.toBe(client_id)
+    expect((await callerWith(app, again.tokens.access_token)).status).toBe(200)
+  })
+
+  it('gives a claimed agent one grant across its claim, refresh and jwt-bearer tokens', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    const { registration, granted } = await claimed(app)
+    const fromClaim = await callerOf(app, granted.access_token)
+    expect(fromClaim).toMatchObject({ client: registration.registration_id, grant: expect.any(String), name: 'Night shift' })
+    const fromBearer = await callerOf(app, (await (await bearer(app, granted.identity_assertion)).json()).access_token)
+    const fromRefresh = await callerOf(app, (await (await refreshWith(app, granted.refresh_token)).json()).access_token)
+    expect([fromBearer.grant, fromRefresh.grant]).toEqual([fromClaim.grant, fromClaim.grant])
+  })
+
+  it('uses a claimed registration’s id as the grant when it was claimed before grants', async () => {
+    const store = memoryOAuthStore()
+    const { app } = await oauthApp(store)
+    const { registration, granted } = await claimed(app)
+    const { family: _family, ...before } = (await store.get('registration', registration.registration_id))!
+    await store.put('registration', registration.registration_id, before, Math.floor(Date.now() / 1000) + 3600)
+    const caller = await callerOf(app, (await (await bearer(app, granted.identity_assertion)).json()).access_token)
+    expect(caller).toMatchObject({ client: registration.registration_id, grant: registration.registration_id })
+  })
+
+  it('accepts an access token from before grants, known by its client', async () => {
+    const store = memoryOAuthStore()
+    const signingKey = await generateOAuthKey()
+    const { app } = await oauthApp(store, { signingKey })
+    const jti = 'jti-from-an-older-kit'
+    await store.put('access', jti, { client: 'client_old' }, Math.floor(Date.now() / 1000) + 3600)
+    const old = await new SignJWT({ sub: OWNER, client_id: 'client_old', name: 'Old', scope: 'read', jti })
+      .setProtectedHeader({ alg: 'ES256' }).setIssuer(ORIGIN).setIssuedAt().setExpirationTime('1h').sign(await importJWK(JSON.parse(signingKey), 'ES256'))
+    const caller = await callerOf(app, old)
+    expect(caller).toMatchObject({ kind: 'agent', name: 'Old', client: 'client_old', scopes: ['read'] })
+    expect(caller.grant).toBeUndefined()
+  })
+
+  it('still works on a store without take and markUsed, one request at a time', async () => {
+    const { app } = await oauthApp(memoryStore())
+    const { exchange } = await approvedCode(app)
+    const tokens = await (await exchange()).json()
+    expect((await callerWith(app, tokens.access_token)).status).toBe(200)
+    expect((await exchange()).status).toBe(400)
+    expect((await callerWith(app, tokens.access_token)).status).toBe(401)
+    const { tokens: fresh } = await signedIn(app)
+    const rotated = await (await refreshWith(app, fresh.refresh_token)).json()
+    expect((await callerWith(app, rotated.access_token)).status).toBe(200)
+    expect((await (await refreshWith(app, fresh.refresh_token)).json()).error).toBe('invalid_grant')
+    expect((await callerWith(app, rotated.access_token)).status).toBe(401)
+  })
+})
+
+oauthStoreContract('memory', async () => memoryOAuthStore())
+oauthStoreContract('database (node:sqlite)', async () => dbOAuthStore(await testDb()))
 
 describe('OAuth store in the database', () => {
   it('keeps what was issued across a restart and forgets what expired', async () => {
