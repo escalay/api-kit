@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.27.1](https://github.com/escalay/api-kit/compare/v1.27.0...v1.27.1) (2026-11-22)
+
+
+### Fixed
+
+* **core:** keep only answers worth replaying, never token answers ([#83](https://github.com/escalay/api-kit/issues/83)) ([a9e96cd](https://github.com/escalay/api-kit/commit/a9e96cd13c10c17e9ea995b8b6e4019777e86f4d))
+* **core:** read the caller's address one way, chosen by the app ([#82](https://github.com/escalay/api-kit/issues/82)) ([91f1063](https://github.com/escalay/api-kit/commit/91f10630165de89408c6d25ecc9c46bc8d3ce090))
+
 ## [1.27.0](https://github.com/escalay/api-kit/compare/v1.26.1...v1.27.0) (2026-11-22)
 
 
