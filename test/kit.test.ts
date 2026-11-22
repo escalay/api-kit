@@ -730,7 +730,13 @@ describe('the copy-in CLI', () => {
       // --switch: listed in the catalog, so an owner can switch it off, and the feature names its switch
       expect(await readFile(join(app, 'src/features/catalog.ts'), 'utf8')).toContain("  'reading-lists': { title: 'ReadingLists', description: 'ReadingLists: say here what switching it off stops.' },\n  // kit:catalog")
       expect(await readFile(join(app, 'src/features/reading-lists/index.ts'), 'utf8')).toContain("  name: 'reading-lists',\n  switch: 'reading-lists',")
-      expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'switches', 'testing'])
+      expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'brand', 'switches', 'testing'])
+      // The starter brand: a monogram of the title, served as SVG until `kit brand` renders it
+      expect(await readFile(join(app, 'brand/brand.ts'), 'utf8')).toContain("  name: 'demo-api',\n  title: 'Demo API',")
+      expect(await readFile(join(app, 'brand/icon.svg'), 'utf8')).toContain('>D</text>')
+      expect(await readFile(join(app, 'src/brand.gen.ts'), 'utf8')).not.toContain('png:')
+      const doctor = cli(app, 'doctor')
+      expect(doctor.stdout).toContain('note     brand: src/brand.gen.ts has the SVG only')
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
       // The product's own skill, the place for developer skills, and the link coding agents find them through
       for (const path of ['guide/skills/demo-api/SKILL.md', 'guide/skills/demo-api/references/find-your-way.md', '.agents/skills/README.md']) expect(existsSync(join(app, path)), path).toBe(true)
@@ -760,7 +766,7 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+11 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+13 passed/)
 
       // The client and its command line: `kit sdk` makes both; the CLI compiles on its own and offers the app's tools
       const sdk = cli(parent, 'sdk', '--app', 'demo-api')

@@ -6,7 +6,7 @@ an MCP tool.
 
 ## Commands
 
-`pnpm install` · `pnpm test` · `pnpm typecheck` · `pnpm lint` (oxlint) · `pnpm format` (oxfmt) · `pnpm guide` (after editing `guide/`)
+`pnpm install` · `pnpm test` · `pnpm typecheck` · `pnpm lint` (oxlint) · `pnpm format` (oxfmt) · `pnpm guide` (after editing `guide/`) · `npx @escalay/kit brand` (after editing `brand/`; needs `pnpm add -D @resvg/resvg-js`)
 
 - `pnpm dev`: the API on Node at http://localhost:4400 (`/docs`, `/llms.txt`, `/mcp`) <!-- runtime:node -->
 - `pnpm __worker_dev__`: the Worker locally over a local D1 (`/docs`, `/llms.txt`, `/mcp`) <!-- preset:api --> <!-- runtime:workers -->
@@ -53,6 +53,8 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 | `src/features/<name>/` | one feature: `schema.ts` (tables + migration steps) · `repo.ts` (the only queries) · `routes.ts` (OpenAPI contracts) · `handlers.ts` (request → repo → HAL) · `tools.ts` (MCP tools) · `index.ts` (register, tools, sample tool arguments) · `<name>.test.ts` |
 | `src/kit/` | the copied kit, owned by this app; `kit.json` records its version, and each part's `README.md` says what it is for and its rules (start with `core`, `db`, `mcp`, `testing`). Update with `diff --patch`, then `update` |
 | `guide/` | the agent guide: templates whose `{{api.endpoints}}` and `{{mcp.tools}}` are generated from the code |
+| `brand/` | the brand: `brand.ts` (name, title, a description of at most 100 characters, the accent) and `icon.svg` (add `icon-dark.svg` for dark backgrounds); MCP, the Server Card, the docs, the A2A card, the guide's `{{brand.*}}` and the favicon all read it |
+| `src/brand.gen.ts` | `brand/` rendered (`npx @escalay/kit brand`): the favicon, PNG icons and OG card as base64, committed so nothing renders at runtime; the SVG alone until the first render. `npx @escalay/kit doctor` says when it is stale |
 | `guide/skills/__name__/` | the skill this product ships to the agents that use it: `SKILL.md` routes, `references/<job>.md` is one playbook per job. Served at `/skills/*`, offered over MCP as skills and prompts, and installed with `npx skills add <this deployment's address>` or from the repository |
 | `.agents/skills/` | skills for developing this repository (`.claude/skills` links here). Never served, and marked `metadata.internal: true` so installing from the repository does not offer them |
 | `skills.sh.json` | tells `npx skills add <this repository>` that the product's skill is in `guide/skills/` |
