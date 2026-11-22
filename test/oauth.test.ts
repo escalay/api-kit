@@ -436,6 +436,27 @@ describe('OAuth callers: the client and the grant, not the name', () => {
     expect(expiries['revoked-client']).toBeGreaterThanOrEqual(latest)
   })
 
+  it('takes one approval per registration, so the claim, refresh and jwt-bearer tokens share one grant', async () => {
+    const { app, oauth } = await oauthApp(memoryOAuthStore())
+    const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+    const { claim_attempt } = await (await app.request('/agent/identity/claim', json({ claim_token: registration.claim_token }))).json()
+    const type = (attempt: { verification_uri: string; user_code: string }) =>
+      app.request('/oauth/claim', { ...form({ claim_attempt_token: new URL(attempt.verification_uri).searchParams.get('claim_attempt_token')!, user_code: attempt.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    expect((await type(registration.claim)).status).toBe(200)
+    const granted = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))).json()
+    const second = await type(claim_attempt)
+    expect([second.status, await second.text()]).toEqual([409, expect.stringContaining('Already approved')])
+
+    const refreshed = await (await refreshWith(app, granted.refresh_token)).json()
+    const bearing = await (await bearer(app, granted.identity_assertion)).json()
+    const grants = await Promise.all([granted, refreshed, bearing].map(async (one) => (await callerOf(app, one.access_token)).grant))
+    expect(new Set(grants).size).toBe(1)
+    await oauth.revokeGrant(grants[0])
+    for (const one of [granted, refreshed, bearing]) expect((await callerWith(app, one.access_token)).status).toBe(401)
+    expect((await (await refreshWith(app, refreshed.refresh_token)).json()).error).toBe('invalid_grant')
+    expect((await (await bearer(app, granted.identity_assertion)).json()).error).toBe('invalid_grant')
+  })
+
   it('uses a claimed registration’s id as the grant when it was claimed before grants', async () => {
     const store = memoryOAuthStore()
     const { app } = await oauthApp(store)

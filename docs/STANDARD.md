@@ -148,7 +148,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 - **Agents that get their own token (optional, `oauth.ts`):** the app is its own OAuth server. MCP clients follow the
   401's `resource_metadata` to `/.well-known/oauth-protected-resource[/mcp]`, register (RFC 7591, public clients), and
   send the owner to `/oauth/authorize` (code + PKCE S256); other agents follow `/auth.md` (anonymous or by email),
-  and the owner types the agent's 6-digit code at `/oauth/claim`; a CLI or device without a browser uses the device
+  and the owner types the agent's 6-digit code at `/oauth/claim` (once per registration: a second code is refused); a CLI or device without a browser uses the device
   authorization grant (RFC 8628: `POST /oauth/device_authorization`, a `XXXX-XXXX` code with no vowels for the owner
   to type at `/oauth/device`, 10 minutes, single use, hashes only, 5 wrong codes per person per 10 minutes, then it
   polls the token endpoint and hears `authorization_pending`, `slow_down`, `expired_token` or `access_denied`). The

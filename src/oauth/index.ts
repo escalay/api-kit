@@ -448,8 +448,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       await store.delete('claim-attempt', key)
       const registration = await store.get('registration', String(attempt.registration))
       if (!registration) return c.html(page('Expired', '<h1>This registration expired</h1>'), 410)
+      // One approval per registration: a second would give its jwt-bearer tokens a grant its claim and refresh tokens lack
+      if (registration.claimed) return c.html(page('Already approved', `<h1>Already approved</h1><p>${escape(String(registration.name))} was approved already; this code is spent. You can close this page.</p>`), 409)
       // One grant for the claim: its claim, refresh and jwt-bearer tokens all carry it
-      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: newGrant() }, now() + REGISTRATION_TTL)
+      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: registration.family ?? newGrant() }, now() + REGISTRATION_TTL)
       return c.html(page('Approved', `<h1>Approved</h1><p>${escape(String(registration.name))} can now use ${escape(config.name)}. You can close this page.</p>`))
     })
 

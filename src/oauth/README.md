@@ -39,7 +39,8 @@ An OAuth caller is `{ kind: 'agent', client, grant, name, scopes, owner }`:
   clients that register the same name are two callers.
 - `grant` is one approval: every token from one sign-in (a code, a device approval, a claim), rotated or not, carries
   it. A claimed agent's claim, refresh and jwt-bearer tokens share one, so once that grant is revoked (a replayed
-  refresh token, `revokeGrant`) its identity assertion is refused too: the agent registers again. Tokens issued before
+  refresh token, `revokeGrant`) its identity assertion is refused too: the agent registers again. A registration is
+  approved once: a second claim code typed for it gets an "Already approved" page (409), never a second grant. Tokens issued before
   grants have none and run to their hour, known by `client`; a claim from before grants uses its registration id.
 - `verify` reads the issued row and both revocation markers (the client's, and the grant's when the token has one) in
   one round trip: three row reads per request with a grant, two without.
@@ -114,6 +115,8 @@ Defaults that change when an app takes this version:
 - A code sent twice with its verifier revokes its sign-in.
 - `revokeClient` deletes the registration: a revoked client registers again. A code or a device approval collected
   after it gets `invalid_grant` (before, it was issued tokens `verify` refused).
+- A second claim code typed for a registration already approved is refused with a 409 page (before, it replaced the
+  registration's grant, so its jwt-bearer tokens and its claim and refresh tokens no longer shared one).
 - `createOAuth` throws on a malformed signing key when called. On Node a bad key already stopped the process at start
   (an unhandled rejection); on Workers the app now fails to build instead of failing only its OAuth requests.
 
