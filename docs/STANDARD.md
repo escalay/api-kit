@@ -159,7 +159,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   hashes; a used one sent again revokes every refresh token of that sign-in, and so does revoking any of them. **An
   OAuth caller is known by its client_id and its grant (one approval, every token of one sign-in), never by the name it
   registered; the name is for display.** Rate limits, idempotency, MCP and A2A task ownership key on them, and revoking a grant ends its
-  access tokens at once (`revokeGrant`), and a claimed agent's identity assertion with them; `revokeClient` also drops the registration. A code, a refresh token, a device code and a claim token are
+  access tokens at once (`revokeGrant`), and a claimed agent's identity assertion with them; `revokeClient` also drops the registration and refuses a code or device approval not yet collected (the revoke markers outlive anything issued behind them). A code, a refresh token, a device code and a claim token are
   used once under concurrent requests: a second valid exchange of a code, or a refresh token sent again (outside an
   optional `reuseGraceSeconds`, default 0), revokes the grant. OAuth rows live in SQLite or D1, never KV. Scopes: `read` for safe methods, `write` for the rest; the relay endpoints (`/mcp`, `/a2a`,
   `auth.relay`) need only `read`, since each call they make reaches a route that checks its own scope. In Access, only

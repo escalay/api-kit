@@ -49,6 +49,11 @@ await oauth.revokeGrant(caller.grant)   // ends that sign-in at once: its access
 await oauth.revokeClient(clientId)      // every sign-in of the client, and drops its registration: it registers again
 ```
 
+`revokeClient` also ends what was approved but not yet collected: a code exchanged or a device approval polled after
+it gets `invalid_grant`, and the device page refuses a code whose client is gone. Both markers (`revokeGrant`'s and
+`revokeClient`'s) are kept 30 days and 20 minutes, longer than a refresh token issued from a code or device approval
+collected at the last moment.
+
 `createOAuth({ …, reuseGraceSeconds: 30 })`: a used refresh token sent again inside the window (a client that lost the
 answer and retried) gets the same successor, an HMAC of the used token under a secret derived from the signing key, so
 none is stored. Never a second branch: once that successor is used, or the window has passed, it is reuse. The default
@@ -107,7 +112,8 @@ Defaults that change when an app takes this version:
 - `verify` refuses a token whose grant was revoked at once (before, up to an hour), including after a refresh token is
   replayed. A claimed agent's identity assertion is refused once its grant is revoked: it registers again.
 - A code sent twice with its verifier revokes its sign-in.
-- `revokeClient` deletes the registration: a revoked client registers again.
+- `revokeClient` deletes the registration: a revoked client registers again. A code or a device approval collected
+  after it gets `invalid_grant` (before, it was issued tokens `verify` refused).
 - `createOAuth` throws on a malformed signing key when called. On Node a bad key already stopped the process at start
   (an unhandled rejection); on Workers the app now fails to build instead of failing only its OAuth requests.
 

@@ -242,6 +242,37 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect((await (await poll()).json()).error).toBe('invalid_grant')
     })
 
+    it('refuses a code collected after revokeClient', async () => {
+      const { app, oauth } = await oauthApp(await make())
+      const { client_id, exchange } = await approvedCode(app)
+      await oauth.revokeClient(client_id)
+      const answer = await exchange()
+      expect([answer.status, (await answer.json()).error]).toEqual([400, 'invalid_grant'])
+    })
+
+    it('refuses a device approval collected after revokeClient, and a device whose client was revoked before approval', async () => {
+      const { app, oauth } = await oauthApp(await make())
+      const device = 'urn:ietf:params:oauth:grant-type:device_code'
+      const approve = (user_code: string) => app.request('/oauth/device', { ...form({ user_code, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+      const waiting = async () => {
+        const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+        const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+        const poll = () => app.request('/oauth/token', form({ grant_type: device, device_code, client_id }))
+        return { client_id, user_code, poll }
+      }
+
+      const approved = await waiting()
+      expect((await approve(approved.user_code)).status).toBe(200)
+      await oauth.revokeClient(approved.client_id)
+      const late = await approved.poll()
+      expect([late.status, (await late.json()).error]).toEqual([400, 'invalid_grant'])
+
+      const revoked = await waiting()
+      await oauth.revokeClient(revoked.client_id)
+      expect((await approve(revoked.user_code)).status).toBe(400)
+      expect((await (await revoked.poll()).json()).error).toBe('invalid_grant')
+    })
+
     it('issues one sign-in for a claim polled from two places at once', async () => {
       const { app } = await oauthApp(await make())
       const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()

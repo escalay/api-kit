@@ -422,6 +422,20 @@ describe('OAuth callers: the client and the grant, not the name', () => {
     expect((await (await bearer(app, revoked.granted.identity_assertion)).json()).error).toBe('invalid_grant')
   })
 
+  it('keeps a revoke marker longer than anything issued behind it', async () => {
+    const inner = memoryOAuthStore()
+    const expiries: Record<string, number> = {}
+    const store: OAuthStore = { ...inner, put: async (kind, id, value, expiresAt) => ((expiries[kind] = expiresAt), inner.put(kind, id, value, expiresAt)) }
+    const { app, oauth } = await oauthApp(store)
+    const { client_id, tokens } = await signedIn(app)
+    await oauth.revokeGrant((await callerOf(app, tokens.access_token)).grant)
+    await oauth.revokeClient(client_id)
+    // A code or a device approval still waiting can be collected, and its refresh token lives 30 days from then
+    const latest = expiries.refresh! + 10 * 60 + 10 * 60
+    expect(expiries['revoked-family']).toBeGreaterThanOrEqual(latest)
+    expect(expiries['revoked-client']).toBeGreaterThanOrEqual(latest)
+  })
+
   it('uses a claimed registration’s id as the grant when it was claimed before grants', async () => {
     const store = memoryOAuthStore()
     const { app } = await oauthApp(store)

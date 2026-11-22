@@ -50,6 +50,8 @@ const DEVICE_INTERVAL = 5
 /** Wrong device codes a signed-in person may type in a window before the page refuses for the rest of it. */
 const DEVICE_TRIES = 5
 const DEVICE_TRIES_WINDOW = 600
+/** A revoke marker outlives anything issued behind it: a code or device approval collected late, then its refresh token. */
+const REVOKED_TTL = REFRESH_TTL + CODE_TTL + DEVICE_TTL
 /** No vowels (no words), nothing that reads as another letter or a digit (RFC 8628 §6.1). */
 const USER_CODE_ALPHABET = 'BCDFGHJKLMNPQRSTVWXZ'
 
@@ -177,7 +179,7 @@ export const createOAuth = (config: OAuthConfig) => {
   }
 
   /** Ends one approval at once: its access tokens fail `verify`, its refresh tokens are refused. */
-  const revokeGrant = (grant: string) => store.put('revoked-family', grant, {}, now() + REFRESH_TTL)
+  const revokeGrant = (grant: string) => store.put('revoked-family', grant, {}, now() + REVOKED_TTL)
 
   /** The protected-resource metadata URL for a request: suffixed with `/mcp` for MCP, the bare one elsewhere. */
   const resourceMetadataFor = (c: Context) => `${originOf(c)}/.well-known/oauth-protected-resource${c.req.path.startsWith('/mcp') ? '/mcp' : ''}`
@@ -496,6 +498,9 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         await store.put('device-tries', triesKey, { count: Number(tries?.count ?? 0) + 1, until }, until)
         return { refused: c.html(deviceForm(typed, 'That code doesn’t match a device waiting here. Check it, or ask the device for a new one.'), 400) }
       }
+      // The client was revoked (or its registration expired) while the device waited: nothing to approve
+      const [client, revoked] = await Promise.all([store.get('client', String(record.client)), store.get('revoked-client', String(record.client))])
+      if (!client || revoked) return { refused: c.html(page('No longer allowed', '<h1>This device can’t be connected</h1><p>Its app was revoked or its registration expired. Start again on the device.</p>'), 400) }
       return { record, deviceKey: String(entry.device) }
     }
 
@@ -556,6 +561,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           }
           if (!sameRequest) return oauthError(c, 400, 'invalid_grant', 'client_id or redirect_uri differ from the authorization request.')
           if (!verified) return oauthError(c, 400, 'invalid_grant', 'The code_verifier doesn’t match the code_challenge.')
+          if (await store.get('revoked-client', String(row.client))) return oauthError(c, 400, 'invalid_grant', 'This client was revoked: register again.')
           const issued = { client: String(row.client), name: String(row.name), owner: String(row.owner), scopes: row.scopes as string[], grant }
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
         }
@@ -598,6 +604,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const record = body.device_code ? await store.get('device', key) : null
           if (!record || record.client !== body.client_id) return oauthError(c, 400, 'invalid_grant', 'This device_code is unknown or belongs to another client_id: start again at /oauth/device_authorization.')
           const keepUntil = Number(record.expiresAt) + DEVICE_TTL
+          if (await store.get('revoked-client', String(record.client))) {
+            await store.delete('device', key)
+            return oauthError(c, 400, 'invalid_grant', 'This client was revoked: register again.')
+          }
           if (now() >= Number(record.expiresAt)) {
             await store.delete('device', key)
             return oauthError(c, 400, 'expired_token', 'The code expired before the owner approved it: start again at /oauth/device_authorization.')
@@ -660,7 +670,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
    * revoked client registers again and gets a new id.
    */
   const revokeClient = async (clientId: string) => {
-    await store.put('revoked-client', clientId, {}, now() + REFRESH_TTL)
+    await store.put('revoked-client', clientId, {}, now() + REVOKED_TTL)
     await store.delete('client', clientId)
     await store.delete('registration', clientId)
   }
