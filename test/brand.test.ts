@@ -182,11 +182,22 @@ describe('brand', () => {
     expect(await (await get(app, '/site.webmanifest')).json()).toEqual({ name: 'mine' })
   })
 
-  it('in a private service, needs credentials for the brand’s files and never lets a shared cache keep them', async () => {
+  it('lets other sites show its files, while the rest of the API stays same-site', async () => {
+    const app = await branded()
+    for (const path of ['/icon.svg', '/icon-512.png', '/og.png']) {
+      const response = await get(app, path)
+      expect([response.status, response.headers.get('cross-origin-resource-policy')], path).toEqual([200, 'cross-origin'])
+      const fresh = await get(app, path, { 'if-none-match': response.headers.get('etag')! })
+      expect([fresh.status, fresh.headers.get('cross-origin-resource-policy')], path).toEqual([304, 'cross-origin'])
+    }
+    expect((await get(app, '/openapi.json')).headers.get('cross-origin-resource-policy')).toBe('same-site')
+  })
+
+  it('in a private service, needs credentials for the brand’s files, keeps them same-site and never lets a shared cache keep them', async () => {
     const app = await branded({ private: true })
     expect((await get(app, '/favicon.ico')).status).toBe(401)
     const withKey = await get(app, '/favicon.ico', AUTH)
-    expect([withKey.status, withKey.headers.get('cache-control')]).toEqual([200, 'private, max-age=604800'])
+    expect([withKey.status, withKey.headers.get('cache-control'), withKey.headers.get('cross-origin-resource-policy')]).toEqual([200, 'private, max-age=604800', 'same-site'])
   })
 
   it('serves the SVG alone until `kit brand` renders the PNGs', async () => {

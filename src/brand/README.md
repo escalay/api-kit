@@ -33,7 +33,7 @@ own SVG, then `npx @escalay/kit brand` renders it again. `kit init` makes every 
 
 | Surface | From the brand |
 |---|---|
-| `/favicon.ico` (16, 32, 48 PNGs in one ICO), `/icon.svg`, `/icon-192.png`, `/icon-512.png`, `/apple-touch-icon.png` (180, opaque), `/og.png` (1200×630), `/site.webmanifest`, and `/icon-dark*` with a dark icon | the files; open without a key unless the app is private (behind Access, bypass SSO for these paths as STANDARD §7 lists them), a week of caching, an ETag of each file's bytes |
+| `/favicon.ico` (16, 32, 48 PNGs in one ICO), `/icon.svg`, `/icon-192.png`, `/icon-512.png`, `/apple-touch-icon.png` (180, opaque), `/og.png` (1200×630), `/site.webmanifest`, and `/icon-dark*` with a dark icon | the files; open without a key unless the app is private (behind Access, bypass SSO for these paths as STANDARD §7 lists them), a week of caching, an ETag of each file's bytes, `cross-origin-resource-policy: cross-origin` so other sites can show them in an `<img>` (`same-site` in a private app) |
 | MCP `serverInfo` (`server/discover`, 2025's `initialize`) and the Server Card | `title`, `description`, `websiteUrl` (where `info` leaves them out), `icons` |
 | OpenAPI `info` | `x-logo` (the 512 PNG, else the SVG, on `background`) and `termsOfService` from `termsUrl` |
 | A2A Agent Card | `iconUrl` |

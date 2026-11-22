@@ -242,8 +242,8 @@ export type AgentBrand = {
   icons: (origin: string | null, options?: { inline?: boolean }) => ServerIcon[]
   /** The `<link>` and `<meta>` tags for a page's `<head>`. */
   headTags: (origin: string) => string
-  /** Serves its files on the app; a path the app answers itself stays the app's. */
-  mount: (app: Hono<any, any, any>) => void
+  /** Serves its files on the app (any site may show them, unless the app is private); a path the app answers itself stays the app's. */
+  mount: (app: Hono<any, any, any>, options?: { private?: boolean }) => void
 }
 
 /** `cookbook.example.com` + `cookbook` → `com.example.cookbook/cookbook`: the reverse-DNS name the card spec asks for. */

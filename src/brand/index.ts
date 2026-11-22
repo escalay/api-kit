@@ -202,7 +202,7 @@ export const createBrand = (brand: Brand, assets: BrandAssets): AgentBrand => {
     ...(assets.og ? { '/og.png': { type: 'image/png', body: () => bytesOf(assets.og!) } } : {}),
   }
   const made = new Map<string, { body: Uint8Array | string; etag: string }>()
-  const send = (c: Context, path: string, prepared: Headers) => {
+  const send = (c: Context, path: string, prepared: Headers, resourcePolicy: string) => {
     const file = files[path]!
     if (!made.has(path)) {
       const body = file.body()
@@ -210,7 +210,7 @@ export const createBrand = (brand: Brand, assets: BrandAssets): AgentBrand => {
     }
     const { body, etag } = made.get(path)!
     const headers = new Headers(prepared)
-    for (const [name, value] of Object.entries({ 'content-type': file.type, 'cache-control': CACHE, etag, 'access-control-allow-origin': '*' })) headers.set(name, value)
+    for (const [name, value] of Object.entries({ 'content-type': file.type, 'cache-control': CACHE, etag, 'access-control-allow-origin': '*', 'cross-origin-resource-policy': resourcePolicy })) headers.set(name, value)
     const fresh = c.req.header('if-none-match')?.split(',').some((value) => value.trim() === etag)
     return new Response(fresh ? null : (body as BodyInit), { status: fresh ? 304 : 200, headers })
   }
@@ -225,7 +225,9 @@ export const createBrand = (brand: Brand, assets: BrandAssets): AgentBrand => {
     paths: Object.keys(files),
     icons: (origin, options) => brandIcons(origin, assets, options),
     headTags: (origin) => headTags(brand, assets, origin),
-    mount: (app: Hono<any, any, any>) => {
+    mount: (app: Hono<any, any, any>, options = {}) => {
+      // Other sites show the icons and OG card in an <img>; a private app's files stay on its own site
+      const resourcePolicy = options.private ? 'same-site' : 'cross-origin'
       for (const path of Object.keys(files))
         app.get(path, async (c, next) => {
           // After the app's own routes and files: only a path nothing else answered gets the brand's
@@ -236,7 +238,7 @@ export const createBrand = (brand: Brand, assets: BrandAssets): AgentBrand => {
           for (const name of ['content-type', 'content-length', 'content-language', 'content-encoding']) prepared.delete(name)
           // Cleared first, or Hono copies the 404's headers over the file's
           c.res = undefined as never
-          c.res = send(c, path, prepared)
+          c.res = send(c, path, prepared, resourcePolicy)
         })
     },
   }

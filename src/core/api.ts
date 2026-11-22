@@ -269,7 +269,7 @@ export const createAgentApi = (config: AgentApiConfig) => {
   if (home === 'app') app.get('/app', (c) => c.redirect('/app/', 302))
   if (brand) {
     recordMounted(app, { brand })
-    brand.mount(app)
+    brand.mount(app, { private: config.private })
   }
 
   return app

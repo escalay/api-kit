@@ -607,8 +607,9 @@ every surface, so none of them can disagree.
   rides on `server/discover` only, not on the serverInfo every answer carries.
 - `/favicon.ico` (16, 32 and 48 px), `/icon.svg`, `/icon-192.png`, `/icon-512.png`, `/apple-touch-icon.png`, `/og.png` and
   `/site.webmanifest` (and `/icon-dark.svg`, `/icon-dark-192.png`, `/icon-dark-512.png` with a dark icon) are public
-  (credentials first when the service is private), cached a week with an ETag of the bytes served; a path the app
-  serves itself stays the app's. Behind Access they bypass SSO with §7's open paths, or the icons clients fetch from
+  (credentials first when the service is private), cached a week with an ETag of the bytes served, and
+  `cross-origin-resource-policy: cross-origin`, so other sites can show them (`same-site` when the service is
+  private); a path the app serves itself stays the app's. Behind Access they bypass SSO with §7's open paths, or the icons clients fetch from
   the server's host and the pages' head tags get the sign-in page.
 - Connector lists in claude.ai and Claude Desktop show the favicon of the address's **root domain**, whatever the
   server says: serve the same icon there. `kit doctor` notes a host on a subdomain.
