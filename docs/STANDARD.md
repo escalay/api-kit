@@ -141,8 +141,10 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   made or deleted: its id, name and `by`, never its value). An app logs them where it logs the rest, so an owner can
   see who was let in, and alerts the person whose way in changed.
 - **Open without auth:** `/api/health`, `/openapi.json`, `/docs`, `/llms*.txt`, `/agents/*`, `/skills/*`,
-  `/problems/*` (no data). In Access, these paths and `/api/*`, `/mcp` bypass SSO; the app's key check
-  guards them.
+  `/problems/*` (no data), and with a brand (§22) its files: `/favicon.ico`, `/icon.svg`, `/icon-192.png`,
+  `/icon-512.png`, `/apple-touch-icon.png`, `/og.png`, `/site.webmanifest`, and `/icon-dark.svg`,
+  `/icon-dark-192.png`, `/icon-dark-512.png` with a dark icon. In Access, these paths and `/api/*`, `/mcp` bypass SSO;
+  the app's key check guards them.
 - A 401 carries `WWW-Authenticate: Bearer realm="<app>"` (plus `error="invalid_token"` for a wrong key). Keys never go
   in URLs or logs.
 - **Agents that get their own token (optional, `oauth.ts`):** the app is its own OAuth server. MCP clients follow the
@@ -604,8 +606,10 @@ every surface, so none of them can disagree.
   SVG. A dark variant adds entries with `theme: 'dark'`, never a second inline icon. On 2026-07-28 the inline icon
   rides on `server/discover` only, not on the serverInfo every answer carries.
 - `/favicon.ico` (16, 32 and 48 px), `/icon.svg`, `/icon-192.png`, `/icon-512.png`, `/apple-touch-icon.png`, `/og.png` and
-  `/site.webmanifest` are public (credentials first when the service is private), cached a week with an ETag; a path
-  the app serves itself stays the app's.
+  `/site.webmanifest` (and `/icon-dark.svg`, `/icon-dark-192.png`, `/icon-dark-512.png` with a dark icon) are public
+  (credentials first when the service is private), cached a week with an ETag of the bytes served; a path the app
+  serves itself stays the app's. Behind Access they bypass SSO with §7's open paths, or the icons clients fetch from
+  the server's host and the pages' head tags get the sign-in page.
 - Connector lists in claude.ai and Claude Desktop show the favicon of the address's **root domain**, whatever the
   server says: serve the same icon there. `kit doctor` notes a host on a subdomain.
 - No brand changes nothing: every document is byte for byte what it was without one.
