@@ -22,6 +22,15 @@ describe('the kit in workerd', () => {
       expect((await exports.default.fetch(`https://kit.test${path}`)).status, path).toBe(200)
   })
 
+  it('serves the brand from its committed bytes: favicon, icons and head tags', async () => {
+    const favicon = await exports.default.fetch('https://kit.test/favicon.ico')
+    expect([favicon.status, favicon.headers.get('content-type')]).toEqual([200, 'image/x-icon'])
+    expect([...new Uint8Array(await favicon.arrayBuffer()).subarray(0, 6)]).toEqual([0, 0, 1, 0, 3, 0])
+    const icon = await exports.default.fetch('https://kit.test/icon-192.png')
+    expect([...new Uint8Array(await icon.arrayBuffer()).subarray(0, 4)]).toEqual([137, 80, 78, 71])
+    expect(await (await exports.default.fetch('https://kit.test/docs')).text()).toContain('<meta property="og:image" content="https://kit.test/og.png">')
+  })
+
   it('replays an Idempotency-Key and limits calls, with the guards in D1', async () => {
     const post = (body: string, key?: string) => exports.default.fetch('https://kit.test/probe/notes', { method: 'POST', body, headers: key ? { 'idempotency-key': key } : {} })
     const first = await post('a', 'k1')

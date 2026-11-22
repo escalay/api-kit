@@ -1,0 +1,74 @@
+# brand
+
+One brand, every surface. The app owns `brand/brand.ts` (`defineBrand`) and `brand/icon.svg` (and, if it wants,
+`brand/icon-dark.svg`, a mark made for dark backgrounds). `kit brand` renders the PNGs at build time into
+`src/brand.gen.ts`, which is committed: nothing rasterises at runtime, so Workers serve the same bytes as Node.
+
+Needs: `core`. Rendering needs `@resvg/resvg-js` in the app (`pnpm add -D @resvg/resvg-js`), only when `kit brand` runs.
+
+```ts
+// brand/brand.ts
+import { defineBrand } from '../src/kit/brand/index.js'
+
+export default defineBrand({ name: 'cookbook', title: 'Cookbook', description: 'Recipes and menus for agents.', accent: '#2563eb' })
+```
+
+```ts
+// src/app.ts
+import BRAND from '../brand/brand.js'
+import { BRAND_ASSETS } from './brand.gen.js'
+
+const app = createAgentApi({ …, brand: createBrand(BRAND, BRAND_ASSETS) })
+// mountMcp, mountA2A, serveGuide and serveFrontDoor take it from the app
+```
+
+`npx @escalay/kit add brand` scaffolds both files (a monogram of the name's first letter on the accent); swap in your
+own SVG, then `npx @escalay/kit brand` renders it again. `kit init` makes every new app with them and an SVG-only
+`src/brand.gen.ts` until the first `kit brand`.
+
+## What it serves and who reads it
+
+| Surface | From the brand |
+|---|---|
+| `/favicon.ico` (16, 32, 48 PNGs in one ICO), `/icon.svg`, `/icon-192.png`, `/icon-512.png`, `/apple-touch-icon.png` (180, opaque), `/og.png` (1200×630), `/site.webmanifest`, and `/icon-dark*` with a dark icon | the files; open without a key unless the app is private, a week of caching, an ETag from the inputs' hash |
+| MCP `serverInfo` (`server/discover`, 2025's `initialize`) and the Server Card | `title`, `description`, `websiteUrl` (where `info` leaves them out), `icons` |
+| OpenAPI `info` | `x-logo` (the 512 PNG, else the SVG, on `background`) and `termsOfService` from `termsUrl` |
+| A2A Agent Card | `iconUrl` |
+| The guide | `{{brand.name}}`, `{{brand.title}}`, `{{brand.description}}` (`guideGaps(files, vars, { brand })` checks them) |
+| `/docs` and the front door's pages | the head tags (`headTags`): icons, manifest, `theme-color`, Open Graph, Twitter card; a page with its own `rel="icon"` keeps it |
+
+What each client shows, and why the icons come in this order:
+
+| Client | Shows |
+|---|---|
+| Claude (MCP Apps) | only an inline `data:` PNG or JPEG, 64–128 px, under 10 KB, in a serverInfo under about 16,000 characters: the first icon, 96 px |
+| VS Code | no SVG; honours `theme`; `https` icons only from the server's own host: the 192 and 512 PNGs |
+| Clients that take SVG | the SVG, last |
+| claude.ai and Claude Desktop connector lists | Google's favicon service for the **root domain** of the connector's address, whatever the server says |
+
+The last row is the one the kit can't fix from here: a server at `mcp.example.com` shows `example.com`'s favicon.
+Serve the same icon there too; `kit doctor` notes it for a host on a subdomain.
+
+## Exports
+
+| Export | What |
+|---|---|
+| `defineBrand(brand)` | the brand, checked: names not empty, a description of 1–100 characters (the Server Card's limit), `#rrggbb` colours, absolute https URLs |
+| `createBrand(brand, assets)` | what `createAgentApi({ brand })` takes (`AgentBrand` in core): the files it serves and what the other parts read |
+| `brandIcons(origin, assets, { inline })` | the ordered MCP icons |
+| `headTags(brand, assets, origin)` | the head tags, for pages the app renders itself |
+| `webManifest(brand, assets)`, `icoOf(pngs)` | the manifest, and an ICO of PNGs built by hand |
+| `Brand`, `BrandAssets` | the brand, and what `kit brand` writes |
+
+## Rules
+
+- PNG first, SVG last: the inline 96 PNG, then this host's 192 and 512 PNGs, then the SVG; a dark icon adds `https`
+  entries with `theme: 'dark'` (one inline icon only).
+- On MCP 2026-07-28 the inline icon rides only on `server/discover` (and 2025's `initialize`); the serverInfo stamped
+  on every other answer leaves it out, since it weighs kilobytes.
+- A path the app serves itself (a route, or a file in the front door's folder) stays the app's.
+- No brand, no change: every surface is byte for byte what it was.
+- `kit brand` hashes `brand.ts`, the SVGs and its own output spec (never the rendered bytes, which differ between
+  machines); `kit doctor` and `kit brand --check` call `src/brand.gen.ts` stale when the hash no longer matches. The OG
+  card's text uses the machine's sans-serif font (none is bundled), so render where that font looks right.
+- STANDARD §22 (Identity).

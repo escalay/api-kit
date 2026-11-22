@@ -27,7 +27,7 @@ serveGuide(app, { files: GUIDE_FILES, vars, full })   // Workers can't read a fo
 | File | What |
 |---|---|
 | `guide.ts` | `serveGuide` (from `dir`, or `files` on Workers), `guideFiles(dir)`, `guideModuleSource(files)` (the text `kit guide` writes; an app's test compares its `guide.gen.ts` to it), `fillTemplate` |
-| `reference.ts` | the generated parts: `{{api.endpoints}}`, `{{api.operations}}`, `{{api.unblock}}`, `{{mcp.tools}}`, `{{mcp.count}}`, `{{mcp.resources}}`, `{{skills.<name>.playbooks}}` |
+| `reference.ts` | the generated parts: `{{api.endpoints}}`, `{{api.operations}}`, `{{api.unblock}}`, `{{mcp.tools}}`, `{{mcp.count}}`, `{{mcp.resources}}`, `{{skills.<name>.playbooks}}`; `brandVars`: `{{brand.name}}`, `{{brand.title}}`, `{{brand.description}}` when the app has a brand (`createAgentApi({ brand })`) |
 
 ## Rules
 

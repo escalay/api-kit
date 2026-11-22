@@ -25,7 +25,7 @@ import { CACHE } from '../core/cache.js'
 import { frontmatterOf, recordMounted, mountedOf, sendPublic, skillsIndex, tarGz, WELL_KNOWN, type SkillArtifact } from '../core/discovery.js'
 import { originOf } from '../core/hal.js'
 import { problemResponse } from '../core/problem.js'
-import { generatedVars, type CliCommandLike, type OpenApiDoc } from './reference.js'
+import { brandVars, generatedVars, type CliCommandLike, type OpenApiDoc } from './reference.js'
 
 export const MARKDOWN = 'text/markdown; charset=utf-8'
 
@@ -109,7 +109,8 @@ export const serveGuide = (app: Hono<any, any, any> & Requester, { vars, full, c
   const credentialsOf = (c: Context) => Object.fromEntries((['authorization', 'cookie', 'cf-access-jwt-assertion'] as const).flatMap((name) => (c.req.header(name) ? [[name, c.req.header(name)!]] : [])))
   const render = async (origin: string, name: string, credentials: Record<string, string> = {}) => {
     const generated = generatedVars({ origin, doc: await docOf(origin, credentials), tools: mountedOf(app).mcp?.tools, resources: mountedOf(app).mcp?.resources, commands: commands?.commands, files })
-    return fillTemplate(files.get(name)!, { origin, ...generated, ...vars() }).text
+    const brand = mountedOf(app).brand
+    return fillTemplate(files.get(name)!, { origin, ...generated, ...(brand ? { brand: brandVars(brand) } : {}), ...vars() }).text
   }
   const send = (c: Context, body: string) => c.body(body, 200, { 'content-type': MARKDOWN, 'cache-control': CACHE.docs })
 

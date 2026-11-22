@@ -16,6 +16,8 @@ serveFrontDoor(app, web)                                                    // l
 
 ## Rules
 
+- With `createAgentApi({ brand })`, each page gets the brand's head tags (icons, manifest, theme colour, Open Graph)
+  unless it names a `rel="icon"` of its own, and a `favicon.ico` in `dir` wins over the brand's.
 - Register it last. Vite's hashed `/assets/` are served unversioned (a `?v=` on them loads each module twice).
 - In private mode `/` redirects to `/app` and nothing public names the service.
 - Not to be confused with the browser modules (`browser/`), which go into the frontend.

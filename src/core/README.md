@@ -16,6 +16,7 @@ const app = createAgentApi({
   private: true,                                                // optional: nothing readable without credentials, noindex
   home: 'app',                                                  // optional: `/` sends people to the browser app at `/app/` (default: to `/docs`)
   address: { header: 'cf-connecting-ip' },                      // optional: where the caller's address comes from (below)
+  brand: createBrand(BRAND, BRAND_ASSETS),                      // optional: the brand part; favicon, icons, x-logo, and what MCP, A2A and the guide read
 })
 ```
 

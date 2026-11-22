@@ -27,7 +27,8 @@ mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools: [getNote]
 | `mountedMcp(app)` | the tools and resources `mountMcp` serves, for `cliGaps` and `cliSnapshot` |
 | `guideSkills({ files, fill })` | the guide's skill folders as the factory's `skills` and `prompts` (one prompt per playbook); `fill` renders a file first when a skill uses placeholders. Served so a plain MCP client finds them (below) |
 | `mcpServerFactory` | the server: info, instructions, tools, resources, prompts, skills; `toolsTtlMs` sets how long clients cache `tools/list` (default an hour); `structured` says when a tool's JSON rides as `structuredContent`: `'always'` (the default) or `'withOutput'` (only for a tool with an `output` schema; the others answer text only, so the app's CLI prints `{ text }` for their `--json`) |
-| `mountMcp` | `/mcp` (Streamable HTTP, MCP 2026-07-28 with a fallback for older clients) and the Server Card |
+| `mountMcp` | `/mcp` (Streamable HTTP, MCP 2026-07-28 with a fallback for older clients) and the Server Card; the app's brand (`createAgentApi({ brand })`) fills `title`, `description`, `websiteUrl` and `icons` where `info` leaves them out |
+| `serverInfoOf(info, brand, origin, { inline })` | that identity: the inline PNG icon first (2025's `initialize`, `server/discover`, the card), left out of the serverInfo 2026-07-28 stamps on every other answer; a stdio factory takes `brand` itself |
 | `inProcess(app)` / `overHttp(origin, key)` | how tools reach the routes: in the same process, or over HTTP for a stdio entry |
 | `callWaiting` | follows a 202 run until it finishes, so a slow route still answers the tool |
 

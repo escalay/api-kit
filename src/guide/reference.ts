@@ -229,5 +229,8 @@ export const generatedVars = ({ origin, doc, tools, resources, commands, files }
   }
 }
 
+/** `{{brand.name}}`, `{{brand.title}}`, `{{brand.description}}`: what a guide may say of the app's brand. @example brandVars(BRAND).title */
+export const brandVars = ({ name, title, description }: { name: string; title: string; description: string }) => ({ name, title, description })
+
 /** Template names the kit fills itself; `guideGaps` doesn't ask the app for them. */
 export const GENERATED_ROOTS = ['origin', 'api', 'mcp', 'skills', 'cli'] as const

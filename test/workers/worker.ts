@@ -14,6 +14,16 @@ import { probeTelemetry } from './probe-telemetry.js'
 
 type Env = { DB: D1Database }
 
+// What `kit brand` commits, in miniature: one 1 px PNG for every size
+const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQTX79HwAElwJzVt2vfAAAAABJRU5ErkJggg=='
+const BRAND_ASSETS = {
+  inputsHash: '0123456789abcdef'.repeat(4),
+  svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#2563eb"/></svg>',
+  png: { 16: PIXEL, 32: PIXEL, 48: PIXEL, 96: PIXEL, 180: PIXEL, 192: PIXEL, 512: PIXEL },
+  og: PIXEL,
+}
+const BRAND = kit.defineBrand({ name: 'probe', title: 'Kit on Workers', description: 'The kit running in workerd.', accent: '#2563eb' })
+
 const build = async (env: Env) => {
   const db = await kit.openDb(drizzle(env.DB) as unknown as kit.Db)
   await kit.migrate(db, 'probe', ['create table probe (id integer primary key, note text)', "insert into probe (note) values ('one'); insert into probe (note) values ('two')"])
@@ -27,6 +37,8 @@ const build = async (env: Env) => {
     guards: { store: guards },
     // On Workers the connection is Cloudflare's: the address it saw comes in cf-connecting-ip
     address: { header: 'cf-connecting-ip' },
+    // The favicon, icons and OG card from committed bytes: nothing renders in workerd
+    brand: kit.createBrand(BRAND, BRAND_ASSETS),
   })
   // Passkeys run through @simplewebauthn/server on workerd; the code is a test value, never a real secret
   await kit.registerPeople(app, { db, rpName: 'Probe' })

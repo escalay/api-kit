@@ -218,7 +218,33 @@ export const SERVER_CARD_TYPE = 'application/mcp-server-card+json'
 /** The 2026 revision the kit's servers speak; the SDK answers the 2025 ones through its fallback. */
 export const MODERN_PROTOCOL_VERSION = '2026-07-28'
 
-export type ServerCardInfo = { name: string; version: string; title?: string; description?: string; websiteUrl?: string }
+/** An MCP `Icon` (spec 2025-11-25 and on): `theme: 'dark'` is one made for a dark background. */
+export type ServerIcon = { src: string; mimeType?: string; sizes?: string[]; theme?: 'light' | 'dark' }
+
+export type ServerCardInfo = { name: string; version: string; title?: string; description?: string; websiteUrl?: string; icons?: ServerIcon[] }
+
+/**
+ * What core and the other parts read of the app's brand (`createBrand` in the `brand` part): `createAgentApi({ brand })`
+ * serves its files and records it, and MCP, A2A, the guide and the front door take it from the app.
+ */
+export type AgentBrand = {
+  name: string
+  title: string
+  description: string
+  websiteUrl?: string
+  termsUrl?: string
+  background: string
+  /** The path of the largest picture it serves (OpenAPI's `x-logo`, the A2A card's `iconUrl`). */
+  logo: string
+  /** The paths `mount` serves, left open without credentials unless the app is private. */
+  paths: string[]
+  /** MCP and Server Card icons: the inline PNG first, this origin's PNGs, the SVG last; no origin, the inline one only. */
+  icons: (origin: string | null, options?: { inline?: boolean }) => ServerIcon[]
+  /** The `<link>` and `<meta>` tags for a page's `<head>`. */
+  headTags: (origin: string) => string
+  /** Serves its files on the app; a path the app answers itself stays the app's. */
+  mount: (app: Hono<any, any, any>) => void
+}
 
 /** `cookbook.example.com` + `cookbook` → `com.example.cookbook/cookbook`: the reverse-DNS name the card spec asks for. */
 export const reverseDnsName = (origin: string, name: string) => `${new URL(origin).hostname.split('.').reverse().join('.')}/${name}`
@@ -230,6 +256,7 @@ export const serverCard = (origin: string, path: string, info: ServerCardInfo, p
   description: info.description ?? info.title ?? info.name,
   ...(info.title ? { title: info.title } : {}),
   websiteUrl: info.websiteUrl ?? `${origin}${WELL_KNOWN.guide}`,
+  ...(info.icons?.length ? { icons: info.icons } : {}),
   remotes: [
     {
       type: 'streamable-http' as const,
@@ -261,6 +288,7 @@ type Mounted = {
   /** Builds the skill artifacts for an origin (they are rendered per origin and per data snapshot). */
   refreshSkills?: (origin: string, credentials?: Record<string, string>) => Promise<SkillArtifact[]>
   mcp?: { path: string; card: (origin: string) => ReturnType<typeof serverCard>; tools: ToolLike[]; resources?: ResourceLike[] }
+  brand?: AgentBrand
 }
 const mountedByApp = new WeakMap<object, Mounted>()
 
