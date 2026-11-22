@@ -152,8 +152,8 @@ const readLock = () => {
   const keyFor = (key) => (flat[key] ? `${WEB}${flat[key]}` : key.startsWith('web/') && WEB_FILES.has(key.slice(4)) ? WEB + key.slice(4) : key)
   return { ...lock, files: Object.fromEntries(Object.entries(lock.files).map(([key, hash]) => [keyFor(key), flat[key] ? null : hash]).filter(([, hash]) => hash !== null)) }
 }
-const writeLock = (modules, hashes, webDir) =>
-  writeFileSync(lockPath, JSON.stringify({ $comment: 'Written by @escalay/kit; hashes are of the files as the kit last wrote them.', source: SOURCE, version: VERSION, modules, ...(webDir ? { webDir } : {}), files: Object.fromEntries(Object.entries(hashes).sort()) }, null, 2) + '\n')
+const writeLock = (modules, hashes, webDir, version = VERSION) =>
+  writeFileSync(lockPath, JSON.stringify({ $comment: 'Written by @escalay/kit; hashes are of the files as the kit last wrote them.', source: SOURCE, version, modules, ...(webDir ? { webDir } : {}), files: Object.fromEntries(Object.entries(hashes).sort()) }, null, 2) + '\n')
 
 const dependenciesOf = (modules) => Object.assign({}, ...modules.map((name) => REGISTRY[name].dependencies ?? {}))
 const installCommand = (modules) => {
@@ -167,18 +167,23 @@ const install = (modules) => {
   if (result.status !== 0) fail('pnpm add failed; run it yourself: ' + installCommand(modules))
 }
 
-/** Each file's state against kit.json: did you edit it, did the kit change it. */
+/** Each file's state against kit.json: did you edit it, did the kit change it. A file equal to the kit's is unchanged, whatever kit.json recorded. */
 const statusOf = (lock, expected) =>
   Object.keys({ ...lock.files, ...expected }).sort().map((file) => {
     const path = pathOf(file, lock.webDir)
     const local = existsSync(path) ? sha(readFileSync(path, 'utf8')) : null
     const recorded = lock.files[file] ?? null
     const kit = expected[file] === undefined ? null : sha(expected[file])
+    if (local !== null && local === kit) return { file, state: 'unchanged', edited: false, changed: false }
     const edited = local !== null && recorded !== null && local !== recorded
-    const changed = kit !== recorded
+    // A part's file is fixed per kit version, so at kit.json's version an edited one's other hash is a wrong record; index.ts also follows the parts
+    const changed = kit !== recorded && !(edited && lock.version === VERSION && file !== 'index.ts')
     const state = local === null ? 'missing' : recorded === null ? 'new in kit' : kit === null ? 'dropped by kit' : edited && changed ? 'both changed' : edited ? 'you edited' : changed ? 'kit changed' : 'unchanged'
     return { file, state, edited, changed }
   })
+
+/** What to do with a file you edited that the kit changed too. */
+const keptFix = () => `\`kit diff --dir ${dirArg} --patch\` shows both; \`kit update --dir ${dirArg} --force\` takes the kit's, then make your edits again`
 
 /** The part a recorded file came with (`index.ts` is the kit's own). */
 const partOf = (key, modules) => modules.find((name) => REGISTRY[name].files.includes(sourceOf(key))) ?? 'kit'
@@ -186,12 +191,15 @@ const partOf = (key, modules) => modules.find((name) => REGISTRY[name].files.inc
 /** One line per thing wrong with the copy, each saying how to fix it. */
 const findingsOf = (lock) => {
   const statuses = statusOf(lock, expectedFiles(lock.modules, lock.webDir))
-  const behind = [...new Set(statuses.filter(({ state }) => ['kit changed', 'both changed', 'new in kit', 'dropped by kit'].includes(state)).map(({ file }) => partOf(file, lock.modules)))]
+  const behind = [...new Set(statuses.filter(({ state }) => ['kit changed', 'new in kit', 'dropped by kit'].includes(state)).map(({ file }) => partOf(file, lock.modules)))]
+  const kept = statuses.filter(({ state }) => state === 'both changed')
   return [
     ...statuses.filter(({ state }) => state === 'missing').map(({ file }) => `missing  ${file}: \`kit update --dir ${dirArg}\` writes it again`),
-    ...statuses.filter(({ edited }) => edited).map(({ file }) => `edited   ${file}: yours to keep; \`kit diff --dir ${dirArg} --patch\` shows the change, \`kit update --dir ${dirArg} --force\` takes the kit's`),
+    ...statuses
+      .filter(({ edited }) => edited)
+      .map(({ file, state }) => (state === 'both changed' ? `edited   ${file}: you edited it, and kit ${VERSION} changed it: ${keptFix()}` : `edited   ${file}: yours to keep; \`kit diff --dir ${dirArg} --patch\` shows the change, \`kit update --dir ${dirArg} --force\` takes the kit's`)),
     ...behind.map((part) => `behind   ${part} was copied from kit ${lock.version} and kit ${VERSION} changed it: \`kit diff --dir ${dirArg} --patch\`, then \`kit update --dir ${dirArg}\``),
-    ...(lock.version !== VERSION && !behind.length ? [`behind   kit.json says kit ${lock.version}, this is ${VERSION} with the same files: \`kit update --dir ${dirArg}\` records it`] : []),
+    ...(lock.version !== VERSION && !behind.length && !kept.length ? [`behind   kit.json says kit ${lock.version}, this is ${VERSION} with the same files: \`kit update --dir ${dirArg}\` records it`] : []),
   ]
 }
 
@@ -1135,9 +1143,14 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
         console.log(`  dropped       ${file} (no longer in the kit; delete it when nothing imports it)`)
         continue
       }
-      if (state === 'unchanged') continue
+      if (state === 'unchanged') {
+        hashes[file] = sha(expected[file])
+        continue
+      }
       if ((state === 'both changed' || state === 'you edited') && !flags.has('--force')) {
         if (state === 'both changed') kept.push(file)
+        // The kit's hash, as adopt records it: a wrong record would read as a kit change once the kit moves on
+        if (state === 'you edited' && lock.version === VERSION) hashes[file] = sha(expected[file])
         continue
       }
       mkdirSync(dirname(pathOf(file, lock.webDir)), { recursive: true })
@@ -1145,8 +1158,14 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
       hashes[file] = sha(expected[file])
       console.log(`  updated       ${file}`)
     }
-    writeLock(modules, hashes, lock.webDir)
-    if (kept.length) console.log(`Kept your edits to ${kept.join(', ')} although the kit changed them: \`diff --patch\` shows both, merge by hand, or --force`)
+    // A kept file still holds the older kit's code, so kit.json keeps the older version until none is left
+    writeLock(modules, hashes, lock.webDir, kept.length ? lock.version : VERSION)
+    if (kept.length) {
+      console.log(`${kept.length} ${kept.length === 1 ? 'file' : 'files'} kept at kit ${lock.version}: ${kept.join(', ')}. ${keptFix()}`)
+      console.log(`Dependencies: ${installCommand(modules)}`)
+      process.exitCode = 1
+      return
+    }
     console.log(`kit.json → ${VERSION}. Dependencies: ${installCommand(modules)}`)
   },
 }

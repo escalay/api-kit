@@ -15,7 +15,7 @@ Run every check. A check that was not run counts as failed.
 |---|---|---|
 | `no record` | parts were copied without `kit.json` (the shadcn CLI) | `npx @escalay/kit adopt` |
 | `missing` | a recorded file is gone | `npx @escalay/kit update` |
-| `edited` | the file differs from what the kit wrote | keep it on purpose, or `update --force` |
+| `edited` | the file differs from what the kit wrote; "and kit X changed it" when the kit moved on too | keep it on purpose, or `update --force` (then edit again) |
 | `behind` | the kit changed a part since it was copied | `diff --patch`, then `update` |
 | `cli` | a command is unnamed, duplicated, plural, undescribed or without an example (`cliGaps`) | name it: the `api-kit-cli` skill |
 
