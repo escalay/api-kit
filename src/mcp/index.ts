@@ -2,7 +2,8 @@
  * An MCP server (spec 2026-07-28, stateless Streamable HTTP; 2025-era clients served by the SDK's fallback) whose tools
  * are thin calls to the app's own HTTP routes, so the API and MCP can never disagree: same validation, same auth,
  * same problem details. A tool answers with a short text an agent reads first, the route's JSON as
- * `structuredContent` (matching `outputSchema` when given), and `resource_link`s for images. The skills folder is
+ * `structuredContent` (matching `outputSchema` when given; see `structured` on `mcpServerFactory`), and
+ * `resource_link`s for images. The skills folder is
  * served through the Skills extension (SEP-2640) and each playbook also as a prompt.
  *
  * @example

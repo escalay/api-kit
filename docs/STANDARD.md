@@ -461,7 +461,7 @@ the deployment's `/mcp`, so it can't disagree with the tools.
   enums checked before the call; nested objects only through `--input -`, a JSON object the flags win over.
 - **Agents first**: stdout holds only the answer; progress, prompts and warnings go to stderr. `--json [fields]` prints
   `structuredContent` (fields of each item for a list; `senderWritten` is always kept, and a field the answer
-  doesn't have is named on stderr). A resource's JSON reads as `key: value` lines without `--json`, under the app's
+  doesn't have is named on stderr; under `structured: 'withOutput'` a tool with no output schema prints `{ text }`). A resource's JSON reads as `key: value` lines without `--json`, under the app's
   untrusted-text note when it names `senderWritten` fields (`createCli({ untrusted })`). Errors are the problem as one line on stderr (JSON with
   `--json`) with stable exit codes: 0 done, 1 usage, 2 sign-in, 3 not found, 4 refused or a limit, 5 the server,
   6 timed out or still working, 130 stopped. Nothing prompts without a terminal; a destructive tool needs `--yes` there.
