@@ -332,6 +332,30 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect((await claimPoll(app, registration.claim_token)).status).toBe(200)
     })
 
+    it('makes one code when the consent form is posted twice at once', async () => {
+      const { app } = await oauthApp(await make())
+      const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Sample', redirect_uris: [REDIRECT] }))).json()
+      const query = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: REDIRECT, code_challenge: 'x'.repeat(43), code_challenge_method: 'S256' })
+      const ticket = /name="ticket" value="([^"]+)"/.exec(await (await app.request(`/oauth/authorize?${query}`, { headers: { 'x-test-owner': OWNER } })).text())![1]!
+      const allow = () => app.request('/oauth/authorize', { ...form({ ticket, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+      const answers = await Promise.all([allow(), allow()])
+      expect(answers.map((answer) => answer.status).sort()).toEqual([302, 400])
+    })
+
+    it('takes one answer when the device form is posted twice at once', async () => {
+      const { app } = await oauthApp(await make())
+      const device = 'urn:ietf:params:oauth:grant-type:device_code'
+      const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+      const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+      const answer = (decision: string) => app.request('/oauth/device', { ...form({ user_code, decision }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+      const answers = await Promise.all([answer('allow'), answer('deny')])
+      expect(answers.map((one) => one.status).sort()).toEqual([200, 400])
+      const won = await answers.find((one) => one.status === 200)!.text()
+      const polled = await (await app.request('/oauth/token', form({ grant_type: device, device_code, client_id }))).json()
+      if (won.includes('Approved')) expect(polled.access_token).toBeTruthy()
+      else expect(polled.error).toBe('access_denied')
+    })
+
     it('issues one sign-in for a claim polled from two places at once', async () => {
       const { app } = await oauthApp(await make())
       const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()

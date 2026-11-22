@@ -160,7 +160,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   OAuth caller is known by its client_id and its grant (one approval, every token of one sign-in), never by the name it
   registered; the name is for display.** Rate limits, idempotency, MCP and A2A task ownership key on them, and revoking a grant ends its
   access tokens at once (`revokeGrant`), and a claimed agent's identity assertion with them; `revokeClient` also drops the registration and refuses a code, device approval or claim token not yet collected, and a claim token collected after its grant was revoked is refused too (the revoke markers outlive anything issued behind them, so nothing may be issued into a revoked grant or client). A code, a refresh token, a device code and a claim token are
-  used once under concurrent requests: a second valid exchange of a code, or a refresh token sent again (outside an
+  used once under concurrent requests, and so is each approval (a consent ticket, a typed claim or device code: a
+  double-clicked Approve approves once): a second valid exchange of a code, or a refresh token sent again (outside an
   optional `reuseGraceSeconds`, default 0), revokes the grant. OAuth rows live in SQLite or D1, never KV. Scopes: `read` for safe methods, `write` for the rest; the relay endpoints (`/mcp`, `/a2a`,
   `auth.relay`) need only `read`, since each call they make reaches a route that checks its own scope. In Access, only
   `/oauth/authorize`, `/oauth/claim` and `/oauth/device` stay gated; `/oauth/register|token|revoke|device_authorization`,

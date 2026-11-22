@@ -365,8 +365,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if (!owner || (site && site !== 'same-origin')) return c.html(page('Not allowed', '<h1>Not allowed</h1><p>Approve from the page this site showed you, signed in.</p>'), 403)
       const body = await bodyOf(c)
       const consent = body.ticket ? await store.get('consent', body.ticket) : null
-      if (!consent || consent.owner !== owner) return c.html(page('Expired', '<h1>This approval expired</h1><p>Start again from the app that asked.</p>'), 400)
-      await store.delete('consent', body.ticket!)
+      const expired = () => c.html(page('Expired', '<h1>This approval expired</h1><p>Start again from the app that asked.</p>'), 400)
+      if (!consent || consent.owner !== owner) return expired()
+      // Single use: a double-clicked Allow makes one code, never two grants
+      if (!(await take('consent', body.ticket!))) return expired()
       const params = consent as Record<string, string>
       const origin = originOf(c)
       if (body.decision !== 'allow') return c.redirect(backTo(params.redirect_uri!, origin, { error: 'access_denied', error_description: 'The owner said no.', state: params.state }), 302)
@@ -535,8 +537,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const found = await deviceFor(c, approver.owner, body.user_code ?? '')
       if ('refused' in found) return found.refused
       if (body.decision !== 'allow' && body.decision !== 'deny') return c.html(deviceConsent(found.record, body.user_code ?? '', approver.owner))
-      // Single use: the typed code is gone either way, and the device's code goes when it collects the answer
-      await store.delete('device-user', userCodeKey(body.user_code ?? ''))
+      // Single use: the typed code is gone either way, and the device's code goes when it collects the answer. Taken, so
+      // two posts at once (a double-click, or Allow and Deny from two tabs) write one answer
+      if (!(await take('device-user', userCodeKey(body.user_code ?? ''))))
+        return c.html(deviceForm(body.user_code ?? '', 'That code was just answered. Ask the device for a new one if it still waits.'), 400)
       // Its own row: the device's polls rewrite the device row, and must never write over the answer
       await store.put('device-decision', found.deviceKey, { status: body.decision === 'allow' ? 'approved' : 'denied', owner: approver.owner }, Number(found.record.expiresAt) + DEVICE_TTL)
       if (body.decision === 'deny') return c.html(page('Denied', `<h1>Denied</h1><p>${escape(String(found.record.name))} gets nothing. You can close this page.</p>`))
