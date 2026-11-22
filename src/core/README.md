@@ -28,11 +28,14 @@ setup claim. Name the one place it comes from with `address`; every guard and pa
 | In front of the app | `address` |
 |---|---|
 | Cloudflare (Workers, or a tunnel or proxied DNS with the origin reachable only through it) | `{ header: 'cf-connecting-ip' }` |
-| A reverse proxy that appends the connection's address to `X-Forwarded-For` on every request | `{ header: 'x-forwarded-for' }`; two such proxies in a row, `hops: 2` |
+| A reverse proxy, with the app reachable only through it, that appends the connection's address to `X-Forwarded-For` on every request | `{ header: 'x-forwarded-for' }`; two such proxies in a row, `hops: 2` |
 | Nothing, on Node (`@hono/node-server`) | `'socket'` |
 
 - `{ header, hops = 1 }` takes the value `hops` from the right, the one your nearest proxy wrote; whatever a caller
   put before it is never read. No header, or fewer values than `hops`, is `local`.
+- A named header is only as true as the path to the app: anyone who can reach the app without going through that proxy
+  (an open port, another hostname, a second route in) sends the header themselves and picks their own address. Close
+  every other way in, or use `'socket'`.
 - Check that your proxy sets or appends the header on every request: one configured to pass it through untouched
   leaves it as the caller sent it, and `hops` then counts the caller's own values.
 - `'socket'` is the connection; where there is none (Workers, `app.request`, a call made in-process) it is `local`,

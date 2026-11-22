@@ -319,7 +319,9 @@ fact, steps with checkable done-when criteria.
 - **The caller's address** (§9): on Workers, or behind Cloudflare with the origin reachable only through it,
   `address: { header: 'cf-connecting-ip' }`; behind a reverse proxy that appends to `X-Forwarded-For`,
   `{ header: 'x-forwarded-for', hops }` with one hop per such proxy (only a proxy that appends on every request: one
-  that passes the header through leaves it as sent); on Node with nothing in front, `'socket'`.
+  that passes the header through leaves it as sent); on Node with nothing in front, `'socket'`. A named header holds
+  only when the app is reachable through that proxy alone: a caller who reaches it another way sets the header
+  themselves.
 - **Lint and format:** every app has `pnpm lint` (oxlint) and `pnpm format` (oxfmt). Both leave out `src/kit/` (the
   kit's copy must stay byte-equal for `doctor`) and generated files.
 
