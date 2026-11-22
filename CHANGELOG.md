@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.28.0](https://github.com/escalay/api-kit/compare/v1.27.1...v1.28.0) (2026-11-22)
+
+
+### New
+
+* **brand:** one brand on every surface an app serves ([#85](https://github.com/escalay/api-kit/issues/85)) ([323e016](https://github.com/escalay/api-kit/commit/323e016018d6b7dee2a6c32c5b4dc2905aaded7c))
+
 ## [1.27.1](https://github.com/escalay/api-kit/compare/v1.27.0...v1.27.1) (2026-11-22)
 
 
