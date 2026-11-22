@@ -188,7 +188,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   (`Idempotent-Replayed: true`), the key with another body is a `422`, one in flight a `409`. `/openapi.json` documents
   the header on each of them. Only a success is kept: a refusal (`401`, `403`, `404`, `408`, `409`, `422`, `429`, any
   `4xx`) or a server error changed nothing, so a retry with the same key runs again. The token endpoints (`/oauth/*`,
-  `/agent/identity*`) are never kept, and neither is an app's own open route that answers a secret.
+  `/agent/identity*`) are never kept; an app lists its own open routes that answer a secret in `skip`, so they never are.
 - Paid routes sit behind `rateLimit` per caller, with the `RateLimit-Policy` / `RateLimit` headers and a `429` with
   `Retry-After` past the limit, so a looping agent can't drain the budget.
 - Every model key is the app's own capped OpenRouter key, never a shared one; the
