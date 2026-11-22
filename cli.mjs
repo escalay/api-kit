@@ -100,6 +100,14 @@ const webDirArg = valueOf('--web-dir')
 const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
+/** The app the kit folder belongs to: `--app`, else the nearest folder at or above `--dir` with a package.json; null when none. */
+const appRootOf = () => {
+  if (valueOf('--app')) return resolve(process.cwd(), valueOf('--app'))
+  for (let at = dir; ; at = dirname(at)) {
+    if (existsSync(join(at, 'package.json'))) return at
+    if (dirname(at) === at) return null
+  }
+}
 const lockPath = join(dir, 'kit.json')
 
 // ---- Modules ----
@@ -1192,8 +1200,9 @@ const commands = {
     writeLock(modules, hashes, webDir)
     console.log(`Copied ${modules.join(', ')} (kit ${VERSION}) into ${relative(process.cwd(), dir) || '.'}`)
     if (skipped.length) console.log(`Kept your version of ${skipped.join(', ')} (it differs from the kit); --force overwrites`)
-    if (names.includes('brand')) {
-      const root = resolve(dir, '../..')
+    const root = names.includes('brand') ? appRootOf() : null
+    if (names.includes('brand') && !root) console.log(`Brand: no package.json above ${dirArg}, so brand/ was not made: \`kit add brand --dir ${dirArg} --app <app>\` names the app`)
+    if (root) {
       const pkg = existsSync(join(root, 'package.json')) ? JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) : {}
       const name = basename(pkg.name ?? basename(root))
       const written = scaffoldBrand(root, { name, title: name.split(/[-_.]/).filter(Boolean).map(capital).join(' '), part: join(dir, 'brand') })
@@ -1301,7 +1310,8 @@ const commands = {
   doctor: () => {
     if (flags.has('--adopt') && !existsSync(lockPath)) adopt()
     const lock = readLock()
-    const brand = lock ? brandFindings(resolve(dir, '../..'), lock.modules.includes('brand')) : { findings: [], notes: [] }
+    const root = lock ? appRootOf() : null
+    const brand = root ? brandFindings(root, lock.modules.includes('brand')) : { findings: [], notes: lock?.modules.includes('brand') ? [`note     brand: no package.json above ${dirArg}: \`--app <app>\` names the app whose brand/ to check`] : [] }
     const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
     for (const line of [...(lock ? addressNotes() : []), ...brand.notes, ...findings]) console.log(line)
     console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}: ${lock.modules.join(', ')}`)

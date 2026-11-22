@@ -17,6 +17,7 @@ const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect 
 const brandedApp = async (name: string, { dark = true, websiteUrl }: { dark?: boolean; websiteUrl?: string } = {}) => {
   const app = join(PARENT, name)
   await mkdir(join(app, 'brand'), { recursive: true })
+  await writeFile(join(app, 'package.json'), JSON.stringify({ name, type: 'module' }))
   const part = relative(join(app, 'brand'), join(KIT, 'src/brand/index.js'))
   await writeFile(join(app, 'brand/brand.ts'), `import { defineBrand } from '${part}'\n\nexport default defineBrand({\n  name: 'cookbook',\n  title: 'Cookbook',\n  description: 'Recipes and menus for agents.',\n${websiteUrl ? `  websiteUrl: '${websiteUrl}',\n` : ''}  accent: '#2563eb',\n})\n`)
   await writeFile(join(app, 'brand/icon.svg'), ICON)
@@ -205,8 +206,45 @@ describe('kit brand', () => {
     expect(stale.stdout).toContain('stale    brand/ changed since src/brand.gen.ts was written: `kit brand` renders it again')
   })
 
+  it('add and doctor find the app at the nearest package.json above --dir, at any depth', async () => {
+    for (const dir of ['kit', 'src/kit']) {
+      // A folder above the app with configs of its own, which add must never touch
+      const outer = await mkdtemp(join(tmpdir(), 'kit-brand-'))
+      const outerConfig = `${JSON.stringify({ ignorePatterns: [] }, null, 2)}\n`
+      await writeFile(join(outer, '.oxfmtrc.json'), outerConfig)
+      const app = join(outer, 'cookbook')
+      await mkdir(app)
+      await writeFile(join(app, 'package.json'), JSON.stringify({ name: 'cookbook', type: 'module' }))
+      await writeFile(join(app, '.oxfmtrc.json'), `${JSON.stringify({ ignorePatterns: [] }, null, 2)}\n`)
+      const added = cli(app, 'add', 'core', 'brand', '--dir', dir)
+      expect(added.status, added.stderr).toBe(0)
+      expect(existsSync(join(outer, 'brand')), dir).toBe(false)
+      expect(await readFile(join(outer, '.oxfmtrc.json'), 'utf8'), dir).toBe(outerConfig)
+      expect(await readFile(join(app, 'brand/brand.ts'), 'utf8'), dir).toContain(`from '../${dir}/brand/index.js'`)
+      expect(JSON.parse(await readFile(join(app, '.oxfmtrc.json'), 'utf8')).ignorePatterns, dir).toEqual(['src/brand.gen.ts'])
+      const doctor = cli(app, 'doctor', '--dir', dir)
+      expect(doctor.stdout, dir).toContain('brand    src/brand.gen.ts is missing: `kit brand` writes it')
+    }
+  })
+
+  it('add brand with no package.json above --dir scaffolds nothing and says how to name the app', async () => {
+    const outer = await mkdtemp(join(tmpdir(), 'kit-brand-'))
+    const app = join(outer, 'cookbook')
+    await mkdir(app)
+    const added = cli(app, 'add', 'brand', '--dir', 'kit')
+    expect(added.status, added.stderr).toBe(0)
+    expect(added.stdout).toContain('Brand: no package.json above kit, so brand/ was not made: `kit add brand --dir kit --app <app>` names the app')
+    expect(existsSync(join(app, 'brand'))).toBe(false)
+    expect(existsSync(join(outer, 'brand'))).toBe(false)
+    // --app names it
+    const named = cli(app, 'add', 'brand', '--dir', 'kit', '--app', '.')
+    expect(named.status, named.stderr).toBe(0)
+    expect(existsSync(join(app, 'brand/brand.ts'))).toBe(true)
+  })
+
   it('doctor notes an installed brand part with no brand files, without failing', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-brand-'))
+    await writeFile(join(app, 'package.json'), JSON.stringify({ name: 'cookbook', type: 'module' }))
     expect(cli(app, 'add', 'core', 'brand').status).toBe(0)
     await rm(join(app, 'brand'), { recursive: true })
     const noted = cli(app, 'doctor')

@@ -23,7 +23,8 @@ const app = createAgentApi({ …, brand: createBrand(BRAND, BRAND_ASSETS) })
 ```
 
 `npx @escalay/kit add brand` scaffolds both files (a monogram of the name's first letter on the accent); swap in your
-own SVG, then `npx @escalay/kit brand` renders it again. In an app made before the part, `add brand` also adds
+own SVG, then `npx @escalay/kit brand` renders it again. The app is the nearest folder at or above `--dir` with a
+`package.json` (or `--app`); with none, `add brand` makes nothing and says so. In an app made before the part, `add brand` also adds
 `src/brand.gen.ts` to the ignore lists in `.oxfmtrc.json` and `.oxlintrc.json` and the allowlist in `.gitleaks.toml`,
 or prints the line to add where it can't read one. A formatter that rewrites the module anyway (single quotes) does
 no harm: `kit doctor` reads either quote style. `kit init` makes every new app with them and an SVG-only
