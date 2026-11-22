@@ -199,6 +199,7 @@ code already knows is generated, never written by hand**, so the guide cannot dr
 | `{{api.unblock}}` | the kit: how to look a call or a field up in the spec, read an error, restart from `/api`, handle a `202` |
 | `{{cli.commands}}` | the CLI's commands (§19), jobs first: name with positional arguments, summary, the tool behind it |
 | `{{mcp.tools}}`, `{{mcp.count}}`, `{{mcp.resources}}` | the MCP tools (name, the route its call reaches, description) and resources (URI template, what it gives) |
+| `{{mcp.toolsets}}` | each MCP toolset (§11): its tools, its size, the URL that selects it; one line when every tool is in `core` |
 | `{{skills.<name>.playbooks}}` | the skill folder: each playbook's title and first sentence |
 
 Hand-written: what only a person knows (concepts, trust and measured accuracy, real-id examples, playbook steps and
@@ -260,6 +261,28 @@ fact, steps with checkable done-when criteria.
   Never publish protected-resource metadata without a working authorization server: it sends clients into a flow that
   cannot succeed.
 - `mountMcp` publishes the Server Card (SEP-2127) at `<mcp>/server-card` and `/.well-known/mcp/server-card.json`.
+- **Toolsets** (decision 0004): every listed tool's name, description and input schema sit in the model's context for
+  the whole session, so a server past about 25 tools or 30 KB of them splits its tools into named sets and a client
+  connects with the sets its job needs: `/mcp?tools=core,flows` (comma-separated or repeated `tools`). The path stays
+  `/mcp`, so auth, the OAuth resource metadata, the Server Card and the allowed hosts are unchanged.
+  - A tool says `toolset: 'flows'` (or several: `['core', 'flows']`); `inToolset('flows', tools)` puts a feature's
+    tools in one, keeping a tool's own. A tool without one is in **`core`**: what most agents need. **`all`**, or no
+    `tools` query, lists every tool, so a plain `/mcp` stays complete for the CLI and surface checks.
+  - Names a server doesn't have are ignored and named in its instructions (none left: every tool), never an error
+    that stops a connection. The instructions list each set with its tool count and size and how to reconnect with
+    more. A call to a tool outside the selection answers `isError` with a `404 not_found` problem that names its set
+    and the URL that lists it.
+  - Each listed tool names its sets in `_meta["api-kit/toolsets"]`, the Server Card lists them (size and URL) in
+    `_meta["api-kit/toolsets"]`, the guide with `{{mcp.toolsets}}`. A server whose tools are all in `core` shows
+    none of it. `tools/list` carries the hash of its own selection.
+  - **Grouping:** by job (a playbook's tools together), never by feature internals: a set is what an agent loads to do
+    one kind of work. `core` holds the everyday job end to end (for a mail API: make an address, wait, read, reply)
+    and stays at about **30 KB and 20 to 25 tools**; the rest go to a few sets named by short lowercase nouns
+    (`flows`, `delivery`, `admin`). A tool two jobs need is in both sets. Keep descriptions to when to use it and what
+    comes back, describe each argument once, and reuse schemas; the heaviest tools (`kit mcp size --set core`) are
+    where to cut.
+  - **Measured:** `toolsetSizes(TOOLS)` (bytes of name, description and input schema per tool and per set; about 4
+    bytes a token) in a test that holds `core` under its budget, and `kit mcp size` in the app.
 - **Resources** (`mcpResource`) let a client attach a thing (a recipe with its picture, a tree): a URI template read
   through the routes, JSON as text and images as blobs; a part marked `optional` (an image that may be missing) is
   left out when it fails, so the rest still arrives. `resources/read` carries the URI in the `Mcp-Name` header.
@@ -337,7 +360,7 @@ CORS:
 | `/robots.txt` | Content Signals (`ai-train`, `search`, `ai-input`; default all `no`), `Disallow: /` unless `crawl`, `Agentmap` |
 | `Accept: text/markdown` on `/` and `/docs` | the guide (`llms.txt`) with `x-markdown-tokens`; browsers still get HTML |
 | `/.well-known/agent-skills/index.json` | Agent Skills Discovery v0.2.0; a skill with references as one deterministic `.tar.gz`, digests over the exact bytes served |
-| `<mcp>/server-card`, `/.well-known/mcp/server-card.json` | MCP Server Card (SEP-2127): identity, the remote with its auth header, protocol versions |
+| `<mcp>/server-card`, `/.well-known/mcp/server-card.json` | MCP Server Card (SEP-2127): identity, the remote with its auth header, protocol versions, and the toolsets with their sizes and URLs (`_meta["api-kit/toolsets"]`, §11) |
 | `/.well-known/ai-catalog.json` | AI Catalog (ARD): the API, the MCP server and each skill, with representative queries |
 | `/sitemap.xml` (`discovery.sitemap`) | the public pages only, named in robots.txt |
 | `/.well-known/agent-card.json` (`a2a.ts`) | A2A 1.0 Agent Card: the JSON-RPC interface, security schemes, skills |

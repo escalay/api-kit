@@ -16,6 +16,9 @@ const getNote = mcpTool({
   summarize: (note) => `${note.title} (${note.year}) · ${note._links.self.href}`,
 })
 mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools: [getNote], callApi: inProcess(app) }), allowedHostnames: [host, 'localhost'] })
+
+// Toolsets: `/mcp?tools=core` lists get_note alone, `/mcp?tools=core,flows` adds the flows, `/mcp` lists every tool
+const tools = [getNote, ...inToolset('flows', flowTools)]
 ```
 
 | Export | What |
@@ -26,7 +29,9 @@ mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools: [getNote]
 | `PROBLEM_META`, `PENDING_META` | a failed call carries its problem (with `status`) in `_meta["api-kit/problem"]`; one still working names its run in `_meta["api-kit/pending"]` |
 | `mountedMcp(app)` | the tools and resources `mountMcp` serves, for `cliGaps` and `cliSnapshot` |
 | `guideSkills({ files, fill })` | the guide's skill folders as the factory's `skills` and `prompts` (one prompt per playbook); `fill` renders a file first when a skill uses placeholders. Served so a plain MCP client finds them (below) |
-| `mcpServerFactory` | the server: info, instructions, tools, resources, prompts, skills; `toolsTtlMs` sets how long clients cache `tools/list` (default an hour) |
+| `mcpServerFactory` | the server: info, instructions, tools, resources, prompts, skills; `toolsTtlMs` sets how long clients cache `tools/list` (default an hour). A request to `/mcp?tools=core,flows` gets only those toolsets (`select(url)` says what a URL lists) |
+| `toolset` on a tool, `inToolset(name, tools)`, `toolsetsOf`, `CORE_TOOLSET`, `ALL_TOOLSETS`, `TOOLSETS_META` | toolsets: the sets a tool is in (`core` when it names none), a feature's tools put in one |
+| `toolsetSizes(tools)`, `toolBytes(tool)` | what a model reads (name, description, input schema) per tool and per set, `core` first, heaviest tool first; `kit mcp size` prints it |
 | `mountMcp` | `/mcp` (Streamable HTTP, MCP 2026-07-28 with a fallback for older clients) and the Server Card |
 | `inProcess(app)` / `overHttp(origin, key)` | how tools reach the routes: in the same process, or over HTTP for a stdio entry |
 | `callWaiting` | follows a 202 run until it finishes, so a slow route still answers the tool |
@@ -44,4 +49,9 @@ mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools: [getNote]
   `skill://postbox/references`) answers a Markdown list of its files as `skill://` URIs; a miss names the start URI;
   the server's `instructions` get one line naming each `SKILL.md`. `skills/list`, `skills/get` and
   `resources/directory/read` work as the extension defines them.
+- Past about 25 tools or 30 KB, split tools into toolsets by job (decision 0004): `core` is what most agents need and
+  stays at about 30 KB and 20 to 25 tools; other sets are short lowercase nouns (`flows`, `admin`); a tool two jobs
+  need is in both. A plain `/mcp` (and `?tools=all`) lists every tool; unknown set names are ignored and named in the
+  instructions; a call to a tool outside the selection answers `isError` naming its set and the URL that lists it.
+  Hold `core` under its budget in a test: `expect(toolsetSizes(TOOLS).sets[0]!.bytes).toBeLessThan(30_000)`.
 - Every tool runs in the app's tests: `toolsRun` (testing module). Standard: `docs/STANDARD.md` §11 and §19.

@@ -22,6 +22,7 @@ npm create escalay my-api                        # the `api` preset, with an exa
 cd my-api && pnpm install && pnpm format && pnpm migrations && pnpm test && pnpm dev   # http://localhost:4400/docs, /llms.txt, /mcp
 npx @escalay/kit feature reading-lists           # a new feature folder, listed and tested
 npx @escalay/kit sdk                             # a typed TypeScript client in sdk/, a method per operation
+npx @escalay/kit mcp size                        # each MCP toolset's tools and what a model reads of them
 gh repo create my-api --private --source . --push && npx @escalay/kit repo apply   # CI runs; the repository set up as §20 says
 npx @escalay/kit button --check && npx @escalay/kit button --write                 # the Deploy to Cloudflare button, ready and in the README
 ```
@@ -106,7 +107,7 @@ The full standard: [docs/STANDARD.md](docs/STANDARD.md). Why the layout is what 
 | `oauth` | the app as its own OAuth server (auth code + PKCE, device authorization for CLIs, agent registration via auth.md, rotating refresh tokens, ES256 tokens) | [oauth](src/oauth/README.md) |
 | `pagination` | cursor pages and sorting | [pagination](src/pagination/README.md) |
 | `guide` | the agent guide from templates and its generated parts | [guide](src/guide/README.md) |
-| `mcp` | an MCP server over the routes: tools, resources, prompts, skills, its Server Card | [mcp](src/mcp/README.md) |
+| `mcp` | an MCP server over the routes: tools (in toolsets a client selects with `/mcp?tools=core,flows`), resources, prompts, skills, its Server Card | [mcp](src/mcp/README.md) |
 | `a2a` | A2A 1.0 over the MCP tools | [a2a](src/a2a/README.md) |
 | `vectors` | Gemini Embedding 2 look and meaning vectors: ledgers that never pay twice, `nearest`, `standouts` | [vectors](src/vectors/README.md) |
 | `vector-search` | search by words, picture and likeness: three routes and their tools | [vector-search](src/vector-search/README.md) |

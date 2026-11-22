@@ -56,6 +56,8 @@ serving; you only write the files and run `pnpm guide`.
   say, and keep `: ` (colon then space) out of it: some skill loaders stop reading there.
 - **Short.** A playbook is 15 to 40 lines. If it needs more, the product is missing a route that does the job in
   one call.
+- **Name the toolset** when the product has MCP toolsets: the `SKILL.md` says to connect with `/mcp?tools=core`, and
+  a playbook that needs more names its set (`/mcp?tools=core,flows`). `core` alone must carry the main playbook.
 
 ## Rules for developer skills
 

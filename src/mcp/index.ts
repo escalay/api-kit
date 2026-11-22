@@ -12,14 +12,15 @@
  * // a stdio client on a laptop: the same tools over HTTP with its own key
  * serveStdio(mcpServerFactory({ info, instructions, tools, callApi: overHttp(origin, process.env.COOKBOOK_API_KEY!) }))
  */
-import { createMcpHandler, McpServer, originValidationResponse, ResourceTemplate, SUPPORTED_PROTOCOL_VERSIONS, UriTemplate, type AuthInfo, type CallToolResult, type McpServerFactory } from '@modelcontextprotocol/server'
+import { createMcpHandler, McpServer, originValidationResponse, ResourceTemplate, SERVER_INFO_META_KEY, SUPPORTED_PROTOCOL_VERSIONS, UriTemplate, type AuthInfo, type CallToolResult, type McpRequestContext, type McpServerFactory } from '@modelcontextprotocol/server'
 import type { SkillCatalog } from '@modelcontextprotocol/server/ext/skills'
 import { createHash } from 'node:crypto'
 import { z } from '@hono/zod-openapi'
 import type { Context, Hono } from 'hono'
-import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, TOOLS_HASH_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
+import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, TOOLS_HASH_META, TOOLSETS_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
 import { attachSkills, instructionsWithSkills } from './skills.js'
-import { MODERN_PROTOCOL_VERSION, mountedOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN } from '../core/discovery.js'
+import { ALL_TOOLSETS, checkToolsets, chooseToolsets, CORE_TOOLSET, requestedToolsets, toolsetsOf, toolsetSizes, toolsetsText, type ToolsetChoice } from './toolsets.js'
+import { MODERN_PROTOCOL_VERSION, mountedOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN, type ToolsetSummary } from '../core/discovery.js'
 import { originOf, pathWith } from '../core/hal.js'
 
 type Query = Record<string, string | number | boolean | string[] | null | undefined>
@@ -48,6 +49,8 @@ export type McpTool<Input extends z.ZodObject = z.ZodObject> = {
   route?: string
   /** Its command, noun then verb (`'mail wait'`), with examples run without the bin (`'mail wait adr_1 --timeout 30'`). */
   cli?: CliSpec
+  /** The toolsets it is in (`'flows'`, or several); `core` when left out. A client picks sets with `/mcp?tools=core,flows`. */
+  toolset?: string | readonly string[]
 }
 
 /** Where a tool's route is published in its MCP listing, so a gateway can tell which tool a guide's route means. */
@@ -153,7 +156,7 @@ export const toolsHashOf = (tools: McpTool[], resources: McpResource[] = []) => 
   const known = hashes.get(tools)
   if (known) return known
   const listing = {
-    tools: tools.map((tool) => ({ name: tool.name, title: tool.title, description: tool.description, input: z.toJSONSchema(tool.input, { io: 'input' }), output: tool.output ? z.toJSONSchema(tool.output, { io: 'output', unrepresentable: 'any' }) : null, hints: hintsOf(tool), route: routeOf(tool) ?? null, cli: cliOf(tool) })),
+    tools: tools.map((tool) => ({ name: tool.name, title: tool.title, description: tool.description, input: z.toJSONSchema(tool.input, { io: 'input' }), output: tool.output ? z.toJSONSchema(tool.output, { io: 'output', unrepresentable: 'any' }) : null, hints: hintsOf(tool), route: routeOf(tool) ?? null, cli: cliOf(tool), toolset: tool.toolset })),
     resources: resources.map((resource) => ({ name: resource.name, title: resource.title, description: resource.description, uriTemplate: resource.uriTemplate, cli: resourceCli(resource) })),
   }
   const hash = createHash('sha256').update(JSON.stringify(listing)).digest('hex').slice(0, 16)
@@ -161,67 +164,96 @@ export const toolsHashOf = (tools: McpTool[], resources: McpResource[] = []) => 
   return hash
 }
 
-/** A factory that also carries its server info and tools, so `mountMcp` can publish the card and the guide can list the tools. */
-export type AgentMcpFactory = McpServerFactory & { info: McpServerInfo; tools: McpTool[]; resources: McpResource[]; instructions?: string; prompts?: McpPrompt[] }
+/** What one connection lists: its tools (the same array for the same selection), the instructions for it, the tools-hash. */
+export type McpSelection = { tools: McpTool[]; instructions: string; hash: string; choice: ToolsetChoice | null }
 
-/** `toolsTtlMs`: how long clients may cache `tools/list` (default an hour); shorter when the tools change without a deploy. */
-export const mcpServerFactory = ({ info, instructions, tools, resources = [], prompts = [], skills, callApi, waitMs = 60_000, toolsTtlMs = HOUR }: { info: McpServerInfo; instructions: string; tools: McpTool[]; resources?: McpResource[]; prompts?: McpPrompt[]; skills?: SkillCatalog; callApi: CallApi; waitMs?: number; toolsTtlMs?: number }): AgentMcpFactory => Object.assign(() => {
-  // Lists only change with a deploy: let clients cache them for an hour
-  const cached = { ttlMs: HOUR, cacheScope: 'private' as const }
-  const server = new McpServer(info, { instructions: instructionsWithSkills(instructions, skills), cacheHints: { 'server/discover': cached, 'tools/list': { ...cached, ttlMs: toolsTtlMs }, 'prompts/list': cached, 'resources/list': cached, 'resources/templates/list': cached } })
-  // Clients that cache the list learn from any answer that it changed
-  const listed = { [TOOLS_HASH_META]: toolsHashOf(tools, resources) }
-  for (const tool of tools) {
-    const route = routeOf(tool)
-    const cli = cliOf(tool)
-    server.registerTool(
-      tool.name,
-      { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, ...hintsOf(tool) }, _meta: { ...(route ? { [ROUTE_META]: route } : {}), [CLI_META]: { name: cli.name, positional: cli.positional, examples: cli.examples }, ...listed } },
-      async (args: Record<string, unknown>, ctx): Promise<CallToolResult> => {
-        const { response, pending } = await callWaiting(callApi, tool.call(args as never), ctx.http?.authInfo, waitMs)
-        const json = await response.json().catch(() => null)
-        if (pending) return { content: [{ type: 'text', text: `Still working: run ${pending}. Check it with get_run, then call ${tool.name} again with the same arguments (it answers at once when done).` }], _meta: { [PENDING_META]: { run: pending }, ...listed } }
-        if (!response.ok) return { isError: true, content: [{ type: 'text', text: problemText(json, response.status) }], _meta: { [PROBLEM_META]: problemOf(json, response.status), ...listed } }
-        return {
-          content: [{ type: 'text', text: tool.summarize(json, args as never) }, ...(tool.links?.(json) ?? []).map((link) => ({ type: 'resource_link' as const, ...link }))],
-          ...(json && typeof json === 'object' ? { structuredContent: json } : {}),
-          _meta: listed,
-        }
-      },
-    )
+/**
+ * A factory that also carries its server info and tools, so `mountMcp` can publish the card and the guide can list the
+ * tools. `select(url)` is what a request to `url` lists (its `tools` query picks toolsets); `toolsets()` each set with
+ * its size, `[]` when every tool is in `core`.
+ */
+export type AgentMcpFactory = McpServerFactory & { info: McpServerInfo; tools: McpTool[]; resources: McpResource[]; instructions?: string; prompts?: McpPrompt[]; select: (url?: string) => McpSelection; toolsets: () => ToolsetSummary[] }
+
+/**
+ * `toolsTtlMs`: how long clients may cache `tools/list` (default an hour); shorter when the tools change without a
+ * deploy. A request whose URL asks for toolsets (`/mcp?tools=core,flows`) gets only their tools, and instructions that
+ * list every set; a plain `/mcp` (and stdio) gets every tool.
+ */
+export const mcpServerFactory = ({ info, instructions, tools, resources = [], prompts = [], skills, callApi, waitMs = 60_000, toolsTtlMs = HOUR }: { info: McpServerInfo; instructions: string; tools: McpTool[]; resources?: McpResource[]; prompts?: McpPrompt[]; skills?: SkillCatalog; callApi: CallApi; waitMs?: number; toolsTtlMs?: number }): AgentMcpFactory => {
+  checkToolsets(tools)
+  const said = instructionsWithSkills(instructions, skills)
+  const grouped = tools.some((tool) => toolsetsOf(tool).some((name) => name !== CORE_TOOLSET))
+  // One tools array per selection of existing sets (never per query string), so each keeps one hash
+  const chosen = new Map<string, McpTool[]>()
+  const select = (url?: string): McpSelection => {
+    if (!grouped) return { tools, instructions: said, hash: toolsHashOf(tools, resources), choice: null }
+    const sizes = toolsetSizes(tools)
+    const choice = chooseToolsets(requestedToolsets(url), sizes.sets.map((set) => set.name))
+    const key = choice.sets?.join(',') ?? ALL_TOOLSETS
+    let listed = chosen.get(key)
+    if (!listed) chosen.set(key, (listed = choice.sets ? tools.filter((tool) => toolsetsOf(tool).some((name) => choice.sets!.includes(name))) : tools))
+    return { tools: listed, instructions: `${said}\n\n${toolsetsText(sizes, choice, url ? new URL(url).pathname : '/mcp')}`, hash: toolsHashOf(listed, resources), choice }
   }
-  for (const prompt of prompts) {
-    server.registerPrompt(prompt.name, { title: prompt.title, description: prompt.description, ...(prompt.arguments ? { argsSchema: prompt.arguments } : {}) } as never, ((args: Record<string, string> = {}) => ({
-      description: prompt.description,
-      messages: [{ role: 'user' as const, content: { type: 'text' as const, text: prompt.text(args) } }],
-    })) as never)
+  const serverFor = ({ tools: listedTools, instructions: text, hash }: McpSelection) => {
+    // Lists only change with a deploy: let clients cache them for an hour
+    const cached = { ttlMs: HOUR, cacheScope: 'private' as const }
+    const server = new McpServer(info, { instructions: text, cacheHints: { 'server/discover': cached, 'tools/list': { ...cached, ttlMs: toolsTtlMs }, 'prompts/list': cached, 'resources/list': cached, 'resources/templates/list': cached } })
+    // Clients that cache the list learn from any answer that it changed
+    const listed = { [TOOLS_HASH_META]: hash }
+    for (const tool of listedTools) {
+      const route = routeOf(tool)
+      const cli = cliOf(tool)
+      server.registerTool(
+        tool.name,
+        { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, ...hintsOf(tool) }, _meta: { ...(route ? { [ROUTE_META]: route } : {}), [CLI_META]: { name: cli.name, positional: cli.positional, examples: cli.examples }, ...(grouped ? { [TOOLSETS_META]: toolsetsOf(tool) } : {}), ...listed } },
+        async (args: Record<string, unknown>, ctx): Promise<CallToolResult> => {
+          const { response, pending } = await callWaiting(callApi, tool.call(args as never), ctx.http?.authInfo, waitMs)
+          const json = await response.json().catch(() => null)
+          if (pending) return { content: [{ type: 'text', text: `Still working: run ${pending}. Check it with get_run, then call ${tool.name} again with the same arguments (it answers at once when done).` }], _meta: { [PENDING_META]: { run: pending }, ...listed } }
+          if (!response.ok) return { isError: true, content: [{ type: 'text', text: problemText(json, response.status) }], _meta: { [PROBLEM_META]: problemOf(json, response.status), ...listed } }
+          return {
+            content: [{ type: 'text', text: tool.summarize(json, args as never) }, ...(tool.links?.(json) ?? []).map((link) => ({ type: 'resource_link' as const, ...link }))],
+            ...(json && typeof json === 'object' ? { structuredContent: json } : {}),
+            _meta: listed,
+          }
+        },
+      )
+    }
+    for (const prompt of prompts) {
+      server.registerPrompt(prompt.name, { title: prompt.title, description: prompt.description, ...(prompt.arguments ? { argsSchema: prompt.arguments } : {}) } as never, ((args: Record<string, string> = {}) => ({
+        description: prompt.description,
+        messages: [{ role: 'user' as const, content: { type: 'text' as const, text: prompt.text(args) } }],
+      })) as never)
+    }
+    for (const resource of resources) {
+      server.registerResource(
+        resource.name,
+        new ResourceTemplate(lenientTemplate(resource.uriTemplate), { list: undefined }),
+        { title: resource.title, description: resource.description, cacheHint: cached, _meta: { [CLI_META]: resourceMeta(resource) } },
+        async (uri, variables, ctx) => {
+          const auth = ctx.http?.authInfo
+          const values = Object.fromEntries(Object.entries(variables).map(([key, value]) => [key, Array.isArray(value) ? value[0]! : String(value)]))
+          const parts = await Promise.all(
+            resource.read(values).map(async ({ optional, ...call }) => {
+              const response = await callApi(call, auth)
+              if (!response.ok && optional) return null
+              if (!response.ok) throw new Error(problemText(await response.json().catch(() => null), response.status))
+              const type = response.headers.get('content-type') ?? 'application/octet-stream'
+              return /json|text|markdown/.test(type)
+                ? { uri: uri.href, mimeType: type.split(';')[0]!, text: await response.text() }
+                : { uri: uri.href, mimeType: type.split(';')[0]!, blob: Buffer.from(await response.arrayBuffer()).toString('base64') }
+            }),
+          )
+          return { contents: parts.filter((part) => part !== null) }
+        },
+      )
+    }
+    if (skills) attachSkills(server, skills)
+    return server
   }
-  for (const resource of resources) {
-    server.registerResource(
-      resource.name,
-      new ResourceTemplate(lenientTemplate(resource.uriTemplate), { list: undefined }),
-      { title: resource.title, description: resource.description, cacheHint: cached, _meta: { [CLI_META]: resourceMeta(resource) } },
-      async (uri, variables, ctx) => {
-        const auth = ctx.http?.authInfo
-        const values = Object.fromEntries(Object.entries(variables).map(([key, value]) => [key, Array.isArray(value) ? value[0]! : String(value)]))
-        const parts = await Promise.all(
-          resource.read(values).map(async ({ optional, ...call }) => {
-            const response = await callApi(call, auth)
-            if (!response.ok && optional) return null
-            if (!response.ok) throw new Error(problemText(await response.json().catch(() => null), response.status))
-            const type = response.headers.get('content-type') ?? 'application/octet-stream'
-            return /json|text|markdown/.test(type)
-              ? { uri: uri.href, mimeType: type.split(';')[0]!, text: await response.text() }
-              : { uri: uri.href, mimeType: type.split(';')[0]!, blob: Buffer.from(await response.arrayBuffer()).toString('base64') }
-          }),
-        )
-        return { contents: parts.filter((part) => part !== null) }
-      },
-    )
-  }
-  if (skills) attachSkills(server, skills)
-  return server
-}, { info, tools, resources, instructions: instructionsWithSkills(instructions, skills), prompts })
+  return Object.assign((context?: McpRequestContext) => serverFor(select(context?.requestInfo?.url)), { info, tools, resources, instructions: said, prompts, select, toolsets: () => (grouped ? toolsetSizes(tools).sets : []) })
+
+}
 
 /**
  * The tools and resources `mountMcp` serves on an app, as they were given: for the CLI snapshot and `cliGaps`.
@@ -268,8 +300,34 @@ const modernInitialize = async (c: Context, factory: AgentMcpFactory) => {
     // As the server itself declares them: an app may announce changes on a listen stream (`handler.notify`)
     capabilities: { tools: { listChanged: true }, ...(factory.prompts?.length ? { prompts: { listChanged: true } } : {}), ...(factory.resources.length ? { resources: { listChanged: true } } : {}) },
     serverInfo: factory.info,
-    instructions: `${factory.instructions ?? ''}\n\nThis server speaks MCP ${MODERN_PROTOCOL_VERSION}, which is stateless: no initialize or session is needed. Call tools/list or any method directly with the MCP-Protocol-Version and Mcp-Method headers (server/discover returns this same information).`.trim(),
+    instructions: `${factory.select(c.req.url).instructions}\n\nThis server speaks MCP ${MODERN_PROTOCOL_VERSION}, which is stateless: no initialize or session is needed. Call tools/list or any method directly with the MCP-Protocol-Version and Mcp-Method headers (server/discover returns this same information).`.trim(),
   }
+  return c.json({ jsonrpc: '2.0', id: message.id, result })
+}
+
+/**
+ * A `tools/call` on a connection whose toolsets leave that tool out: the SDK would answer a bare protocol error, so
+ * answer as a failed call that names the tool's sets and the URL that lists it, in the SDK's own result envelope.
+ */
+const unselectedCall = async (c: Context, factory: AgentMcpFactory) => {
+  if (c.req.method !== 'POST' || !requestedToolsets(c.req.url).length) return null
+  const { tools, choice, hash } = factory.select(c.req.url)
+  if (!choice?.sets) return null
+  const message = (await c.req.raw.clone().json().catch(() => null)) as { id?: string | number; method?: string; params?: { name?: unknown } } | null
+  if (message?.method !== 'tools/call' || message.id === undefined) return null
+  const tool = factory.tools.find((one) => one.name === message.params?.name)
+  if (!tool || tools.includes(tool)) return null
+  const sets = toolsetsOf(tool)
+  const path = new URL(c.req.url).pathname
+  const problem = {
+    type: `${originOf(c)}/problems/not_found`,
+    title: 'Not found',
+    status: 404,
+    code: 'not_found',
+    detail: `${tool.name} is in the ${sets.join(' or ')} toolset, which this connection didn't select (it lists ${choice.sets.join(', ')}). Reconnect to ${path}?tools=${[...choice.sets, sets[0]].join(',')}, or to ${path} for every tool.`,
+  }
+  const modern = c.req.header('mcp-protocol-version') === MODERN_PROTOCOL_VERSION
+  const result = { isError: true, content: [{ type: 'text', text: problemText(problem, 404) }], _meta: { [PROBLEM_META]: problem, [TOOLS_HASH_META]: hash, ...(modern ? { [SERVER_INFO_META_KEY]: factory.info } : {}) }, ...(modern ? { resultType: 'complete' } : {}) }
   return c.json({ jsonrpc: '2.0', id: message.id, result })
 }
 
@@ -281,14 +339,14 @@ const modernInitialize = async (c: Context, factory: AgentMcpFactory) => {
 export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, allowedHostnames }: { path?: string; factory: AgentMcpFactory; allowedHostnames: string[] }) => {
   const handler = createMcpHandler(factory, { responseMode: 'auto' })
   // The Server Card (SEP-2127): at its reserved place beside the endpoint, and where domain scanners look
-  const card = (origin: string) => serverCard(origin, path, factory.info, [MODERN_PROTOCOL_VERSION, ...SUPPORTED_PROTOCOL_VERSIONS])
-  recordMounted(app, { mcp: { path, card, tools: factory.tools, resources: factory.resources } })
+  const card = (origin: string) => serverCard(origin, path, factory.info, [MODERN_PROTOCOL_VERSION, ...SUPPORTED_PROTOCOL_VERSIONS], factory.toolsets())
+  recordMounted(app, { mcp: { path, card, tools: factory.tools, resources: factory.resources, toolsets: factory.toolsets } })
   for (const at of [`${path}/server-card`, WELL_KNOWN.serverCard]) app.get(at, (c: Context) => sendPublic(c, JSON.stringify(card(originOf(c)), null, 2), SERVER_CARD_TYPE))
   app.all(path, async (c: Context) => {
     const rejected = originValidationResponse(c.req.raw, allowedHostnames)
     if (rejected) return rejected
-    const greeting = await modernInitialize(c, factory)
-    if (greeting) return greeting
+    const answered = (await modernInitialize(c, factory)) ?? (await unselectedCall(c, factory))
+    if (answered) return answered
     const caller = c.get('caller' as never) as { kind: string; name?: string; email?: string } | undefined
     const authInfo: AuthInfo = {
       token: (c.req.header('authorization') ?? '').replace(/^bearer\s+/i, ''),
@@ -311,4 +369,5 @@ export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, all
 }
 
 export { guideSkills } from './skills.js'
-export { CLI_META, cliOf, PENDING_META, PROBLEM_META, routeOf, TOOLS_HASH_META, type CliExample, type CliSpec } from '../core/cli.js'
+export { ALL_TOOLSETS, CORE_TOOLSET, inToolset, toolBytes, toolsetsOf, toolsetSizes, type ToolsetSizes, type ToolSize } from './toolsets.js'
+export { CLI_META, cliOf, PENDING_META, PROBLEM_META, routeOf, TOOLS_HASH_META, TOOLSETS_META, type CliExample, type CliSpec } from '../core/cli.js'

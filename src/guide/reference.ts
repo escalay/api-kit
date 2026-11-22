@@ -2,14 +2,14 @@
  * The parts of the agent guide that must never drift from the code, written from the code: every operation from the
  * OpenAPI document, every MCP tool with the route it calls, every playbook in the skill folder, and how to get
  * unstuck. Guide templates place them with `{{api.endpoints}}`, `{{api.tag.<slug>}}`, `{{api.unblock}}`,
- * `{{api.operations}}`, `{{mcp.tools}}`, `{{mcp.count}}`, `{{mcp.resources}}` and `{{skills.<name>.playbooks}}`; `serveGuide` fills them.
+ * `{{api.operations}}`, `{{mcp.tools}}`, `{{mcp.count}}`, `{{mcp.resources}}`, `{{mcp.toolsets}}` and `{{skills.<name>.playbooks}}`; `serveGuide` fills them.
  *
  * @example
  * endpointsMarkdown(doc)             // ### Search … - `GET /api/v1/search/recipes?q=…` — Recipes for a description. …
  * toolRoute(tool, doc)               // { method: 'GET', path: '/api/v1/search/recipes', operationId: 'searchRecipes' }
  */
 import { cliOf, resourceCli, toolCli } from '../core/cli.js'
-import type { ResourceLike, ToolLike } from '../core/discovery.js'
+import type { ResourceLike, ToolLike, ToolsetSummary } from '../core/discovery.js'
 
 type Schema = { type?: string | string[]; enum?: unknown[]; default?: unknown; example?: unknown; description?: string; items?: Schema; minimum?: number; maximum?: number; anyOf?: Schema[]; $ref?: string; properties?: Record<string, Schema>; additionalProperties?: unknown }
 type Parameter = { name: string; in: string; required?: boolean; description?: string; example?: unknown; schema?: Schema }
@@ -147,6 +147,22 @@ export const toolsMarkdown = (tools: ToolLike[], doc: OpenApiDoc) =>
     })
     .join('\n')
 
+/**
+ * One line per toolset: its size, the URL that selects it and its tools, then the URL with every tool. A server
+ * whose tools are all in `core` gets one line.
+ *
+ * @example
+ * toolsetsMarkdown('https://mail.example/mcp', [{ name: 'core', tools: ['create_address'], bytes: 900 }, …], 30)
+ * // → '- **`core`** — 1 tool, ~1 KB: `https://mail.example/mcp?tools=core` — create_address\n…\n- **every tool** — 30 tools: `https://mail.example/mcp`'
+ */
+export const toolsetsMarkdown = (endpoint: string, toolsets: ToolsetSummary[], count: number) =>
+  toolsets.length > 1
+    ? [
+        ...toolsets.map((set) => `- **\`${set.name}\`** — ${set.tools.length} tool${set.tools.length === 1 ? '' : 's'}, ~${Math.max(1, Math.round(set.bytes / 1000))} KB: \`${endpoint}?tools=${set.name}\` — ${set.tools.join(', ')}`),
+        `- **every tool** — ${count} tools: \`${endpoint}\` (or \`?tools=all\`)`,
+      ].join('\n')
+    : `One set: all ${count} tools at \`${endpoint}\`.`
+
 /** A command as the CLI snapshot (`commands.json`) holds it: enough to list it. */
 export type CliCommandLike = { name: string; positional: string[]; summary: string; tool?: string; uriTemplate?: string; job?: string }
 /** What the CLI needs of a job to list it. */
@@ -219,11 +235,11 @@ export const unblockMarkdown = (origin: string) => {
 }
 
 /** Everything generated, keyed the way guide templates name it. */
-export const generatedVars = ({ origin, doc, tools, resources, commands, files }: { origin: string; doc: OpenApiDoc; tools?: ToolLike[]; resources?: ResourceLike[]; commands?: CliCommandLike[]; files: Map<string, string> }) => {
+export const generatedVars = ({ origin, doc, tools, resources, toolsets, mcpPath = '/mcp', commands, files }: { origin: string; doc: OpenApiDoc; tools?: ToolLike[]; resources?: ResourceLike[]; toolsets?: ToolsetSummary[]; mcpPath?: string; commands?: CliCommandLike[]; files: Map<string, string> }) => {
   const skills = [...new Set([...files.keys()].flatMap((path) => path.match(/^skills\/([^/]+)\/SKILL\.md$/)?.[1] ?? []))]
   return {
     api: { endpoints: endpointsMarkdown(doc), tag: endpointsByTag(doc), unblock: unblockMarkdown(origin), operations: operationsOf(doc).length },
-    mcp: { tools: tools ? toolsMarkdown(tools, doc) : '', count: tools?.length ?? 0, resources: resources?.length ? resourcesMarkdown(resources) : 'None.' },
+    mcp: { tools: tools ? toolsMarkdown(tools, doc) : '', count: tools?.length ?? 0, resources: resources?.length ? resourcesMarkdown(resources) : 'None.', toolsets: tools ? toolsetsMarkdown(origin + mcpPath, toolsets ?? [], tools.length) : '' },
     skills: Object.fromEntries(skills.map((name) => [name, { playbooks: playbooksMarkdown(files, name) }])),
     cli: { commands: commands || tools ? cliMarkdown({ tools, resources, commands }) : '' },
   }

@@ -42,6 +42,10 @@
  *                                             a license key (an ES256 JWT) the app's `licenseOf` accepts; printed, never stored
  *   kit license verify <key> --public <file> --product <name> [--instance <id>]
  *                                             what a key grants, or why it is refused
+ *   kit mcp size [--dir src/kit] [--set core] [--json]
+ *                                             each MCP toolset's tools and the bytes a model reads of them (name,
+ *                                             description, input schema), a note when core is over budget; --set lists
+ *                                             one set's tools, heaviest first. Loads TOOLS from src/app.ts (needs tsx)
  *
  * @example
  * npx @escalay/kit add core pagination guide mcp testing --dir apps/api/src/kit --install
@@ -92,7 +96,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
+const VALUE_FLAGS = new Set(['--set', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 const lockPath = join(dir, 'kit.json')
@@ -443,6 +447,58 @@ console.log(JSON.stringify(cliGaps({ tools, resources, jobs: ${jobs} })))
   // Not a finding about the kit's copy: say so, and leave the exit code to the copy
   if (!gaps) console.log(`note     could not build the app to check its commands with cliGaps (installed? createApp({ db, env }) enough?): ${(checked.stderr || '').trim().split('\n')[0] ?? ''}`)
   return (gaps ?? []).map((gap) => `cli      ${gap}`)
+}
+
+// ---- MCP toolsets ----
+
+/** What the standard aims `core` at (§11, Toolsets): about 30 KB a model reads, 20 to 25 tools. */
+const CORE_BUDGET = { bytes: 30_000, tools: 25 }
+
+/**
+ * The app's tools measured by its own copy of `toolsetSizes`: `TOOLS` from `src/app.ts` when it exports them, else the
+ * app built as `doctor` builds it for `cliGaps` and the tools `mountMcp` serves.
+ */
+const appToolsetSizes = () => {
+  const root = resolve(dir, '../..')
+  if (!existsSync(join(root, 'src/app.ts'))) fail(`no src/app.ts two folders above ${dirArg}: run it in an app, or pass --dir <app>/src/kit`)
+  if (!existsSync(join(dir, 'mcp/toolsets.ts'))) fail(`${dirArg}/mcp has no toolsets.ts: \`kit update mcp --dir ${dirArg}\` takes it`)
+  const url = (path) => JSON.stringify(pathToFileURL(join(root, path)).href)
+  const kit = relative(root, dir)
+  const script = join(tmpdir(), `kit-mcp-size-${process.pid}.mts`)
+  writeFileSync(script, `const app = await import(${url('src/app.ts')})
+const { toolsetSizes } = await import(${url(`${kit}/mcp/toolsets.ts`)})
+let tools = app.TOOLS
+if (!tools) {
+  const { mountedOf, testDb } = await import(${url(`${kit}/index.ts`)})
+  tools = mountedOf(await app.createApp({ db: await testDb(), env: {} })).mcp?.tools ?? []
+}
+console.log(JSON.stringify(toolsetSizes(tools)))
+`)
+  const measured = spawnSync('pnpm', ['exec', 'tsx', script], { cwd: root, encoding: 'utf8' })
+  rmSync(script, { force: true })
+  if (measured.status !== 0) fail(`could not load the app's tools (installed? does src/app.ts export TOOLS, or build with createApp({ db, env })?): ${(measured.stderr || '').trim().split('\n')[0] ?? ''}`)
+  return JSON.parse(measured.stdout.trim().split('\n').at(-1))
+}
+
+/** `kit mcp size`: each toolset's tools and bytes, a note when `core` is over budget; `--set` lists one set's tools. */
+const mcpSize = () => {
+  const sizes = appToolsetSizes()
+  const only = valueOf('--set')
+  const set = only && (sizes.sets.find((one) => one.name === only) ?? fail(`no toolset "${only}"; the app has ${sizes.sets.map((one) => one.name).join(', ')}`))
+  if (flags.has('--json')) return console.log(JSON.stringify(set ? { ...set, tools: sizes.tools.filter((tool) => set.tools.includes(tool.name)) } : sizes, null, 2))
+  const kb = (bytes) => `${(bytes / 1000).toFixed(1)} KB`
+  const row = (name, tools, bytes) => `${name.padEnd(14)}${String(tools).padStart(6)}${kb(bytes).padStart(11)}${`${(bytes / 4000).toFixed(1)}k`.padStart(10)}`
+  if (set) {
+    console.log(row(set.name, set.tools.length, set.bytes))
+    for (const tool of sizes.tools.filter((one) => set.tools.includes(one.name))) console.log(`  ${tool.name.padEnd(40)}${kb(tool.bytes).padStart(10)}`)
+    return
+  }
+  console.log(`${'toolset'.padEnd(14)}${'tools'.padStart(6)}${'size'.padStart(11)}${'~tokens'.padStart(10)}`)
+  for (const one of sizes.sets) console.log(row(one.name, one.tools.length, one.bytes))
+  console.log(row('every tool', sizes.all.tools, sizes.all.bytes))
+  const core = sizes.sets.find((one) => one.name === 'core')
+  if (core && (core.bytes > CORE_BUDGET.bytes || core.tools.length > CORE_BUDGET.tools))
+    console.log(`note  core is ${kb(core.bytes)} with ${core.tools.length} tools; aim for about ${kb(CORE_BUDGET.bytes)} and ${CORE_BUDGET.tools} tools: move tools for one job into their own set (docs/STANDARD.md §11, Toolsets)`)
 }
 
 // ---- Commands ----
@@ -1116,6 +1172,8 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
   },
 
   license: licenseCommand,
+
+  mcp: () => (names[0] === 'size' ? mcpSize() : fail('kit mcp size [--dir src/kit] [--set <toolset>] [--json]')),
 
   feature: () => {
     const [name] = names

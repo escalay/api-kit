@@ -48,6 +48,10 @@ A feature is one folder, `src/features/<name>/`, with one shape. The kit's `boar
   'reading-list view rl_123', about: 'One list with its books' }] }`. Rules and jobs: the `api-kit-cli` skill.
 - `samples` in `index.ts` gives each tool arguments that work, creating what the tool needs first. A tool with no
   sample fails `toolsRun`.
+- **Toolset**: a tool without `toolset` is in `core`, which every agent loads. A feature for one kind of work (building
+  automations, admin) puts its tools in a set: `inToolset('flows', tools)`; agents then connect with
+  `/mcp?tools=core,flows`. Past about 25 tools or 30 KB in `core` (`npx @escalay/kit mcp size`), split by job:
+  [references/toolsets.md](references/toolsets.md).
 
 ## Checks
 
@@ -59,8 +63,9 @@ A feature is one folder, `src/features/<name>/`, with one shape. The kit's `boar
 | The guide has no empty placeholder | `guideGaps(...)` returns `[]` |
 | The guide module is current | `pnpm guide`, then the `guide.gen.ts` test |
 | Every tool has a command and an example | `cliGaps({ tools: TOOLS })` returns `[]`; with `sdk/`, also `pnpm sdk:types` |
+| `core` stays lean (once the app has toolsets) | `toolsetSizes(TOOLS)`: `core` under 30 KB and 25 tools |
 
-All six run with `pnpm test`.
+All seven run with `pnpm test`.
 
 ## Done when
 

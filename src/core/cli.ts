@@ -31,6 +31,8 @@ export const PENDING_META = 'api-kit/pending'
  * names, words, schemas, `_meta`), so a client that cached the list can tell it changed with the next answer.
  */
 export const TOOLS_HASH_META = 'api-kit/tools-hash'
+/** Where each listed tool names the toolsets it is in (only on a server with more than `core`), and the Server Card lists the sets. */
+export const TOOLSETS_META = 'api-kit/toolsets'
 
 /** Commands every app's CLI has, which no tool, resource or job may be named after (or use as a noun). */
 export const CLI_BUILT_INS = ['help', 'commands', 'api', 'tool', 'doctor', 'completion', 'version'] as const

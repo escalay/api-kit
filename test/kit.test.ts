@@ -574,6 +574,11 @@ describe('the copy-in CLI', () => {
       expect(await readFile(join(app, 'src/features/catalog.ts'), 'utf8')).toContain("  'reading-lists': { title: 'ReadingLists', description: 'ReadingLists: say here what switching it off stops.' },\n  // kit:catalog")
       expect(await readFile(join(app, 'src/features/reading-lists/index.ts'), 'utf8')).toContain("  name: 'reading-lists',\n  switch: 'reading-lists',")
       expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'switches', 'testing'])
+      // The app's tools by toolset, measured by its own copy of the kit
+      const sized = cli(app, 'mcp', 'size')
+      expect(sized.stdout, sized.stderr).toMatch(/^toolset\s+tools\s+size\s+~tokens\ncore\s+\d+\s+[\d.]+ KB\s+[\d.]+k\nevery tool\s+\d+/)
+      expect(JSON.parse(cli(app, 'mcp', 'size', '--set', 'core', '--json').stdout)).toMatchObject({ name: 'core', tools: expect.arrayContaining([expect.objectContaining({ name: 'get_reading_list', toolsets: ['core'] })]) })
+      expect(cli(app, 'mcp', 'size', '--set', 'flows').stderr).toBe('kit: no toolset "flows"; the app has core\n')
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
       // The product's own skill, the place for developer skills, and the link coding agents find them through
       for (const path of ['guide/skills/demo-api/SKILL.md', 'guide/skills/demo-api/references/find-your-way.md', '.agents/skills/README.md']) expect(existsSync(join(app, path)), path).toBe(true)
@@ -971,7 +976,7 @@ describe('the skills', () => {
       expect(text.split('\n').length, name).toBeLessThanOrEqual(150)
       expect(text, name).toMatch(/`pnpm test|`npx @escalay\/kit doctor`|^pnpm release:check/m)
       // Only commands the CLI has
-      for (const [, command] of text.matchAll(/npx @escalay\/kit ([a-z]+)/g)) expect(['list', 'add', 'diff', 'update', 'doctor', 'adopt', 'init', 'feature', 'guide', 'sdk', 'cli'], `${name}: ${command}`).toContain(command)
+      for (const [, command] of text.matchAll(/npx @escalay\/kit ([a-z]+)/g)) expect(['list', 'add', 'diff', 'update', 'doctor', 'adopt', 'init', 'feature', 'guide', 'sdk', 'cli', 'mcp'], `${name}: ${command}`).toContain(command)
     }
   })
 })
