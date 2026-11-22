@@ -37,7 +37,9 @@ setup claim. Name the one place it comes from with `address`; every guard and pa
   leaves it as the caller sent it, and `hops` then counts the caller's own values.
 - `'socket'` is the connection; where there is none (Workers, `app.request`, a call made in-process) it is `local`,
   never a header.
-- An IPv6 address counts by its /64; an IPv4 address mapped into IPv6 counts as the IPv4 one.
+- A port after the address (`203.0.113.4:5678`, `[2001:db8::1]:443`) is dropped. A global IPv6 address (2000::/3)
+  counts by its /64; one that carries an IPv4 address (mapped `::ffff:…`, dotted or hex, and NAT64 `64:ff9b::/96`)
+  counts as that IPv4 address; any other (loopback, link-local, unique local) counts whole.
 - The default, `'headers'`, is the read before this option: `cf-connecting-ip`, else the whole `X-Forwarded-For`,
   as sent. A caller who can reach the app directly can send either, so set `address` on Node. `kit doctor` notes an
   app on `@hono/node-server` that names none.

@@ -72,7 +72,7 @@ export const memoryGuardStore = ({ maxEntries = 2000 }: { maxEntries?: number } 
  *   'headers'                  today's read, as sent: `cf-connecting-ip`, else the whole `x-forwarded-for` (default)
  *   { header, hops = 1 }       the value `hops` from the right of a header a proxy writes or appends to
  *   'socket'                   the connection on Node (`@hono/node-server`); 'local' where there is none (Workers)
- * A named source is never mixed with another, and an IPv6 address counts by its /64.
+ * A named source is never mixed with another; a port is dropped, and a global IPv6 address counts by its /64.
  * @example
  * createAgentApi({ …, address: { header: 'cf-connecting-ip' } })                 // behind Cloudflare
  * createAgentApi({ …, address: { header: 'x-forwarded-for', hops: 1 } })         // behind one proxy that appends
@@ -82,20 +82,40 @@ export type AddressTrust = 'headers' | 'socket' | { header: string; hops?: numbe
 
 type Connection = { incoming?: { socket?: { remoteAddress?: string } } }
 
-/** The first four groups of an IPv6 address (`2001:db8:1:2::/64`); an IPv4 one, mapped or not, as it is. */
-const prefixOf = (address: string) => {
-  const bare = address.replace(/^\[|\]$/g, '').replace(/%.*$/, '').toLowerCase()
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(bare)
-  if (mapped) return mapped[1]!
+/** The eight 16-bit groups of an IPv6 address (an IPv4 tail as two), or undefined when it is not one. */
+const groupsOf = (address: string) => {
+  const halves = address.split('::')
+  if (halves.length > 2) return undefined
+  const groupsIn = (half: string) =>
+    (half ? half.split(':') : []).flatMap((part) => {
+      const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(part)?.slice(1).map(Number)
+      if (ipv4) return ipv4.some((octet) => octet > 255) ? [NaN] : [ipv4[0]! * 256 + ipv4[1]!, ipv4[2]! * 256 + ipv4[3]!]
+      return /^[0-9a-f]{1,4}$/.test(part) ? [parseInt(part, 16)] : [NaN]
+    })
+  const [left, right = []] = halves.map(groupsIn) as [number[], number[]?]
+  const groups = halves.length === 2 ? [...left, ...Array<number>(Math.max(0, 8 - left.length - right.length)).fill(0), ...right] : left
+  return groups.length === 8 && groups.every((group) => group >= 0) ? groups : undefined
+}
+
+/**
+ * What the guards count an address as: an IPv4 one as it is (a port dropped); one IPv6 carries (mapped, NAT64) as that
+ * IPv4 address; a global IPv6 one (2000::/3) by its /64 (`2001:db8:1:2::/64`); any other IPv6 one (loopback,
+ * link-local, unique local) whole.
+ */
+const prefixOf = (value: string) => {
+  const unported = /^\[([^\]]+)\](?::\d+)?$/.exec(value)?.[1] ?? /^(\d+\.\d+\.\d+\.\d+):\d+$/.exec(value)?.[1] ?? value
+  const bare = unported.replace(/%.*$/, '').toLowerCase()
   if (!bare.includes(':')) return bare
-  const [head = '', tail] = bare.split('::')
-  const left = head ? head.split(':') : []
-  const right = tail ? tail.split(':') : []
-  // An IPv4 tail (`64:ff9b::192.0.2.1`) stands for two groups
-  const width = [...left, ...right].reduce((sum, group) => sum + (group.includes('.') ? 2 : 1), 0)
-  const groups = tail === undefined ? left : [...left, ...Array<string>(Math.max(0, 8 - width)).fill('0'), ...right]
-  if (groups.length < 4 || groups.slice(0, 4).some((group) => !/^[0-9a-f]{1,4}$/.test(group))) return bare
-  return `${groups.slice(0, 4).map((group) => parseInt(group, 16).toString(16)).join(':')}::/64`
+  const groups = groupsOf(bare)
+  if (!groups) return bare
+  const hex = groups.map((group) => group.toString(16))
+  const zero = (from: number, to: number) => groups.slice(from, to).every((group) => group === 0)
+  const mapped = zero(0, 5) && groups[5] === 0xffff
+  const nat64 = groups[0] === 0x64 && groups[1] === 0xff9b && zero(2, 6)
+  if (mapped || nat64) return [groups[6]! >> 8, groups[6]! & 255, groups[7]! >> 8, groups[7]! & 255].join('.')
+  if ((groups[0]! & 0xe000) === 0x2000) return `${hex.slice(0, 4).join(':')}::/64`
+  // One spelling per address: the first run of two or more zero groups as `::`
+  return hex.join(':').replace(/(^|:)0(:0)+(:|$)/, '::')
 }
 
 /**

@@ -193,7 +193,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 - **A caller without credentials is counted by its address, read from one source the app names**
   (`createAgentApi({ address })`, §12), never from whichever header a caller sent: a header a proxy writes,
   `hops` values from the right (default 1, the nearest proxy's), or the connection (`'socket'`, on Node; `local`
-  where there is none). A missing source is `local`, never another header. An IPv6 address counts by its /64. The
+  where there is none). A missing source is `local`, never another header. A port is dropped, a global IPv6 address
+  counts by its /64, and an IPv6 address that carries an IPv4 one (mapped, NAT64) counts as that IPv4 address. The
   default, `'headers'`, is the earlier read (`cf-connecting-ip`, else the whole `X-Forwarded-For`, as sent): an app on
   Node names its source, and `kit doctor` notes one that doesn't.
 - Every model key is the app's own capped OpenRouter key, never a shared one; the

@@ -104,11 +104,42 @@ describe("the caller's address", () => {
       'paid ip:2001:db8:1:2::/64',
       'paid ip:2001:db8:1:2::/64',
       'paid ip:2001:db8:1:3::/64',
-      'paid ip:fe80:0:0:0::/64',
-      'paid ip:0:0:0:0::/64',
+      'paid ip:fe80::1',
+      'paid ip:::1',
       'paid ip:203.0.113.4',
       'paid ip:203.0.113.4',
     ])
+  })
+
+  it('a port after the address is not part of it', async () => {
+    const { ids, call } = limited({ address: { header: 'x-forwarded-for' }, limit: 2 })
+    // A proxy that appends `ip:port`: a new connection is not a new caller
+    expect((await call({ 'x-forwarded-for': '203.0.113.4:5678' })).status).toBe(200)
+    expect((await call({ 'x-forwarded-for': '203.0.113.4:9999' })).status).toBe(200)
+    expect((await call({ 'x-forwarded-for': '203.0.113.4' })).status).toBe(429)
+    await call({ 'x-forwarded-for': '[2001:db8:1:2::a]:443' })
+    await call({ 'x-forwarded-for': '[fe80::1%eth0]:8080' })
+    expect(ids).toEqual(['paid ip:203.0.113.4', 'paid ip:203.0.113.4', 'paid ip:203.0.113.4', 'paid ip:2001:db8:1:2::/64', 'paid ip:fe80::1'])
+  })
+
+  it('only a global address folds to its /64; an IPv4 one in IPv6 counts as IPv4', async () => {
+    const { ids, call } = limited({ address: { header: 'x-real-ip' } })
+    const addresses = [
+      // IPv4-mapped, written in hex: the IPv4 address, as when written dotted
+      '::ffff:c000:0201',
+      '::FFFF:0102:0304',
+      // NAT64 (64:ff9b::/96) carries an IPv4 address in its last 32 bits: one bucket per IPv4 address
+      '64:ff9b::192.0.2.1',
+      '64:ff9b::c633:6407',
+      // Not one site's /64: each address on its own
+      '::2',
+      '::3',
+      'fe80::2',
+      'fd00:1:2:3::4',
+      'fd00:1:2:3::5',
+    ]
+    for (const address of addresses) await call({ 'x-real-ip': address })
+    expect(ids).toEqual(['192.0.2.1', '1.2.3.4', '192.0.2.1', '198.51.100.7', '::2', '::3', 'fe80::2', 'fd00:1:2:3::4', 'fd00:1:2:3::5'].map((id) => `paid ip:${id}`))
   })
 
   it('a custom key splits buckets, and null skips counting', async () => {
