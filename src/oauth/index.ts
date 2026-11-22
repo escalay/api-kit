@@ -295,7 +295,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
 | \`authorization_pending\` | the owner hasn't approved yet; keep polling at \`interval\` |
 | \`slow_down\` | you polled faster than \`interval\`; wait the new \`interval\` (5 seconds more) from now on |
 | \`expired_token\` | the 10-minute code window passed; ask for a new claim or device code |
-| \`invalid_grant\` | the code, refresh token or assertion is used, expired or revoked; start again (a code or a refresh token sent twice revokes its whole sign-in) |
+| \`invalid_grant\` | the code, refresh token, assertion or claim token is used, expired or revoked; start again (a code or a refresh token sent twice revokes its whole sign-in) |
 | \`access_denied\` | the owner said no |
 `
 
@@ -591,14 +591,22 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         case CLAIM_GRANT: {
           const held = body.claim_token ? await store.get('claim-token', sha(body.claim_token)) : null
           if (!held) return oauthError(c, 400, 'expired_token', 'The claim window closed: register again.')
-          const registration = await store.get('registration', String(held.registration))
+          const client = String(held.registration)
+          // revokeClient drops the registration: its marker says so before the registration reads as expired
+          const [registration, revokedClient] = await Promise.all([store.get('registration', client), store.get('revoked-client', client)])
+          if (revokedClient) return oauthError(c, 400, 'invalid_grant', 'This agent was revoked: register again.')
           if (!registration) return oauthError(c, 400, 'expired_token', 'The registration expired: register again.')
           if (!registration.claimed) return oauthError(c, 400, 'authorization_pending', 'The owner hasn’t typed the code yet.')
           // Single use under concurrent polls: only the one that takes the claim token gets tokens
           if (!(await take('claim-token', sha(body.claim_token!)))) return oauthError(c, 400, 'expired_token', 'The claim window closed: register again.')
           // A registration claimed before grants carries none: its id is the grant, the same in every token
-          const issued = { client: String(held.registration), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant: String(registration.family ?? held.registration) }
-          const assertion = await sign({ sub: held.registration, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
+          const grant = String(registration.family ?? client)
+          // Read after the take, so a revoke that landed while this poll ran is seen: a refresh row issued into a revoked
+          // grant would outlive the marker and undo the revoke
+          const [revokedGrant, revokedLate] = await Promise.all([store.get('revoked-family', grant), store.get('revoked-client', client)])
+          if (revokedGrant || revokedLate) return oauthError(c, 400, 'invalid_grant', 'This sign-in is revoked: register again.')
+          const issued = { client, name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant }
+          const assertion = await sign({ sub: client, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued), identity_assertion: assertion, assertion_expires: new Date((now() + REGISTRATION_TTL) * 1000).toISOString() }, 200, { 'cache-control': 'no-store' })
         }
         case DEVICE_GRANT: {

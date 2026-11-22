@@ -50,10 +50,13 @@ await oauth.revokeGrant(caller.grant)   // ends that sign-in at once: its access
 await oauth.revokeClient(clientId)      // every sign-in of the client, and drops its registration: it registers again
 ```
 
-`revokeClient` also ends what was approved but not yet collected: a code exchanged or a device approval polled after
-it gets `invalid_grant`, and the device page refuses a code whose client is gone. Both markers (`revokeGrant`'s and
-`revokeClient`'s) are kept 30 days and 20 minutes, longer than a refresh token issued from a code or device approval
-collected at the last moment.
+`revokeClient` also ends what was approved but not yet collected: a code exchanged, or a device approval or a claim
+token polled after it, gets `invalid_grant`, and the device page refuses a code whose client is gone. A claim token
+collected after `revokeGrant` ended its grant gets `invalid_grant` too: a claimed agent can learn its grant through
+jwt-bearer before it collects the claim, and a refresh token issued into that grant would outlive the marker and undo
+the revoke. The claim grant reads both markers after it takes the claim token, so a revoke landing during the poll
+counts. Both markers (`revokeGrant`'s and `revokeClient`'s) are kept 30 days and 20 minutes, longer than a refresh
+token issued from a code or device approval collected at the last moment.
 
 `createOAuth({ …, reuseGraceSeconds: 30 })`: a used refresh token sent again inside the window (a client that lost the
 answer and retried) gets the same successor, an HMAC of the used token under a secret derived from the signing key, so
@@ -114,7 +117,10 @@ Defaults that change when an app takes this version:
   replayed. A claimed agent's identity assertion is refused once its grant is revoked: it registers again.
 - A code sent twice with its verifier revokes its sign-in.
 - `revokeClient` deletes the registration: a revoked client registers again. A code or a device approval collected
-  after it gets `invalid_grant` (before, it was issued tokens `verify` refused).
+  after it gets `invalid_grant` (before, it was issued tokens `verify` refused), and so does a claim token (before,
+  `expired_token`, or tokens when the revoke landed during the poll).
+- A claim token collected after `revokeGrant` ended its grant gets `invalid_grant` (before, it was issued a refresh
+  token in the revoked grant, which outlived the revoke marker).
 - A second claim code typed for a registration already approved is refused with a 409 page (before, it replaced the
   registration's grant, so its jwt-bearer tokens and its claim and refresh tokens no longer shared one).
 - `createOAuth` throws on a malformed signing key when called. On Node a bad key already stopped the process at start

@@ -49,6 +49,10 @@ export const signedIn = async (app: App, options: { clientId?: string; name?: st
 
 export const callerWith = (app: App, accessToken: string) => app.request('/api/v1/things', { headers: { authorization: `Bearer ${accessToken}` } })
 export const refreshWith = (app: App, refreshToken: string) => app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: refreshToken }))
+/** The owner types an agent's claim code on the claim page. */
+const typeClaim = (app: App, attempt: { verification_uri: string; user_code: string }) =>
+  app.request('/oauth/claim', { ...form({ claim_attempt_token: new URL(attempt.verification_uri).searchParams.get('claim_attempt_token')!, user_code: attempt.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+const claimPoll = (app: App, claimToken: string) => app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: claimToken }))
 
 export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>) =>
   describe(`OAuthStore: ${name}`, () => {
@@ -271,6 +275,52 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       await oauth.revokeClient(revoked.client_id)
       expect((await approve(revoked.user_code)).status).toBe(400)
       expect((await (await revoked.poll()).json()).error).toBe('invalid_grant')
+    })
+
+    it('refuses a claim token collected after its grant was revoked, so the revoke never undoes itself', async () => {
+      const { app, oauth } = await oauthApp(await make())
+      const { registration_id, claim_token, identity_assertion } = await (await app.request('/agent/identity', json({ type: 'anonymous', client_name: 'Night shift' }))).json()
+      const { claim_attempt } = await (await app.request('/agent/identity/claim', json({ claim_token, email: OWNER }))).json()
+      expect((await typeClaim(app, claim_attempt)).status).toBe(200)
+      // The agent learns its grant through jwt-bearer before it collects the claim
+      const bearing = await (await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: identity_assertion }))).json()
+      const { caller } = await (await callerWith(app, bearing.access_token)).json()
+      expect(caller).toMatchObject({ client: registration_id, grant: expect.any(String) })
+      await oauth.revokeGrant(caller.grant)
+      const late = await claimPoll(app, claim_token)
+      expect([late.status, (await late.json()).error]).toEqual([400, 'invalid_grant'])
+    })
+
+    it('refuses a claim token collected after revokeClient, and one whose revoke lands while it is collected', async () => {
+      const inner = await make()
+      const during: { run?: () => unknown } = {}
+      const store: OAuthStore = {
+        ...inner,
+        get: async (kind, id) => {
+          const value = await inner.get(kind, id)
+          if (kind !== 'registration' || !during.run) return value
+          const run = during.run
+          during.run = undefined
+          await run()
+          return value
+        },
+      }
+      const { app, oauth } = await oauthApp(store)
+      const approved = async () => {
+        const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+        expect((await typeClaim(app, registration.claim)).status).toBe(200)
+        return registration as { registration_id: string; claim_token: string }
+      }
+
+      const revoked = await approved()
+      await oauth.revokeClient(revoked.registration_id)
+      const late = await claimPoll(app, revoked.claim_token)
+      expect([late.status, (await late.json()).error]).toEqual([400, 'invalid_grant'])
+
+      const racing = await approved()
+      during.run = () => oauth.revokeClient(racing.registration_id)
+      const raced = await claimPoll(app, racing.claim_token)
+      expect([raced.status, (await raced.json()).error]).toEqual([400, 'invalid_grant'])
     })
 
     it('issues one sign-in for a claim polled from two places at once', async () => {
