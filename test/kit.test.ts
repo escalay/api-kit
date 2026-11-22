@@ -554,6 +554,17 @@ describe('the copy-in CLI', () => {
     expect(cli(app, 'doctor', '--dir', 'kit').stdout).toContain("note     the app runs on Node (@hono/node-server) and names no source for the caller's address")
   })
 
+  it('doctor never reads above the app for the address note', async () => {
+    // The app sits in a folder named src beside another project served on Node
+    const projects = join(await mkdtemp(join(tmpdir(), 'kit-projects-')), 'src')
+    const app = join(projects, 'sample')
+    await mkdir(join(projects, 'other'), { recursive: true })
+    await mkdir(app)
+    await writeFile(join(projects, 'other/server.ts'), "import { serve } from '@hono/node-server'\n")
+    cli(app, 'add', 'core', '--dir', 'kit')
+    expect(cli(app, 'doctor', '--dir', 'kit').stdout).toBe(`kit matches kit ${KIT_VERSION}: core\n`)
+  })
+
   it('doctor names a kept file as edited here and changed in the kit', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     cli(app, 'add', 'core', '--dir', 'kit')

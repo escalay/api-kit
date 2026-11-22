@@ -467,11 +467,14 @@ const agentApiCalls = (text) =>
 
 /**
  * A hint, not a finding: an app served on Node whose code names no `address` counts anonymous callers by headers as
- * sent. Reads the app's own files under the nearest `src/` above the kit folder, else `./src` (the kit folder left out).
+ * sent. Reads the app's own files under the nearest `src/` above the kit folder inside the app, else `./src` (the kit
+ * folder left out).
  */
 const addressNotes = () => {
-  const srcAbove = (path) => (basename(path) === 'src' ? path : dirname(path) === path ? undefined : srcAbove(dirname(path)))
-  const src = srcAbove(dirname(dir)) ?? resolve(process.cwd(), 'src')
+  const root = process.cwd()
+  // Never above the app (the folder kit runs in): a `src` there holds other projects
+  const srcAbove = (path) => (relative(root, path).startsWith('..') ? undefined : basename(path) === 'src' ? path : path === root ? undefined : srcAbove(dirname(path)))
+  const src = srcAbove(dirname(dir)) ?? join(root, 'src')
   if (!existsSync(src)) return []
   const texts = readdirSync(src, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && /\.(m?ts|m?js|tsx)$/.test(entry.name))
