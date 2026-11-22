@@ -2,7 +2,9 @@
  * Two guards for calls that change something or cost money, both keyed by the caller:
  *   idempotency   `Idempotency-Key` on POST and PATCH (IETF httpapi-idempotency-key): a retry with the same key and
  *                 body gets the stored answer (`Idempotent-Replayed: true`), the same key with another body is a 422,
- *                 one still in flight a 409. Kept 24 hours.
+ *                 one still in flight a 409. Kept 24 hours, and only what `keep` passes (by default a success, never
+ *                 a refusal or a server error, which changed nothing). Never on `/oauth/*` and `/agent/identity*`,
+ *                 whose answers hold tokens, nor on the paths an app adds to `skip`.
  *   rateLimit     at most `limit` calls per `windowSeconds` per caller on the routes it guards, with the draft
  *                 `RateLimit-Policy` / `RateLimit` headers (IETF httpapi-ratelimit-headers) and a 429 problem with
  *                 `Retry-After` past it: a looping agent can't drain a paid budget.
@@ -17,6 +19,7 @@
  */
 import { createHash } from 'node:crypto'
 import type { Context, MiddlewareHandler } from 'hono'
+import { matches, OAUTH_OPEN_PATHS } from './auth.js'
 import { problemResponse } from './problem.js'
 
 /** A stored answer to replay: the body is base64, so a store can keep it as JSON. */
@@ -147,10 +150,34 @@ const callerOf = (c: Context, trust?: AddressTrust) => {
   return caller ? `${caller.kind}:${caller.name ?? caller.email}` : `ip:${addressOf(c, trust)}`
 }
 
-export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, store = memoryGuardStore() }: { ttlMs?: number; lockMs?: number; store?: GuardStore } = {}): MiddlewareHandler =>
+/** Which answers are kept to replay: a success. A refusal changed nothing, so a retry after its cause is fixed runs again. */
+const keepSuccess = (status: number) => status < 400
+
+/** Paths whose answers are never kept: the OAuth endpoints answer with tokens and codes. */
+const NEVER_KEPT = [...OAUTH_OPEN_PATHS, '/agent/identity*']
+
+/** `idempotency`'s options; `createAgentApi({ guards })` passes `store`, `keep` and `skip`. */
+export type IdempotencyOptions = {
+  ttlMs?: number
+  lockMs?: number
+  store?: GuardStore
+  /** Which statuses are kept to replay (default: below 400). `(status) => status < 500` keeps refusals too, as the kit once did; one that passes a 5xx keeps server errors as well. */
+  keep?: (status: number) => boolean
+  /** More paths never kept, beside `/oauth/*` and `/agent/identity*`: an app's own open routes that answer a secret (a redirect holding a code). */
+  skip?: string[]
+}
+
+/**
+ * Replays a retried POST or PATCH from its first answer (the rules are at the top of this file).
+ *
+ * @example
+ * app.use('*', idempotency({ store: await dbGuardStore(db), skip: ['/join/*'] }))   // createAgentApi does this for you
+ */
+export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, store = memoryGuardStore(), keep = keepSuccess, skip = [] }: IdempotencyOptions = {}): MiddlewareHandler =>
   async (c, next) => {
     const key = c.req.header('idempotency-key')
     if (!key || (c.req.method !== 'POST' && c.req.method !== 'PATCH')) return next()
+    if ([...NEVER_KEPT, ...skip].some((pattern) => matches(c.req.path, pattern))) return next()
     if (key.length > 255) return problemResponse(c, 'bad_request', { detail: 'Idempotency-Key is at most 255 characters.', errors: [{ in: 'header', path: 'Idempotency-Key', message: 'too long' }] })
     const id = `${callerOf(c)} ${c.req.method} ${c.req.path} ${key}`
     const bodyHash = createHash('sha256').update(new Uint8Array(await c.req.raw.clone().arrayBuffer())).digest('hex')
@@ -167,8 +194,8 @@ export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, stor
       await store.release(id)
       throw error
     }
-    // Server errors aren't kept: a retry with the same key should be able to succeed
-    if (c.res.status >= 500) return void (await store.release(id))
+    // What isn't kept (a refusal, a server error) frees the key: a retry with it runs again
+    if (!keep(c.res.status)) return void (await store.release(id))
     const body = Buffer.from(await c.res.clone().arrayBuffer()).toString('base64')
     await store.save(id, { bodyHash, status: c.res.status, headers: [...c.res.headers.entries()], body }, now + ttlMs)
   }

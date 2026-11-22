@@ -22,7 +22,7 @@ const db = await testDb()                                               // tests
 |---|---|
 | `openDb(source)` | a path or `file:` URL or `:memory:` or `DatabaseSync` → Drizzle over node:sqlite (the `sqlite-proxy` driver, rows as arrays so same-named columns in a join stay apart); a Drizzle database → used as it is; any other URL → an error naming what to do |
 | `migrate(db, feature, steps)` | applies the steps not yet applied, in order, each in a transaction, recorded in `kit_migrations (feature, step)`; on D1 (which refuses `begin`) each step and its record go as one atomic batch |
-| `dbGuardStore(db)` | the guards' state (`core/guards.ts`) in table `kit_guards`, each check one atomic statement: rate windows and Idempotency-Key answers shared by every instance. On Workers pass it to `createAgentApi({ guards: { store } })` and every `rateLimit` |
+| `dbGuardStore(db)` | the guards' state (`core/guards.ts`) in table `kit_guards`, each check one atomic statement: rate windows and Idempotency-Key answers shared by every instance; expired rows go as it runs, at most once a minute per store. On Workers pass it to `createAgentApi({ guards: { store } })` and every `rateLimit` |
 | `testDb()` | Node: an empty in-memory database; workerd: the test Worker's `DB` binding (storage is kept apart per test file, not per test) |
 | `Db` | the type every repo takes |
 

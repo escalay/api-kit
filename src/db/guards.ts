@@ -25,13 +25,20 @@ export const kitGuards = sqliteTable('kit_guards', {
 
 export const GUARD_MIGRATIONS = ['create table if not exists kit_guards (kind text not null, id text not null, start integer not null, used integer not null, value text not null, expires_at integer not null, primary key (kind, id))'] as const
 
-/** Makes the guards' table if needed and drops expired rows (epoch ms throughout). */
+/** Makes the guards' table if needed; drops expired rows as it runs, at most once a minute (epoch ms throughout). */
 export const dbGuardStore = async (db: Db): Promise<GuardStore> => {
   await migrate(db, 'guards', GUARD_MIGRATIONS)
-  await db.delete(kitGuards).where(lte(kitGuards.expiresAt, Date.now()))
   const key = (id: string) => and(eq(kitGuards.kind, 'key'), eq(kitGuards.id, id))
+  // Set before the delete runs, so calls arriving together prune once
+  let prunedAt = -Infinity
+  const prune = async (now: number) => {
+    if (now - prunedAt < 60_000) return
+    prunedAt = now
+    await db.delete(kitGuards).where(lte(kitGuards.expiresAt, now))
+  }
   return {
     count: async (id, windowMs, now) => {
+      await prune(now)
       // SQLite evaluates every `set` against the row as it was, so `start` and `used` restart together
       const stale = sql`${kitGuards.start} <= ${now - windowMs}`
       const [window] = await db.insert(kitGuards).values({ kind: 'rate', id, start: now, used: 1, value: '', expiresAt: now + windowMs })
@@ -47,6 +54,7 @@ export const dbGuardStore = async (db: Db): Promise<GuardStore> => {
       return window!
     },
     claim: async (id, lockMs, now) => {
+      await prune(now)
       // An expired answer, or a lock whose request died, no longer holds the key
       await db.delete(kitGuards).where(and(key(id), lte(kitGuards.expiresAt, now)))
       const taken = await db.insert(kitGuards).values({ kind: 'key', id, start: now, used: 0, value: '', expiresAt: now + lockMs }).onConflictDoNothing().returning({ id: kitGuards.id })
@@ -55,7 +63,11 @@ export const dbGuardStore = async (db: Db): Promise<GuardStore> => {
       if (!row) return null
       return row.value ? (JSON.parse(row.value) as StoredAnswer) : 'running'
     },
-    save: async (id, answer, expiresAt) => void (await db.update(kitGuards).set({ value: JSON.stringify(answer), expiresAt }).where(key(id))),
+    // An upsert: a request that outlived its lock may find its row pruned, and its answer still counts
+    save: async (id, answer, expiresAt) => {
+      const value = JSON.stringify(answer)
+      await db.insert(kitGuards).values({ kind: 'key', id, start: 0, used: 0, value, expiresAt }).onConflictDoUpdate({ target: [kitGuards.kind, kitGuards.id], set: { value, expiresAt } })
+    },
     release: async (id) => void (await db.delete(kitGuards).where(and(key(id), eq(kitGuards.value, '')))),
   }
 }

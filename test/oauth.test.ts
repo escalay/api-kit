@@ -391,6 +391,20 @@ describe('OAuth callers: the client and the grant, not the name', () => {
     expect((await app.request('/api/v1/notes', { method: 'POST', headers: { authorization: `Bearer ${one.tokens.access_token}` } })).status).toBe(429)
   })
 
+  it('never replays the token endpoint: tokens are not kept, and a code sent twice is a real second exchange', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    const { client_id, code, verifier } = await approvedCode(app)
+    const exchange = () => app.request('/oauth/token', { ...form({ grant_type: 'authorization_code', code, client_id, redirect_uri: 'http://localhost:7777/cb', code_verifier: verifier }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'idempotency-key': 'exchange-1' } })
+    const first = await exchange()
+    expect(first.status).toBe(200)
+    expect((await first.json()).access_token).toBeTruthy()
+    const second = await exchange()
+    expect(second.headers.get('idempotent-replayed')).toBeNull()
+    const body = await second.json()
+    expect(body.error).toBe('invalid_grant')
+    expect(body.access_token).toBeUndefined()
+  })
+
   it('makes a revoked client register again', async () => {
     const { app, oauth } = await oauthApp(memoryOAuthStore())
     const { client_id, tokens } = await signedIn(app)

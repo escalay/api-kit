@@ -21,7 +21,7 @@ import { requestId } from 'hono/request-id'
 import { secureHeaders } from 'hono/secure-headers'
 import { authenticate, OAUTH_OPEN_PATHS, SCOPES, type OAuthServer } from './auth.js'
 import { cacheControl, CACHE } from './cache.js'
-import { idempotency, type AddressTrust, type GuardStore } from './guards.js'
+import { idempotency, type AddressTrust, type GuardStore, type IdempotencyOptions } from './guards.js'
 import { API_CATALOG_TYPE, apiCatalog, LINK_HEADER, markdownTokens, MARKDOWN_TYPE, poppyJson, robotsTxt, sendPublic, sitemapXml, WELL_KNOWN, wantsMarkdown, type DiscoveryConfig } from './discovery.js'
 import { HAL_JSON, originOf } from './hal.js'
 import { errorHandler, notFoundHandler, PROBLEMS, problemResponse, problemResponses, validationHook, type ProblemCode } from './problem.js'
@@ -45,8 +45,14 @@ export type AgentApiConfig = {
   home?: 'docs' | 'app' | false
   /** The service as its own OAuth server (`createOAuth`): mounted here, its tokens accepted beside keys. */
   oauth?: OAuthServer
-  /** Where Idempotency-Key answers are kept (default: this process's memory). On Workers: `dbGuardStore(db)`. */
-  guards?: { store?: GuardStore }
+  /**
+   * Idempotency-Key: where answers are kept (`store`, default this process's memory; on Workers `dbGuardStore(db)`),
+   * which statuses are kept (`keep`, default a success), and more paths never kept (`skip`, beside the OAuth ones).
+   *
+   * @example
+   * guards: { store: await dbGuardStore(db), skip: ['/join/*'] }
+   */
+  guards?: Pick<IdempotencyOptions, 'store' | 'keep' | 'skip'>
   /**
    * Where a caller's address is read for the guards and every part that counts by it (default 'headers': today's read,
    * as sent). Behind Cloudflare `{ header: 'cf-connecting-ip' }`, behind a proxy that appends
@@ -76,7 +82,7 @@ const IDEMPOTENCY_HEADER = {
   name: 'Idempotency-Key',
   in: 'header',
   required: false,
-  description: 'Any unique string (a UUID): a retry with the same key and body gets the first answer instead of doing the work twice; the same key with another body is a 422. Kept 24 hours.',
+  description: 'Any unique string (a UUID): a retry with the same key and body gets the first answer instead of doing the work twice; the same key with another body is a 422. Kept 24 hours, and only a success: after a refusal or a server error, a retry runs again.',
   schema: { type: 'string', maxLength: 255 },
 }
 
@@ -183,7 +189,7 @@ export const createAgentApi = (config: AgentApiConfig) => {
   })
   app.use('*', rejectUnknownQuery(app))
   // After auth: a retried POST is recognised per caller
-  app.use('*', idempotency({ store: config.guards?.store }))
+  app.use('*', idempotency(config.guards))
   app.onError(errorHandler)
   app.notFound(notFoundHandler)
 

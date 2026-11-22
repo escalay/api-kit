@@ -88,8 +88,14 @@ export const accessOwner = (access: AccessOptions) => {
   }
 }
 
-// `/llms.txt` matches itself, `/skills/x.md` matches `/skills/*`, and a leading star matches a suffix (`/mcp/server-card`)
-const matches = (path: string, pattern: string) =>
+/**
+ * Whether a path fits a pattern: `/llms.txt` matches itself, `/skills/x.md` matches `/skills/*`, and a leading star
+ * matches a suffix (`/mcp/server-card`).
+ *
+ * @example
+ * matches('/oauth/token', '/oauth/*') // true
+ */
+export const matches = (path: string, pattern: string) =>
   pattern.endsWith('*') ? path.startsWith(pattern.slice(0, -1)) : pattern.startsWith('*') ? path.endsWith(pattern.slice(1)) : path === pattern
 
 export type AccessOptions = {
