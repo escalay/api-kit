@@ -41,8 +41,8 @@ Each part's rules travel with it in `src/kit/<part>/README.md`; the full standar
 1. `npx @escalay/kit doctor`: one line per file that is missing, edited, or behind, each with its fix.
 2. `npx @escalay/kit diff --patch`: your edits beside the kit's changes.
 3. `npx @escalay/kit update`: writes what the kit changed and keeps every file you edited. When the kit changed a
-   kept file too, it exits 1 and leaves `kit.json` at the older version: `--force` takes the kit's, then make your
-   edits again.
+   kept file since the version `kit.json` records, it exits 1 and leaves `kit.json` at that version: `--force` takes
+   the kit's, then make your edits again.
 4. Done when `doctor` exits 0, or lists only the edits you mean to keep, and `pnpm test` passes.
 
 ## Shipping

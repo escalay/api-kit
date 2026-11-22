@@ -426,7 +426,7 @@ describe('the copy-in CLI', () => {
     // Edited here, and recorded from an older kit: both changed
     await writeFile(join(app, 'kit/core/cache.ts'), '// mine too\n')
     const lock = JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8'))
-    await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, files: { ...lock.files, 'core/cache.ts': 'stale' } }))
+    await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1', files: { ...lock.files, 'core/cache.ts': 'stale' } }))
     const diff = cli(app, 'diff', '--dir', 'kit')
     expect(diff.status).toBe(1)
     expect(diff.stdout).toMatch(/you edited\s+core\/hal\.ts/)
@@ -521,11 +521,34 @@ describe('the copy-in CLI', () => {
     const kept = cli(app, 'doctor', '--dir', 'kit')
     expect(kept.status).toBe(1)
     expect(kept.stdout.trim().split('\n')).toEqual([keptLine, '1 to fix in kit'])
-    // Kept by an older CLI that stamped the new version anyway: never 'copied from' the new kit
+    // At this kit's version (an older CLI stamped it over the kept file) the record is all there is: the edit is yours, never 'copied from' the new kit
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, files: { ...lock.files, 'core/cache.ts': 'older' } }))
     const stamped = cli(app, 'doctor', '--dir', 'kit')
-    expect(stamped.stdout.trim().split('\n')).toEqual([keptLine, '1 to fix in kit'])
+    expect(stamped.stdout.trim().split('\n')).toEqual([
+      "edited   core/cache.ts: yours to keep; `kit diff --dir kit --patch` shows the change, `kit update --dir kit --force` takes the kit's",
+      '1 to fix in kit',
+    ])
     expect(stamped.stdout).not.toContain('copied from')
+  })
+
+  it('an edited file whose record is wrong at this kit version stays yours, and update records the kit’s hash', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'core', '--dir', 'kit')
+    const lock = JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8'))
+    const edited = (await kitText('core/cache.ts')) + '// mine\n'
+    await writeFile(join(app, 'kit/core/cache.ts'), edited)
+    await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, files: { ...lock.files, 'core/cache.ts': 'bad' } }))
+    expect(cli(app, 'doctor', '--dir', 'kit').stdout.trim().split('\n')).toEqual([
+      "edited   core/cache.ts: yours to keep; `kit diff --dir kit --patch` shows the change, `kit update --dir kit --force` takes the kit's",
+      '1 to fix in kit',
+    ])
+    for (const run of [1, 2]) {
+      const updated = cli(app, 'update', '--dir', 'kit')
+      expect([run, updated.status]).toEqual([run, 0])
+      expect(updated.stdout).toContain(`kit.json → ${KIT_VERSION}`)
+    }
+    expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).toBe(edited)
+    expect(JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8'))).toMatchObject({ version: KIT_VERSION, files: { 'core/cache.ts': hashOfText(await kitText('core/cache.ts')) } })
   })
 
   it('adopts parts copied by the shadcn CLI: writes the record from what is on disk', async () => {

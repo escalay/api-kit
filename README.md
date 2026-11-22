@@ -129,8 +129,8 @@ npx @escalay/kit update --dir apps/api/src/kit       # never overwrites your edi
 ```
 
 A file equal to the kit's counts as unchanged, whatever `kit.json` recorded. When `update` keeps a file you edited
-that the kit changed too, it exits 1 and leaves `kit.json` at the older version, so `doctor` still names the file:
-`update --force` takes the kit's, then make your edits again.
+that the kit changed since the version `kit.json` records, it exits 1 and leaves `kit.json` at that older version,
+so `doctor` still names the file: `update --force` takes the kit's, then make your edits again.
 
 `--dir` defaults to `src/kit`. The app imports `./kit/index.js` and each entry part's folder (`./kit/mcp/index.js`,
 `./kit/boards/index.js`, `./kit/testing/index.js`). Its container build needs nothing from this repo.

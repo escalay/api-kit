@@ -176,7 +176,8 @@ const statusOf = (lock, expected) =>
     const kit = expected[file] === undefined ? null : sha(expected[file])
     if (local !== null && local === kit) return { file, state: 'unchanged', edited: false, changed: false }
     const edited = local !== null && recorded !== null && local !== recorded
-    const changed = kit !== recorded
+    // At this kit's version the kit has not changed a file since kit.json recorded it, so an edited file's other hash is a wrong record
+    const changed = kit !== recorded && !(edited && lock.version === VERSION)
     const state = local === null ? 'missing' : recorded === null ? 'new in kit' : kit === null ? 'dropped by kit' : edited && changed ? 'both changed' : edited ? 'you edited' : changed ? 'kit changed' : 'unchanged'
     return { file, state, edited, changed }
   })
@@ -1148,6 +1149,8 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
       }
       if ((state === 'both changed' || state === 'you edited') && !flags.has('--force')) {
         if (state === 'both changed') kept.push(file)
+        // The kit's hash, as adopt records it: a wrong record would read as a kit change once the kit moves on
+        if (state === 'you edited' && lock.version === VERSION) hashes[file] = sha(expected[file])
         continue
       }
       mkdirSync(dirname(pathOf(file, lock.webDir)), { recursive: true })
