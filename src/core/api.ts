@@ -21,7 +21,7 @@ import { requestId } from 'hono/request-id'
 import { secureHeaders } from 'hono/secure-headers'
 import { authenticate, OAUTH_OPEN_PATHS, SCOPES, type OAuthServer } from './auth.js'
 import { cacheControl, CACHE } from './cache.js'
-import { idempotency, type IdempotencyOptions } from './guards.js'
+import { idempotency, type AddressTrust, type GuardStore, type IdempotencyOptions } from './guards.js'
 import { API_CATALOG_TYPE, apiCatalog, LINK_HEADER, markdownTokens, MARKDOWN_TYPE, poppyJson, robotsTxt, sendPublic, sitemapXml, WELL_KNOWN, wantsMarkdown, type DiscoveryConfig } from './discovery.js'
 import { HAL_JSON, originOf } from './hal.js'
 import { errorHandler, notFoundHandler, PROBLEMS, problemResponse, problemResponses, validationHook, type ProblemCode } from './problem.js'
@@ -53,6 +53,12 @@ export type AgentApiConfig = {
    * guards: { store: await dbGuardStore(db), skip: ['/join/*'] }
    */
   guards?: Pick<IdempotencyOptions, 'store' | 'keep' | 'skip'>
+  /**
+   * Where a caller's address is read for the guards and every part that counts by it (default 'headers': today's read,
+   * as sent). Behind Cloudflare `{ header: 'cf-connecting-ip' }`, behind a proxy that appends
+   * `{ header: 'x-forwarded-for', hops }`, nothing in front on Node 'socket'. See `AddressTrust`.
+   */
+  address?: AddressTrust
   /**
    * Private: nothing about the service is readable without credentials. Only `robots.txt`, `/api/health` (status only),
    * the error pages and what an OAuth client needs to ask for access stay open; the guide, docs, spec, discovery files
@@ -145,6 +151,14 @@ export const createAgentApi = (config: AgentApiConfig) => {
     ? [...PRIVATE_OPEN, ...(config.oauth ? PRIVATE_OAUTH_OPEN : []), ...(config.auth.open ?? [])]
     : ['/api/health', '/openapi.json', '/docs', '/llms.txt', '/llms-full.txt', '/agents/*', '/skills/*', '/problems/*', ...discovery, ...(config.oauth ? OAUTH_OPEN_PATHS : []), ...(config.auth.open ?? [])]
 
+  // First, so every guard and part after it reads the address from the source the app named
+  if (config.address) {
+    const address = config.address
+    app.use('*', async (c, next) => {
+      c.set('kit:address' as never, address as never)
+      await next()
+    })
+  }
   app.use('*', requestId({ headerName: 'x-request-id' }))
   app.use('*', secureHeaders({ crossOriginResourcePolicy: false, contentSecurityPolicy: undefined }))
   // Same-site unless a route says otherwise (a sandboxed page's own files must load from its opaque origin)

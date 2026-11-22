@@ -20,7 +20,7 @@ what `feature` generates): `schema.ts` (Drizzle tables + migration steps) · `re
 |---|---|
 | `src/core/api.ts` | `createAgentApi`: OpenAPIHono with request ids, secure headers, auth, problem handlers, `/openapi.json` (3.1), `/docs` (Scalar), `/problems/{code}`, `/api/health`, and the discovery it can serve alone |
 | `src/core/discovery.ts` | api-catalog, Link headers, robots.txt with Content Signals, Markdown for agents, skills index + archives, Server Card, AI Catalog (`serveAiCatalog`) |
-| `src/core/guards.ts` | `idempotency` (Idempotency-Key on POST/PATCH, wired by `createAgentApi`) and `rateLimit` (per caller, RateLimit headers) |
+| `src/core/guards.ts` | `idempotency` (Idempotency-Key on POST/PATCH, wired by `createAgentApi`) and `rateLimit` (per caller or a custom `key`, RateLimit headers); `addressOf` (the caller's address from the one source the app names, `AddressTrust`) |
 | `src/core/hal.ts` | HAL links: `originOf`, `linksOf`, `pathWith`, `LinksSchema` |
 | `src/core/problem.ts` | RFC 9457 problems: `PROBLEMS`, `ProblemError`, `problemResponses`, `validationHook` |
 | `src/pagination/index.ts` | cursor pages: `limitQuery`, `cursorQuery`, `pageOf`, `pageSchema` |

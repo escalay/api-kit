@@ -512,6 +512,59 @@ describe('the copy-in CLI', () => {
     expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).toBe((await kitText('core/cache.ts')) + '// mine\n')
   })
 
+  it('doctor notes an app served on Node that names no source for the caller\'s address, without failing', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'core')
+    await writeFile(join(app, 'src/server.ts'), "import { serve } from '@hono/node-server'\n")
+    await writeFile(join(app, 'src/app.ts'), "const app = createAgentApi({ title: 'Sample', auth })\n")
+    const noted = cli(app, 'doctor')
+    expect(noted.status).toBe(0)
+    expect(noted.stdout.trim().split('\n')).toEqual([
+      "note     the app runs on Node (@hono/node-server) and names no source for the caller's address, so anonymous callers are counted by cf-connecting-ip or x-forwarded-for as sent: set createAgentApi({ address }) to the header your proxy writes, or 'socket' with nothing in front (STANDARD §9)",
+      `src/kit matches kit ${KIT_VERSION}: core`,
+    ])
+    await writeFile(join(app, 'src/app.ts'), "const app = createAgentApi({ title: 'Sample', auth, address: 'socket' })\n")
+    expect(cli(app, 'doctor').stdout).toBe(`src/kit matches kit ${KIT_VERSION}: core\n`)
+    // An `address` outside the createAgentApi call (a seed's email address) names no source
+    await writeFile(join(app, 'src/app.ts'), "const seed = { address: 'sample@example.test' }\nconst app = createAgentApi({\n  title: 'Sample',\n  auth: authOf({ realm: 'sample' }),\n})\n")
+    expect(cli(app, 'doctor').stdout).toContain("note     the app runs on Node (@hono/node-server) and names no source for the caller's address")
+    await writeFile(join(app, 'src/app.ts'), "const app = createAgentApi({\n  title: 'Sample',\n  auth: authOf({ realm: 'sample' }),\n  address,\n})\n")
+    expect(cli(app, 'doctor').stdout).toBe(`src/kit matches kit ${KIT_VERSION}: core\n`)
+    // On Workers alone there is no hint: cf-connecting-ip is Cloudflare's own
+    await writeFile(join(app, 'src/app.ts'), "const app = createAgentApi({ title: 'Sample', auth })\n")
+    await rm(join(app, 'src/server.ts'))
+    expect(cli(app, 'doctor').stdout).toBe(`src/kit matches kit ${KIT_VERSION}: core\n`)
+  })
+
+  it('doctor notes a Node app with no address source wherever its kit sits under src', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'core', '--dir', 'src/lib/kit')
+    await writeFile(join(app, 'src/server.ts'), "import { serve } from '@hono/node-server'\n")
+    await writeFile(join(app, 'src/app.ts'), "const app = createAgentApi({ title: 'Sample', auth })\n")
+    const noted = cli(app, 'doctor', '--dir', 'src/lib/kit')
+    expect(noted.status).toBe(0)
+    expect(noted.stdout).toContain("note     the app runs on Node (@hono/node-server) and names no source for the caller's address")
+    await writeFile(join(app, 'src/app.ts'), "const app = createAgentApi({ title: 'Sample', auth, address: 'socket' })\n")
+    expect(cli(app, 'doctor', '--dir', 'src/lib/kit').stdout).toBe(`src/lib/kit matches kit ${KIT_VERSION}: core\n`)
+    // A kit outside src: the app's own src is read
+    await rm(join(app, 'src/lib'), { recursive: true })
+    cli(app, 'add', 'core', '--dir', 'kit')
+    expect(cli(app, 'doctor', '--dir', 'kit').stdout).toBe(`kit matches kit ${KIT_VERSION}: core\n`)
+    await writeFile(join(app, 'src/app.ts'), "const app = createAgentApi({ title: 'Sample', auth })\n")
+    expect(cli(app, 'doctor', '--dir', 'kit').stdout).toContain("note     the app runs on Node (@hono/node-server) and names no source for the caller's address")
+  })
+
+  it('doctor never reads above the app for the address note', async () => {
+    // The app sits in a folder named src beside another project served on Node
+    const projects = join(await mkdtemp(join(tmpdir(), 'kit-projects-')), 'src')
+    const app = join(projects, 'sample')
+    await mkdir(join(projects, 'other'), { recursive: true })
+    await mkdir(app)
+    await writeFile(join(projects, 'other/server.ts'), "import { serve } from '@hono/node-server'\n")
+    cli(app, 'add', 'core', '--dir', 'kit')
+    expect(cli(app, 'doctor', '--dir', 'kit').stdout).toBe(`kit matches kit ${KIT_VERSION}: core\n`)
+  })
+
   it('doctor names a kept file as edited here and changed in the kit', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     cli(app, 'add', 'core', '--dir', 'kit')

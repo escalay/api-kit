@@ -25,6 +25,8 @@ const build = async (env: Env) => {
     tags: [{ name: 'Probe', description: 'The probe.' }, kit.PEOPLE_TAG, kit.SETUP_TAG, kit.TELEMETRY_TAG, kit.SWITCHES_TAG],
     auth: { realm: 'probe', keys: kit.parseApiKeys(undefined), open: ['/probe', '/probe/*', '/llms.txt', '/agents/*', '/api/telemetry', '/api/features', '/probe-beta', ...kit.PEOPLE_OPEN_PATHS, ...kit.SETUP_OPEN_PATHS], session: kit.sessionOf(db) },
     guards: { store: guards },
+    // On Workers the connection is Cloudflare's: the address it saw comes in cf-connecting-ip
+    address: { header: 'cf-connecting-ip' },
   })
   // Passkeys run through @simplewebauthn/server on workerd; the code is a test value, never a real secret
   await kit.registerPeople(app, { db, rpName: 'Probe' })
@@ -37,6 +39,7 @@ const build = async (env: Env) => {
   flags.gated(app, 'beta').get('/probe-beta', (c) => c.json({ beta: true }))
   // Workers can't read a folder: the guide comes from a module, as `kit guide` writes it
   kit.serveGuide(app, { files: { 'llms.txt': '# Probe\n\nServed from {{origin}}.\n\n{{api.endpoints}}\n', 'agents/notes.md': '# Notes\n' }, vars: () => ({}), full: ['llms.txt', 'agents/*'] })
+  app.get('/probe/address', (c) => c.json({ named: kit.addressOf(c), socket: kit.addressOf(c, 'socket') }))
   app.use('/probe', kit.snapshotEtag(() => 'v1'))
   app.get('/probe', async (c) => c.json({ rows: await db.all(sql`select count(*) as n from probe`) }))
   // Each call adds a row: a replayed Idempotency-Key must not add another, whichever isolate answers

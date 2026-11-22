@@ -18,7 +18,7 @@ import type { OpenAPIHono, RouteHandler } from '@hono/zod-openapi'
 import { eq } from 'drizzle-orm'
 import type { Context } from 'hono'
 import { hashApiKey, type Caller } from '../core/auth.js'
-import type { GuardStore } from '../core/guards.js'
+import { addressOf, type GuardStore } from '../core/guards.js'
 import { linksOf, originOf } from '../core/hal.js'
 import { newId } from '../core/ids.js'
 import { ProblemError } from '../core/problem.js'
@@ -95,7 +95,8 @@ export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards,
 
   const claim: RouteHandler<SetupRoutes['claim']> = async (c) => {
     const now = Date.now()
-    const address = c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? 'local'
+    // From the source the app named with createAgentApi({ address })
+    const address = addressOf(c)
     const mine = await guards.count(`setup-claim ip:${address}`, PER_ADDRESS.windowMs, now)
     const all = await guards.count('setup-claim all', IN_ALL.windowMs, now)
     if (mine.used > PER_ADDRESS.limit || all.used > IN_ALL.limit)

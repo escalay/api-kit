@@ -18,6 +18,7 @@ import {
   storedKeysOf,
   teamTools,
   testDb,
+  type AddressTrust,
   type SetupStep,
 } from '../src/index.js'
 import { lintOpenApi, softAuthenticator, toolRoutes, toolsRun } from '../src/testing/index.js'
@@ -27,7 +28,7 @@ const CODE = 'K7Q2-9XMD'
 const ORIGIN = 'http://app.test'
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1'
 
-const setup = async (options: { code?: string | undefined; steps?: SetupStep[] } = {}) => {
+const setup = async (options: { code?: string | undefined; steps?: SetupStep[]; address?: AddressTrust } = {}) => {
   const code = 'code' in options ? options.code : CODE
   const steps = options.steps ?? []
   const db = await testDb()
@@ -46,6 +47,7 @@ const setup = async (options: { code?: string | undefined; steps?: SetupStep[] }
       session: sessionOf(db),
       access: { team: 'example', audience: 'aud', verify: async (token) => (token.startsWith('ok:') ? token.slice(3) : null), roleOf: roleOf(db) },
     },
+    address: options.address,
   })
   const teamChanges: unknown[] = []
   const passkeyChanges: unknown[] = []
@@ -116,6 +118,16 @@ describe('claiming a deployment', () => {
     const guesser = browser('198.51.100.7')
     for (let attempt = 0; attempt < 5; attempt++) expect((await guesser.call('POST', '/api/setup/claim', { code: `GUESS-${attempt}`, email: 'g@example.com' })).status).toBe(403)
     expect((await guesser.call('POST', '/api/setup/claim', { code: CODE, email: 'g@example.com' })).status).toBe(429)
+  })
+
+  it('the setup claim counts by the trusted address', async () => {
+    const { browser } = await setup({ address: { header: 'x-forwarded-for' } })
+    // A new cf-connecting-ip or a value put in front of x-forwarded-for each time: still one address
+    for (let attempt = 0; attempt < 5; attempt++)
+      expect((await browser(`192.0.2.${attempt}`).call('POST', '/api/setup/claim', { code: `GUESS-${attempt}`, email: 'g@example.com' }, { 'x-forwarded-for': `forged-${attempt}, 198.51.100.7` })).status).toBe(403)
+    expect((await browser('192.0.2.9').call('POST', '/api/setup/claim', { code: CODE, email: 'g@example.com' }, { 'x-forwarded-for': 'forged-9, 198.51.100.7' })).status).toBe(429)
+    // Another address the proxy wrote has its own count
+    expect((await browser('192.0.2.9').call('POST', '/api/setup/claim', { code: 'GUESS-X', email: 'g@example.com' }, { 'x-forwarded-for': '198.51.100.8' })).status).toBe(403)
   })
 
   it('lets the owner back in after the setup code is changed, once, and tells the app when it starts and completes', async () => {
