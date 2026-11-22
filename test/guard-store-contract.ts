@@ -46,6 +46,16 @@ export const guardStoreContract = (name: string, make: () => Promise<GuardStore>
       expect(await store.claim(failed, 60_000, 70_000)).toBeNull()
     })
 
+    it('keeps the answer of a request that outlived its lock, even after a prune', async () => {
+      const store = await make()
+      const id = `slow-${crypto.randomUUID()}`
+      expect(await store.claim(id, 60_000, 1_000)).toBeNull()
+      await store.count(`slow-other-${crypto.randomUUID()}`, 1_000, 62_000)
+      const answer = { bodyHash: 'h', status: 201, headers: [] as [string, string][], body: btoa('{}') }
+      await store.save(id, answer, 200_000)
+      expect(await store.claim(id, 60_000, 63_000)).toEqual(answer)
+    })
+
     if (counted) it('prunes expired rows while running, at most once a minute', async () => {
       const { store, rows: count } = await counted()
       const prefix = `prune-${crypto.randomUUID()}`

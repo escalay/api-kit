@@ -63,7 +63,11 @@ export const dbGuardStore = async (db: Db): Promise<GuardStore> => {
       if (!row) return null
       return row.value ? (JSON.parse(row.value) as StoredAnswer) : 'running'
     },
-    save: async (id, answer, expiresAt) => void (await db.update(kitGuards).set({ value: JSON.stringify(answer), expiresAt }).where(key(id))),
+    // An upsert: a request that outlived its lock may find its row pruned, and its answer still counts
+    save: async (id, answer, expiresAt) => {
+      const value = JSON.stringify(answer)
+      await db.insert(kitGuards).values({ kind: 'key', id, start: 0, used: 0, value, expiresAt }).onConflictDoUpdate({ target: [kitGuards.kind, kitGuards.id], set: { value, expiresAt } })
+    },
     release: async (id) => void (await db.delete(kitGuards).where(and(key(id), eq(kitGuards.value, '')))),
   }
 }
