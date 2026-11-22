@@ -2,7 +2,7 @@
 /**
  * Makes one app per preset with `create-escalay` in the OS temp folder, installs it and runs its own CI's checks: format,
  * typecheck, lint, format check and tests for both, and for `api` a client made with `kit sdk` and its command line, built and run. For the `app` preset also the build (its files must land under /app/assets/, the one prefix
- * the Worker leaves to files), a dry-run deploy, and that a formatted app still takes a new feature and passes. The
+ * the Worker leaves to files, its brand's at the root), a dry-run deploy, and that a formatted app still takes a new feature and passes. The
  * `api` starter's brand is rendered with `kit brand` (its PNGs then served on Node and in workerd); the `app` starter
  * keeps the SVG-only brand a new app starts with, as the canaries and the release smoke test do.
  */
@@ -72,9 +72,11 @@ run(process.execPath, [cli, 'doctor'], api)
 run(process.execPath, ['sdk/dist/cli/bin.js', 'note', 'list', '--help'], api)
 const app = check('starter-app', 'app', [['exec', 'oxfmt', '--check', 'web', 'vite.config.ts', 'tsconfig.web.json', 'index.html'], ['exec', 'wrangler', 'deploy', '--dry-run']])
 const built = [...readFileSync(join(app, 'dist/client/index.html'), 'utf8').matchAll(/(?:src|href)="(\/[^"]+)"/g)].map(([, path]) => path)
-const stray = built.filter((path) => !path.startsWith('/app/assets/') || !existsSync(join(app, 'dist/client', path)))
-if (!built.length || stray.length) {
-  console.error(`the built page must load its files from /app/assets/: ${JSON.stringify(built.length ? stray : 'no files')}`)
+// The brand's files are the Worker's, at the root, never built (the dev server leaves them there with vite-ignore)
+const BRAND_PATHS = ['/favicon.ico', '/icon.svg', '/icon-dark.svg', '/icon-192.png', '/icon-512.png', '/icon-dark-192.png', '/icon-dark-512.png', '/apple-touch-icon.png', '/og.png', '/site.webmanifest']
+const stray = built.filter((path) => !BRAND_PATHS.includes(path) && (!path.startsWith('/app/assets/') || !existsSync(join(app, 'dist/client', path))))
+if (!built.some((path) => path.startsWith('/app/assets/')) || stray.length) {
+  console.error(`the built page must load its files from /app/assets/: ${JSON.stringify(stray.length ? stray : 'no files')}`)
   process.exit(1)
 }
 // Generated code is written in the kit's long-line style: the first format rewrites it, and the app must still take a feature
