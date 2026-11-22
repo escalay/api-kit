@@ -87,7 +87,7 @@ export type IdempotencyOptions = {
   ttlMs?: number
   lockMs?: number
   store?: GuardStore
-  /** Which statuses are kept to replay (default: below 400). `(status) => status < 500` keeps refusals too, as the kit once did. */
+  /** Which statuses are kept to replay (default: below 400). `(status) => status < 500` keeps refusals too, as the kit once did; one that passes a 5xx keeps server errors as well. */
   keep?: (status: number) => boolean
   /** More paths never kept, beside `/oauth/*` and `/agent/identity*`: an app's own open routes that answer a secret (a redirect holding a code). */
   skip?: string[]

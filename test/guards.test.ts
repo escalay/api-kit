@@ -77,6 +77,16 @@ describe('idempotency', () => {
     expect(await (await failing.post()).json()).toEqual({ run: 2 })
   })
 
+  it('keeps a server error when `keep` passes one: the kit adds no guard of its own', async () => {
+    const { state, post } = answering({ keep: () => true })
+    state.status = 503
+    await post()
+    state.status = 201
+    const replayed = await post()
+    expect(replayed.status).toBe(503)
+    expect(replayed.headers.get('idempotent-replayed')).toBe('true')
+  })
+
   it('never keeps an answer from the OAuth endpoints, whatever `skip` adds', async () => {
     for (const options of [{}, { skip: ['/join/*'] }]) {
       const { state, post } = answering(options)
