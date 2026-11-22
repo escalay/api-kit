@@ -10,7 +10,7 @@
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
  *   kit update [part…] [--dir src/kit] [--force]
- *   kit doctor [--dir src/kit] [--adopt]      missing files, edited files, parts behind this kit; exits 1 with a fix per line
+ *   kit doctor [--dir src/kit] [--adopt]      missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it)
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
  *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--yes]
  *                                             a new app: features/, the kit in src/kit, tests; Node (server.ts, a
@@ -451,6 +451,23 @@ console.log(JSON.stringify(cliGaps({ tools, resources, jobs: ${jobs} })))
   // Not a finding about the kit's copy: say so, and leave the exit code to the copy
   if (!gaps) console.log(`note     could not build the app to check its commands with cliGaps (installed? createApp({ db, env }) enough?): ${(checked.stderr || '').trim().split('\n')[0] ?? ''}`)
   return (gaps ?? []).map((gap) => `cli      ${gap}`)
+}
+
+/**
+ * A hint, not a finding: an app served on Node whose code names no `address` counts anonymous callers by headers as
+ * sent. Reads the app's own files under `src/` (the kit folder left out).
+ */
+const addressNotes = () => {
+  const src = join(resolve(dir, '../..'), 'src')
+  if (!existsSync(src) || !dir.startsWith(src)) return []
+  const texts = readdirSync(src, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && /\.(m?ts|m?js|tsx)$/.test(entry.name))
+    .map((entry) => join(entry.parentPath, entry.name))
+    .filter((path) => !path.startsWith(dir) && !path.includes('node_modules'))
+    .map((path) => readFileSync(path, 'utf8'))
+  const onNode = texts.some((text) => text.includes('@hono/node-server'))
+  const named = texts.some((text) => /createAgentApi\(/.test(text) && /\baddress\s*[:,}]/.test(text))
+  return onNode && !named ? ["note     the app runs on Node (@hono/node-server) and names no source for the caller's address, so anonymous callers are counted by cf-connecting-ip or x-forwarded-for as sent: set createAgentApi({ address }) to the header your proxy writes, or 'socket' with nothing in front (STANDARD §9)"] : []
 }
 
 // ---- Commands ----
@@ -988,7 +1005,7 @@ const commands = {
     if (flags.has('--adopt') && !existsSync(lockPath)) adopt()
     const lock = readLock()
     const findings = lock ? [...findingsOf(lock), ...cliFindings()] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
-    for (const finding of findings) console.log(finding)
+    for (const line of [...(lock ? addressNotes() : []), ...findings]) console.log(line)
     console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
   },

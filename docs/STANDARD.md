@@ -124,7 +124,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   **passkey** (WebAuthn, `@simplewebauthn/server`); signing in with it sets an HttpOnly cookie (`__Host-session` on
   https, SameSite=Lax, 30 days) whose token is stored only as a SHA-256. `auth.session` checks it after keys and agent
   tokens and before Access; a write made with it must come from the same site, as with Access's cookie. Claiming
-  **fails closed** (no secret set: 503) and is limited (5 an hour per address, 20 a day in all); a claimed deployment
+  **fails closed** (no secret set: 503) and is limited (5 an hour per address, read as §9 says, 20 a day in all); a claimed deployment
   answers the same code with 409, and a **rotated** code opens recovery for an existing owner, once. **Members** come
   through Access: with `access.roleOf: roleOf(db)` an email that is neither listed nor of a listed domain gets 403
   (without `roleOf`, Access works as before). Roles: `owner` does everything; `member` everything but admin (the team,
@@ -188,7 +188,14 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   (`Idempotent-Replayed: true`), the key with another body is a `422`, one in flight a `409`. `/openapi.json` documents
   the header on each of them.
 - Paid routes sit behind `rateLimit` per caller, with the `RateLimit-Policy` / `RateLimit` headers and a `429` with
-  `Retry-After` past the limit, so a looping agent can't drain the budget.
+  `Retry-After` past the limit, so a looping agent can't drain the budget. `rateLimit({ key })` counts per anything
+  else instead (a pack, a grant); a `null` key leaves the call uncounted.
+- **A caller without credentials is counted by its address, read from one source the app names**
+  (`createAgentApi({ address })`, §12), never from whichever header a caller sent: a header a proxy writes,
+  `hops` values from the right (default 1, the nearest proxy's), or the connection (`'socket'`, on Node; `local`
+  where there is none). A missing source is `local`, never another header. An IPv6 address counts by its /64. The
+  default, `'headers'`, is the earlier read (`cf-connecting-ip`, else the whole `X-Forwarded-For`, as sent): an app on
+  Node names its source, and `kit doctor` notes one that doesn't.
 - Every model key is the app's own capped OpenRouter key, never a shared one; the
   cap answers `429 spend_cap`.
 
@@ -308,6 +315,10 @@ fact, steps with checkable done-when criteria.
   `<!-- deploy-button -->` block current, and `--smoke` deploys a copy as a stranger would (its resources made under
   `-smoke-` names first, as the button makes them, then the scripts), checks `/api/health` and `/llms.txt`, and
   deletes all it made. The button needs a public github.com or gitlab.com repository, and deploys Workers only.
+- **The caller's address** (§9): on Workers, or behind Cloudflare with the origin reachable only through it,
+  `address: { header: 'cf-connecting-ip' }`; behind a reverse proxy that appends to `X-Forwarded-For`,
+  `{ header: 'x-forwarded-for', hops }` with one hop per such proxy (only a proxy that appends on every request: one
+  that passes the header through leaves it as sent); on Node with nothing in front, `'socket'`.
 - **Lint and format:** every app has `pnpm lint` (oxlint) and `pnpm format` (oxfmt). Both leave out `src/kit/` (the
   kit's copy must stay byte-equal for `doctor`) and generated files.
 

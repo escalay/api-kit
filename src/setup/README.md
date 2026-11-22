@@ -44,7 +44,8 @@ check: async () => ((await flags.isOn('sending')) ? checkSending() : { ok: false
 ## Rules
 
 - **Fails closed:** with no code set, every claim is refused (503, naming the secret to set).
-- Attempts are limited: 5 an hour per address, 20 a day in all (429). A wrong code is 403.
+- Attempts are limited: 5 an hour per address, 20 a day in all (429). A wrong code is 403. The address is read from
+  the source the app names with `createAgentApi({ address })` (`addressOf`, core README); without one, as sent.
 - A claimed deployment answers its own code with 409. A **different** code (the secret was rotated) opens recovery
   for an existing owner's email, once: it becomes the code on record.
 - `onRecovery` hears an owner getting back in, in two stages (`{ stage, who, passkey }`): `started` when a rotated code
