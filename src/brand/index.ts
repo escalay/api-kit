@@ -164,6 +164,8 @@ export const webManifest = (brand: Brand, assets: BrandAssets) => ({
 /** Bumped when what the routes send changes for the same assets, so an old ETag never confirms it. */
 const FORMAT = 1
 const CACHE = 'public, max-age=604800'
+/** An SVG opened on its own is a document: no script, no fetch, its own origin. */
+const SVG_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
 
 /** 16 hex characters of the bytes served (two FNV-1a passes with different bases): a new render under the same inputs gets a new ETag. */
 const fingerprintOf = (body: Uint8Array | string) => {
@@ -211,6 +213,7 @@ export const createBrand = (brand: Brand, assets: BrandAssets): AgentBrand => {
     const { body, etag } = made.get(path)!
     const headers = new Headers(prepared)
     for (const [name, value] of Object.entries({ 'content-type': file.type, 'cache-control': CACHE, etag, 'access-control-allow-origin': '*', 'cross-origin-resource-policy': resourcePolicy })) headers.set(name, value)
+    if (file.type === 'image/svg+xml') headers.set('content-security-policy', SVG_POLICY)
     const fresh = c.req.header('if-none-match')?.split(',').some((value) => value.trim() === etag)
     return new Response(fresh ? null : (body as BodyInit), { status: fresh ? 304 : 200, headers })
   }

@@ -193,6 +193,20 @@ describe('brand', () => {
     expect((await get(app, '/openapi.json')).headers.get('cross-origin-resource-policy')).toBe('same-site')
   })
 
+  it('sandboxes its SVGs, so a script in one never runs in the API’s origin when it is opened directly', async () => {
+    const CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    for (const app of [await branded(), await branded({ private: true })]) {
+      for (const path of ['/icon.svg', '/icon-dark.svg']) {
+        const response = await get(app, path, AUTH)
+        expect([response.status, response.headers.get('content-security-policy')], path).toEqual([200, CSP])
+        const fresh = await get(app, path, { ...AUTH, 'if-none-match': response.headers.get('etag')! })
+        expect([fresh.status, fresh.headers.get('content-security-policy')], path).toEqual([304, CSP])
+      }
+    }
+    // Only the SVGs: a PNG runs nothing
+    expect((await get(await branded(), '/icon-512.png')).headers.get('content-security-policy')).toBeNull()
+  })
+
   it('in a private service, needs credentials for the brand’s files, keeps them same-site and never lets a shared cache keep them', async () => {
     const app = await branded({ private: true })
     expect((await get(app, '/favicon.ico')).status).toBe(401)
