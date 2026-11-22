@@ -29,6 +29,8 @@ const pngSize = (base64: string) => {
   expect([...png.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
   return [png.readUInt32BE(16), png.readUInt32BE(20)]
 }
+/** The module as an app's formatter leaves it with `singleQuote`: every string in single quotes. */
+const singleQuoted = (source: string) => source.replace(/^( *\w+: )(".*")(,?)$/gm, (_, key, text, comma) => `${key}'${JSON.parse(text).replaceAll("'", "\\'")}'${comma}`)
 const moduleOf = async (app: string) => (await import(`${join(app, 'src/brand.gen.ts')}?t=${Date.now()}`)).BRAND_ASSETS
 
 describe('kit brand', () => {
@@ -83,6 +85,56 @@ describe('kit brand', () => {
     await writeFile(join(app, 'brand/icon.svg'), ICON.replace('#ffffff', '#000000'))
     const stale = cli(app, 'brand', '--check')
     expect([stale.status, stale.stdout]).toEqual([1, 'stale    brand/ changed since src/brand.gen.ts was written: `kit brand` renders it again\n'])
+  })
+
+  it('reads a module the app’s formatter rewrote in single quotes: current until an input changes, and a heavy icon still found', async () => {
+    const app = await brandedApp('single-quotes', { dark: false })
+    expect(cli(app, 'add', 'core', 'brand').status).toBe(0)
+    expect(cli(app, 'brand').status).toBe(0)
+    const path = join(app, 'src/brand.gen.ts')
+    const source = singleQuoted(await readFile(path, 'utf8'))
+    expect(source).toMatch(/^ {2}inputsHash: '[0-9a-f]{64}',$/m)
+    expect(source).not.toMatch(/: "/)
+    await writeFile(path, source)
+    const current = cli(app, 'brand', '--check')
+    expect([current.status, current.stdout]).toEqual([0, 'src/brand.gen.ts matches brand/\n'])
+    await writeFile(path, source.replace(/(96: ')([A-Za-z0-9+/=]+)'/, (_, start) => `${start}${'A'.repeat(14_000)}'`))
+    const heavy = cli(app, 'doctor')
+    expect(heavy.status).toBe(1)
+    expect(heavy.stdout).toContain('brand    the inline icon is 10.3 KB, over the 10 KB Claude shows')
+    await writeFile(path, source)
+    await writeFile(join(app, 'brand/icon.svg'), ICON.replace('#ffffff', '#000000'))
+    expect(cli(app, 'brand', '--check').status).toBe(1)
+  })
+
+  it('add brand keeps lint, format and the secrets scan off src/brand.gen.ts in an app made before the part, once', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-brand-'))
+    await writeFile(join(app, 'package.json'), JSON.stringify({ name: 'cookbook', type: 'module' }))
+    // As a new app had them before the brand part
+    for (const name of ['.oxfmtrc.json', '.oxlintrc.json']) await writeFile(join(app, name), `${JSON.stringify({ semi: false, ignorePatterns: ['src/kit/**', 'src/guide.gen.ts'] }, null, 2)}\n`)
+    await writeFile(join(app, '.gitleaks.toml'), "[extend]\nuseDefault = true\n\n[allowlist]\npaths = ['''src/kit/kit\\.json''']\n")
+    const added = cli(app, 'add', 'brand')
+    expect(added.status, added.stderr).toBe(0)
+    expect(added.stdout).toContain('Ignored src/brand.gen.ts in .oxfmtrc.json, .oxlintrc.json and .gitleaks.toml')
+    for (const name of ['.oxfmtrc.json', '.oxlintrc.json']) expect(JSON.parse(await readFile(join(app, name), 'utf8')), name).toEqual({ semi: false, ignorePatterns: ['src/kit/**', 'src/guide.gen.ts', 'src/brand.gen.ts'] })
+    expect(await readFile(join(app, '.gitleaks.toml'), 'utf8')).toBe("[extend]\nuseDefault = true\n\n[allowlist]\npaths = ['''src/kit/kit\\.json''', '''src/brand\\.gen\\.ts''']\n")
+    const files = async () => Promise.all(['.oxfmtrc.json', '.oxlintrc.json', '.gitleaks.toml'].map((name) => readFile(join(app, name), 'utf8')))
+    const before = await files()
+    const again = cli(app, 'add', 'brand')
+    expect(again.stdout).not.toContain('src/brand.gen.ts in')
+    expect(await files()).toEqual(before)
+  })
+
+  it('add brand prints the lines to add where it can’t read the config', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-brand-'))
+    await writeFile(join(app, 'package.json'), JSON.stringify({ name: 'cookbook', type: 'module' }))
+    await writeFile(join(app, '.oxfmtrc.json'), '{ // mine\n}\n')
+    await writeFile(join(app, '.gitleaks.toml'), "[allowlist]\npaths = [\n  '''src/kit/kit\\.json''',\n]\n")
+    const added = cli(app, 'add', 'brand')
+    expect(added.status, added.stderr).toBe(0)
+    expect(added.stdout).toContain('Add "src/brand.gen.ts" to ignorePatterns in .oxfmtrc.json')
+    expect(added.stdout).toContain("Add '''src/brand\\.gen\\.ts''' to [allowlist] paths in .gitleaks.toml")
+    expect(await readFile(join(app, '.oxfmtrc.json'), 'utf8')).toBe('{ // mine\n}\n')
   })
 
   it('says how to install the renderer when the app has none', async () => {

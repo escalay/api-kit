@@ -537,6 +537,37 @@ const writeSvgOnlyBrand = (root) => {
   writeFileSync(files.module, brandModuleSource({ inputsHash: brandInputsHash(root), svg: textOf(files.icon), svgDark: textOf(files.dark) }))
 }
 
+/** Lint, format and the secrets scan leave src/brand.gen.ts alone in an app made before the part; what it can't edit, it names. */
+const ignoreBrandModule = (root) => {
+  const done = []
+  const todo = []
+  for (const name of ['.oxfmtrc.json', '.oxlintrc.json'].filter((name) => existsSync(join(root, name)))) {
+    let config
+    try {
+      config = JSON.parse(readFileSync(join(root, name), 'utf8'))
+    } catch {
+      todo.push(`Add "${BRAND_MODULE}" to ignorePatterns in ${name}`)
+      continue
+    }
+    if (config.ignorePatterns?.includes(BRAND_MODULE)) continue
+    config.ignorePatterns = [...(config.ignorePatterns ?? []), BRAND_MODULE]
+    writeFileSync(join(root, name), JSON.stringify(config, null, 2) + '\n')
+    done.push(name)
+  }
+  const gitleaks = join(root, '.gitleaks.toml')
+  const entry = "'''src/brand\\.gen\\.ts'''"
+  const toml = textOf(gitleaks)
+  if (toml !== null && !toml.includes(entry)) {
+    // The one-line list every app's template has had; any other shape is the app's own
+    const paths = /^paths = \[(.+)\]$/m
+    if (paths.test(toml)) {
+      writeFileSync(gitleaks, toml.replace(paths, (_, list) => `paths = [${list}, ${entry}]`))
+      done.push('.gitleaks.toml')
+    } else todo.push(`Add ${entry} to [allowlist] paths in .gitleaks.toml`)
+  }
+  return { done, todo }
+}
+
 /** brand/brand.ts and a monogram brand/icon.svg, unless they are there; `part` is the kit's brand folder. */
 const scaffoldBrand = (root, { name, title, part }) => {
   const vars = { __kit_brand__: relative(join(root, 'brand'), join(part, 'index.js')).split('\\').join('/'), __name__: name, __title__: title, __initial__: (title.match(/[A-Za-z0-9]/)?.[0] ?? 'A').toUpperCase() }
@@ -573,9 +604,9 @@ const brandFindings = (root, installed) => {
   const notes = []
   const module = textOf(files.module)
   if (module === null) findings.push(`brand    ${BRAND_MODULE} is missing: \`kit brand\` writes it`)
-  else if (module.match(/\binputsHash: "([0-9a-f]*)"/)?.[1] !== brandInputsHash(root)) findings.push(`stale    brand/ changed since ${BRAND_MODULE} was written: \`kit brand\` renders it again`)
+  else if (module.match(/\binputsHash: (["'])([0-9a-f]*)\1/)?.[2] !== brandInputsHash(root)) findings.push(`stale    brand/ changed since ${BRAND_MODULE} was written: \`kit brand\` renders it again`)
   else if (!/\n {2}png: \{/.test(module)) notes.push(`note     brand: ${BRAND_MODULE} has the SVG only: \`kit brand\` renders the favicon, PNG icons and OG card (it needs ${RESVG_INSTALL})`)
-  const inline = module?.match(/\n {2}png: \{[^}]*?\n {4}96: "([A-Za-z0-9+/=]*)"/)?.[1]
+  const inline = module?.match(/\n {2}png: \{[^}]*?\n {4}96: (["'])([A-Za-z0-9+/=]*)\1/)?.[2]
   const bytes = inline ? Buffer.from(inline, 'base64').length : 0
   if (bytes > INLINE_LIMIT) findings.push(`brand    the inline icon is ${(bytes / 1024).toFixed(1)} KB, over the 10 KB Claude shows: simplify brand/icon.svg (flat colours, no filters, gradients or embedded images), then \`kit brand\``)
   // claude.ai's connector list asks Google for the favicon of the address's last two labels
@@ -1167,6 +1198,9 @@ const commands = {
       const name = basename(pkg.name ?? basename(root))
       const written = scaffoldBrand(root, { name, title: name.split(/[-_.]/).filter(Boolean).map(capital).join(' '), part: join(dir, 'brand') })
       if (written.length) console.log(`Made ${written.join(' and ')}: a monogram of the name on the accent; make them yours`)
+      const ignored = ignoreBrandModule(root)
+      if (ignored.done.length) console.log(`Ignored ${BRAND_MODULE} in ${ignored.done.join(', ').replace(/, ([^,]*)$/, ' and $1')}: it is generated`)
+      for (const line of ignored.todo) console.log(line)
       console.log(`Brand: ${RESVG_INSTALL} && \`kit brand\` renders ${BRAND_MODULE}, then createAgentApi({ …, brand: createBrand(BRAND, BRAND_ASSETS) }) (src/kit/brand/README.md)`)
     }
     if (flags.has('--install')) install(modules)
