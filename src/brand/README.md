@@ -72,7 +72,11 @@ Serve the same icon there too; `kit doctor` notes it for a host on a subdomain.
   entries with `theme: 'dark'` (one inline icon only).
 - On MCP 2026-07-28 the inline icon rides only on `server/discover` (and 2025's `initialize`); the serverInfo stamped
   on every other answer leaves it out, since it weighs kilobytes.
-- A path the app serves itself (a route, or a file in the front door's folder) stays the app's.
+- A path the app serves itself (a route, or a file in the front door's folder) stays the app's: a brand file answers
+  only where the app answered 404. To give its own answer at one of these paths, the app serves it (any status but
+  404). An app's own 404 there is replaced by the brand's file, and no option turns one path off: with a brand,
+  `/icon.svg` and `/site.webmanifest` are always served, the others once `kit brand` rendered them (the dark ones with
+  `brand/icon-dark.svg`). An app that must refuse one of them answers it with another status, such as 410.
 - Headers set before the brand answers (the request id, an app's own) stay on its files.
 - No brand, no change: every surface is byte for byte what it was.
 - `kit brand` hashes `brand.ts`, the SVGs and its own output spec (never the rendered bytes, which differ between
