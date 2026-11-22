@@ -8,6 +8,7 @@
  *                 `Retry-After` past it: a looping agent can't drain a paid budget.
  * Both keep their state in a `GuardStore`: `memoryGuardStore()` (the default) is right for one Node process; on
  * Workers, where every isolate has its own memory, pass `dbGuardStore(db)` (`db`) so all of them share it.
+ * A caller with no credentials is counted by address, read from the one source the app names (`AddressTrust`).
  *
  * @example
  * const guards = await dbGuardStore(db)
@@ -66,11 +67,84 @@ export const memoryGuardStore = ({ maxEntries = 2000 }: { maxEntries?: number } 
   }
 }
 
-/** Who the guards count: an OAuth agent by its client and grant (never the name it gave itself), else name or email. */
-const callerOf = (c: Context) => {
+/**
+ * Where the caller's address comes from, set once with `createAgentApi({ address })` (or per `rateLimit`):
+ *   'headers'                  today's read, as sent: `cf-connecting-ip`, else the whole `x-forwarded-for` (default)
+ *   { header, hops = 1 }       the value `hops` from the right of a header a proxy writes or appends to
+ *   'socket'                   the connection on Node (`@hono/node-server`); 'local' where there is none (Workers)
+ * A named source is never mixed with another; a port is dropped, and a global IPv6 address counts by its /64.
+ * @example
+ * createAgentApi({ …, address: { header: 'cf-connecting-ip' } })                 // behind Cloudflare
+ * createAgentApi({ …, address: { header: 'x-forwarded-for', hops: 1 } })         // behind one proxy that appends
+ * createAgentApi({ …, address: 'socket' })                                         // nothing in front, on Node
+ */
+export type AddressTrust = 'headers' | 'socket' | { header: string; hops?: number }
+
+type Connection = { incoming?: { socket?: { remoteAddress?: string } } }
+
+/** The eight 16-bit groups of an IPv6 address (an IPv4 tail as two), or undefined when it is not one. */
+const groupsOf = (address: string) => {
+  const halves = address.split('::')
+  if (halves.length > 2) return undefined
+  const groupsIn = (half: string) =>
+    (half ? half.split(':') : []).flatMap((part) => {
+      const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(part)?.slice(1).map(Number)
+      if (ipv4) return ipv4.some((octet) => octet > 255) ? [NaN] : [ipv4[0]! * 256 + ipv4[1]!, ipv4[2]! * 256 + ipv4[3]!]
+      return /^[0-9a-f]{1,4}$/.test(part) ? [parseInt(part, 16)] : [NaN]
+    })
+  const [left, right = []] = halves.map(groupsIn) as [number[], number[]?]
+  const groups = halves.length === 2 ? [...left, ...Array<number>(Math.max(0, 8 - left.length - right.length)).fill(0), ...right] : left
+  return groups.length === 8 && groups.every((group) => group >= 0) ? groups : undefined
+}
+
+/**
+ * What the guards count an address as: an IPv4 one as it is (a port dropped); one IPv6 carries (mapped, NAT64) as that
+ * IPv4 address; a global IPv6 one (2000::/3) by its /64 (`2001:db8:1:2::/64`); any other IPv6 one (loopback,
+ * link-local, unique local) whole.
+ */
+const prefixOf = (value: string) => {
+  const unported = /^\[([^\]]+)\](?::\d+)?$/.exec(value)?.[1] ?? /^(\d+\.\d+\.\d+\.\d+):\d+$/.exec(value)?.[1] ?? value
+  const bare = unported.replace(/%.*$/, '').toLowerCase()
+  if (!bare.includes(':')) return bare
+  const groups = groupsOf(bare)
+  if (!groups) return bare
+  const hex = groups.map((group) => group.toString(16))
+  const zero = (from: number, to: number) => groups.slice(from, to).every((group) => group === 0)
+  const mapped = zero(0, 5) && groups[5] === 0xffff
+  const nat64 = groups[0] === 0x64 && groups[1] === 0xff9b && zero(2, 6)
+  if (mapped || nat64) return [groups[6]! >> 8, groups[6]! & 255, groups[7]! >> 8, groups[7]! & 255].join('.')
+  if ((groups[0]! & 0xe000) === 0x2000) return `${hex.slice(0, 4).join(':')}::/64`
+  // One spelling per address: the first run of two or more zero groups as `::`
+  return hex.join(':').replace(/(^|:)0(:0)+(:|$)/, '::')
+}
+
+/**
+ * The caller's address from `trust`, else the source `createAgentApi({ address })` set on the request, else today's
+ * read; 'local' when the named source has none.
+ * @example
+ * app.post('/api/claim', async (c) => { await guards.count(`claim ip:${addressOf(c)}`, 3_600_000, Date.now()); … })
+ */
+export const addressOf = (c: Context, trust?: AddressTrust): string => {
+  const source = trust ?? (c.get('kit:address' as never) as AddressTrust | undefined) ?? 'headers'
+  if (source === 'headers') return c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? 'local'
+  if (source === 'socket') {
+    // @hono/node-server hands the connection over as the env (some dev servers under `server`); no import needed
+    const env = c.env as (Connection & { server?: Connection }) | undefined
+    const address = (env?.server ?? env)?.incoming?.socket?.remoteAddress
+    return address ? prefixOf(address) : 'local'
+  }
+  const values = (c.req.header(source.header) ?? '').split(',').map((value) => value.trim())
+  const hops = source.hops ?? 1
+  // Fewer values than hops: the request did not come the way the app said, so nothing in it is read
+  const value = values.length >= hops ? values[values.length - hops] : undefined
+  return value ? prefixOf(value) : 'local'
+}
+
+/** Who the guards count: an OAuth agent by its client and grant (never the name it gave itself), else name or email, else the address. */
+const callerOf = (c: Context, trust?: AddressTrust) => {
   const caller = c.get('caller' as never) as { kind: string; name?: string; email?: string; client?: string; grant?: string } | undefined
   if (caller?.kind === 'agent' && caller.client) return `agent:${caller.client}/${caller.grant ?? '-'}`
-  return caller ? `${caller.kind}:${caller.name ?? caller.email}` : `ip:${c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? 'local'}`
+  return caller ? `${caller.kind}:${caller.name ?? caller.email}` : `ip:${addressOf(c, trust)}`
 }
 
 export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, store = memoryGuardStore() }: { ttlMs?: number; lockMs?: number; store?: GuardStore } = {}): MiddlewareHandler =>
@@ -99,10 +173,20 @@ export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, stor
     await store.save(id, { bodyHash, status: c.res.status, headers: [...c.res.headers.entries()], body }, now + ttlMs)
   }
 
-export const rateLimit = ({ policy, limit, windowSeconds, store = memoryGuardStore() }: { policy: string; limit: number; windowSeconds: number; store?: GuardStore }): MiddlewareHandler =>
+/**
+ * `address` overrides the app's source for this limit. `key` replaces the caller in the bucket id (count per pack, per
+ * grant, per anything); null lets the call through uncounted.
+ * @example
+ * rateLimit({ policy: 'pack', limit: 60, windowSeconds: 600, store, key: (c) => `pack:${c.req.path.split('/')[2]}` })
+ */
+export type RateLimitOptions = { policy: string; limit: number; windowSeconds: number; store?: GuardStore; address?: AddressTrust; key?: (c: Context) => string | null }
+
+export const rateLimit = ({ policy, limit, windowSeconds, store = memoryGuardStore(), address, key }: RateLimitOptions): MiddlewareHandler =>
   async (c, next) => {
+    const who = key ? key(c) : callerOf(c, address)
+    if (who === null) return next()
     const now = Date.now()
-    const window = await store.count(`${policy} ${callerOf(c)}`, windowSeconds * 1000, now)
+    const window = await store.count(`${policy} ${who}`, windowSeconds * 1000, now)
     const reset = Math.max(1, Math.ceil((window.start + windowSeconds * 1000 - now) / 1000))
     const headers = { 'ratelimit-policy': `"${policy}";q=${limit};w=${windowSeconds}`, ratelimit: `"${policy}";r=${Math.max(0, limit - window.used)};t=${reset}` }
     if (window.used > limit) return problemResponse(c, 'too_many_requests', { detail: `More than ${limit} calls to ${policy} routes in ${windowSeconds / 60} minutes. Try again in ${reset} seconds; answers already computed are cached, so repeating one is not needed.`, headers: { ...headers, 'retry-after': String(reset) } })

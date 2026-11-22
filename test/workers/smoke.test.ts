@@ -38,6 +38,11 @@ describe('the kit in workerd', () => {
     expect(refused.headers.get('ratelimit-policy')).toBe('"probe";q=3;w=60')
   })
 
+  it('reads the address from cf-connecting-ip as the app names it, and the socket as local', async () => {
+    const answer = await exports.default.fetch('https://kit.test/probe/address', { headers: { 'cf-connecting-ip': '2001:db8:1:2::7', 'x-forwarded-for': '203.0.113.9' } })
+    expect(await answer.json()).toEqual({ named: '2001:db8:1:2::/64', socket: 'local' })
+  })
+
   it('applies each migration step once, atomically, on D1', async () => {
     const db = await openDb(drizzle(env.DB) as unknown as Db)
     const steps = ['create table once (id integer primary key)', 'insert into once (id) values (1); insert into once (id) values (2)']
