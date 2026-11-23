@@ -1058,6 +1058,27 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
       expect([refused.status, refused.headers.get('location')], scopes).toEqual([400, null])
     }
     expect((await browser.post('/join', { ticket: readOnly, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+    // An empty list passed by the app is refused too
+    const { app: own, oauth } = await oauthApp(memoryOAuthStore(), { approve: async (c, ask) => c.html(`<input name="ticket" value="${ask.ticket}">`) }, { open: ['/none'] })
+    own.post('/none', async (c) => oauth.complete(c, String((await c.req.parseBody()).ticket ?? ''), { approver: OWNER, scopes: [] }))
+    const ownBrowser = browserOf(own)
+    const ticket = ticketIn(await (await ownBrowser.request(`/oauth/authorize?${authorizeQuery(await registered(own))}`)).text())
+    const none = await ownBrowser.post('/none', { ticket })
+    expect([none.status, none.headers.get('location')]).toEqual([400, null])
+  })
+
+  it('completes a sign-in that asked only for unknown scopes on the kit’s page, as before approvals: a token with no scopes', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    const client_id = await registered(app)
+    const owner = browserOf(app, { 'x-test-owner': OWNER })
+    const page = await owner.request(`/oauth/authorize?${authorizeQuery(client_id, { scope: 'admin' })}`)
+    expect(page.status).toBe(200)
+    const allowed = await owner.post('/oauth/authorize', { ticket: ticketIn(await page.text()), decision: 'allow' })
+    expect([allowed.status, allowed.headers.get('location')]).toEqual([302, expect.stringContaining('code=')])
+    const tokens = await (await exchangeAt(app, allowed.headers.get('location'), client_id)).json()
+    expect(tokens.scope).toBe('')
+    // A token with no scopes reads nothing
+    expect((await callerWith(app, tokens.access_token)).status).toBe(403)
   })
 
   it('hands onGrant the data, and false spends the code and issues nothing', async () => {

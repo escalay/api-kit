@@ -552,8 +552,9 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       // Resolved again from the ticket's own request: the audience is the ticket's, never chosen here
       const bound = audienceFor(c, params.resource)
       if ('refused' in bound) return cantApprove(c, `${bound.refused} (invalid_target)`)
+      // Only the app's own list is checked: without one, the request's scopes go through as they did before approvals, even none
       const scopes = decision.scopes ?? checked.scopes
-      if (!scopes.length || scopes.some((scope) => !checked.scopes.includes(scope))) return cantApprove(c, `An approval may only narrow the scopes asked for (${checked.scopes.join(' ')}).`)
+      if (decision.scopes && (!scopes.length || scopes.some((scope) => !checked.scopes.includes(scope)))) return cantApprove(c, `An approval may only narrow the scopes asked for (${checked.scopes.join(' ')}).`)
       approved = { checked, scopes, audience: bound }
     }
     // Single use: a double-clicked Allow makes one code, never two grants
