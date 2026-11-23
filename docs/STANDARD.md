@@ -165,9 +165,23 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   used once under concurrent requests, and so is each approval (a consent ticket, a typed claim or device code: a
   double-clicked Approve approves once): a second valid exchange of a code, or a refresh token sent again (outside an
   optional `reuseGraceSeconds`, default 0), revokes the grant. OAuth rows live in SQLite or D1, never KV. Scopes: `read` for safe methods, `write` for the rest; the relay endpoints (`/mcp` or the OAuth
-  server's `mcpPath`, `/a2a`, `auth.relay`) need only `read`, since each call they make reaches a route that checks its own scope (`auth.relay` takes the same path patterns as the open list, a star inside one whole segment: `/s/*/mcp`). In Access, only
-  `/oauth/authorize`, `/oauth/claim` and `/oauth/device` stay gated; `/oauth/register|token|revoke|device_authorization`,
-  `/agent/identity*`, `/auth.md` and `/.well-known/*` bypass it.
+  server's `mcpPath`, `/a2a`, `auth.relay`) need only `read`, since each call they make reaches a route that checks its own scope (`auth.relay` takes the same path patterns as the open list, a star inside one whole segment: `/s/*/mcp`). In Access,
+  `/oauth/claim` and `/oauth/device` stay gated, and `/oauth/authorize` unless the app passes `approve`;
+  `/oauth/register|token|revoke|device_authorization`, `/agent/identity*`, `/auth.md` and `/.well-known/*` bypass it.
+- **Who approves a sign-in (`approve`, `onGrant`):** by default the owner, on the kit's page behind the sign-in. With
+  an `approve` hook, `/oauth/authorize` may bypass Access: the app's page decides (an invite, an ask to join), and the
+  grant follows only a same-origin POST from the browser that opened it (`complete`), once; nothing is granted without
+  a click, and a stored approval never stands in for one. Each ticket is bound to its browser by an HttpOnly,
+  SameSite=Lax nonce cookie (`__Host-oauth_ticket` on https, 10 minutes, renewed and reused by a second sign-in), and
+  answered once: posted again from that browser it is a page saying it went through, from another "expired". With
+  `approve` set, `/oauth/authorize` never redirects before a person acts: every error is a page. Every approval POST
+  (`complete`, the kit's consent, claim and device pages) needs `Sec-Fetch-Site: same-origin`, or with none an
+  `Origin` equal to the issuer's; `same-site` is refused, since a sibling host is same-site. The approval only
+  narrows scopes, never sets the resource (the ticket's). `onGrant` hears the first token of every grant (code,
+  device, claim) after the kit's checks, once, and false withdraws it (`invalid_grant`); an app that keeps its own
+  client rows makes them in `onGrant` and refuses a token whose grant has none. The kit's own pages carry the app's
+  brand (§22) and name the client by text only, never a `logo_uri`; the consent page names the resource asked for and
+  whether the client returns to a host or an app on this computer.
 - **Audiences (RFC 8707, RFC 9728, MCP 2026-07-28):** every grant is bound to one resource, signed as the token's
   `aud`. It is the resource the client sent at the authorization request (or device authorization) when the server
   issues for it, else the **root** (the issuer's origin): a client that sends none, or (without `resources`) one the
@@ -632,7 +646,8 @@ every surface, so none of them can disagree.
   changed.
 - **The same identity on every surface:** MCP `serverInfo` (`server/discover`, 2025's `initialize`) and the Server Card
   (`title`, `description`, `websiteUrl`, `icons`), OpenAPI's `x-logo`, the A2A card's `iconUrl`, the guide's
-  `{{brand.*}}`, and the favicon, manifest and Open Graph tags of the pages the app serves.
+  `{{brand.*}}`, the favicon, manifest and Open Graph tags of the pages the app serves, and the OAuth approval pages
+  (§7: the head tags, the icon, the title and the accent; never a client's `logo_uri`).
 - **PNG first, SVG last.** Icons go in this order: the 96 px PNG inline (the only kind Claude shows: a `data:` PNG
   under 10 KB), then the 192 and 512 PNGs on the server's own host (VS Code takes no SVG and no other host), then the
   SVG. A dark variant adds entries with `theme: 'dark'`, never a second inline icon. On 2026-07-28 the inline icon

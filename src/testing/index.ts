@@ -10,6 +10,7 @@
  *   toolsRun        MCP tools that fail when run: each called in-process with sample arguments, as an agent would
  *   cliGaps         commands the app's CLI can't offer well: unnamed, duplicated, shadowing, plural, undescribed, no example
  *   cliSnapshot     every command as the CLI package carries it (`commands.json`)
+ *   approveSignIn   an OAuth approval on the kit's consent page, as a browser makes it (ticket cookie, same-origin)
  *
  * @example
  * const doc = await (await app.request('/openapi.json')).json()
@@ -161,6 +162,30 @@ export const toolsRun = async (tools: RunnableTool[], app: RequestableApp, args:
   }
   for (const name of Object.keys(args)) if (!tools.some((tool) => tool.name === name)) failures.push(`${name}: sample arguments for a tool that doesn't exist`)
   return failures
+}
+
+/**
+ * Approves a sign-in on the kit's own consent page the way a browser does: opens `/oauth/authorize`, keeps the ticket
+ * cookie it sets, and posts the answer same-origin with it. Returns the answer, a 302 to the client's redirect with
+ * `code` (or `error=access_denied`). `headers` go on both requests: whatever signs the owner in, a forwarded host.
+ * A hand-made approval POST without the cookie and a same-origin header is refused.
+ *
+ * @example
+ * const answer = await approveSignIn(app, { response_type: 'code', client_id, redirect_uri, code_challenge, code_challenge_method: 'S256' }, { headers: { 'x-test-owner': 'owner@example.test' } })
+ * const code = new URL(answer.headers.get('location')!).searchParams.get('code')
+ */
+export const approveSignIn = async (app: RequestableApp, query: URLSearchParams | Record<string, string> | string, { headers = {}, decision = 'allow' }: { headers?: Record<string, string>; decision?: 'allow' | 'deny' } = {}) => {
+  const page = await app.request(`/oauth/authorize?${new URLSearchParams(query)}`, { headers })
+  const html = await page.text()
+  const ticket = /name="ticket" value="([^"]+)"/.exec(html)?.[1]
+  if (!ticket) throw new Error(`approveSignIn: /oauth/authorize answered ${page.status} with no consent form: ${html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)}`)
+  const cookies = page.headers.getSetCookie().map((line) => line.split(';')[0]!)
+  const cookie = [headers.cookie, ...cookies].filter(Boolean).join('; ')
+  return app.request('/oauth/authorize', {
+    method: 'POST',
+    headers: { ...headers, 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': 'same-origin', ...(cookie ? { cookie } : {}) },
+    body: new URLSearchParams({ ticket, decision }).toString(),
+  })
 }
 
 export { softAuthenticator } from './authenticator.js'

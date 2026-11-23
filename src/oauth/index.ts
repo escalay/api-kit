@@ -1,6 +1,7 @@
 /**
  * The service as its own OAuth authorization server, so an agent can get a token without anyone pasting a key. Three
- * ways in, each ending at a person who approves it on a page behind the site's single sign-on:
+ * ways in, each ending at a person who approves it on a page behind the site's single sign-on (or, for the first, on
+ * the app's own page: `approve`, `complete`, `onGrant`):
  *   MCP clients (claude.ai, Claude Desktop, Cursor) follow the 401's `resource_metadata` to the protected-resource
  *   metadata, register themselves (RFC 7591), send the owner to `/oauth/authorize` (authorization code + PKCE S256),
  *   and refresh with rotating refresh tokens.
@@ -31,10 +32,13 @@ import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 
 import type { Context, Hono } from 'hono'
 import { calculateJwkThumbprint, exportJWK, importJWK, jwtVerify, SignJWT, type JWK } from 'jose'
 import { OAUTH_OPEN_PATHS, SCOPES } from '../core/auth.js'
+import { mountedOf, type AgentBrand } from '../core/discovery.js'
 import { originOf } from '../core/hal.js'
 import { problemResponse } from '../core/problem.js'
+import { arrivalOf, LOOPBACK, nonceOf, returnOf, sameOrigin, ticketCookie, type SignInAsk, type SignInDecision, type SignInGrant } from './approval.js'
 import type { OAuthStore } from './store.js'
 
+export type { SignInAsk, SignInDecision, SignInGrant } from './approval.js'
 export { OAUTH_MIGRATIONS, oauthKeys } from './schema.js'
 export { dbOAuthStore, memoryOAuthStore, type OAuthStore } from './store.js'
 
@@ -64,8 +68,30 @@ export type OAuthConfig = {
   /** The private ES256 key as a JWK JSON string (`generateOAuthKey()` makes one). */
   signingKey: string
   store: OAuthStore
-  /** The signed-in person's email on the approval pages (from the single sign-on), or null: only they may approve. */
+  /** The signed-in person's email on the kit's approval pages (from the single sign-on), or null: only they may approve. */
   owner: (c: Context) => Promise<string | null>
+  /**
+   * The app's own page for a sign-in (an invite, an ask to join), called by `GET /oauth/authorize` once the kit has
+   * checked the client, its redirect, PKCE and the resource, and before `owner`. A Response is the page: it posts the
+   * ticket to the app's own route, which reads it with `ticketOf` and answers with `complete`, so nothing is granted
+   * without a click. null shows the kit's own page to the owner. Set, `/oauth/authorize` answers every error with a
+   * page and never redirects before a person acts.
+   *
+   * @example
+   * approve: async (c, ask) => c.html(invitePage(ask))   // a form posting `ticket` and the invite to /join
+   */
+  approve?: (c: Context, ask: SignInAsk) => Promise<Response | null>
+  /**
+   * Hears the first token of every grant (a code, a device approval, a claim), after the kit's own checks: where an app
+   * spends an invite or makes its own row for the grant. false withdraws it (`invalid_grant`, the code or device code
+   * spent, a claim's grant revoked). Never asked on refresh or jwt-bearer: judge later requests in `accepts`.
+   *
+   * @example
+   * onGrant: async (grant) => grant.kind !== 'code' || invites.spend(grant.data?.invite, grant.grant)
+   */
+  onGrant?: (grant: SignInGrant, c: Context) => Promise<boolean>
+  /** The brand on the kit's own pages; default the app's (`createAgentApi({ brand })`). */
+  brand?: AgentBrand
   /** Emails allowed to claim an agent registration; empty means whoever `owner` lets in. */
   owners?: string[]
   /** Extra fields for the authorization server metadata, e.g. `poppy_domains`. */
@@ -174,12 +200,14 @@ const canonical = (uri: string) => {
 const pathOf = (resource: string) => resource.replace(/^[a-z][a-z\d+.-]*:\/\/[^/]*/i, '')
 
 const UNSAFE_SCHEMES = new Set(['javascript:', 'data:', 'file:', 'vbscript:', 'blob:'])
+/** A ticket nonce: 24 random bytes, base64url. */
+const newNonce = () => randomBytes(24).toString('base64url')
 
 /** Redirect URIs a client may register: https anywhere, http only on this machine, or an app's own scheme (`cursor://`). */
 const redirectAllowed = (uri: string) => {
   const url = URL.canParse(uri) ? new URL(uri) : null
   if (!url || url.hash || UNSAFE_SCHEMES.has(url.protocol)) return false
-  if (url.protocol === 'http:') return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+  if (url.protocol === 'http:') return LOOPBACK.includes(url.hostname)
   return true
 }
 
@@ -201,14 +229,6 @@ const ONE_RESOURCE = 'Send one resource: the address the token is for.'
 
 const oauthError = (c: Context, status: 400 | 401 | 403 | 410 | 429, error: string, description: string, extra: Record<string, unknown> = {}) =>
   c.json({ error, error_description: description, ...extra }, status, { 'cache-control': 'no-store' })
-
-const page = (title: string, body: string) =>
-  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title>
-<style>:root{color-scheme:light dark;--bg:#fafaf9;--fg:#111;--muted:#ececeb;--mfg:#6b6b6b}@media(prefers-color-scheme:dark){:root{--bg:#0b0b0b;--fg:#f2f2f2;--muted:#1c1c1c;--mfg:#9a9a9a}}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 Inter,ui-sans-serif,system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:16px}
-main{max-width:28rem;width:100%;background:var(--muted);border-radius:12px;padding:28px}h1{font-size:20px;font-weight:400;letter-spacing:-.01em;margin:0 0 8px}p{color:var(--mfg);margin:0 0 16px}
-form{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}button,input{font:inherit;border-radius:8px;border:0;padding:10px 16px}button{background:var(--fg);color:var(--bg);cursor:pointer}button.quiet{background:transparent;color:var(--fg);box-shadow:inset 0 0 0 1px var(--mfg)}
-input{background:var(--bg);color:var(--fg);letter-spacing:.3em;width:9ch;text-align:center}code{font-size:14px}</style></head><body><main>${body}</main></body></html>`
 
 export const createOAuth = (config: OAuthConfig) => {
   const { store } = config
@@ -265,6 +285,23 @@ export const createOAuth = (config: OAuthConfig) => {
 
   /** Ends one approval at once: its access tokens fail `verify`, its refresh tokens are refused. */
   const revokeGrant = (grant: string) => store.put('revoked-family', grant, {}, now() + REVOKED_TTL)
+
+  /** The app this server was mounted on, for its brand. */
+  let mounted: object | undefined
+  const brandOf = () => config.brand ?? (mounted ? mountedOf(mounted).brand : undefined)
+
+  /** One of the kit's own pages, carrying the app's brand when it has one: head tags, icon, name, accent. Never a client's logo. */
+  const page = (c: Context, title: string, body: string) => {
+    const brand = brandOf()
+    const accent = brand?.accent && /^#[0-9a-f]{6}$/i.test(brand.accent) ? `:root{--accent:${brand.accent}}button{background:var(--accent);color:#fff}` : ''
+    const mark = brand ? `<header style="display:flex;align-items:center;gap:10px;margin:0 0 20px"><img src="/icon.svg" alt="" width="32" height="32"><span>${escape(brand.title)}</span></header>` : ''
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title>${brand ? brand.headTags(originOf(c)) : ''}
+<style>:root{color-scheme:light dark;--bg:#fafaf9;--fg:#111;--muted:#ececeb;--mfg:#6b6b6b}@media(prefers-color-scheme:dark){:root{--bg:#0b0b0b;--fg:#f2f2f2;--muted:#1c1c1c;--mfg:#9a9a9a}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 Inter,ui-sans-serif,system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:16px}
+main{max-width:28rem;width:100%;background:var(--muted);border-radius:12px;padding:28px}h1{font-size:20px;font-weight:400;letter-spacing:-.01em;margin:0 0 8px}p{color:var(--mfg);margin:0 0 16px}
+form{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}button,input{font:inherit;border-radius:8px;border:0;padding:10px 16px}button{background:var(--fg);color:var(--bg);cursor:pointer}button.quiet{background:transparent;color:var(--fg);box-shadow:inset 0 0 0 1px var(--mfg)}
+input{background:var(--bg);color:var(--fg);letter-spacing:.3em;width:9ch;text-align:center}code{font-size:14px}${accent}</style></head><body><main>${mark}${body}</main></body></html>`
+  }
 
   const mcpPath = config.mcpPath ?? '/mcp'
   /** The root resource: the issuer's origin in canonical form, what a grant gets when no resource it issues for was asked. */
@@ -420,7 +457,144 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
 | \`access_denied\` | the owner said no |
 `
 
+  /** Whether a sign-in request can go on, and its client and scopes; `redirect` marks an error the client may hear at its redirect. */
+  const authorizeParams = async (c: Context, params: Record<string, string>) => {
+    const client = params.client_id ? await store.get('client', params.client_id) : null
+    if (!client) return { error: 'This app is not registered here, or its registration expired. Remove this connection in your app and add it again.' }
+    if (!(client.redirectUris as string[]).includes(params.redirect_uri ?? '')) return { error: 'The redirect_uri is not one this client registered.' }
+    if (params.response_type !== 'code') return { error: 'Only response_type=code is supported.', redirect: true }
+    if (!params.code_challenge || params.code_challenge_method !== 'S256') return { error: 'PKCE is required: code_challenge with code_challenge_method=S256.', redirect: true }
+    const scopes = (params.scope || SCOPES.join(' ')).split(' ').filter((scope) => (SCOPES as readonly string[]).includes(scope))
+    return { client, scopes }
+  }
+  type Checked = { client: Record<string, unknown>; scopes: string[] }
+
+  const backTo = (redirectUri: string, origin: string, query: Record<string, string | undefined>) => {
+    const url = new URL(redirectUri)
+    for (const [key, value] of Object.entries({ ...query, iss: origin })) if (value !== undefined) url.searchParams.set(key, value)
+    return url.toString()
+  }
+
+  const signInFirst = (c: Context) => c.html(page(c, 'Sign in first', '<h1>Sign in first</h1><p>Approving an agent needs you signed in to this site. Open it in your browser, sign in, then try again.</p>'), 401)
+  const cantApprove = (c: Context, why: string) => c.html(page(c, 'Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(why)}</p>`), 400)
+  const notAllowed = (c: Context) => c.html(page(c, 'Not allowed', '<h1>Not allowed</h1><p>Approve from the page this site showed you, signed in, in the browser that opened it.</p>'), 403)
+  const expired = (c: Context) => c.html(page(c, 'Expired', '<h1>This approval expired</h1><p>Start again from the app that asked.</p>'), 400)
+  /** A ticket this browser answered already (a double click, a tab brought back): no new code, no redirect. */
+  const answered = (c: Context, outcome: unknown) =>
+    c.html(
+      outcome === 'approved'
+        ? page(c, 'Already approved', '<h1>Already approved</h1><p>This sign-in went through already. Return to the app that asked; you can close this page.</p>')
+        : page(c, 'Already answered', `<h1>Already answered</h1><p>${outcome === 'denied' ? 'You said no to this sign-in already.' : 'This sign-in was answered already.'} You can close this page.</p>`),
+      400,
+    )
+
+  /** The kit's own consent page: who asks, for what, as whom, and where it returns. */
+  const consentPage = (c: Context, ticket: string, checked: Checked, owner: string, audience: string, redirectUri: string) => {
+    const what = checked.scopes.includes('write') ? 'read everything and make changes' : 'read everything'
+    const path = pathOf(audience)
+    const asked = path ? `<code>${escape(config.name)}: ${escape(path)}</code>` : `all of ${escape(config.name)}`
+    const back = returnOf(redirectUri)
+    const returns = back.onThisComputer ? `an app on this computer (<code>${escape(back.host)}</code>)` : `<code>${escape(back.host)}</code>`
+    return c.html(page(c, `Allow ${checked.client.name}?`, `<h1>Allow <strong>${escape(String(checked.client.name))}</strong> to use ${escape(config.name)}?</h1>
+<p>It asks for ${asked}. It will be able to ${what} as you (${escape(owner)}), until you revoke it. It sends you back to ${returns}.</p>
+<form method="post" action="/oauth/authorize"><input type="hidden" name="ticket" value="${ticket}"><button name="decision" value="allow">Allow</button><button class="quiet" name="decision" value="deny">Deny</button></form>`))
+  }
+
+  type Consent = { params: Record<string, string>; nonce: string; arrival: SignInAsk['arrival']; expiresAt: number; owner?: string }
+  const askOf = (ticket: string, row: Consent, checked: Checked, audience: string): SignInAsk => {
+    const { params } = row
+    const back = returnOf(params.redirect_uri!)
+    return {
+      ticket,
+      client: { id: params.client_id!, name: String(checked.client.name), redirectUris: checked.client.redirectUris as string[] },
+      redirectUri: params.redirect_uri!,
+      redirectHost: back.host,
+      onThisComputer: back.onThisComputer,
+      scopes: checked.scopes,
+      resource: audience,
+      ...(params.state === undefined ? {} : { state: params.state }),
+      arrival: row.arrival,
+    }
+  }
+
+  /** The ticket as this browser holds it: live and its own, spent here already, another browser's, or gone (expired, unknown, from before tickets were bound). */
+  type Held = { gone: true } | { answered: unknown } | { foreign: true } | { row: Consent }
+  const consentOf = async (c: Context, ticket: string): Promise<Held> => {
+    const row = ticket ? await store.get('consent', ticket) : null
+    if (!row || typeof row.nonce !== 'string') return { gone: true }
+    const nonce = nonceOf(c)
+    const mine = nonce !== null && same(sha(nonce), row.nonce)
+    if (row.used) return mine ? { answered: row.answer } : { gone: true }
+    if (typeof row.params !== 'object') return { gone: true }
+    if (!mine) return { foreign: true }
+    return { row: row as Consent }
+  }
+
+  /**
+   * Answers a ticket once, from the browser that opened it, same-origin: a 302 to the client with `code` (or
+   * `access_denied`), or a page. The ticket is marked used and kept, hashes only, until it would have expired, so the
+   * same browser posting it again hears it went through. `owner` (the kit's page) must be the one it was shown to.
+   */
+  const answer = async (c: Context, ticket: string, decision: SignInDecision, owner?: string) => {
+    if (!sameOrigin(c, rootOf(c))) return notAllowed(c)
+    const found = await consentOf(c, ticket)
+    if ('gone' in found) return expired(c)
+    if ('answered' in found) return answered(c, found.answered)
+    if ('foreign' in found || (owner !== undefined && found.row.owner !== owner)) return notAllowed(c)
+    const { params, expiresAt, nonce } = found.row
+    const origin = originOf(c)
+    let approved: { checked: Checked; scopes: string[]; audience: Pick<Grant, 'audience' | 'resource'> } | undefined
+    if (decision !== 'deny') {
+      const checked = await authorizeParams(c, params)
+      if ('error' in checked) return cantApprove(c, checked.error!)
+      // Resolved again from the ticket's own request: the audience is the ticket's, never chosen here
+      const bound = audienceFor(c, params.resource)
+      if ('refused' in bound) return cantApprove(c, `${bound.refused} (invalid_target)`)
+      const scopes = decision.scopes ?? checked.scopes
+      if (!scopes.length || scopes.some((scope) => !checked.scopes.includes(scope))) return cantApprove(c, `An approval may only narrow the scopes asked for (${checked.scopes.join(' ')}).`)
+      approved = { checked, scopes, audience: bound }
+    }
+    // Single use: a double-clicked Allow makes one code, never two grants
+    if (!(await markUsed('consent', ticket, expiresAt))) {
+      const late = await consentOf(c, ticket)
+      return 'answered' in late ? answered(c, late.answered) : expired(c)
+    }
+    await store.put('consent', ticket, { nonce, used: true, answer: approved ? 'approved' : 'denied', expiresAt }, expiresAt)
+    if (decision === 'deny' || !approved) return c.redirect(backTo(params.redirect_uri!, origin, { error: 'access_denied', error_description: owner === undefined ? 'The sign-in was refused.' : 'The owner said no.', state: params.state }), 302)
+    // The grant is saved before the code exists: everything onGrant hears is on the code's row
+    const code = token('code')
+    await store.put('code', sha(code), { client: params.client_id, redirectUri: params.redirect_uri, challenge: params.code_challenge, scopes: approved.scopes, owner: decision.approver, name: approved.checked.client.name, ...approved.audience, grant: newGrant(), used: false, ...(decision.data ? { data: decision.data } : {}) }, now() + CODE_TTL)
+    return c.redirect(backTo(params.redirect_uri!, origin, { code, state: params.state }), 302)
+  }
+
+  /**
+   * The sign-in a ticket holds, for the app's own POST route: null when it expired, was answered, or this browser did
+   * not open it.
+   *
+   * @example
+   * const ask = await oauth.ticketOf(c, String(body.ticket))
+   * if (!ask) return c.html(expiredPage, 400)
+   */
+  const ticketOf = async (c: Context, ticket: string): Promise<SignInAsk | null> => {
+    const found = await consentOf(c, ticket)
+    if (!('row' in found)) return null
+    const checked = await authorizeParams(c, found.row.params)
+    const bound = audienceFor(c, found.row.params.resource)
+    return 'error' in checked || 'refused' in bound ? null : askOf(ticket, found.row, checked, bound.audience)
+  }
+
+  /**
+   * Answers a ticket from the app's own page: the grant follows only a same-origin POST from the browser that opened it,
+   * once. `approver` becomes the token's `sub`, `scopes` may only narrow, `data` reaches `onGrant`; the resource is the
+   * ticket's. Returns the 302 to the client (`code`, `state`, `iss`, or `access_denied`), or a 400/403 page.
+   *
+   * @example
+   * return oauth.complete(c, ask.ticket, { approver: 'owner@example.test', scopes: ['read'], data: { invite } })
+   */
+  const complete = (c: Context, ticket: string, decision: SignInDecision) => answer(c, ticket, decision)
+
   const mount = (app: Hono<any, any, any>) => {
+    mounted = app
     const json = (c: Context, body: unknown, type = 'application/json') => c.body(JSON.stringify(body, null, 2), 200, { 'content-type': type, 'cache-control': 'public, max-age=300', 'access-control-allow-origin': '*' })
 
     app.get('/.well-known/oauth-authorization-server', (c) => json(c, authorizationServer(originOf(c))))
@@ -454,65 +628,52 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       return c.json({ client_id: clientId, client_id_issued_at: issuedAt, client_name: name, redirect_uris: uris, grant_types: grantTypes, response_types: uris.length ? ['code'] : [], token_endpoint_auth_method: 'none' }, 201, { 'cache-control': 'no-store' })
     })
 
-    const authorizeParams = async (c: Context, params: Record<string, string>) => {
-      const client = params.client_id ? await store.get('client', params.client_id) : null
-      if (!client) return { error: 'This client is not registered here (or its registration expired). Register again at /oauth/register.' }
-      if (!(client.redirectUris as string[]).includes(params.redirect_uri ?? '')) return { error: 'The redirect_uri is not one this client registered.' }
-      if (params.response_type !== 'code') return { error: 'Only response_type=code is supported.', redirect: true }
-      if (!params.code_challenge || params.code_challenge_method !== 'S256') return { error: 'PKCE is required: code_challenge with code_challenge_method=S256.', redirect: true }
-      const scopes = (params.scope || SCOPES.join(' ')).split(' ').filter((scope) => (SCOPES as readonly string[]).includes(scope))
-      return { client, scopes }
-    }
-
-    const backTo = (redirectUri: string, origin: string, query: Record<string, string | undefined>) => {
-      const url = new URL(redirectUri)
-      for (const [key, value] of Object.entries({ ...query, iss: origin })) if (value !== undefined) url.searchParams.set(key, value)
-      return url.toString()
-    }
-
-    // The consent page: behind the single sign-on, and the owner check runs here too
+    // The sign-in page: the app's (`approve`) or the kit's own, behind the single sign-on, where the owner check runs too
     app.get('/oauth/authorize', async (c) => {
       const params = c.req.query()
-      const owner = await config.owner(c)
-      if (!owner) return c.html(page('Sign in first', '<h1>Sign in first</h1><p>Approving an agent needs you signed in to this site. Open it in your browser, sign in, then try again.</p>'), 401)
+      // With approve, the app decides who signs in: the owner is asked only if it shows no page of its own
+      const owner = config.approve ? null : await config.owner(c)
+      if (!config.approve && !owner) return signInFirst(c)
       const checked = await authorizeParams(c, params)
       if ('error' in checked) {
-        if (checked.redirect && params.redirect_uri) return c.redirect(backTo(params.redirect_uri, originOf(c), { error: 'invalid_request', error_description: checked.error, state: params.state }), 302)
-        return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(checked.error!)}</p>`), 400)
+        // Never a redirect before a person acts when the app approves; today's redirect otherwise
+        if (!config.approve && checked.redirect && params.redirect_uri) return c.redirect(backTo(params.redirect_uri, originOf(c), { error: 'invalid_request', error_description: checked.error, state: params.state }), 302)
+        return cantApprove(c, checked.error!)
       }
       // A page, never a redirect: the resource is checked before anything is written
-      if ((c.req.queries('resource')?.length ?? 0) > 1) return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${ONE_RESOURCE}</p>`), 400)
+      if ((c.req.queries('resource')?.length ?? 0) > 1) return cantApprove(c, ONE_RESOURCE)
       const bound = audienceFor(c, params.resource)
-      if ('refused' in bound) return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(bound.refused)} (invalid_target)</p>`), 400)
+      if ('refused' in bound) return cantApprove(c, `${bound.refused} (invalid_target)`)
+      // One nonce binds every ticket this browser opens: reused while it lives, its life renewed
+      const nonce = nonceOf(c) ?? newNonce()
       const ticket = token('consent')
-      await store.put('consent', ticket, { ...params, owner }, now() + CODE_TTL)
-      const what = checked.scopes.includes('write') ? 'read everything and make changes' : 'read everything'
-      return c.html(page(`Allow ${checked.client.name}?`, `<h1>Allow <strong>${escape(String(checked.client.name))}</strong> to use ${escape(config.name)}?</h1>
-<p>It will be able to ${what} as you (${escape(owner)}), until you revoke it. It sends you back to <code>${escape(new URL(params.redirect_uri!).host)}</code>.</p>
-<form method="post" action="/oauth/authorize"><input type="hidden" name="ticket" value="${ticket}"><button name="decision" value="allow">Allow</button><button class="quiet" name="decision" value="deny">Deny</button></form>`))
+      const expiresAt = now() + CODE_TTL
+      const row = { params, nonce: sha(nonce), arrival: arrivalOf(c), expiresAt }
+      const bindTo = (page: Response) => {
+        const bound = new Response(page.body, page)
+        bound.headers.append('set-cookie', ticketCookie(c, nonce, CODE_TTL))
+        return bound
+      }
+      if (config.approve) {
+        await store.put('consent', ticket, row, expiresAt)
+        const own = await config.approve(c, askOf(ticket, row, checked, bound.audience))
+        if (own) return bindTo(own)
+        const person = await config.owner(c)
+        if (!person) return signInFirst(c)
+        await store.put('consent', ticket, { ...row, owner: person }, expiresAt)
+        return bindTo(consentPage(c, ticket, checked, person, bound.audience, params.redirect_uri!))
+      }
+      await store.put('consent', ticket, { ...row, owner }, expiresAt)
+      return bindTo(consentPage(c, ticket, checked, owner!, bound.audience, params.redirect_uri!))
     })
 
     app.post('/oauth/authorize', async (c) => {
+      if (!sameOrigin(c, rootOf(c))) return notAllowed(c)
       const owner = await config.owner(c)
-      const site = c.req.header('sec-fetch-site')
-      if (!owner || (site && site !== 'same-origin')) return c.html(page('Not allowed', '<h1>Not allowed</h1><p>Approve from the page this site showed you, signed in.</p>'), 403)
+      if (!owner) return notAllowed(c)
       const body = await bodyOf(c)
-      const consent = body.ticket ? await store.get('consent', body.ticket) : null
-      const expired = () => c.html(page('Expired', '<h1>This approval expired</h1><p>Start again from the app that asked.</p>'), 400)
-      if (!consent || consent.owner !== owner) return expired()
-      // Single use: a double-clicked Allow makes one code, never two grants
-      if (!(await take('consent', body.ticket!))) return expired()
-      const params = consent as Record<string, string>
-      const origin = originOf(c)
-      if (body.decision !== 'allow') return c.redirect(backTo(params.redirect_uri!, origin, { error: 'access_denied', error_description: 'The owner said no.', state: params.state }), 302)
-      const checked = await authorizeParams(c, params)
-      if ('error' in checked) return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(checked.error!)}</p>`), 400)
-      // Resolved again from the request, never read back from the ticket
-      const bound = audienceFor(c, params.resource)
-      if ('refused' in bound) return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(bound.refused)} (invalid_target)</p>`), 400)
-      const code = token('code')
-      await store.put('code', sha(code), { client: params.client_id, redirectUri: params.redirect_uri, challenge: params.code_challenge, scopes: checked.scopes, owner, name: checked.client.name, ...bound, grant: newGrant(), used: false }, now() + CODE_TTL)
-      return c.redirect(backTo(params.redirect_uri!, origin, { code, state: params.state }), 302)
+      // Only a ticket the kit's own page showed this owner: one the app's page holds is the app's to complete
+      return answer(c, body.ticket ?? '', body.decision === 'allow' ? { approver: owner } : 'deny', owner)
     })
 
     // auth.md registration: anonymous or bound to an email, claimed by a person typing the code
@@ -559,41 +720,41 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     // The claim page: behind the single sign-on; the signed-in person must be the one the claim names
     app.get('/oauth/claim', async (c) => {
       const owner = await config.owner(c)
-      if (!owner) return c.html(page('Sign in first', '<h1>Sign in first</h1><p>Open this link in the browser where you are signed in to this site.</p>'), 401)
+      if (!owner) return c.html(page(c, 'Sign in first', '<h1>Sign in first</h1><p>Open this link in the browser where you are signed in to this site.</p>'), 401)
       const attemptToken = c.req.query('claim_attempt_token') ?? ''
       const attempt = await store.get('claim-attempt', sha(attemptToken))
-      if (!attempt) return c.html(page('Expired', '<h1>This code expired</h1><p>Ask the agent for a new one.</p>'), 410)
+      if (!attempt) return c.html(page(c, 'Expired', '<h1>This code expired</h1><p>Ask the agent for a new one.</p>'), 410)
       const registration = await store.get('registration', String(attempt.registration))
-      return c.html(page('Approve an agent', `<h1>Approve <strong>${escape(String(registration?.name ?? 'an agent'))}</strong>?</h1>
+      return c.html(page(c, 'Approve an agent', `<h1>Approve <strong>${escape(String(registration?.name ?? 'an agent'))}</strong>?</h1>
 <p>You are signed in as ${escape(owner)}. Type the 6-digit code the agent gave you to let it read and change ${escape(config.name)} as you.</p>
 <form method="post" action="/oauth/claim"><input type="hidden" name="claim_attempt_token" value="${escape(attemptToken)}"><input name="user_code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required aria-label="Code"><button>Approve</button></form>`))
     })
 
     app.post('/oauth/claim', async (c) => {
+      if (!sameOrigin(c, rootOf(c))) return notAllowed(c)
       const owner = await config.owner(c)
-      const site = c.req.header('sec-fetch-site')
-      if (!owner || (site && site !== 'same-origin')) return c.html(page('Not allowed', '<h1>Not allowed</h1>'), 403)
+      if (!owner) return notAllowed(c)
       const body = await bodyOf(c)
       const key = sha(body.claim_attempt_token ?? '')
       const attempt = await store.get('claim-attempt', key)
-      if (!attempt) return c.html(page('Expired', '<h1>This code expired</h1><p>Ask the agent for a new one.</p>'), 410)
-      if (String(attempt.email) !== owner.toLowerCase()) return c.html(page('Not yours', `<h1>This claim names someone else</h1><p>Sign in as the person the agent asked for.</p>`), 403)
+      if (!attempt) return c.html(page(c, 'Expired', '<h1>This code expired</h1><p>Ask the agent for a new one.</p>'), 410)
+      if (String(attempt.email) !== owner.toLowerCase()) return c.html(page(c, 'Not yours', `<h1>This claim names someone else</h1><p>Sign in as the person the agent asked for.</p>`), 403)
       if (!same(sha(body.user_code ?? ''), String(attempt.code))) {
         const tries = Number(attempt.tries) + 1
         if (tries >= 5) await store.delete('claim-attempt', key)
         else await store.put('claim-attempt', key, { ...attempt, tries }, now() + CLAIM_TTL)
-        return c.html(page('Wrong code', `<h1>That code doesn’t match</h1><p>${tries >= 5 ? 'Too many tries: ask the agent for a new code.' : 'Check the code the agent gave you and try again.'}</p>`), 400)
+        return c.html(page(c, 'Wrong code', `<h1>That code doesn’t match</h1><p>${tries >= 5 ? 'Too many tries: ask the agent for a new code.' : 'Check the code the agent gave you and try again.'}</p>`), 400)
       }
       // Single use: the same form posted twice at once (a double-click) approves once; the other finds the code spent
-      if (!(await take('claim-attempt', key))) return c.html(page('Expired', '<h1>This code expired</h1><p>Ask the agent for a new one.</p>'), 410)
+      if (!(await take('claim-attempt', key))) return c.html(page(c, 'Expired', '<h1>This code expired</h1><p>Ask the agent for a new one.</p>'), 410)
       const registration = await store.get('registration', String(attempt.registration))
-      if (!registration) return c.html(page('Expired', '<h1>This registration expired</h1>'), 410)
+      if (!registration) return c.html(page(c, 'Expired', '<h1>This registration expired</h1>'), 410)
       // One approval per registration: a second would give its jwt-bearer tokens a grant its claim and refresh tokens lack
-      if (registration.claimed) return c.html(page('Already approved', `<h1>Already approved</h1><p>${escape(String(registration.name))} was approved already; this code is spent. You can close this page.</p>`), 409)
+      if (registration.claimed) return c.html(page(c, 'Already approved', `<h1>Already approved</h1><p>${escape(String(registration.name))} was approved already; this code is spent. You can close this page.</p>`), 409)
       // One grant for the claim: its claim, refresh and jwt-bearer tokens all carry it (made at registration; older rows get one here)
       // The audience came with the grant at registration: one registered before audiences stays without
       await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: registration.family ?? newGrant() }, now() + REGISTRATION_TTL)
-      return c.html(page('Approved', `<h1>Approved</h1><p>${escape(String(registration.name))} can now use ${escape(config.name)}. You can close this page.</p>`))
+      return c.html(page(c, 'Approved', `<h1>Approved</h1><p>${escape(String(registration.name))} can now use ${escape(config.name)}. You can close this page.</p>`))
     })
 
     // RFC 8628: a device without a browser gets a code for the owner to type, then polls the token endpoint
@@ -621,14 +782,14 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       )
     })
 
-    const deviceForm = (typed: string, note: string) => page('Connect a device', `<h1>Connect a device</h1><p>${note}</p>
+    const deviceForm = (c: Context, typed: string, note: string) => page(c, 'Connect a device', `<h1>Connect a device</h1><p>${note}</p>
 <form method="post" action="/oauth/device"><input name="user_code" value="${escape(typed)}" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="9" required aria-label="Code" style="width:14ch"><button>Continue</button></form>`)
 
     /** The signed-in person allowed to approve, or the page that says why not. */
     const deviceApprover = async (c: Context) => {
       const owner = await config.owner(c)
-      if (!owner) return { refused: c.html(page('Sign in first', '<h1>Sign in first</h1><p>Open this page in the browser where you are signed in to this site, then type the code.</p>'), 401) }
-      if (config.owners?.length && !config.owners.some((one) => one.toLowerCase() === owner.toLowerCase())) return { refused: c.html(page('Not allowed', '<h1>Not allowed</h1><p>Only the owner of this service can connect a device.</p>'), 403) }
+      if (!owner) return { refused: c.html(page(c, 'Sign in first', '<h1>Sign in first</h1><p>Open this page in the browser where you are signed in to this site, then type the code.</p>'), 401) }
+      if (config.owners?.length && !config.owners.some((one) => one.toLowerCase() === owner.toLowerCase())) return { refused: c.html(page(c, 'Not allowed', '<h1>Not allowed</h1><p>Only the owner of this service can connect a device.</p>'), 403) }
       return { owner }
     }
 
@@ -636,25 +797,25 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     const deviceFor = async (c: Context, owner: string, typed: string) => {
       const triesKey = sha(owner.toLowerCase())
       const tries = await store.get('device-tries', triesKey)
-      if (tries && Number(tries.count) >= DEVICE_TRIES) return { refused: c.html(page('Too many tries', '<h1>Too many tries</h1><p>Wait ten minutes, then type the code again.</p>'), 429) }
+      if (tries && Number(tries.count) >= DEVICE_TRIES) return { refused: c.html(page(c, 'Too many tries', '<h1>Too many tries</h1><p>Wait ten minutes, then type the code again.</p>'), 429) }
       const entry = await store.get('device-user', userCodeKey(typed))
       const record = entry ? await store.get('device', String(entry.device)) : null
       if (!entry || !record || now() >= Number(record.expiresAt) || (await store.get('device-decision', String(entry.device)))) {
         const until = Number(tries?.until ?? now() + DEVICE_TRIES_WINDOW)
         await store.put('device-tries', triesKey, { count: Number(tries?.count ?? 0) + 1, until }, until)
-        return { refused: c.html(deviceForm(typed, 'That code doesn’t match a device waiting here. Check it, or ask the device for a new one.'), 400) }
+        return { refused: c.html(deviceForm(c, typed, 'That code doesn’t match a device waiting here. Check it, or ask the device for a new one.'), 400) }
       }
       // The client was revoked (or its registration expired) while the device waited: nothing to approve
       const [client, revoked] = await Promise.all([store.get('client', String(record.client)), store.get('revoked-client', String(record.client))])
-      if (!client || revoked) return { refused: c.html(page('No longer allowed', '<h1>This device can’t be connected</h1><p>Its app was revoked or its registration expired. Start again on the device.</p>'), 400) }
-      return { record, deviceKey: String(entry.device) }
+      if (!client || revoked) return { refused: c.html(page(c, 'No longer allowed', '<h1>This device can’t be connected</h1><p>Its app was revoked or its registration expired. Start again on the device.</p>'), 400) }
+      return { record, client, deviceKey: String(entry.device) }
     }
 
-    const deviceConsent = (record: Record<string, unknown>, typed: string, owner: string) => {
+    const deviceConsent = (c: Context, record: Record<string, unknown>, typed: string, owner: string, client: Record<string, unknown>) => {
       const what = (record.scopes as string[]).includes('write') ? 'read everything and make changes' : 'read everything'
       const code = typed.toUpperCase().replace(/[^A-Z]/g, '')
-      return page(`Allow ${record.name}?`, `<h1>Allow <strong>${escape(String(record.name))}</strong> to use ${escape(config.name)}?</h1>
-<p>It will be able to ${what} as you (${escape(owner)}), until you revoke it. Allow it only if the device in front of you shows <code>${code.slice(0, 4)}-${code.slice(4)}</code>.</p>
+      return page(c, `Allow ${record.name}?`, `<h1>Allow <strong>${escape(String(record.name))}</strong> to use ${escape(config.name)}?</h1>
+<p>It will be able to ${what} as you (${escape(owner)}), until you revoke it. Allow it only if the device in front of you shows <code>${code.slice(0, 4)}-${code.slice(4)}</code>.${(client.redirectUris as string[] | undefined)?.length ? '' : ' It registered as a device, with no page to send you back to: it waits for its token there.'}</p>
 <form method="post" action="/oauth/device"><input type="hidden" name="user_code" value="${code}"><button name="decision" value="allow">Allow</button><button class="quiet" name="decision" value="deny">Deny</button></form>`)
     }
 
@@ -663,29 +824,28 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const approver = await deviceApprover(c)
       if ('refused' in approver) return approver.refused
       const typed = c.req.query('user_code') ?? ''
-      if (!typed) return c.html(deviceForm('', `Type the code your device or agent shows to let it use ${escape(config.name)}.`))
+      if (!typed) return c.html(deviceForm(c, '', `Type the code your device or agent shows to let it use ${escape(config.name)}.`))
       const found = await deviceFor(c, approver.owner, typed)
       if ('refused' in found) return found.refused
-      return c.html(deviceConsent(found.record, typed, approver.owner))
+      return c.html(deviceConsent(c, found.record, typed, approver.owner, found.client))
     })
 
     app.post('/oauth/device', async (c) => {
-      const site = c.req.header('sec-fetch-site')
-      if (site && site !== 'same-origin') return c.html(page('Not allowed', '<h1>Not allowed</h1><p>Approve from the page this site showed you, signed in.</p>'), 403)
+      if (!sameOrigin(c, rootOf(c))) return notAllowed(c)
       const approver = await deviceApprover(c)
       if ('refused' in approver) return approver.refused
       const body = await bodyOf(c)
       const found = await deviceFor(c, approver.owner, body.user_code ?? '')
       if ('refused' in found) return found.refused
-      if (body.decision !== 'allow' && body.decision !== 'deny') return c.html(deviceConsent(found.record, body.user_code ?? '', approver.owner))
+      if (body.decision !== 'allow' && body.decision !== 'deny') return c.html(deviceConsent(c, found.record, body.user_code ?? '', approver.owner, found.client))
       // Single use: the typed code is gone either way, and the device's code goes when it collects the answer. Taken, so
       // two posts at once (a double-click, or Allow and Deny from two tabs) write one answer
       if (!(await take('device-user', userCodeKey(body.user_code ?? ''))))
-        return c.html(deviceForm(body.user_code ?? '', 'That code was just answered. Ask the device for a new one if it still waits.'), 400)
+        return c.html(deviceForm(c, body.user_code ?? '', 'That code was just answered. Ask the device for a new one if it still waits.'), 400)
       // Its own row: the device's polls rewrite the device row, and must never write over the answer
       await store.put('device-decision', found.deviceKey, { status: body.decision === 'allow' ? 'approved' : 'denied', owner: approver.owner }, Number(found.record.expiresAt) + DEVICE_TTL)
-      if (body.decision === 'deny') return c.html(page('Denied', `<h1>Denied</h1><p>${escape(String(found.record.name))} gets nothing. You can close this page.</p>`))
-      return c.html(page('Approved', `<h1>Approved</h1><p>${escape(String(found.record.name))} can now use ${escape(config.name)}; it picks up its token within seconds. You can close this page.</p>`))
+      if (body.decision === 'deny') return c.html(page(c, 'Denied', `<h1>Denied</h1><p>${escape(String(found.record.name))} gets nothing. You can close this page.</p>`))
+      return c.html(page(c, 'Approved', `<h1>Approved</h1><p>${escape(String(found.record.name))} can now use ${escape(config.name)}; it picks up its token within seconds. You can close this page.</p>`))
     })
 
     app.post('/oauth/token', async (c) => {
@@ -693,6 +853,11 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const origin = originOf(c)
       /** More than one resource for a row bound to one, checked before any write; a row from before audiences ignores resource altogether. */
       const manyFor = async (row: Record<string, unknown>) => typeof row.audience === 'string' && (await manyResources(c))
+      /** The app's word on the first token of a grant; without `onGrant`, yes. */
+      const heard = async (kind: SignInGrant['kind'], issued: Grant, data?: unknown) =>
+        !config.onGrant ||
+        (await config.onGrant({ kind, grant: issued.grant, client: { id: issued.client, name: issued.name }, approver: issued.owner, scopes: issued.scopes, ...(issued.audience ? { resource: issued.audience } : {}), ...(data ? { data: data as Record<string, string> } : {}) }, c))
+      const withdrawn = () => oauthError(c, 400, 'invalid_grant', 'This sign-in was withdrawn: start again.')
       switch (body.grant_type) {
         case 'authorization_code': {
           const key = sha(body.code ?? '')
@@ -716,6 +881,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (!verified) return oauthError(c, 400, 'invalid_grant', 'The code_verifier doesn’t match the code_challenge.')
           if (await store.get('revoked-client', String(row.client))) return oauthError(c, 400, 'invalid_grant', 'This client was revoked: register again.')
           const issued = { client: String(row.client), name: String(row.name), owner: String(row.owner), scopes: row.scopes as string[], grant, ...boundOf(row) }
+          // The code is spent either way: a refusal issues nothing
+          if (!(await heard('code', issued, row.data))) return withdrawn()
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
         }
         case 'refresh_token': {
@@ -761,6 +928,14 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const [revokedGrant, revokedLate] = await Promise.all([store.get('revoked-family', grant), store.get('revoked-client', client)])
           if (revokedGrant || revokedLate) return oauthError(c, 400, 'invalid_grant', 'This sign-in is revoked: register again.')
           const issued = { client, name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant, ...boundOf(registration) }
+          if (config.onGrant) {
+            // Refused, the grant ends, so the agent's identity assertion buys nothing either; heard, jwt-bearer may follow
+            if (!(await heard('claim', issued))) {
+              await revokeGrant(grant)
+              return withdrawn()
+            }
+            await store.put('registration', client, { ...registration, collected: true }, now() + REGISTRATION_TTL)
+          }
           const assertion = await sign({ sub: client, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued), identity_assertion: assertion, assertion_expires: new Date((now() + REGISTRATION_TTL) * 1000).toISOString() }, 200, { 'cache-control': 'no-store' })
         }
@@ -790,6 +965,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (decision?.status === 'denied') return oauthError(c, 400, 'access_denied', 'The owner said no.')
           if (decision?.status === 'approved') {
             const issued = { client: String(record.client), name: String(record.name), owner: String(decision.owner), scopes: record.scopes as string[], grant: newGrant(), ...boundOf(record) }
+            if (!(await heard('device', issued))) return withdrawn()
             return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
           }
           const interval = Number(record.interval)
@@ -806,6 +982,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const registration = payload?.typ === 'agent_identity' && typeof payload.sub === 'string' ? await store.get('registration', payload.sub) : null
           if (!registration || (await store.get('revoked-client', String(payload!.sub)))) return oauthError(c, 400, 'invalid_grant', 'This assertion is expired, revoked or unknown: register again.')
           if (!registration.claimed) return oauthError(c, 400, 'invalid_grant', 'Not claimed yet: an unclaimed registration has no scopes. Run the claim (auth.md step B2).')
+          // The claim's first token is the one the app hears: an assertion never gets there first
+          if (config.onGrant && !registration.collected) return oauthError(c, 400, 'invalid_grant', 'Collect the claim first: poll the token endpoint with the claim grant (auth.md step B4).')
           if (await manyFor(registration)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
           const grant = String(registration.family ?? payload!.sub)
           // The assertion belongs to the claim's sign-in: once that grant is revoked it buys nothing, never a dead token
@@ -843,7 +1021,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     await store.delete('registration', clientId)
   }
 
-  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, mcpPath, revokeGrant, revokeClient, authorizationServer, protectedResource, authMd }
+  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, mcpPath, revokeGrant, revokeClient, ticketOf, complete, authorizationServer, protectedResource, authMd }
 }
 
 export type OAuth = ReturnType<typeof createOAuth>

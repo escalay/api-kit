@@ -235,6 +235,8 @@ export type AgentBrand = {
   websiteUrl?: string
   termsUrl?: string
   background: string
+  /** `#rrggbb`: the theme colour, on the kit's own pages too (OAuth's approval pages). */
+  accent?: string
   /** The path of the largest picture it serves (OpenAPI's `x-logo`, the A2A card's `iconUrl`). */
   logo: string
   /** The paths `mount` serves, left open without credentials unless the app is private. */

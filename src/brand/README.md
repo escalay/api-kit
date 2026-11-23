@@ -43,6 +43,7 @@ no harm: `kit doctor` reads either quote style. `kit init` makes every new app w
 | A2A Agent Card | `iconUrl` |
 | The guide | `{{brand.name}}`, `{{brand.title}}`, `{{brand.description}}` (`guideGaps(files, vars, { brand })` checks them) |
 | `/docs` and the front door's pages | the head tags (`headTags`): icons, manifest, `theme-color`, Open Graph, Twitter card; a page with its own `rel="icon"` keeps it |
+| The OAuth part's own pages (consent, device, claim, their errors) | the head tags, `/icon.svg` beside the title, and the `accent` on the buttons; a client is named by text only, never by a `logo_uri` it registered |
 
 What each client shows, and why the icons come in this order:
 
