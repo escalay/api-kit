@@ -62,17 +62,20 @@ unless the app passes its own `accepts`, as here:
 
 ```ts
 const SPACE = /^\/s\/[a-z0-9-]+\/mcp/
-const resourceOf = (c: Context) => oauth.rootOf(c) + (SPACE.exec(c.req.path)?.[0] ?? '')
+const resourceOf = (c: Context) =>
+  oauth.rootOf(c) + (SPACE.exec(c.req.path)?.[0] ?? (c.req.path === oauth.mcpPath || c.req.path.startsWith(oauth.mcpPath + '/') ? oauth.mcpPath : ''))
 const oauth = createOAuth({
   …,
   // A pure check of the path: the kit has checked the origin, and the metadata path asks it too
   resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path),
   resourceOf,                                                  // where a 401 points (RFC 9728 §3.3)
   accepts: async (caller, c) => {
-    // The path decides when it names a space. A tool's in-process /api call has the space's path no more: only then
-    // does the app read the space it carries (`spaceOf`)
-    const here = SPACE.test(c.req.path) ? resourceOf(c) : (spaceOf(c) ?? resourceOf(c))
-    return !caller.resource || caller.resource === oauth.rootOf(c) || caller.resource === here || `This token is for ${caller.resource}: connect again at ${here}.`
+    // The path decides at an MCP address, a space's or mcpPath. Elsewhere, as in a tool's in-process /api call, the
+    // path names none: only then does the app read the space the call carries (`spaceOf`)
+    const root = oauth.rootOf(c)
+    const here = resourceOf(c) === root ? (spaceOf(c) ?? root) : resourceOf(c)
+    // An aud-less, root or mcpPath token works everywhere, as with the default
+    return !caller.resource || caller.resource === root || caller.resource === root + oauth.mcpPath || caller.resource === here || `This token is for ${caller.resource}, not ${here}: connect again there.`
   },
 })
 ```
@@ -86,11 +89,14 @@ const oauth = createOAuth({
 - `accepts` runs on every request after the token's signature and revocation checks, in-process calls included: MCP
   tools call `/api` with the same bearer, and apps rewrite paths before the kit runs. Whatever carries the space to an
   in-process call (`spaceOf`) must be something a client cannot set, such as a header the app strips from every
-  outside request, and the request's own path outranks it whenever the path names a space: otherwise a client sends
-  the carrier with one space's token and reaches another. A sentence refuses: 401
+  outside request, and the request's own path outranks it at every MCP address, a space's or `mcpPath`: otherwise a
+  client sends the carrier with one space's token and reaches another, or `mcpPath`. A sentence refuses: 401
   `invalid_token`, the sentence as `detail` (and its printable ASCII as `error_description`), `resource_metadata` at
   `resourceOf(c)`. Compare audiences with `oauth.rootOf(c)`, the root as the kit signs it (canonical: a forwarded
   host in capitals or with its default port is the same root), not the raw origin.
+- Keep `mcpPath` in `resourceOf` and in `accepts`: without it, a token asked for `<origin>/mcp` (what MCP clients
+  send) is refused at `/mcp`, `/api` and every space, and the 401 at `/mcp` points at the origin's metadata.
+  `test/oauth.test.ts` runs this example as written.
 - `listResources(origin)` names what the authorization server metadata lists (`protected_resources`, default the
   origin and `mcpPath`). Never list per-space resources there.
 - `mcpPath` keeps the pointer, the metadata, the listed resources and the relay (`read` may POST there) on MCP when it

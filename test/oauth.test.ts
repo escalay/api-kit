@@ -557,24 +557,29 @@ describe('OAuth callers: the client and the grant, not the name', () => {
 describe('OAuth audiences: each token bound to the resource it was asked for (RFC 8707, RFC 9728)', () => {
   const ALPHA = `${ORIGIN}/s/alpha/mcp`
   const BETA = `${ORIGIN}/s/beta/mcp`
-  const SPACE = /^\/s\/[a-z]+\/mcp/
-  const resourceOf = (c: Context) => `${originOf(c)}${SPACE.exec(c.req.path)?.[0] ?? (c.req.path === '/mcp' || c.req.path.startsWith('/mcp/') ? '/mcp' : '')}`
 
-  /** An app with one MCP resource per space (`/s/<name>/mcp`); a test header stands in for how the app knows which resource an in-process call serves, which a real app makes something no client can set. */
+  /** An app with one MCP resource per space (`/s/<name>/mcp`), the oauth README's example as written; a test header stands in for how the app knows which resource an in-process call serves (`spaceOf`), which a real app makes something no client can set. */
   const spacesApi = async () => {
+    const spaceOf = (c: Context) => c.req.header('x-test-resource')
+    const SPACE = /^\/s\/[a-z0-9-]+\/mcp/
+    const resourceOf = (c: Context) =>
+      oauth.rootOf(c) + (SPACE.exec(c.req.path)?.[0] ?? (c.req.path === oauth.mcpPath || c.req.path.startsWith(oauth.mcpPath + '/') ? oauth.mcpPath : ''))
     const oauth = createOAuth({
       name: 'Sample',
       signingKey: await generateOAuthKey(),
       store: memoryOAuthStore(),
       owner: async (c) => c.req.header('x-test-owner') ?? null,
       owners: [OWNER],
-      resources: (path) => /^\/s\/[a-z]+\/mcp$/.test(path),
-      resourceOf,
+      // A pure check of the path: the kit has checked the origin, and the metadata path asks it too
+      resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path),
+      resourceOf,                                                  // where a 401 points (RFC 9728 §3.3)
       accepts: async (caller, c) => {
-        // The path decides when it names a space; only an in-process call, whose path no longer does, reads the carrier
-        const here = SPACE.test(c.req.path) ? resourceOf(c) : (c.req.header('x-test-resource') ?? resourceOf(c))
-        // The app's choice: an aud-less or root token works in every space
-        return !caller.resource || caller.resource === originOf(c) || caller.resource === here ? true : `This token is for ${caller.resource}, not ${here}: connect again there.`
+        // The path decides at an MCP address, a space's or mcpPath. Elsewhere, as in a tool's in-process /api call, the
+        // path names none: only then does the app read the space the call carries (`spaceOf`)
+        const root = oauth.rootOf(c)
+        const here = resourceOf(c) === root ? (spaceOf(c) ?? root) : resourceOf(c)
+        // An aud-less, root or mcpPath token works everywhere, as with the default
+        return !caller.resource || caller.resource === root || caller.resource === root + oauth.mcpPath || caller.resource === here || `This token is for ${caller.resource}, not ${here}: connect again there.`
       },
     })
     const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys('') }, oauth })
@@ -584,6 +589,8 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
       const inner = await app.request('/api/v1/things', { headers: { authorization: c.req.header('authorization') ?? '', 'x-test-resource': resourceOf(c) } })
       return c.json({ api: inner.status })
     })
+    // The single MCP calls the API in-process too, carrying no space
+    app.post('/mcp', async (c) => c.json({ api: (await app.request('/api/v1/things', { headers: { authorization: c.req.header('authorization') ?? '' } })).status }))
     return { app, oauth }
   }
   type App = Awaited<ReturnType<typeof oauthApp>>['app']
@@ -657,7 +664,23 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
     expect((await forged.json()).detail).toContain(`not ${BETA}`)
   })
 
+  it('with spaces, takes a token asked for /mcp at /mcp, its in-process /api call included, and everywhere else on the origin', async () => {
+    const { app } = await spacesApi()
+    const { exchange } = await approvedCode(app, { resource: `${ORIGIN}/mcp` })
+    const auth = { authorization: `Bearer ${(await (await exchange({ resource: `${ORIGIN}/mcp` })).json()).access_token}` }
+    const here = await app.request('/mcp', { method: 'POST', headers: auth })
+    expect([here.status, await here.json()]).toEqual([200, { api: 200 }])
+    expect((await app.request('/api/v1/things', { headers: auth })).status).toBe(200)
+    expect(await (await app.request('/s/alpha/mcp', { method: 'POST', headers: auth })).json()).toEqual({ api: 200 })
+    // The /mcp path outranks the carrier: a space's token is refused there, pointed at /mcp's metadata
+    const { exchange: alpha } = await approvedCode(app, { resource: ALPHA })
+    const refused = await app.request('/mcp', { method: 'POST', headers: { authorization: `Bearer ${(await (await alpha()).json()).access_token}`, 'x-test-resource': ALPHA } })
+    expect(refused.status).toBe(401)
+    expect(refused.headers.get('www-authenticate')).toContain(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`)
+  })
+
   it('with resources and no accepts, takes a token at its own resource and refuses it at another and at /api, in-process calls included', async () => {
+    const resourceOf = (c: Context) => `${originOf(c)}${/^\/s\/[a-z]+\/mcp/.exec(c.req.path)?.[0] ?? (c.req.path === '/mcp' || c.req.path.startsWith('/mcp/') ? '/mcp' : '')}`
     const { app } = await oauthApp(memoryOAuthStore(), { resources: (path) => /^\/s\/[a-z]+\/mcp$/.test(path), resourceOf })
     app.post('/s/:name/mcp', async (c) => c.json({ api: (await app.request('/api/v1/things', { headers: { authorization: c.req.header('authorization') ?? '' } })).status }))
     const { exchange } = await approvedCode(app, { resource: ALPHA })
