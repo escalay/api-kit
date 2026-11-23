@@ -268,7 +268,8 @@ const oauth = createOAuth({
   reachable outside Access also passes `limits`.
 - **`dbOAuthStore` prunes expired rows** on a write, at most once a minute, besides when it is made.
 - **`limits`** (default `false`: none) counts per address, read by `addressOf` from `address` (default the app's
-  `createAgentApi({ address })`; IPv6 by its /64). Past a limit: 429 with `Retry-After` (JSON
+  `createAgentApi({ address })`). A named source counts a global IPv6 address by its /64; with none named, the
+  `'headers'` read takes the address as sent, each IPv6 address on its own. Past a limit: 429 with `Retry-After` (JSON
   `too_many_requests`, a page at authorize). A request whose `owner(c)` answers (the owner signed in) is never counted.
 
 | Endpoint | Limit per address |
@@ -280,10 +281,11 @@ const oauth = createOAuth({
 
 - Only a miss counts at the token endpoint, and only a miss is refused, so a right code or refresh token is never
   turned away by other people's junk, and a device polling (`authorization_pending`, `slow_down`) counts nothing.
-- On Workers pass `dbGuardStore(db)`, so every isolate shares the counts. Name the address the proxy in front writes
-  (`AddressTrust`, core's README): the default read takes `cf-connecting-ip` or `x-forwarded-for` as sent, which a
-  caller can set to anything, and where the named source is missing every caller shares the single `local` bucket,
-  which anyone can fill.
+- On Workers pass `dbGuardStore(db)`, so every isolate shares the counts, and `address: { header: 'cf-connecting-ip' }`
+  (`AddressTrust`, core's README; behind another proxy, the header it writes): the default read takes
+  `cf-connecting-ip` or `x-forwarded-for` as sent, which a caller can set to anything, without the /64 grouping, so
+  one IPv6 host gets a bucket per address. Where the named source is missing every caller shares the single `local`
+  bucket, which anyone can fill.
 
 ## Callers, grants and revoking
 

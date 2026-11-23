@@ -223,11 +223,12 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   A registration no sign-in has used lives a week (its first code exchanged or device token collected gives it a
   year), and unused registrations and open consent tickets are capped (10 000 each by default; past it the oldest
   goes), so rows written without auth stay bounded; the database store prunes expired rows on a write, at most once a
-  minute. `limits` counts per address, read as §9 says (IPv6 by /64): registration and `/agent/identity` 20 an hour
-  together, device authorization 20 an hour, the sign-in page 60 a minute, token-endpoint misses 30 a minute, counted
-  after the lookup so a right code is never refused; the owner is never counted; past a limit, 429 with
-  `Retry-After`. The limits live in the kit because `oauth.mount` runs inside `createAgentApi`, before any app
-  middleware.
+  minute. `limits` counts per address, read as §9 says: a named source counts IPv6 by its /64, while the default
+  `'headers'` read takes the address as sent, so a Workers app passes `address: { header: 'cf-connecting-ip' }`.
+  Registration and `/agent/identity` 20 an hour together, device authorization 20 an hour, the sign-in page 60 a
+  minute, token-endpoint misses 30 a minute, counted after the lookup so a right code is never refused; the owner is
+  never counted; past a limit, 429 with `Retry-After`. The limits live in the kit because `oauth.mount` runs inside
+  `createAgentApi`, before any app middleware.
 
 ## 8. Caching
 
