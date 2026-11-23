@@ -45,19 +45,21 @@ export type SignInGrant = {
 export const LOOPBACK = ['localhost', '127.0.0.1', '[::1]']
 const NONCE = /^[\w-]{32,64}$/
 
-const secure = (c: Context) => originOf(c).startsWith('https:')
 /** `__Host-oauth_ticket` on https (no sibling host can set it), `oauth_ticket` on http. */
-const cookieName = (c: Context) => (secure(c) ? '__Host-oauth_ticket' : 'oauth_ticket')
+const cookieName = (origin: string) => (origin.startsWith('https:') ? '__Host-oauth_ticket' : 'oauth_ticket')
 
-/** The ticket nonce this browser holds, when it sent a well-formed one under this origin's cookie name. @example const nonce = nonceOf(c) ?? newNonce() */
-export const nonceOf = (c: Context) => {
-  const value = getCookie(c, cookieName(c))
+/**
+ * The ticket nonce this browser holds, when it sent a well-formed one under the cookie name of `origin` (the issuer;
+ * default the request's). @example const nonce = nonceOf(c) ?? newNonce()
+ */
+export const nonceOf = (c: Context, origin = originOf(c)) => {
+  const value = getCookie(c, cookieName(origin))
   return value && NONCE.test(value) ? value : null
 }
 
-/** The `Set-Cookie` line binding tickets to this browser for `seconds`. @example page.headers.append('set-cookie', ticketCookie(c, nonce, 600)) */
-export const ticketCookie = (c: Context, nonce: string, seconds: number) =>
-  `${cookieName(c)}=${nonce}; Max-Age=${seconds}; Path=/; HttpOnly; SameSite=Lax${secure(c) ? '; Secure' : ''}`
+/** The `Set-Cookie` line binding tickets to this browser for `seconds`, named for `origin`. @example page.headers.append('set-cookie', ticketCookie(c, nonce, 600)) */
+export const ticketCookie = (c: Context, nonce: string, seconds: number, origin = originOf(c)) =>
+  `${cookieName(origin)}=${nonce}; Max-Age=${seconds}; Path=/; HttpOnly; SameSite=Lax${origin.startsWith('https:') ? '; Secure' : ''}`
 
 /**
  * Whether a POST came from this origin's own page: `Sec-Fetch-Site: same-origin`, or with no such header an `Origin`

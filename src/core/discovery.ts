@@ -129,14 +129,14 @@ export const robotsTxt = ({ contentSignal = {}, crawl = false, sitemap, private:
 export const sitemapXml = (origin: string, paths: string[]) =>
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${paths.map((path) => `  <url><loc>${origin}${path.replace(/&/g, '&amp;')}</loc></url>`).join('\n')}\n</urlset>\n`
 
-/** `/.well-known/poppy.json` (Personal Agent Protocol draft 0.3, section 3): this origin is the organization and the issuer. */
-export const poppyJson = (origin: string, { name, apis = [], protocols = [], scopes }: NonNullable<DiscoveryConfig['poppy']>, withIssuer: boolean) => ({
+/** `/.well-known/poppy.json` (Personal Agent Protocol draft 0.3, section 3): this origin is the organization and, unless `issuer` names the OAuth server's fixed one, the issuer. */
+export const poppyJson = (origin: string, { name, apis = [], protocols = [], scopes }: NonNullable<DiscoveryConfig['poppy']>, withIssuer: boolean, issuer = origin) => ({
   protocol_version: '0.3',
   organization: { name, domain: new URL(origin).hostname },
   ...(withIssuer
     ? {
         auth: {
-          issuer: origin,
+          issuer,
           ...(scopes
             ? {
                 scopes: Object.fromEntries(Object.entries(scopes).map(([scope, one]) => [scope, one.description])),

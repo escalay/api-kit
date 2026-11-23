@@ -4,9 +4,10 @@ import { mkdtemp } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { SignJWT, importJWK } from 'jose'
+import { SignJWT, decodeJwt, importJWK } from 'jose'
+import { count, eq } from 'drizzle-orm'
 import type { Context } from 'hono'
-import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryOAuthStore, memoryStore, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
+import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryGuardStore, memoryOAuthStore, memoryStore, oauthKeys, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
 import { ASSETS } from './brand-fixture.js'
 import { approveSignIn } from '../src/testing/index.js'
 import { approvedCode, audOf, authorizeQuery, browserOf, callerWith, formWithTwoResources, joinApp, oauthApp, oauthStoreContract, refreshWith, registered, signedIn, ticketIn, typeClaim } from './oauth-store-contract.js'
@@ -1341,6 +1342,259 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
         for (const absent of ['<link rel="icon"', 'theme-color', '<img', '--accent', 'tracker.example.test']) expect(html, name).not.toContain(absent)
       }
     })
+  })
+})
+
+describe('OAuth open endpoints: one public origin, lifetimes, caps and limits for sign-ins by anyone', () => {
+  const PUBLIC = 'https://sample.example.test'
+  const FORGED = { 'x-forwarded-host': 'elsewhere.example.test', 'x-forwarded-proto': 'https' }
+  const REDIRECT = 'http://localhost:7777/cb'
+  const VERIFIER = 'v'.repeat(43)
+  const DAY = 24 * 3600
+  const DEVICE = 'urn:ietf:params:oauth:grant-type:device_code'
+  const nowSeconds = () => Math.floor(Date.now() / 1000)
+  afterEach(() => vi.useRealTimers())
+  // Only Date moves: jose and the stores read it, and async crypto keeps working
+  const clock = () => {
+    let at = Date.now()
+    vi.useFakeTimers({ toFake: ['Date'], now: at })
+    return (seconds: number) => vi.setSystemTime((at += seconds * 1000))
+  }
+  type App = Awaited<ReturnType<typeof oauthApp>>['app']
+  const ownerForm = { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' }
+  /** A device client the owner approved, its first token collected. */
+  const deviceSignedIn = async (app: App) => {
+    const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [DEVICE] }))).json()
+    const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+    await app.request('/oauth/device', { ...form({ user_code, decision: 'allow' }), headers: ownerForm })
+    expect((await app.request('/oauth/token', form({ grant_type: DEVICE, device_code, client_id }))).status).toBe(200)
+    return client_id as string
+  }
+  const authorizePage = (app: App, client_id: string, headers: Record<string, string> = {}) => app.request(`/oauth/authorize?${authorizeQuery(client_id)}`, { headers: { 'x-test-owner': OWNER, ...headers } })
+  const deviceStart = (app: App, client_id: string, headers: Record<string, string> = {}) => app.request('/oauth/device_authorization', { ...form({ client_id }), headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers } })
+  const register = (app: App, headers: Record<string, string> = {}) => app.request('/oauth/register', json({ client_name: 'Sample', redirect_uris: [REDIRECT] }, headers))
+
+  it('a forged x-forwarded-host changes no document, iss or check when publicOrigin is set', async () => {
+    const store = memoryOAuthStore()
+    const { app } = await oauthApp(store, { publicOrigin: PUBLIC })
+    for (const headers of [{}, FORGED]) {
+      const as = await app.request('/.well-known/oauth-authorization-server', { headers })
+      expect(as.headers.get('cache-control')).toBe('public, max-age=300')
+      expect(await as.json()).toMatchObject({ issuer: PUBLIC, token_endpoint: `${PUBLIC}/oauth/token`, protected_resources: [PUBLIC, `${PUBLIC}/mcp`], agent_auth: { skill: `${PUBLIC}/auth.md` } })
+      const prm = await app.request('/.well-known/oauth-protected-resource/mcp', { headers })
+      expect(prm.headers.get('cache-control')).toBe('public, max-age=300')
+      expect(await prm.json()).toMatchObject({ resource: `${PUBLIC}/mcp`, authorization_servers: [PUBLIC] })
+      const md = await app.request('/auth.md', { headers })
+      expect(md.headers.get('cache-control')).toBe('public, max-age=300')
+      const text = await md.text()
+      expect(text).toContain(`${PUBLIC}/oauth/register`)
+      expect(text).not.toContain('elsewhere.example.test')
+      expect((await app.request('/api/v1/things', { headers })).headers.get('www-authenticate')).toContain(`resource_metadata="${PUBLIC}/.well-known/oauth-protected-resource"`)
+    }
+
+    // A sign-in made through the forged host: the resource is checked against the public origin, and iss is it
+    const signIn = async (resource: string) => {
+      const client_id = await registered(app)
+      const answer = await approveSignIn(app, authorizeQuery(client_id, { resource }), { headers: { ...FORGED, 'x-test-owner': OWNER } })
+      const back = new URL(answer.headers.get('location')!)
+      expect(back.searchParams.get('iss')).toBe(PUBLIC)
+      const exchanged = await app.request('/oauth/token', { ...form({ grant_type: 'authorization_code', code: back.searchParams.get('code')!, client_id, redirect_uri: REDIRECT, code_verifier: VERIFIER }), headers: { 'content-type': 'application/x-www-form-urlencoded', ...FORGED } })
+      return (await exchanged.json()) as { access_token: string }
+    }
+    const tokens = await signIn(`${PUBLIC}/mcp`)
+    expect(decodeJwt(tokens.access_token)).toMatchObject({ iss: PUBLIC, aud: `${PUBLIC}/mcp` })
+    // The forged host's MCP is not this server's: the grant gets the public root
+    expect(audOf((await signIn('https://elsewhere.example.test/mcp')).access_token)).toBe(PUBLIC)
+    // verify checks the issuer against the public origin, whatever host the request names
+    for (const headers of [{}, FORGED]) expect((await app.request('/api/v1/things', { headers: { ...headers, authorization: `Bearer ${tokens.access_token}` } })).status).toBe(200)
+
+    // The same-origin rule compares Origin with the public origin, never the forged host
+    const browser = browserOf(app, { ...FORGED, 'x-test-owner': OWNER })
+    const page = await browser.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)
+    expect(page.headers.get('set-cookie')).toMatch(/^__Host-oauth_ticket=.*; Secure/)
+    const ticket = ticketIn(await page.text())
+    expect((await browser.post('/oauth/authorize', { ticket, decision: 'allow' }, { origin: 'https://elsewhere.example.test' })).status).toBe(403)
+    expect((await browser.post('/oauth/authorize', { ticket, decision: 'allow' }, { origin: PUBLIC })).status).toBe(302)
+
+    // The device and claim links point at the public origin
+    const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [DEVICE] }))).json()
+    expect((await (await deviceStart(app, client_id, FORGED)).json()).verification_uri).toBe(`${PUBLIC}/oauth/device`)
+    const agent = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER }, FORGED))).json()
+    expect(agent.claim.verification_uri.startsWith(`${PUBLIC}/oauth/claim?`)).toBe(true)
+
+    // The Personal Agent Protocol document names the same issuer
+    const oauth = createOAuth({ name: 'Sample', signingKey: await generateOAuthKey(), store, owner: async () => null, publicOrigin: PUBLIC })
+    const withPoppy = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys('') }, oauth, discovery: { poppy: { name: 'Sample' } } })
+    expect((await (await withPoppy.request('/.well-known/poppy.json', { headers: FORGED })).json()).auth.issuer).toBe(PUBLIC)
+
+    // One origin, canonical, with no path
+    const keyed = { name: 'Sample', signingKey: await generateOAuthKey(), store, owner: async () => null }
+    const canonicalApp = (await oauthApp(store, { publicOrigin: 'HTTPS://Sample.Example.test:443/' })).app
+    expect(await (await canonicalApp.request('/.well-known/oauth-authorization-server')).json()).toMatchObject({ issuer: PUBLIC })
+    for (const wrong of ['https://sample.example.test/app', 'sample.example.test', 'https://sample.example.test/?x=1']) expect(() => createOAuth({ ...keyed, publicOrigin: wrong }), wrong).toThrow(/publicOrigin/)
+  })
+
+  it('without publicOrigin the metadata is no-store', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    for (const path of ['/.well-known/oauth-authorization-server', '/.well-known/oauth-authorization-server/mcp', '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp', '/auth.md'])
+      expect((await app.request(path)).headers.get('cache-control'), path).toBe('no-store')
+    // The keys name no origin, so a shared cache may keep them
+    expect((await app.request('/.well-known/jwks.json')).headers.get('cache-control')).toBe('public, max-age=300')
+  })
+
+  it('a registration never used lapses in a week; one used by a code or a device lives a year', async () => {
+    const tick = clock()
+    const store = memoryOAuthStore()
+    const { app } = await oauthApp(store)
+    const unused = await registered(app)
+    const byCode = (await signedIn(app)).client_id
+    const byDevice = await deviceSignedIn(app)
+    // A client registered before registrations lapsed: no `used` flag, a year's life
+    await store.put('client', 'client_before', { name: 'Before', redirectUris: [REDIRECT] }, nowSeconds() + 365 * DAY)
+    tick(7 * DAY - 60)
+    expect((await authorizePage(app, unused)).status).toBe(200)
+    tick(120)
+    const lapsed = await authorizePage(app, unused)
+    expect(lapsed.status).toBe(400)
+    expect(await lapsed.text()).toContain('Remove this connection in your app and add it again.')
+    tick(350 * DAY)
+    expect((await authorizePage(app, byCode)).status).toBe(200)
+    expect((await deviceStart(app, byDevice)).status).toBe(200)
+    expect((await authorizePage(app, 'client_before')).status).toBe(200)
+    // A year from its first use, the used one lapses too
+    tick(15 * DAY)
+    expect((await authorizePage(app, byCode)).status).toBe(400)
+  })
+
+  it('past the cap a new registration evicts the oldest unused one', async () => {
+    const tick = clock()
+    const store = memoryOAuthStore()
+    const { app } = await oauthApp(store, { maxUnusedClients: 3 })
+    const used = (await signedIn(app)).client_id
+    await store.put('client', 'client_before', { name: 'Before', redirectUris: [REDIRECT] }, nowSeconds() + 365 * DAY)
+    const ids: string[] = []
+    for (let n = 0; n < 4; n++) {
+      ids.push(await registered(app))
+      tick(1)
+    }
+    expect(await Promise.all(ids.map(async (id) => Boolean(await store.get('client', id))))).toEqual([false, true, true, true])
+    // A used client and one from before the cap are never evicted
+    expect(await store.get('client', used)).not.toBeNull()
+    expect(await store.get('client', 'client_before')).not.toBeNull()
+    expect(await (await authorizePage(app, ids[0]!)).text()).toContain('Remove this connection in your app and add it again.')
+  })
+
+  it('a burst of registrations is pruned and never stops a new one', async () => {
+    const tick = clock()
+    const db = await testDb()
+    const store = await dbOAuthStore(db)
+    const { app } = await oauthApp(store, { maxUnusedClients: 5 })
+    const rowsOf = async (kind: string) => (await db.select({ n: count() }).from(oauthKeys).where(eq(oauthKeys.kind, kind)))[0]!.n
+    for (let n = 0; n < 30; n++) expect((await register(app)).status).toBe(201)
+    expect(await rowsOf('client')).toBe(5)
+    const burst = await Promise.all(Array.from({ length: 10 }, () => register(app)))
+    expect(burst.map((answer) => answer.status)).toEqual(Array(10).fill(201))
+    expect((await register(app)).status).toBe(201)
+    expect(await rowsOf('client')).toBe(5)
+
+    // Expired rows leave the table on a write, at most once a minute
+    await store.put('code', 'stale', { used: false }, nowSeconds() + 5)
+    tick(10)
+    await register(app)
+    expect(await rowsOf('code')).toBe(1)
+    tick(60)
+    await register(app)
+    expect(await rowsOf('code')).toBe(0)
+  })
+
+  it('caps stored consent tickets like unused registrations: past the cap the oldest open one goes', async () => {
+    const tick = clock()
+    const { app } = await joinApp(memoryOAuthStore(), { maxUnusedTickets: 2 })
+    const client_id = await registered(app)
+    const opened: { browser: ReturnType<typeof browserOf>; ticket: string }[] = []
+    for (let n = 0; n < 3; n++) {
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      opened.push({ browser, ticket })
+      tick(1)
+    }
+    const join = ({ browser, ticket }: { browser: ReturnType<typeof browserOf>; ticket: string }) => browser.post('/join', { ticket, invite: 'garden-42' })
+    const evicted = await join(opened[0]!)
+    expect([evicted.status, await evicted.text()]).toEqual([400, '<p>This sign-in expired: start again from your app.</p>'])
+    expect((await join(opened[2]!)).status).toBe(302)
+    // An answered ticket is not open: it never takes a place under the cap
+    const browser = browserOf(app)
+    const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+    expect((await join(opened[1]!)).status).toBe(302)
+    expect((await join({ browser, ticket })).status).toBe(302)
+  })
+
+  it('the open endpoints are limited per trusted address, and token-endpoint junk never refuses a right code', async () => {
+    const limits = { store: memoryGuardStore(), address: { header: 'x-forwarded-for' } }
+    const { app } = await oauthApp(memoryOAuthStore(), { limits })
+    // One proxy that appends: the last value is the address
+    const from = (address: string) => ({ 'x-forwarded-for': `198.51.100.7, ${address}` })
+    const refusedFor = async (answer: Response) => {
+      expect(answer.status).toBe(429)
+      expect(Number(answer.headers.get('retry-after'))).toBeGreaterThan(0)
+      return answer
+    }
+
+    // Registrations, by /oauth/register and /agent/identity alike: 20 an hour per address
+    for (let n = 0; n < 10; n++) expect((await register(app, from('203.0.113.1'))).status).toBe(201)
+    for (let n = 0; n < 10; n++) expect((await app.request('/agent/identity', json({ type: 'anonymous' }, from('203.0.113.1')))).status).toBe(200)
+    expect((await (await refusedFor(await register(app, from('203.0.113.1')))).json()).error).toBe('too_many_requests')
+    await refusedFor(await app.request('/agent/identity', json({ type: 'anonymous' }, from('203.0.113.1'))))
+    expect((await register(app, from('203.0.113.2'))).status).toBe(201)
+    // IPv6 counts by its /64
+    for (let n = 1; n <= 20; n++) expect((await register(app, from(`2001:db8:1:2::${n}`))).status).toBe(201)
+    await refusedFor(await register(app, from('2001:db8:1:2:ffff::1')))
+    expect((await register(app, from('2001:db8:1:3::1'))).status).toBe(201)
+
+    // Device authorization: 20 an hour
+    const { client_id: device } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [DEVICE] }))).json()
+    for (let n = 0; n < 20; n++) expect((await deviceStart(app, device, from('203.0.113.3'))).status).toBe(200)
+    await refusedFor(await deviceStart(app, device, from('203.0.113.3')))
+
+    // The token endpoint counts misses only, after the lookup: 30 a minute
+    const right = await approvedCode(app)
+    const junk = (n: number) => app.request('/oauth/token', { ...form({ grant_type: 'authorization_code', code: `code_junk${n}`, client_id: right.client_id, code_verifier: VERIFIER }), headers: { 'content-type': 'application/x-www-form-urlencoded', ...from('203.0.113.4') } })
+    for (let n = 0; n < 25; n++) expect((await (await junk(n)).json()).error).toBe('invalid_grant')
+    for (let n = 0; n < 5; n++) expect((await (await app.request('/oauth/token', { ...form({ grant_type: 'refresh_token', refresh_token: `rt_junk${n}` }), headers: { 'content-type': 'application/x-www-form-urlencoded', ...from('203.0.113.4') } })).json()).error).toBe('invalid_grant')
+    await refusedFor(await junk(99))
+    const exchanged = await app.request('/oauth/token', { ...form({ grant_type: 'authorization_code', code: right.code, client_id: right.client_id, redirect_uri: REDIRECT, code_verifier: right.verifier }), headers: { 'content-type': 'application/x-www-form-urlencoded', ...from('203.0.113.4') } })
+    expect(exchanged.status).toBe(200)
+    // A pending device poll is no miss
+    const { device_code } = await (await deviceStart(app, device, from('203.0.113.5'))).json()
+    for (let n = 0; n < 35; n++) expect((await app.request('/oauth/token', { ...form({ grant_type: DEVICE, device_code, client_id: device }), headers: { 'content-type': 'application/x-www-form-urlencoded', ...from('203.0.113.5') } })).status).toBe(400)
+
+    // The sign-in page an app opens to anyone (approve): 60 a minute, then a 429 page
+    const { app: open } = await joinApp(memoryOAuthStore(), { limits: { store: memoryGuardStore(), address: { header: 'x-forwarded-for' } } })
+    const client_id = await registered(open)
+    for (let n = 0; n < 60; n++) expect((await open.request(`/oauth/authorize?${authorizeQuery(client_id)}`, { headers: from('203.0.113.6') })).status).toBe(200)
+    const page = await refusedFor(await open.request(`/oauth/authorize?${authorizeQuery(client_id)}`, { headers: from('203.0.113.6') }))
+    expect(page.headers.get('content-type')).toContain('text/html')
+    expect((await open.request(`/oauth/authorize?${authorizeQuery(client_id)}`, { headers: from('203.0.113.7') })).status).toBe(200)
+
+    // Without limits (the default), nothing is counted
+    const { app: unlimited } = await oauthApp(memoryOAuthStore())
+    for (let n = 0; n < 25; n++) expect((await register(unlimited, from('203.0.113.1'))).status).toBe(201)
+  })
+
+  it('the owner is never counted against an address bucket', async () => {
+    const { app } = await oauthApp(memoryOAuthStore(), { limits: { store: memoryGuardStore(), address: { header: 'x-forwarded-for' } } })
+    const shared = { 'x-forwarded-for': '203.0.113.8' }
+    const client_id = await registered(app)
+    // Someone on the owner's address fills its buckets
+    for (let n = 0; n < 60; n++) expect((await app.request(`/oauth/authorize?${authorizeQuery(client_id)}`, { headers: shared })).status).toBe(401)
+    expect((await app.request(`/oauth/authorize?${authorizeQuery(client_id)}`, { headers: shared })).status).toBe(429)
+    for (let n = 0; n < 20; n++) await register(app, shared)
+    expect((await register(app, shared)).status).toBe(429)
+    // The owner, signed in on that address, still signs in, registers and approves
+    for (let n = 0; n < 5; n++) expect((await authorizePage(app, client_id, shared)).status).toBe(200)
+    expect((await register(app, { ...shared, 'x-test-owner': OWNER })).status).toBe(201)
+    const approved = await approveSignIn(app, authorizeQuery(client_id), { headers: { ...shared, 'x-test-owner': OWNER } })
+    expect(approved.status).toBe(302)
   })
 })
 

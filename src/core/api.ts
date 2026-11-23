@@ -263,7 +263,7 @@ export const createAgentApi = (config: AgentApiConfig) => {
   app.get('/robots.txt', (c) => sendPublic(c, robotsTxt(config.private ? { private: true } : (config.discovery ?? {}), originOf(c)), 'text/plain; charset=utf-8'))
   const { sitemap, poppy } = config.private ? {} : (config.discovery ?? {})
   if (sitemap?.length) app.get('/sitemap.xml', (c) => sendPublic(c, sitemapXml(originOf(c), sitemap), 'application/xml; charset=utf-8'))
-  if (poppy) app.get('/.well-known/poppy.json', (c) => sendPublic(c, JSON.stringify(poppyJson(originOf(c), poppy, Boolean(config.oauth)), null, 2), 'application/json'))
+  if (poppy) app.get('/.well-known/poppy.json', (c) => sendPublic(c, JSON.stringify(poppyJson(originOf(c), poppy, Boolean(config.oauth), config.oauth?.issuerOf?.(c)), null, 2), 'application/json'))
   if (home) app.get('/', (c) => c.redirect(home === 'app' ? '/app/' : '/docs', 302))
   // The app's files are served under /app/, so the bare path is sent there too
   if (home === 'app') app.get('/app', (c) => c.redirect('/app/', 302))

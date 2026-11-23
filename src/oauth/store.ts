@@ -1,5 +1,5 @@
 /** Where the OAuth server keeps what it issued: in memory for tests, or in the app's database. */
-import { and, eq, gt, lte, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, lte, notInArray, sql } from 'drizzle-orm'
 import type { KeyValueStore } from '../core/kv.js'
 import { migrate, type Db } from '../db/index.js'
 import { OAUTH_MIGRATIONS, oauthKeys } from './schema.js'
@@ -20,6 +20,12 @@ export type OAuthStore = KeyValueStore & {
    * one caller. A row with no `used` key counts as unused. `keepUntil` keeps it at least that long (epoch seconds).
    */
   markUsed?: (kind: string, id: string, keepUntil?: number) => Promise<Record<string, unknown> | null>
+  /**
+   * Keeps the `keep` newest unused rows of a kind (`used: false`, newest by expiry, then by write) and deletes the rest:
+   * what caps unused registrations and open consent tickets. A row with no `used` key (from before) is never trimmed. A
+   * store without it is not capped.
+   */
+  trim?: (kind: string, keep: number) => Promise<void>
 }
 
 /** A store in memory, for tests and single-process scripts. */
@@ -46,13 +52,19 @@ export const memoryOAuthStore = (): OAuthStore => {
       rows.set(`${kind}:${id}`, { value, expiresAt: Math.max(row.expiresAt, keepUntil) })
       return value
     },
+    trim: async (kind, keep) => {
+      // The map keeps write order: among rows that expire together, the later one is the newer
+      const unused = [...rows].map(([key, row], order) => ({ key, row, order })).filter(({ key, row }) => key.startsWith(`${kind}:`) && row.value.used === false)
+      unused.sort((a, b) => b.row.expiresAt - a.row.expiresAt || b.order - a.order)
+      for (const { key } of unused.slice(keep)) rows.delete(key)
+    },
   }
 }
 
 /**
  * A store in the app's database (`openDb`), so issued tokens survive a restart and ride along in the app's backup.
- * Migrates its `oauth` table and drops expired rows when made. `take` and `markUsed` are one statement each, on
- * node:sqlite and D1 alike.
+ * Migrates its `oauth` table and drops expired rows when made, then on a write at most once a minute. `take`,
+ * `markUsed` and `trim` are one statement each, on node:sqlite and D1 alike.
  *
  * @example
  * const store = await dbOAuthStore(await openDb(`file:${join(env.STATE_DIR, 'state.sqlite')}`))
@@ -60,6 +72,13 @@ export const memoryOAuthStore = (): OAuthStore => {
 export const dbOAuthStore = async (db: Db): Promise<OAuthStore> => {
   await migrate(db, 'oauth', OAUTH_MIGRATIONS)
   await db.delete(oauthKeys).where(lte(oauthKeys.expiresAt, now()))
+  // Set before each delete runs, so writes arriving together prune once
+  let prunedAt = now()
+  const prune = async () => {
+    if (now() - prunedAt < 60) return
+    prunedAt = now()
+    await db.delete(oauthKeys).where(lte(oauthKeys.expiresAt, prunedAt))
+  }
   const at = (kind: string, id: string) => and(eq(oauthKeys.kind, kind), eq(oauthKeys.id, id))
   const liveAt = (kind: string, id: string) => and(at(kind, id), gt(oauthKeys.expiresAt, now()))
   return {
@@ -67,7 +86,10 @@ export const dbOAuthStore = async (db: Db): Promise<OAuthStore> => {
       const [row] = await db.select({ value: oauthKeys.value }).from(oauthKeys).where(liveAt(kind, id))
       return row ? JSON.parse(row.value) : null
     },
-    put: async (kind, id, value, expiresAt) => void (await db.insert(oauthKeys).values({ kind, id, value: JSON.stringify(value), expiresAt }).onConflictDoUpdate({ target: [oauthKeys.kind, oauthKeys.id], set: { value: JSON.stringify(value), expiresAt } })),
+    put: async (kind, id, value, expiresAt) => {
+      await prune()
+      await db.insert(oauthKeys).values({ kind, id, value: JSON.stringify(value), expiresAt }).onConflictDoUpdate({ target: [oauthKeys.kind, oauthKeys.id], set: { value: JSON.stringify(value), expiresAt } })
+    },
     delete: async (kind, id) => void (await db.delete(oauthKeys).where(at(kind, id))),
     take: async (kind, id) => {
       const [row] = await db.delete(oauthKeys).where(liveAt(kind, id)).returning({ value: oauthKeys.value })
@@ -80,6 +102,12 @@ export const dbOAuthStore = async (db: Db): Promise<OAuthStore> => {
         .where(and(liveAt(kind, id), sql`coalesce(json_extract(${oauthKeys.value}, '$.used'), 0) = 0`))
         .returning({ value: oauthKeys.value })
       return row ? JSON.parse(row.value) : null
+    },
+    trim: async (kind, keep) => {
+      // Strictly false: a row with no `used` key is from before, and NULL = 0 is never true
+      const unused = and(eq(oauthKeys.kind, kind), sql`json_extract(${oauthKeys.value}, '$.used') = 0`)
+      const kept = db.select({ id: oauthKeys.id }).from(oauthKeys).where(unused).orderBy(desc(oauthKeys.expiresAt), sql`rowid desc`).limit(keep)
+      await db.delete(oauthKeys).where(and(unused, notInArray(oauthKeys.id, kept)))
     },
   }
 }

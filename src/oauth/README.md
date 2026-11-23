@@ -200,7 +200,9 @@ app.post('/join', async (c) => {
 - In Access, `/oauth/authorize` may bypass the sign-in once the app passes `approve`: the app's page decides. Keep it
   gated otherwise. A ticket is stored only when a page holds it: the app's, or the kit's shown to the owner. A visit
   `approve` sends to the owner's sign-in stores nothing; one the app's page answers stores a 10-minute row, as an open
-  `/oauth/register` stores a client.
+  `/oauth/register` stores a client. An app whose sign-in is reachable outside Access passes `publicOrigin` and
+  `limits` (below): `oauth.mount` runs inside `createAgentApi`, before any middleware the app adds, so the app can't
+  limit these endpoints itself.
 - With `onGrant` set, a claimed agent's identity assertion (jwt-bearer) works only once its claim was collected and
   heard, so an anonymous agent can't skip `onGrant` with the assertion it got at registration.
 - Every page the kit shows (consent, device, claim, errors) carries the app's brand when it has one
@@ -220,6 +222,56 @@ import { approveSignIn } from './kit/testing/index.js'
 const answer = await approveSignIn(app, { response_type: 'code', client_id, redirect_uri, code_challenge, code_challenge_method: 'S256' }, { headers: { 'x-test-owner': 'owner@example.test' } })
 const code = new URL(answer.headers.get('location')!).searchParams.get('code')
 ```
+
+## Open endpoints: one origin, lifetimes, caps and limits
+
+Registration, device authorization, `/agent/identity`, the token endpoint and, with `approve`, `/oauth/authorize` answer
+anyone and write rows without auth. Once people other than the owner sign in, they are a public surface:
+
+```ts
+const oauth = createOAuth({
+  …,
+  publicOrigin: 'https://sample.example.test',                                  // the only origin it names or checks
+  limits: { store: await dbGuardStore(db), address: { header: 'cf-connecting-ip' } },   // per address, never the owner
+})
+```
+
+- **`publicOrigin`** is the one origin of the issuer, every token's `iss` (and `verify`'s check of it), every metadata
+  document, auth.md, the 401's `resource_metadata`, the device and claim links, `rootOf` (so the resource check and
+  the root audience), the same-origin rule on every approval POST, the ticket cookie's name, and `poppy.json`'s issuer.
+  A forged `X-Forwarded-Host` then changes nothing, and the metadata and auth.md are cached publicly (`public,
+  max-age=300`). Unset, each request's own origin is used, forwarded host included, and those documents are
+  `no-store`, so a forged host can't reach a shared cache. HAL links and the rest of discovery keep the request's
+  origin. It must be an origin with no path (`createOAuth` throws otherwise), and it must be the origin tokens were
+  issued under: setting one that differs signs everyone out, since their tokens' `iss` no longer matches.
+- **A registration no sign-in has used lives a week** (`/oauth/register`; long enough for an invite of a day, with
+  room). Its first use (a code exchanged, a device token collected) gives it a year from then. One that lapses meets
+  the page that says to remove the connection in the app and add it again (a client never hears `invalid_client` at
+  `/oauth/authorize`), and `invalid_client` at `/oauth/device_authorization`. A client registered before this version
+  has no `used` flag and keeps its year. An agent's `/agent/identity` registration lives a day, as before.
+- **Unused registrations are capped** (`maxUnusedClients`, default 10 000): past it, a new registration evicts the
+  oldest unused one, so the table stays bounded whatever the addresses. A used client, or one from before, is never
+  evicted. **Open consent tickets are capped the same way** (`maxUnusedTickets`, default 10 000): an answered ticket
+  takes no place. The cap needs the store's `trim` (`dbOAuthStore` and `memoryOAuthStore` have it); a store without it
+  is not capped.
+- **`dbOAuthStore` prunes expired rows** on a write, at most once a minute, besides when it is made.
+- **`limits`** (default `false`: none) counts per address, read by `addressOf` from `address` (default the app's
+  `createAgentApi({ address })`; IPv6 by its /64). Past a limit: 429 with `Retry-After` (JSON
+  `too_many_requests`, a page at authorize). A request whose `owner(c)` answers (the owner signed in) is never counted.
+
+| Endpoint | Limit per address |
+|---|---|
+| `POST /oauth/register` and `POST /agent/identity`, together | 20 an hour |
+| `POST /oauth/device_authorization` | 20 an hour |
+| `GET /oauth/authorize` | 60 a minute |
+| `POST /oauth/token`: misses only (`invalid_grant`, `invalid_client`), counted after the lookup | 30 a minute |
+
+- Only a miss counts at the token endpoint, and only a miss is refused, so a right code or refresh token is never
+  turned away by other people's junk, and a device polling (`authorization_pending`, `slow_down`) counts nothing.
+- On Workers pass `dbGuardStore(db)`, so every isolate shares the counts. Name the address the proxy in front writes
+  (`AddressTrust`, core's README): the default read takes `cf-connecting-ip` or `x-forwarded-for` as sent, which a
+  caller can set to anything, and where the named source is missing every caller shares the single `local` bucket,
+  which anyone can fill.
 
 ## Callers, grants and revoking
 
@@ -261,7 +313,7 @@ a write there could reset a successor already used.
 |---|---|
 | `index.ts` | `createOAuth` (the server; `revokeClient` is the owner's kill switch; `rootOf`, `resourceOf` and `mcpPath` as it reads them; `ticketOf`, `answeredOf` and `complete` for the app's own sign-in page), `generateOAuthKey` (a new signing key) |
 | `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`; the ticket cookie and the same-origin rule |
-| `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take` and `markUsed`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start), `memoryOAuthStore` |
+| `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take`, `markUsed` and `trim`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start, then on a write at most once a minute), `memoryOAuthStore` |
 | `schema.ts` | the `oauth` table and `OAUTH_MIGRATIONS` |
 
 ## Rules
@@ -302,6 +354,7 @@ a write there could reset a successor already used.
   `/oauth/device_authorization` bypasses it. Name the path exactly: an Access path without `*` covers only itself, while
   `/oauth/device*` would also gate `/oauth/device_authorization` and break every device.
 - Keep the OAuth paths open (`OAUTH_OPEN_PATHS`); `createAgentApi` does it when `oauth` is set, private mode included.
+- An app whose sign-in is reachable outside Access passes `publicOrigin` and `limits`.
 - Standard: `docs/STANDARD.md` §7 (audiences there too) and §11.
 
 ## Upgrading to grants
@@ -380,3 +433,19 @@ on by itself once the app has one). Defaults that change when an app takes this 
 - With `onGrant` set, a claimed agent's identity assertion (jwt-bearer) is refused until its claim token was collected
   and heard. An agent claimed before the app set `onGrant` keeps its refresh tokens; its assertion (a day at most) is
   refused, so it refreshes or registers again.
+
+## Upgrading to open sign-in
+
+New, off unless set: `publicOrigin`, `limits`, `maxUnusedClients` and `maxUnusedTickets` (both default 10 000), and
+the store's `trim`. Defaults that change when an app takes this version:
+
+- **Without `publicOrigin`, the metadata and auth.md are `no-store`** (before, `public, max-age=300`): a forged
+  `X-Forwarded-Host` could have put another origin's documents in a shared cache. A client fetches them once more per
+  connection. Set `publicOrigin` to cache them again.
+- **A registration left unused for a week lapses** (before, every registration lived a year): the client registers
+  again, and a person who opens its sign-in link meets the "add it again" page. Its first sign-in gives it a year.
+  Registrations from before keep their year.
+- **Unused registrations are capped at 10 000**, and so are open consent tickets: past it the oldest goes.
+- `dbOAuthStore` prunes expired rows while it runs, at most once a minute.
+
+Nothing else changes until the app passes `publicOrigin` or `limits`.

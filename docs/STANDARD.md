@@ -212,6 +212,18 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
     `accepts`): MCP tools call `/api` in-process with the same bearer, so the token for the single MCP must fit the
     whole origin, path-scoped resources included. An app that wants otherwise refuses it in its own `accepts`, as for
     the root.
+- **Open endpoints (`publicOrigin`, `limits`):** an app whose sign-in is reachable outside Access passes
+  `publicOrigin` and `limits`. `publicOrigin` is the only origin the issuer, `iss`, every metadata document, auth.md,
+  the 401's pointer, the resource's origin check, the root audience and the same-origin rule use, so a forged
+  `X-Forwarded-Host` changes none of them; without it the metadata and auth.md are `no-store`, never cached publicly.
+  A registration no sign-in has used lives a week (its first code exchanged or device token collected gives it a
+  year), and unused registrations and open consent tickets are capped (10 000 each by default; past it the oldest
+  goes), so rows written without auth stay bounded; the database store prunes expired rows on a write, at most once a
+  minute. `limits` counts per address, read as §9 says (IPv6 by /64): registration and `/agent/identity` 20 an hour
+  together, device authorization 20 an hour, the sign-in page 60 a minute, token-endpoint misses 30 a minute, counted
+  after the lookup so a right code is never refused; the owner is never counted; past a limit, 429 with
+  `Retry-After`. The limits live in the kit because `oauth.mount` runs inside `createAgentApi`, before any app
+  middleware.
 
 ## 8. Caching
 
@@ -220,7 +232,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 - `Cache-Control`: API `private, no-cache`; media `private, max-age=86400, immutable`; guides and OpenAPI
   `private, max-age=300`; any error `no-store`. **Anything behind auth is `private`, never `public`**: a CDN in front
   (Cloudflare caches `.png`, `.jpg`, `.svg` by extension) would otherwise serve it to anyone. Only discovery files and the
-  front door's own page assets are `public`.
+  front door's own page assets are `public`, and the OAuth metadata and auth.md only with `publicOrigin` (§7).
 
 ## 9. Cost and slow work
 

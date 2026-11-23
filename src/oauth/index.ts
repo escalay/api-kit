@@ -22,6 +22,10 @@
  * Every grant is bound to an audience (RFC 8707): the resource the client asked for at the authorization request when
  * this server issues for it, else the root (the issuer's origin). It never changes on refresh, and a grant from before
  * audiences never gains one. `accepts` judges whether a token's audience fits a request.
+ * The endpoints anyone may call stay bounded: `publicOrigin` fixes the one origin every document, token and check
+ * names; a registration no sign-in has used lives a week and unused ones are capped, as are open consent tickets; and
+ * `limits` counts registrations, device authorizations, sign-in pages and token misses per address. Rules after
+ * cloudflare/workers-oauth-provider (MIT): a registration's life starts again when it is first used.
  *
  * @example
  * const oauth = createOAuth({ name: 'Cookbook', signingKey: env.OAUTH_SIGNING_KEY, store, owner: (c) => ownerOf(c) })
@@ -33,6 +37,7 @@ import type { Context, Hono } from 'hono'
 import { calculateJwkThumbprint, exportJWK, importJWK, jwtVerify, SignJWT, type JWK } from 'jose'
 import { OAUTH_OPEN_PATHS, SCOPES } from '../core/auth.js'
 import { mountedOf, type AgentBrand } from '../core/discovery.js'
+import { addressOf, type AddressTrust, type GuardStore } from '../core/guards.js'
 import { originOf } from '../core/hal.js'
 import { problemResponse } from '../core/problem.js'
 import { arrivalOf, LOOPBACK, nonceOf, returnOf, sameOrigin, ticketCookie, type SignInAsk, type SignInDecision, type SignInGrant } from './approval.js'
@@ -47,6 +52,17 @@ const ACCESS_TTL = HOUR
 const CODE_TTL = 600
 const REFRESH_TTL = 30 * 24 * HOUR
 const CLIENT_TTL = 365 * 24 * HOUR
+/** A registration no sign-in has used yet: long enough for an invite of a day, with room. Its first use gives it CLIENT_TTL. */
+const UNUSED_CLIENT_TTL = 7 * 24 * HOUR
+/** Unused registrations and open consent tickets kept at most, by default: past it the oldest goes. */
+const MAX_UNUSED = 10_000
+/** What `limits` allows per address on the open endpoints: calls per window (seconds). */
+const LIMITS = {
+  register: { limit: 20, window: HOUR },
+  device: { limit: 20, window: HOUR },
+  authorize: { limit: 60, window: 60 },
+  token: { limit: 30, window: 60 },
+} as const
 const REGISTRATION_TTL = 24 * HOUR
 const CLAIM_TTL = 600
 const CLAIM_GRANT = 'urn:workos:agent-auth:grant-type:claim'
@@ -94,6 +110,29 @@ export type OAuthConfig = {
   brand?: AgentBrand
   /** Emails allowed to claim an agent registration; empty means whoever `owner` lets in. */
   owners?: string[]
+  /**
+   * The one origin of the issuer, `iss`, the metadata, auth.md, the 401's pointer, the resource check and the
+   * same-origin rule (`https://sample.example.test`). Unset, each request's own origin is used, forwarded host
+   * included, so the metadata and auth.md are `no-store` rather than cached publicly. An app whose sign-in is reachable
+   * outside Access sets it.
+   *
+   * @example
+   * publicOrigin: env.PUBLIC_ORIGIN   // 'https://sample.example.test'
+   */
+  publicOrigin?: string
+  /**
+   * Per-address limits on the endpoints anyone may call (registration, device authorization, the sign-in page, token
+   * misses), counted in `store` and read with `addressOf` (`address`, default the app's). The owner is never counted.
+   * Default false: none.
+   *
+   * @example
+   * limits: { store: await dbGuardStore(db), address: { header: 'cf-connecting-ip' } }
+   */
+  limits?: { store: GuardStore; address?: AddressTrust } | false
+  /** Registrations no sign-in has used yet, kept at most (default 10 000): past it a new one evicts the oldest. */
+  maxUnusedClients?: number
+  /** Consent tickets stored and not yet answered, kept at most (default 10 000): past it a new one evicts the oldest. */
+  maxUnusedTickets?: number
   /** Extra fields for the authorization server metadata, e.g. `poppy_domains`. */
   metadata?: Record<string, unknown>
   /**
@@ -232,6 +271,10 @@ const oauthError = (c: Context, status: 400 | 401 | 403 | 410 | 429, error: stri
 
 export const createOAuth = (config: OAuthConfig) => {
   const { store } = config
+  const publicOrigin = config.publicOrigin === undefined ? undefined : (canonical(config.publicOrigin) ?? '')
+  if (publicOrigin !== undefined && (!publicOrigin || pathOf(publicOrigin))) throw new Error(`createOAuth: publicOrigin must be an origin with no path, query or fragment (https://sample.example.test), not ${config.publicOrigin}.`)
+  /** The issuer's origin: `publicOrigin`, else the request's own. */
+  const issuerOf = (c: Context) => publicOrigin ?? originOf(c)
   const jwk = JSON.parse(config.signingKey) as JWK
   // A secret of its own, from the signing key: successors are derived, so a retry gets the same one and none is stored
   const successorSecret = createHash('sha256').update(`api-kit refresh successor\0${jwk.d ?? config.signingKey}`).digest()
@@ -283,6 +326,27 @@ export const createOAuth = (config: OAuthConfig) => {
     return value
   }
 
+  /**
+   * Writes a row that waits to be used (a registration, a ticket), evicting the oldest unused past `max` first, so the
+   * table stays bounded whoever writes. Before the write: rows written in the same second tie, and the new one never goes.
+   */
+  const putUnused = async (kind: string, id: string, value: Record<string, unknown>, expiresAt: number, max = MAX_UNUSED) => {
+    await store.trim?.(kind, Math.max(0, max - 1))
+    await store.put(kind, id, { ...value, used: false }, expiresAt)
+  }
+
+  /** A registration's first sign-in: it lives a year from now. Conditional, so a client revoked meanwhile stays gone. */
+  const usedClient = (client: string) => markUsed('client', client, now() + CLIENT_TTL)
+
+  /** Past its limit at this address: the seconds until the window ends; null within it, without `limits`, or for the owner. */
+  const overLimit = async (c: Context, policy: keyof typeof LIMITS) => {
+    if (!config.limits || (await config.owner(c))) return null
+    const { limit, window } = LIMITS[policy]
+    const at = Date.now()
+    const counted = await config.limits.store.count(`oauth-${policy} ip:${addressOf(c, config.limits.address)}`, window * 1000, at)
+    return counted.used > limit ? Math.max(1, Math.ceil((counted.start + window * 1000 - at) / 1000)) : null
+  }
+
   /** Ends one approval at once: its access tokens fail `verify`, its refresh tokens are refused. */
   const revokeGrant = (grant: string) => store.put('revoked-family', grant, {}, now() + REVOKED_TTL)
 
@@ -299,7 +363,7 @@ export const createOAuth = (config: OAuthConfig) => {
     const brand = brandOf()
     const accent = brand?.accent && /^#[0-9a-f]{6}$/i.test(brand.accent) ? `:root{--accent:${brand.accent}}button{background:var(--accent);color:#fff}` : ''
     const mark = brand ? `<header style="display:flex;align-items:center;gap:10px;margin:0 0 20px"><img src="/icon.svg" alt="" width="32" height="32"><span>${escape(brand.title)}</span></header>` : ''
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="same-origin"><title>${escape(title)}</title>${brand ? brand.headTags(originOf(c)) : ''}
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="same-origin"><title>${escape(title)}</title>${brand ? brand.headTags(issuerOf(c)) : ''}
 <style>:root{color-scheme:light dark;--bg:#fafaf9;--fg:#111;--muted:#ececeb;--mfg:#6b6b6b}@media(prefers-color-scheme:dark){:root{--bg:#0b0b0b;--fg:#f2f2f2;--muted:#1c1c1c;--mfg:#9a9a9a}}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 Inter,ui-sans-serif,system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:16px}
 main{max-width:28rem;width:100%;background:var(--muted);border-radius:12px;padding:28px}h1{font-size:20px;font-weight:400;letter-spacing:-.01em;margin:0 0 8px}p{color:var(--mfg);margin:0 0 16px}
@@ -309,7 +373,7 @@ input{background:var(--bg);color:var(--fg);letter-spacing:.3em;width:9ch;text-al
 
   const mcpPath = config.mcpPath ?? '/mcp'
   /** The root resource: the issuer's origin in canonical form, what a grant gets when no resource it issues for was asked. */
-  const rootOf = (c: Context) => canonical(originOf(c)) ?? originOf(c)
+  const rootOf = (c: Context) => publicOrigin ?? canonical(originOf(c)) ?? originOf(c)
   const resourceOf = config.resourceOf ?? ((c: Context) => rootOf(c) + (c.req.path === mcpPath || c.req.path.startsWith(`${mcpPath}/`) ? mcpPath : ''))
   /** Whether this server issues for a canonical resource: the root and MCP always, others when `resources` says so, on this origin only. */
   const issues = (root: string, resource: string) =>
@@ -340,12 +404,12 @@ input{background:var(--bg);color:var(--fg);letter-spacing:.3em;width:9ch;text-al
   const accepts = config.accepts ?? defaultAccepts
 
   /** The protected-resource metadata URL for a request: the one for the resource it is for (RFC 9728 §3.3). */
-  const resourceMetadataFor = (c: Context) => `${originOf(c)}/.well-known/oauth-protected-resource${pathOf(resourceOf(c))}`
+  const resourceMetadataFor = (c: Context) => `${issuerOf(c)}/.well-known/oauth-protected-resource${pathOf(resourceOf(c))}`
 
   /** An access token → its caller, a sentence when `accepts` refuses it here, or null (expired, revoked, or not ours). */
   const verify = async (jwt: string, c: Context): Promise<TokenCaller | { refused: string } | null> => {
     const { publicKey } = await ready
-    const origin = originOf(c)
+    const origin = issuerOf(c)
     const { payload } = await jwtVerify(jwt, publicKey, { issuer: origin, algorithms: ['ES256'] }).catch(() => ({ payload: null }))
     if (!payload || typeof payload.jti !== 'string' || typeof payload.client_id !== 'string') return null
     // Tokens from before grants carry none: they run to their hour, known by their client
@@ -526,7 +590,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
   const consentOf = async (c: Context, ticket: string): Promise<Held> => {
     const row = ticket ? await store.get('consent', ticket) : null
     if (!row || typeof row.nonce !== 'string') return { gone: true }
-    const nonce = nonceOf(c)
+    const nonce = nonceOf(c, issuerOf(c))
     const mine = nonce !== null && same(sha(nonce), row.nonce)
     if (row.used) return mine ? { answered: row.answer } : { gone: true }
     if (typeof row.params !== 'object') return { gone: true }
@@ -546,7 +610,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     if ('answered' in found) return answered(c, found.answered)
     if ('foreign' in found || (owner !== undefined && found.row.owner !== owner)) return notAllowed(c)
     const { params, expiresAt, nonce } = found.row
-    const origin = originOf(c)
+    const origin = issuerOf(c)
     let approved: { checked: Checked; scopes: string[]; audience: Pick<Grant, 'audience' | 'resource'> } | undefined
     if (decision !== 'deny') {
       // Before the ticket is spent: a blank approver would mint a token with no owner
@@ -616,11 +680,39 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
 
   const mount = (app: Hono<any, any, any>) => {
     mounted = app
-    const json = (c: Context, body: unknown, type = 'application/json') => c.body(JSON.stringify(body, null, 2), 200, { 'content-type': type, 'cache-control': 'public, max-age=300', 'access-control-allow-origin': '*' })
+    if (config.limits) {
+      const tooMany = (c: Context, retry: number) =>
+        c.json({ error: 'too_many_requests', error_description: `Too many requests from this address: try again in ${retry} seconds.` }, 429, { 'cache-control': 'no-store', 'retry-after': String(retry) })
+      /** Counts a call before its route runs. */
+      const limited = (policy: keyof typeof LIMITS) => async (c: Context, next: () => Promise<void>) => {
+        const retry = await overLimit(c, policy)
+        return retry ? tooMany(c, retry) : next()
+      }
+      app.post('/oauth/register', limited('register'))
+      app.post('/agent/identity', limited('register'))
+      app.post('/oauth/device_authorization', limited('device'))
+      app.get('/oauth/authorize', async (c, next) => {
+        const retry = await overLimit(c, 'authorize')
+        if (!retry) return next()
+        return c.html(page(c, 'Too many sign-ins', '<h1>Too many sign-ins from here</h1><p>Wait a minute, then start again from the app.</p>'), 429, { 'retry-after': String(retry) })
+      })
+      // Misses only, counted after the lookup: a right code or token is never turned away by other people's junk
+      app.post('/oauth/token', async (c, next) => {
+        await next()
+        if (c.res.status !== 400) return
+        const { error } = (await c.res.clone().json().catch(() => ({}))) as { error?: string }
+        if (error !== 'invalid_grant' && error !== 'invalid_client') return
+        const retry = await overLimit(c, 'token')
+        if (retry) c.res = tooMany(c, retry)
+      })
+    }
+    // A document that names the origin is cached publicly only when the origin is fixed: a forged host must not reach a shared cache
+    const named = publicOrigin ? 'public, max-age=300' : 'no-store'
+    const json = (c: Context, body: unknown, cache = named) => c.body(JSON.stringify(body, null, 2), 200, { 'content-type': 'application/json', 'cache-control': cache, 'access-control-allow-origin': '*' })
 
-    app.get('/.well-known/oauth-authorization-server', (c) => json(c, authorizationServer(originOf(c))))
-    app.get('/.well-known/oauth-authorization-server/*', (c) => json(c, authorizationServer(originOf(c))))
-    app.get('/.well-known/oauth-protected-resource', (c) => json(c, protectedResource(originOf(c), '')))
+    app.get('/.well-known/oauth-authorization-server', (c) => json(c, authorizationServer(issuerOf(c))))
+    app.get('/.well-known/oauth-authorization-server/*', (c) => json(c, authorizationServer(issuerOf(c))))
+    app.get('/.well-known/oauth-protected-resource', (c) => json(c, protectedResource(issuerOf(c), '')))
     app.get('/.well-known/oauth-protected-resource/*', (c) => {
       const suffix = c.req.path.slice('/.well-known/oauth-protected-resource'.length)
       // With resources, never metadata for a resource no token can be granted for: it would start a flow that fails
@@ -628,10 +720,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         const resource = canonical(rootOf(c) + suffix)
         if (!resource || !issues(rootOf(c), resource)) return c.notFound()
       }
-      return json(c, protectedResource(originOf(c), suffix))
+      return json(c, protectedResource(issuerOf(c), suffix))
     })
-    app.get('/.well-known/jwks.json', async (c) => json(c, { keys: [(await ready).publicJwk] }))
-    app.get('/auth.md', (c) => c.body(authMd(originOf(c)), 200, { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'public, max-age=300' }))
+    app.get('/.well-known/jwks.json', async (c) => json(c, { keys: [(await ready).publicJwk] }, 'public, max-age=300'))
+    app.get('/auth.md', (c) => c.body(authMd(issuerOf(c)), 200, { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': named }))
 
     // RFC 7591: a public client registers itself; registering grants nothing until the owner approves a request
     app.post('/oauth/register', async (c) => {
@@ -644,7 +736,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const name = typeof body.client_name === 'string' && body.client_name.trim() ? body.client_name.trim().slice(0, 80) : 'An unnamed client'
       const clientId = token('client')
       const issuedAt = now()
-      await store.put('client', clientId, { name, redirectUris: uris }, issuedAt + CLIENT_TTL)
+      // Unused until a sign-in collects its first token: a week's life, and a place under the cap
+      await putUnused('client', clientId, { name, redirectUris: uris }, issuedAt + UNUSED_CLIENT_TTL, config.maxUnusedClients)
       const grantTypes = [...(uris.length ? ['authorization_code'] : []), 'refresh_token', ...(device ? [DEVICE_GRANT] : [])]
       return c.json({ client_id: clientId, client_id_issued_at: issuedAt, client_name: name, redirect_uris: uris, grant_types: grantTypes, response_types: uris.length ? ['code'] : [], token_endpoint_auth_method: 'none' }, 201, { 'cache-control': 'no-store' })
     })
@@ -658,7 +751,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const checked = await authorizeParams(c, params)
       if ('error' in checked) {
         // Never a redirect before a person acts when the app approves; today's redirect otherwise
-        if (!config.approve && checked.redirect && params.redirect_uri) return c.redirect(backTo(params.redirect_uri, originOf(c), { error: 'invalid_request', error_description: checked.error, state: params.state }), 302)
+        if (!config.approve && checked.redirect && params.redirect_uri) return c.redirect(backTo(params.redirect_uri, issuerOf(c), { error: 'invalid_request', error_description: checked.error, state: params.state }), 302)
         return cantApprove(c, checked.error!)
       }
       // A page, never a redirect: the resource is checked before anything is written
@@ -666,28 +759,28 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const bound = audienceFor(c, params.resource)
       if ('refused' in bound) return cantApprove(c, `${bound.refused} (invalid_target)`)
       // One nonce binds every ticket this browser opens: reused while it lives, its life renewed
-      const nonce = nonceOf(c) ?? newNonce()
+      const nonce = nonceOf(c, issuerOf(c)) ?? newNonce()
       const ticket = token('consent')
       const expiresAt = now() + CODE_TTL
       const row = { params, nonce: sha(nonce), arrival: arrivalOf(c), expiresAt }
       const bindTo = (page: Response) => {
         const bound = new Response(page.body, page)
-        bound.headers.append('set-cookie', ticketCookie(c, nonce, CODE_TTL))
+        bound.headers.append('set-cookie', ticketCookie(c, nonce, CODE_TTL, issuerOf(c)))
         return bound
       }
       if (config.approve) {
         // Stored only once a page holds the ticket: a stranger turned away leaves no row behind
         const own = await config.approve(c, askOf(ticket, row, checked, bound.audience))
         if (own) {
-          await store.put('consent', ticket, row, expiresAt)
+          await putUnused('consent', ticket, row, expiresAt, config.maxUnusedTickets)
           return bindTo(own)
         }
         const person = await config.owner(c)
         if (!person) return signInFirst(c)
-        await store.put('consent', ticket, { ...row, owner: person }, expiresAt)
+        await putUnused('consent', ticket, { ...row, owner: person }, expiresAt, config.maxUnusedTickets)
         return bindTo(consentPage(c, ticket, checked, person, bound.audience, params.redirect_uri!))
       }
-      await store.put('consent', ticket, { ...row, owner }, expiresAt)
+      await putUnused('consent', ticket, { ...row, owner }, expiresAt, config.maxUnusedTickets)
       return bindTo(consentPage(c, ticket, checked, owner!, bound.audience, params.redirect_uri!))
     })
 
@@ -706,7 +799,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if (body.type === 'identity_assertion') return oauthError(c, 400, 'issuer_not_enabled', 'Identity assertions (ID-JAG) are not accepted here: register as anonymous or service_auth.')
       if (body.type !== 'anonymous' && body.type !== 'service_auth') return oauthError(c, 400, 'invalid_request', 'Send {"type": "anonymous"} or {"type": "service_auth", "login_hint": "<email>"}.')
       if (body.type === 'service_auth' && !body.login_hint) return oauthError(c, 400, 'invalid_request', 'service_auth needs login_hint: the owner’s email.')
-      const origin = originOf(c)
+      const origin = issuerOf(c)
       const registrationId = token('reg')
       const claimToken = token('clm')
       const expires = now() + REGISTRATION_TTL
@@ -737,7 +830,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const email = (body.email ?? String(registration.email ?? '')).toLowerCase()
       if (!email) return oauthError(c, 400, 'invalid_request', 'Send email: the address of the person who will approve you.')
       if (config.owners?.length && !config.owners.map((one) => one.toLowerCase()).includes(email)) return oauthError(c, 403, 'access_denied', 'Only the owner of this service can claim an agent.')
-      const attempt = await startClaim(originOf(c), String(held.registration), email)
+      const attempt = await startClaim(issuerOf(c), String(held.registration), email)
       return c.json({ registration_id: held.registration, status: 'initiated', expires_at: new Date((now() + CLAIM_TTL) * 1000).toISOString(), claim_attempt: attempt }, 200, { 'cache-control': 'no-store' })
     })
 
@@ -791,7 +884,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if (await manyResources(c)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
       const bound = audienceFor(c, body.resource)
       if ('refused' in bound) return oauthError(c, 400, 'invalid_target', bound.refused)
-      const origin = originOf(c)
+      const origin = issuerOf(c)
       const deviceCode = token('dc')
       let userCode = deviceUserCode()
       while (await store.get('device-user', userCodeKey(userCode))) userCode = deviceUserCode()
@@ -874,7 +967,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
 
     app.post('/oauth/token', async (c) => {
       const body = await bodyOf(c)
-      const origin = originOf(c)
+      const origin = issuerOf(c)
       /** More than one resource for a row bound to one, checked before any write; a row from before audiences ignores resource altogether. */
       const manyFor = async (row: Record<string, unknown>) => typeof row.audience === 'string' && (await manyResources(c))
       /** The app's word on the first token of a grant; without `onGrant`, yes. */
@@ -907,6 +1000,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const issued = { client: String(row.client), name: String(row.name), owner: String(row.owner), scopes: row.scopes as string[], grant, ...boundOf(row) }
           // The code is spent either way: a refusal issues nothing
           if (!(await heard('code', issued, row.data))) return withdrawn()
+          await usedClient(issued.client)
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
         }
         case 'refresh_token': {
@@ -990,6 +1084,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (decision?.status === 'approved') {
             const issued = { client: String(record.client), name: String(record.name), owner: String(decision.owner), scopes: record.scopes as string[], grant: newGrant(), ...boundOf(record) }
             if (!(await heard('device', issued))) return withdrawn()
+            await usedClient(issued.client)
             return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
           }
           const interval = Number(record.interval)
@@ -1029,7 +1124,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         await store.delete('refresh', sha(value))
       }
       const { publicKey } = await ready
-      const { payload } = await jwtVerify(value, publicKey, { issuer: originOf(c), algorithms: ['ES256'] }).catch(() => ({ payload: null }))
+      const { payload } = await jwtVerify(value, publicKey, { issuer: issuerOf(c), algorithms: ['ES256'] }).catch(() => ({ payload: null }))
       if (typeof payload?.jti === 'string') await store.delete('access', payload.jti)
       return c.body(null, 200, { 'cache-control': 'no-store' })
     })
@@ -1045,7 +1140,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     await store.delete('registration', clientId)
   }
 
-  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, mcpPath, revokeGrant, revokeClient, ticketOf, answeredOf, complete, authorizationServer, protectedResource, authMd }
+  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, issuerOf, mcpPath, revokeGrant, revokeClient, ticketOf, answeredOf, complete, authorizationServer, protectedResource, authMd }
 }
 
 export type OAuth = ReturnType<typeof createOAuth>
