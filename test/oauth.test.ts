@@ -668,6 +668,27 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
     expect([page.status, await page.text()]).toEqual([400, expect.stringContaining('Send one resource')])
   })
 
+  it('refuses more than one resource, or one not sent as a string, at device_authorization and the token endpoint, before anything is written', async () => {
+    const { app } = await sampleApi()
+    const twice = (path: string, fields: Record<string, string>) =>
+      app.request(path, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `${new URLSearchParams(fields)}&resource=${encodeURIComponent(ORIGIN)}&resource=${encodeURIComponent(`${ORIGIN}/mcp`)}` })
+    const refused = async (answer: Response) => [answer.status, (await answer.json()).error]
+    const device = 'urn:ietf:params:oauth:grant-type:device_code'
+    const { client_id: deviceClient } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+    expect(await refused(await twice('/oauth/device_authorization', { client_id: deviceClient }))).toEqual([400, 'invalid_target'])
+    expect(await refused(await app.request('/oauth/device_authorization', json({ client_id: deviceClient, resource: [`${ORIGIN}/mcp`] })))).toEqual([400, 'invalid_target'])
+    const { client_id, verifier, code, exchange } = await approvedCode(app, { resource: `${ORIGIN}/mcp` })
+    const fields = { grant_type: 'authorization_code', code, client_id, code_verifier: verifier }
+    expect(await refused(await twice('/oauth/token', fields))).toEqual([400, 'invalid_target'])
+    expect(await refused(await app.request('/oauth/token', json({ ...fields, resource: [`${ORIGIN}/mcp`] })))).toEqual([400, 'invalid_target'])
+    // The code was not spent by either refusal
+    const tokens = await (await exchange({ resource: `${ORIGIN}/mcp` })).json()
+    expect(audOf(tokens.access_token)).toBe(`${ORIGIN}/mcp`)
+    expect(await refused(await twice('/oauth/token', { grant_type: 'refresh_token', refresh_token: tokens.refresh_token }))).toEqual([400, 'invalid_target'])
+    expect(await refused(await app.request('/oauth/token', json({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, resource: [`${ORIGIN}/mcp`] })))).toEqual([400, 'invalid_target'])
+    expect(audOf((await (await refreshWith(app, tokens.refresh_token, `${ORIGIN}/mcp`)).json()).access_token)).toBe(`${ORIGIN}/mcp`)
+  })
+
   it('binds a device grant to the resource asked for at device_authorization', async () => {
     const { app } = await sampleApi()
     const device = 'urn:ietf:params:oauth:grant-type:device_code'

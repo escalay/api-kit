@@ -47,7 +47,9 @@ audience. When the server chose the audience (the root), a `resource` the client
 A resource is compared in its canonical form: an absolute http(s) URL, scheme and host lower-cased, the default port
 and one trailing slash dropped (`HTTP://Example.test:443/mcp/` is `https://example.test/mcp`). A user part, a query,
 a fragment, a dot segment or an encoded dot (`%2e`) makes it no resource: `invalid_target` with `resources` set, the
-root without. More than one `resource` at authorize is a 400 page. Errors at authorize are pages, never redirects.
+root without. More than one `resource`, or one not sent as a string, is refused: a 400 page at authorize,
+`invalid_target` at `/oauth/device_authorization` and the token endpoint, before anything is written. Errors at
+authorize are pages, never redirects.
 
 An app serving several MCP resources, one per space (`/s/alpha/mcp`), passes three options:
 
@@ -204,7 +206,9 @@ Defaults that change when an app takes this version:
   `/mcp`), else the root (the origin). The default `accepts` takes the root and `/mcp` everywhere on the origin, so
   tokens work where they did. Code that reads a token's claims sees `aud`, and the caller has `resource`.
 - A token request naming a resource other than the authorization request's is `invalid_target` (before, ignored).
-- More than one `resource` at `/oauth/authorize` is a 400 page (before, the first was kept).
+- More than one `resource` at `/oauth/authorize` is a 400 page (before, the first was kept); at
+  `/oauth/device_authorization` and the token endpoint it is `invalid_target`, and so is a JSON `resource` that is not a
+  string (before, the last was kept, and a one-element array read as its string).
 - `oauth.verify` may answer `{ refused }` (a valid token `accepts` turned away), which is truthy: code calling it
   directly checks for `'refused' in answer` before treating the answer as a caller. Only an app's own `accepts` or a
   token for another resource gives one; `createAgentApi` already handles it.

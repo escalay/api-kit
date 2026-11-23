@@ -180,6 +180,15 @@ const bodyOf = async (c: Context): Promise<Record<string, string>> => {
   return Object.fromEntries(Object.entries(form).map(([key, value]) => [key, String(value)]))
 }
 
+/** Whether a body sent `resource` more than once or not as one string: RFC 8707 allows several, the kit binds one. */
+const manyResources = async (c: Context) => {
+  const type = c.req.header('content-type') ?? ''
+  const body = type.includes('application/json') ? await c.req.json().catch(() => null) : await c.req.parseBody({ all: true }).catch(() => null)
+  const resource = (body as Record<string, unknown> | null)?.resource
+  return resource !== undefined && typeof resource !== 'string'
+}
+const ONE_RESOURCE = 'Send one resource: the address the token is for.'
+
 const oauthError = (c: Context, status: 400 | 401 | 403 | 410 | 429, error: string, description: string, extra: Record<string, unknown> = {}) =>
   c.json({ error, error_description: description, ...extra }, status, { 'cache-control': 'no-store' })
 
@@ -461,7 +470,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(checked.error!)}</p>`), 400)
       }
       // A page, never a redirect: the resource is checked before anything is written
-      if ((c.req.queries('resource')?.length ?? 0) > 1) return c.html(page('Can’t approve this', '<h1>Can’t approve this request</h1><p>Send one resource: the address the token is for.</p>'), 400)
+      if ((c.req.queries('resource')?.length ?? 0) > 1) return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${ONE_RESOURCE}</p>`), 400)
       const bound = audienceFor(c, params.resource)
       if ('refused' in bound) return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(bound.refused)} (invalid_target)</p>`), 400)
       const ticket = token('consent')
@@ -583,6 +592,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if (!client) return oauthError(c, 401, 'invalid_client', 'This client is not registered here (or its registration expired). Register at /oauth/register first.')
       const scopes = (body.scope || SCOPES.join(' ')).split(' ').filter((scope) => (SCOPES as readonly string[]).includes(scope))
       if (!scopes.length) return oauthError(c, 400, 'invalid_scope', `Ask for any of: ${SCOPES.join(', ')}.`)
+      if (await manyResources(c)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
       const bound = audienceFor(c, body.resource)
       if ('refused' in bound) return oauthError(c, 400, 'invalid_target', bound.refused)
       const origin = originOf(c)
@@ -670,6 +680,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     app.post('/oauth/token', async (c) => {
       const body = await bodyOf(c)
       const origin = originOf(c)
+      // Before any grant reads or writes a row
+      if (await manyResources(c)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
       switch (body.grant_type) {
         case 'authorization_code': {
           const key = sha(body.code ?? '')
