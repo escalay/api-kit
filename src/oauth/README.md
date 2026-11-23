@@ -210,7 +210,7 @@ Defaults that change when an app takes this version:
 - A token request naming a resource other than the authorization request's is `invalid_target` (before, ignored).
 - More than one `resource` at `/oauth/authorize` is a 400 page (before, the first was kept); at
   `/oauth/device_authorization` and the token endpoint it is `invalid_target`, and so is a JSON `resource` that is not a
-  string (before, the last was kept, and a one-element array read as its string).
+  string (before, ignored).
 - `oauth.verify` may answer `{ refused }` (a valid token `accepts` turned away), which is truthy: code calling it
   directly checks for `'refused' in answer` before treating the answer as a caller. Only an app's own `accepts` or a
   token for another resource gives one; `createAgentApi` already handles it.

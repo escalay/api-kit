@@ -174,8 +174,9 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   app does not describe, gets the root. A resource is compared in one canonical form: an absolute http(s) URL, scheme
   and host lower-cased, the default port and one trailing slash dropped; a user part, a query, a fragment, a dot
   segment or an encoded dot makes it no resource. The audience is fixed at the authorization request: a token request
-  naming another, or more than one, is `invalid_target` (before anything is written), refresh keeps it, and an
-  audience the server chose is never held against a resource the client sends later. The server checks a resource's
+  naming another is `invalid_target` (before anything is written), refresh keeps it, and an audience the server chose
+  is never held against a resource the client sends later. More than one resource is refused everywhere: a page at
+  authorize, `invalid_target` at the device authorization and token endpoints. The server checks a resource's
   origin itself; an app serving several MCP resources passes `resources` (a pure check of the path, never a lookup),
   `resourceOf` and `accepts`, and then an unknown resource or another origin is `invalid_target` and metadata is never
   served for a resource that cannot be granted (404). A token that does not fit a request is a 401 `invalid_token` whose
