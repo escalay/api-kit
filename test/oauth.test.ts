@@ -3,11 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
+import { gunzipSync } from 'node:zlib'
 import { join } from 'node:path'
 import { SignJWT, decodeJwt, importJWK } from 'jose'
 import { count, eq } from 'drizzle-orm'
 import type { Context } from 'hono'
-import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryGuardStore, memoryOAuthStore, memoryStore, oauthKeys, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
+import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryGuardStore, memoryOAuthStore, memoryStore, oauthKeys, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, serveGuide, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
 import { ASSETS, cookbookApi } from './brand-fixture.js'
 import { approveSignIn } from '../src/testing/index.js'
 import { approvedCode, audOf, authorizeQuery, browserOf, callerWith, formWithTwoResources, joinApp, oauthApp, oauthStoreContract, refreshWith, registered, signedIn, ticketIn, typeClaim } from './oauth-store-contract.js'
@@ -1446,6 +1447,16 @@ describe('OAuth open endpoints: one public origin, lifetimes, caps and limits fo
     const poppy = await (await app.request('/.well-known/poppy.json', { headers: FORGED })).json()
     expect(poppy).toMatchObject({ organization: { domain: 'sample.example.test' }, auth: { issuer: PUBLIC }, apis: [{ url: `${PUBLIC}/openapi.json` }] })
     expect(await (await app.request('/.well-known/api-catalog', { headers: FORGED })).text()).toContain(`${PUBLIC}/api`)
+    // A skill's index entry and its archive, rendered for the public origin
+    const guided = createAgentApi({ title: 'Cookbook', version: '1.0.0', description: 'Recipes.', tags: [], auth: { realm: 'cookbook', keys: parseApiKeys('') }, oauth })
+    serveGuide(guided, { files: { 'llms.txt': '# Cookbook\n', 'skills/recipes/SKILL.md': '---\nname: recipes\ndescription: Use when finding recipes at {{origin}}.\n---\n\n# Recipes at {{origin}}\n', 'skills/recipes/references/soups.md': '# Soups at {{origin}}\n' }, vars: () => ({}), full: ['llms.txt'] })
+    const index = await (await guided.request('/.well-known/agent-skills/index.json', { headers: FORGED })).json()
+    expect(index.skills).toMatchObject([{ name: 'recipes', description: `Use when finding recipes at ${PUBLIC}.`, url: `${PUBLIC}/.well-known/agent-skills/recipes.tar.gz` }])
+    const archive = await guided.request('/.well-known/agent-skills/recipes.tar.gz', { headers: FORGED })
+    expect(archive.headers.get('cache-control')).toBe('public, max-age=3600')
+    const unpacked = gunzipSync(new Uint8Array(await archive.arrayBuffer())).toString('utf8')
+    expect(unpacked).toContain(`# Recipes at ${PUBLIC}`)
+    expect(unpacked).not.toContain('elsewhere.example.test')
     // Without publicOrigin, each request's origin, as before
     const plain = await cookbookApi({ oauth: createOAuth({ name: 'Cookbook', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null }) })
     expect(await (await plain.request('/.well-known/api-catalog', { headers: FORGED })).text()).toContain('https://elsewhere.example.test/api')
@@ -1481,6 +1492,25 @@ describe('OAuth open endpoints: one public origin, lifetimes, caps and limits fo
     // A year from its first use, the used one lapses too
     tick(15 * DAY)
     expect((await authorizePage(app, byCode)).status).toBe(400)
+  })
+
+  it('a code approved before its unused registration lapsed still works after, and the client is not made again', async () => {
+    const tick = clock()
+    const { app } = await oauthApp(memoryOAuthStore())
+    const client_id = await registered(app)
+    tick(7 * DAY - 60)
+    // An approval after the lapse is refused: the client is read again
+    const browser = browserOf(app, { 'x-test-owner': OWNER })
+    const late = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+    const approved = await approveSignIn(app, authorizeQuery(client_id), { headers: { 'x-test-owner': OWNER } })
+    const code = new URL(approved.headers.get('location')!).searchParams.get('code')!
+    tick(120)
+    expect((await browser.post('/oauth/authorize', { ticket: late, decision: 'allow' }, { origin: ORIGIN })).status).toBe(400)
+    const exchanged = await app.request('/oauth/token', form({ grant_type: 'authorization_code', code, client_id, redirect_uri: REDIRECT, code_verifier: VERIFIER }))
+    expect(exchanged.status).toBe(200)
+    const { refresh_token } = await exchanged.json()
+    expect((await app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token }))).status).toBe(200)
+    expect(await (await authorizePage(app, client_id)).text()).toContain('Remove this connection in your app and add it again.')
   })
 
   it('past the cap a new registration evicts the oldest unused one', async () => {

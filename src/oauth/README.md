@@ -253,10 +253,10 @@ const oauth = createOAuth({
   room). Its first use (a code exchanged, a device token collected) gives it a year from then. One that lapses meets
   the page that says to remove the connection in the app and add it again (a client never hears `invalid_client` at
   `/oauth/authorize`), and `invalid_client` at `/oauth/device_authorization`. A client registered before this version
-  has no `used` flag and keeps its year. An agent's `/agent/identity` registration lives a day, as before. A sign-in
-  started in the last minutes of the week can still finish after the row lapsed (its ticket and code live 10 minutes
-  each), and the lapsed client is not made again: that sign-in's tokens and refresh tokens work, while a new sign-in
-  with that client_id meets the "add it again" page.
+  has no `used` flag and keeps its year. An agent's `/agent/identity` registration lives a day, as before. An approval
+  after the lapse is refused, but a code approved in the last minutes of the week can still be exchanged after it (a
+  code lives 10 minutes), and the lapsed client is not made again: that sign-in's tokens and refresh tokens work,
+  while a new sign-in with that client_id meets the "add it again" page.
 - **Unused registrations are capped** (`maxUnusedClients`, default 10 000): past it, a new registration evicts the
   oldest unused one, so the table stays bounded whatever the addresses. A used client, or one from before, is never
   evicted. **Open consent tickets are capped the same way** (`maxUnusedTickets`, default 10 000): an answered ticket
