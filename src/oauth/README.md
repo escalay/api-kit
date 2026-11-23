@@ -173,8 +173,8 @@ app.post('/join', async (c) => {
 ```
 
 - `escape` is the app's own HTML escaping. The app's routes are its own to open (`auth.open`) and to limit.
-- **An app's own approval page carries `<meta name="referrer" content="same-origin">`** (or is served with that
-  policy), as the kit's pages do. `createAgentApi` serves every page with `Referrer-Policy: no-referrer` and replaces
+- **An app's own approval page carries `<meta name="referrer" content="same-origin">`** (or a proxy in
+  front of the app sets that policy), as the kit's pages do. `createAgentApi` serves every page with `Referrer-Policy: no-referrer` and replaces
   one a route sets; under it a browser posts the form with `Origin: null`, and where it sends no `Sec-Fetch-Site`
   either (plain http at an address other than this machine's) the POST is refused (403).
 - **Nothing is granted without a click.** There is no approve-at-once answer: a grant follows only `complete`, from a
