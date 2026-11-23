@@ -901,7 +901,7 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
 
     // The invites the owner made, each for one person (an app keeps them in its database)
     const INVITES = new Map([['garden-42', 'owner@example.test']])
-    const invitePage = (ask: SignInAsk, note = '') => `<!doctype html><title>Join Sample</title>
+    const invitePage = (ask: SignInAsk, note = '') => `<!doctype html><meta name="referrer" content="same-origin"><title>Join Sample</title>
 <p>${escape(ask.client.name)} asks to use Sample (${escape(ask.resource)}) and returns to ${ask.onThisComputer ? 'an app on this computer' : escape(ask.redirectHost)}. ${note}</p>
 <form method="post" action="/join"><input type="hidden" name="ticket" value="${ask.ticket}"><input name="invite" aria-label="Invite code"><button>Join</button></form>`
 
@@ -927,6 +927,7 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     const page = await browser.request(`/oauth/authorize?${authorizeQuery(client_id, { resource: `${ORIGIN}/mcp` })}`)
     const html = await page.text()
     expect(html).toContain(`Sample asks to use Sample (${ORIGIN}/mcp) and returns to an app on this computer.`)
+    expect(html).toContain('<meta name="referrer" content="same-origin">')
     expect((await browser.post('/join', { ticket: ticketIn(html), invite: 'garden-1' })).status).toBe(400)
     const joined = await browser.post('/join', { ticket: ticketIn(html), invite: 'garden-42' })
     // Posted again from this browser (a double click, a tab brought back): it went through; from another, it expired
@@ -1227,6 +1228,58 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     }
     expect((await owner.post('/oauth/claim', { claim_attempt_token, user_code: registration.claim.user_code }, { origin: ORIGIN })).status).toBe(200)
     expect((await owner.post('/oauth/device', { user_code, decision: 'allow' }, { origin: ORIGIN })).status).toBe(200)
+  })
+
+  it('sends a referrer policy on every kit page with a form, so its POST carries the real Origin', async () => {
+    const REFERRER = '<meta name="referrer" content="same-origin">'
+    const { app } = await oauthApp(memoryOAuthStore())
+    const owner = browserOf(app, { 'x-test-owner': OWNER })
+    const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+    const device = 'urn:ietf:params:oauth:grant-type:device_code'
+    const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+    const { user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+    const pages = {
+      consent: await owner.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`),
+      claim: await owner.request(new URL(registration.claim.verification_uri).pathname + new URL(registration.claim.verification_uri).search),
+      deviceCode: await owner.request('/oauth/device'),
+      deviceConsent: await owner.request(`/oauth/device?user_code=${user_code}`),
+      deviceConfirm: await owner.post('/oauth/device', { user_code }),
+      deviceWrongCode: await owner.post('/oauth/device', { user_code: 'WXYZ-WXYZ' }),
+    }
+    for (const [name, answer] of Object.entries(pages)) {
+      const html = await answer.text()
+      expect(html, name).toContain('<form method="post"')
+      expect(html, name).toContain(REFERRER)
+      // The header stays strict; the page's own policy is what its form POST follows
+      expect(answer.headers.get('referrer-policy'), name).toBe('no-referrer')
+    }
+  })
+
+  it('refuses an approval POST with no Sec-Fetch-Site and Origin null, and takes one with the issuer’s Origin', async () => {
+    // A browser sends Origin: null from a page served with no-referrer and no policy of its own; over plain http at a
+    // non-loopback address it may send no Sec-Fetch-Site either, so only the page's referrer policy lets it through
+    const { app } = await joinApp(memoryOAuthStore(), { approve: async (c, ask) => (ask.state === 'kit' ? null : c.html(`<input name="ticket" value="${ask.ticket}">`)) })
+    const owner = browserOf(app, { 'x-test-owner': OWNER })
+    const posts = async () => {
+      const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+      const claim_attempt_token = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
+      const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: ['urn:ietf:params:oauth:grant-type:device_code'] }))).json()
+      const { user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+      const signIn = await registered(app)
+      const kit = ticketIn(await (await owner.request(`/oauth/authorize?${authorizeQuery(signIn, { state: 'kit' })}`)).text())
+      const own = ticketIn(await (await owner.request(`/oauth/authorize?${authorizeQuery(signIn)}`)).text())
+      return [
+        ['/oauth/authorize', { ticket: kit, decision: 'allow' }],
+        ['/join/direct', { ticket: own, invite: 'garden-42' }],
+        ['/oauth/claim', { claim_attempt_token, user_code: registration.claim.user_code }],
+        ['/oauth/device', { user_code, decision: 'allow' }],
+      ] as const
+    }
+    for (const [path, fields] of await posts()) {
+      expect((await owner.post(path, fields, { origin: 'null' })).status, path).toBe(403)
+      const taken = await owner.post(path, fields, { origin: ORIGIN })
+      expect(taken.status, path).toBe(path === '/oauth/authorize' || path === '/join/direct' ? 302 : 200)
+    }
   })
 
   it('tells a person at authorize with an unknown or expired client id to add the connection again', async () => {

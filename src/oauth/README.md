@@ -151,7 +151,7 @@ An app that approves by an invite typed on its own page (`test/oauth.test.ts` ru
 ```ts
 // The invites the owner made, each for one person (an app keeps them in its database)
 const INVITES = new Map([['garden-42', 'owner@example.test']])
-const invitePage = (ask: SignInAsk, note = '') => `<!doctype html><title>Join Sample</title>
+const invitePage = (ask: SignInAsk, note = '') => `<!doctype html><meta name="referrer" content="same-origin"><title>Join Sample</title>
 <p>${escape(ask.client.name)} asks to use Sample (${escape(ask.resource)}) and returns to ${ask.onThisComputer ? 'an app on this computer' : escape(ask.redirectHost)}. ${note}</p>
 <form method="post" action="/join"><input type="hidden" name="ticket" value="${ask.ticket}"><input name="invite" aria-label="Invite code"><button>Join</button></form>`
 
@@ -173,6 +173,10 @@ app.post('/join', async (c) => {
 ```
 
 - `escape` is the app's own HTML escaping. The app's routes are its own to open (`auth.open`) and to limit.
+- **An app's own approval page carries `<meta name="referrer" content="same-origin">`** (or is served with that
+  policy), as the kit's pages do. `createAgentApi` serves every page with `Referrer-Policy: no-referrer` and replaces
+  one a route sets; under it a browser posts the form with `Origin: null`, and where it sends no `Sec-Fetch-Site`
+  either (plain http at an address other than this machine's) the POST is refused (403).
 - **Nothing is granted without a click.** There is no approve-at-once answer: a grant follows only `complete`, from a
   same-origin POST, by the browser that opened the ticket, once. A stored approval never stands in for one: the same
   client and approver signing in again see the page again.
@@ -182,7 +186,8 @@ app.post('/join', async (c) => {
   neither breaks the first nor shortens the second. The ticket keeps only the nonce's SHA-256.
 - **Same-origin, not same-site.** `complete`, the kit's consent POST, `/oauth/claim` and `/oauth/device` take a POST
   only with `Sec-Fetch-Site: same-origin`, or, with no such header, an `Origin` equal to the issuer's. A missing
-  header with no matching `Origin` is refused (403), and so is `same-site`: a sibling host is same-site.
+  header with no matching `Origin` is refused (403), and so is `same-site`: a sibling host is same-site. `Origin: null`
+  never matches; the kit's pages set their referrer policy to `same-origin` so a browser sends the real one.
 - **A ticket is answered once.** It is marked used and kept, its nonce hash and the answer only, until its 10 minutes
   end. Posted again from the browser that answered it (a double click, a tab brought back), it is a page that says the
   sign-in went through ("Already approved") or was refused, with no code and no redirect; from another browser it is
@@ -359,7 +364,10 @@ on by itself once the app has one). Defaults that change when an app takes this 
 
 - **Breaking for tests:** a POST to `/oauth/authorize` needs the ticket cookie its page set, and is refused (403) when
   `Sec-Fetch-Site` is absent and `Origin` is not the issuer's; `/oauth/claim` and `/oauth/device` take the same origin
-  rule (before, an absent header passed). Browsers send all of it, so people notice nothing; a test that posts an
+  rule (before, an absent header passed). Over https and on this machine's own address, browsers send
+  `Sec-Fetch-Site`, so people notice nothing. Over plain http at another address they may not, and then only `Origin`
+  decides: the kit's pages carry `<meta name="referrer" content="same-origin">` so it is the issuer's, and an app's own
+  approval page needs the same tag (without it the browser sends `Origin: null`, refused). A test that posts an
   approval by hand breaks. Use `approveSignIn` from the `testing` part, and add `'sec-fetch-site': 'same-origin'` to
   hand-made claim and device POSTs.
 - A ticket opened before the update has no nonce: it is refused once ("This approval expired") and lapses within 10

@@ -176,12 +176,13 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   answered once: posted again from that browser it is a page saying it went through, from another "expired". With
   `approve` set, `/oauth/authorize` never redirects before a person acts: every error is a page. Every approval POST
   (`complete`, the kit's consent, claim and device pages) needs `Sec-Fetch-Site: same-origin`, or with none an
-  `Origin` equal to the issuer's; `same-site` is refused, since a sibling host is same-site. The approval only
-  narrows scopes, never sets the resource (the ticket's). `onGrant` hears the first token of every grant (code,
-  device, claim) after the kit's checks, once, and false withdraws it (`invalid_grant`); an app that keeps its own
-  client rows makes them in `onGrant` and refuses a token whose grant has none. The kit's own pages carry the app's
-  brand (§22) and name the client by text only, never a `logo_uri`; the consent page names the resource asked for and
-  whether the client returns to a host or an app on this computer.
+  `Origin` equal to the issuer's (never `null`, so every page whose form posts there, the kit's and the app's, sets
+  `<meta name="referrer" content="same-origin">` over the `no-referrer` header); `same-site` is refused, since a
+  sibling host is same-site. The approval only narrows scopes, never sets the resource (the ticket's). `onGrant` hears
+  the first token of every grant (code, device, claim) after the kit's checks, once, and false withdraws it
+  (`invalid_grant`); an app that keeps its own client rows makes them in `onGrant` and refuses a token whose grant has
+  none. The kit's own pages carry the app's brand (§22) and name the client by text only, never a `logo_uri`; the
+  consent page names the resource asked for and whether the client returns to a host or an app on this computer.
 - **Audiences (RFC 8707, RFC 9728, MCP 2026-07-28):** every grant is bound to one resource, signed as the token's
   `aud`. It is the resource the client sent at the authorization request (or device authorization) when the server
   issues for it, else the **root** (the issuer's origin): a client that sends none, or (without `resources`) one the

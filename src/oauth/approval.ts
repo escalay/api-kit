@@ -61,7 +61,9 @@ export const ticketCookie = (c: Context, nonce: string, seconds: number) =>
 
 /**
  * Whether a POST came from this origin's own page: `Sec-Fetch-Site: same-origin`, or with no such header an `Origin`
- * equal to `root`. `same-site` is not enough: a sibling host is same-site.
+ * equal to `root`. `same-site` is not enough: a sibling host is same-site. `Origin: null` is refused, and a page served
+ * with the kit's `Referrer-Policy: no-referrer` makes a browser send it: a page whose form posts here carries
+ * `<meta name="referrer" content="same-origin">`, as the kit's own do.
  *
  * @example
  * if (!sameOrigin(c, oauth.rootOf(c))) return c.text('Not allowed', 403)

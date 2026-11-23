@@ -290,12 +290,16 @@ export const createOAuth = (config: OAuthConfig) => {
   let mounted: object | undefined
   const brandOf = () => config.brand ?? (mounted ? mountedOf(mounted).brand : undefined)
 
-  /** One of the kit's own pages, carrying the app's brand when it has one: head tags, icon, name, accent. Never a client's logo. */
+  /**
+   * One of the kit's own pages, carrying the app's brand when it has one: head tags, icon, name, accent. Never a client's
+   * logo. Its own referrer policy (same-origin) overrides the no-referrer header, so its form POST carries the real
+   * `Origin` (never `null`), which the origin rule needs when a browser sends no `Sec-Fetch-Site`.
+   */
   const page = (c: Context, title: string, body: string) => {
     const brand = brandOf()
     const accent = brand?.accent && /^#[0-9a-f]{6}$/i.test(brand.accent) ? `:root{--accent:${brand.accent}}button{background:var(--accent);color:#fff}` : ''
     const mark = brand ? `<header style="display:flex;align-items:center;gap:10px;margin:0 0 20px"><img src="/icon.svg" alt="" width="32" height="32"><span>${escape(brand.title)}</span></header>` : ''
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title>${brand ? brand.headTags(originOf(c)) : ''}
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="same-origin"><title>${escape(title)}</title>${brand ? brand.headTags(originOf(c)) : ''}
 <style>:root{color-scheme:light dark;--bg:#fafaf9;--fg:#111;--muted:#ececeb;--mfg:#6b6b6b}@media(prefers-color-scheme:dark){:root{--bg:#0b0b0b;--fg:#f2f2f2;--muted:#1c1c1c;--mfg:#9a9a9a}}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 Inter,ui-sans-serif,system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:16px}
 main{max-width:28rem;width:100%;background:var(--muted);border-radius:12px;padding:28px}h1{font-size:20px;font-weight:400;letter-spacing:-.01em;margin:0 0 8px}p{color:var(--mfg);margin:0 0 16px}
