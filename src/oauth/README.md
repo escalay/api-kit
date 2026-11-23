@@ -132,11 +132,12 @@ every first token in `onGrant`:
   the grant gets), `state`, and `arrival` (`site`: the first GET's `Sec-Fetch-Site`, `referrerOrigin`: its
   `Referer`'s origin, each null when not sent).
 - The app's page posts the ticket to the app's own route, which reads it with `oauth.ticketOf(c, ticket)` (null when
-  expired, answered, or opened in another browser) and answers with `oauth.complete(c, ticket, decision)`:
+  expired, answered, or opened in another browser; then `oauth.answeredOf(c, ticket)` says `approved`, `denied` or
+  `answered` for a ticket this browser spent already, so the route can say "Already approved") and answers with `oauth.complete(c, ticket, decision)`:
   `{ approver, scopes?, data? }` or `'deny'`. `approver` becomes the token's `sub` (`caller.owner`), `scopes` may only
   narrow what was asked (a wider or empty list is a 400 page), `data` goes on the code and reaches `onGrant`. The
   resource is the ticket's; `complete` never sets one. It returns the 302 to the client (`code`, `state`, `iss`, or
-  `access_denied`) or a 400/403 page.
+  `access_denied`) or a 400/403 page. A blank `approver` is a 400 page, and the ticket stays live.
 - `onGrant(grant, c)` hears the first token of every grant: `kind` (`code`, `device` or `claim`), `grant`, `client`
   (`id`, `name`), `approver`, `scopes`, `resource` (absent on a grant from before audiences) and `data`. It runs after
   the kit's own checks (client, redirect and verifier for a code; the owner's answer for a device; the collected claim
@@ -162,8 +163,9 @@ const oauth = createOAuth({
 const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(''), open: ['/join'] }, oauth })
 app.post('/join', async (c) => {
   const body = await c.req.parseBody()
-  const ask = await oauth.ticketOf(c, String(body.ticket ?? ''))
-  if (!ask) return c.html('<p>This sign-in expired: start again from your app.</p>', 400)
+  const ticket = String(body.ticket ?? '')
+  const ask = await oauth.ticketOf(c, ticket)
+  if (!ask) return c.html((await oauth.answeredOf(c, ticket)) === 'approved' ? '<p>Already approved: return to your app.</p>' : '<p>This sign-in expired: start again from your app.</p>', 400)
   const holder = INVITES.get(String(body.invite ?? ''))
   if (!holder) return c.html(invitePage(ask, 'That invite code is not one of ours.'), 400)
   return oauth.complete(c, ask.ticket, { approver: holder, scopes: ['read'], data: { invite: String(body.invite) } })
@@ -191,7 +193,9 @@ app.post('/join', async (c) => {
 - The kit's page answers only for the owner it was shown to: a ticket the app's page holds can't be approved there.
 - `/oauth/claim` and `/oauth/device` stay the owner's (`owner`, `owners`); `approve` is for `/oauth/authorize` only.
 - In Access, `/oauth/authorize` may bypass the sign-in once the app passes `approve`: the app's page decides. Keep it
-  gated otherwise.
+  gated otherwise. A ticket is stored only when a page holds it: the app's, or the kit's shown to the owner. A visit
+  `approve` sends to the owner's sign-in stores nothing; one the app's page answers stores a 10-minute row, as an open
+  `/oauth/register` stores a client.
 - With `onGrant` set, a claimed agent's identity assertion (jwt-bearer) works only once its claim was collected and
   heard, so an anonymous agent can't skip `onGrant` with the assertion it got at registration.
 - Every page the kit shows (consent, device, claim, errors) carries the app's brand when it has one
@@ -250,7 +254,7 @@ a write there could reset a successor already used.
 
 | File | What |
 |---|---|
-| `index.ts` | `createOAuth` (the server; `revokeClient` is the owner's kill switch; `rootOf`, `resourceOf` and `mcpPath` as it reads them; `ticketOf` and `complete` for the app's own sign-in page), `generateOAuthKey` (a new signing key) |
+| `index.ts` | `createOAuth` (the server; `revokeClient` is the owner's kill switch; `rootOf`, `resourceOf` and `mcpPath` as it reads them; `ticketOf`, `answeredOf` and `complete` for the app's own sign-in page), `generateOAuthKey` (a new signing key) |
 | `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`; the ticket cookie and the same-origin rule |
 | `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take` and `markUsed`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start), `memoryOAuthStore` |
 | `schema.ts` | the `oauth` table and `OAUTH_MIGRATIONS` |
@@ -350,7 +354,7 @@ version kept the query's `resource` as it came; it is never signed.
 
 ## Upgrading to approvals
 
-New, off unless set: `approve`, `onGrant`, `ticketOf`, `complete`, and `brand` (the app's brand on the kit's pages is
+New, off unless set: `approve`, `onGrant`, `ticketOf`, `answeredOf`, `complete`, and `brand` (the app's brand on the kit's pages is
 on by itself once the app has one). Defaults that change when an app takes this version:
 
 - **Breaking for tests:** a POST to `/oauth/authorize` needs the ticket cookie its page set, and is refused (403) when

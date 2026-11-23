@@ -913,8 +913,9 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(''), open: ['/join'] }, oauth })
     app.post('/join', async (c) => {
       const body = await c.req.parseBody()
-      const ask = await oauth.ticketOf(c, String(body.ticket ?? ''))
-      if (!ask) return c.html('<p>This sign-in expired: start again from your app.</p>', 400)
+      const ticket = String(body.ticket ?? '')
+      const ask = await oauth.ticketOf(c, ticket)
+      if (!ask) return c.html((await oauth.answeredOf(c, ticket)) === 'approved' ? '<p>Already approved: return to your app.</p>' : '<p>This sign-in expired: start again from your app.</p>', 400)
       const holder = INVITES.get(String(body.invite ?? ''))
       if (!holder) return c.html(invitePage(ask, 'That invite code is not one of ours.'), 400)
       return oauth.complete(c, ask.ticket, { approver: holder, scopes: ['read'], data: { invite: String(body.invite) } })
@@ -928,6 +929,10 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     expect(html).toContain(`Sample asks to use Sample (${ORIGIN}/mcp) and returns to an app on this computer.`)
     expect((await browser.post('/join', { ticket: ticketIn(html), invite: 'garden-1' })).status).toBe(400)
     const joined = await browser.post('/join', { ticket: ticketIn(html), invite: 'garden-42' })
+    // Posted again from this browser (a double click, a tab brought back): it went through; from another, it expired
+    const again = await browser.post('/join', { ticket: ticketIn(html), invite: 'garden-42' })
+    expect([again.status, again.headers.get('location'), await again.text()]).toEqual([400, null, expect.stringContaining('Already approved')])
+    expect(await (await browserOf(app).post('/join', { ticket: ticketIn(html), invite: 'garden-42' })).text()).toContain('This sign-in expired')
     const tokens = await (await exchangeAt(app, joined.headers.get('location'), client_id)).json()
     expect(tokens.scope).toBe('read')
     expect((await (await callerWith(app, tokens.access_token)).json()).caller).toMatchObject({ owner: OWNER, client: client_id, scopes: ['read'], resource: `${ORIGIN}/mcp` })
@@ -1011,6 +1016,28 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     expect([first.status, second.status, second.headers.get('location')]).toEqual([302, 400, null])
     expect(await second.text()).toContain('Already approved')
     expect((await browser.post('/join', { ticket, invite: 'garden-42' })).status).toBe(400)
+  })
+
+  it('refuses a blank approver before the ticket is spent', async () => {
+    const { app } = await joinApp(memoryOAuthStore())
+    const browser = browserOf(app)
+    const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)).text())
+    for (const approver of ['', '  ']) {
+      const refused = await browser.post('/join/direct', { ticket, approver })
+      expect([refused.status, refused.headers.get('location'), await refused.text()]).toEqual([400, null, expect.stringContaining('needs an approver')])
+    }
+    expect((await browser.post('/join/direct', { ticket, approver: OWNER })).headers.get('location')).toContain('code=')
+  })
+
+  it('stores no ticket for a stranger the app’s approve sends to the owner’s sign-in', async () => {
+    const store = memoryOAuthStore()
+    const tickets: string[] = []
+    const { app } = await joinApp(store, { approve: async (_c, ask) => (tickets.push(ask.ticket), null) })
+    const answer = await app.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)
+    expect([answer.status, cookieOf(answer)]).toEqual([401, undefined])
+    expect(await answer.text()).toContain('Sign in first')
+    expect(tickets).toHaveLength(1)
+    expect(await store.get('consent', tickets[0]!)).toBeNull()
   })
 
   it('lets an approval narrow the scopes, never widen them, and a refresh keeps it read-only', async () => {

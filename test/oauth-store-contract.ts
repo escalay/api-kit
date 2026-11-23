@@ -88,7 +88,7 @@ export const registered = async (app: App, name = 'Sample', redirect = REDIRECT)
 
 /**
  * An app that approves at its own page: the person types an invite, and the app completes the ticket as the person the
- * invite was made for. `heard` is every grant `onGrant` saw; `/join/direct` completes without reading the ticket first.
+ * invite was made for (or `approver` when posted). `heard` is every grant `onGrant` saw; `/join/direct` completes without reading the ticket first.
  */
 export const joinApp = async (store: OAuthStore, options: Partial<OAuthConfig> = {}) => {
   const heard: Parameters<NonNullable<OAuthConfig['onGrant']>>[0][] = []
@@ -99,12 +99,14 @@ export const joinApp = async (store: OAuthStore, options: Partial<OAuthConfig> =
     onGrant: async (grant) => (heard.push(grant), grant.kind !== 'code' || grant.data?.invite === 'garden-42'),
     ...options,
   }, { open: ['/join', '/join/direct'] })
+  const spentPages = { approved: 'Already approved: return to your app.', denied: 'You said no to this sign-in.', answered: 'This sign-in was answered already.', expired: 'This sign-in expired: start again from your app.' }
   const decisionOf = (body: Record<string, unknown>) =>
-    body.decision === 'deny' ? ('deny' as const) : { approver: OWNER, data: { invite: String(body.invite ?? '') }, ...(body.scopes ? { scopes: String(body.scopes).split(' ') } : {}) }
+    body.decision === 'deny' ? ('deny' as const) : { approver: body.approver === undefined ? OWNER : String(body.approver), data: { invite: String(body.invite ?? '') }, ...(body.scopes ? { scopes: String(body.scopes).split(' ') } : {}) }
   app.post('/join', async (c) => {
     const body = await c.req.parseBody()
-    const ask = await oauth.ticketOf(c, String(body.ticket ?? ''))
-    if (!ask) return c.html('<p>This sign-in expired: start again from your app.</p>', 400)
+    const ticket = String(body.ticket ?? '')
+    const ask = await oauth.ticketOf(c, ticket)
+    if (!ask) return c.html(`<p>${spentPages[(await oauth.answeredOf(c, ticket)) ?? 'expired']}</p>`, 400)
     return oauth.complete(c, ask.ticket, decisionOf(body))
   })
   app.post('/join/direct', async (c) => {
@@ -465,6 +467,30 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       const deniedAgain = await (await browser.post('/oauth/authorize', { ticket: denied, decision: 'allow' })).text()
       expect(deniedAgain).not.toContain('Already approved')
       expect(deniedAgain).toContain('Already answered')
+    })
+
+    it('tells the app’s route a ticket this browser answered from one that expired or another browser holds', async () => {
+      const store = await make()
+      const { app } = await joinApp(store)
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect((await browser.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      const again = await browser.post('/join', { ticket, invite: 'garden-42' })
+      expect([again.status, again.headers.get('location'), await again.text()]).toEqual([400, null, expect.stringContaining('Already approved')])
+      // Another browser with a ticket of its own, and one with none
+      const other = browserOf(app)
+      await other.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+      for (const elsewhere of [other, browserOf(app)]) expect(await (await elsewhere.post('/join', { ticket, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+      const denied = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect(new URL((await browser.post('/join', { ticket: denied, decision: 'deny' })).headers.get('location')!).searchParams.get('error')).toBe('access_denied')
+      expect(await (await browser.post('/join', { ticket: denied, invite: 'garden-42' })).text()).toContain('You said no')
+      // Spent, its answer not written yet (the post that spent it still running): answered, never expired
+      const { nonce } = (await store.get('consent', ticket))!
+      await store.put('consent', ticket, { nonce, used: true }, now() + 600)
+      expect(await (await browser.post('/join', { ticket, invite: 'garden-42' })).text()).toContain('answered already')
+      const fresh = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect(await (await browser.post('/join', { ticket: `${fresh}x`, invite: 'garden-42' })).text()).toContain('This sign-in expired')
     })
 
     it('completes a ticket once when the app’s page posts it twice at once', async () => {

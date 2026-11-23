@@ -545,6 +545,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     const origin = originOf(c)
     let approved: { checked: Checked; scopes: string[]; audience: Pick<Grant, 'audience' | 'resource'> } | undefined
     if (decision !== 'deny') {
+      // Before the ticket is spent: a blank approver would mint a token with no owner
+      if (typeof decision.approver !== 'string' || !decision.approver.trim()) return cantApprove(c, 'An approval needs an approver: the person it is for.')
       const checked = await authorizeParams(c, params)
       if ('error' in checked) return cantApprove(c, checked.error!)
       // Resolved again from the ticket's own request: the audience is the ticket's, never chosen here
@@ -581,6 +583,20 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     const checked = await authorizeParams(c, found.row.params)
     const bound = audienceFor(c, found.row.params.resource)
     return 'error' in checked || 'refused' in bound ? null : askOf(ticket, found.row, checked, bound.audience)
+  }
+
+  /**
+   * How this browser answered a ticket it spent already (a double click, a tab brought back), for the app's route when
+   * `ticketOf` is null: `approved`, `denied`, `answered` (spent, its answer not yet written), or null when it expired,
+   * is live, or another browser opened it.
+   *
+   * @example
+   * if (!ask) return c.html((await oauth.answeredOf(c, ticket)) === 'approved' ? alreadyApprovedPage : expiredPage, 400)
+   */
+  const answeredOf = async (c: Context, ticket: string): Promise<'approved' | 'denied' | 'answered' | null> => {
+    const found = await consentOf(c, ticket)
+    if (!('answered' in found)) return null
+    return found.answered === 'approved' || found.answered === 'denied' ? found.answered : 'answered'
   }
 
   /**
@@ -655,9 +671,12 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         return bound
       }
       if (config.approve) {
-        await store.put('consent', ticket, row, expiresAt)
+        // Stored only once a page holds the ticket: a stranger turned away leaves no row behind
         const own = await config.approve(c, askOf(ticket, row, checked, bound.audience))
-        if (own) return bindTo(own)
+        if (own) {
+          await store.put('consent', ticket, row, expiresAt)
+          return bindTo(own)
+        }
         const person = await config.owner(c)
         if (!person) return signInFirst(c)
         await store.put('consent', ticket, { ...row, owner: person }, expiresAt)
@@ -1021,7 +1040,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     await store.delete('registration', clientId)
   }
 
-  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, mcpPath, revokeGrant, revokeClient, ticketOf, complete, authorizationServer, protectedResource, authMd }
+  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, mcpPath, revokeGrant, revokeClient, ticketOf, answeredOf, complete, authorizationServer, protectedResource, authMd }
 }
 
 export type OAuth = ReturnType<typeof createOAuth>

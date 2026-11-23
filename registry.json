@@ -116,7 +116,7 @@
       "name": "oauth",
       "type": "registry:item",
       "title": "OAuth server",
-      "description": "The app as its own OAuth server: metadata, `/oauth/*`, agent registration (auth.md), ES256 tokens; `createOAuth` (with `approve`, `onGrant`, `ticketOf`, `complete`: the app's own sign-in page), `dbOAuthStore`, `memoryOAuthStore`, `generateOAuthKey`",
+      "description": "The app as its own OAuth server: metadata, `/oauth/*`, agent registration (auth.md), ES256 tokens; `createOAuth` (with `approve`, `onGrant`, `ticketOf`, `answeredOf`, `complete`: the app's own sign-in page), `dbOAuthStore`, `memoryOAuthStore`, `generateOAuthKey`",
       "registryDependencies": [
         "escalay/api-kit/core",
         "escalay/api-kit/db"
