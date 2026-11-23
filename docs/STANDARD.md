@@ -214,8 +214,12 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
     the root.
 - **Open endpoints (`publicOrigin`, `limits`):** an app whose sign-in is reachable outside Access passes
   `publicOrigin` and `limits`. `publicOrigin` is the only origin the issuer, `iss`, every metadata document, auth.md,
-  the 401's pointer, the resource's origin check, the root audience and the same-origin rule use, so a forged
-  `X-Forwarded-Host` changes none of them; without it the metadata and auth.md are `no-store`, never cached publicly.
+  the 401's pointer, the resource's origin check, the root audience and the same-origin rule use, and the origin every
+  publicly cached discovery document names (api-catalog, robots.txt, sitemap.xml, poppy.json, the Server Card, the
+  Agent Card, the skills index and archives, the AI Catalog), so a forged `X-Forwarded-Host` changes none of them and
+  reaches no shared cache; without it the metadata and auth.md are `no-store`, never cached publicly, while the other
+  discovery documents keep the request's origin and an hour's public caching, as before. What is never cached publicly
+  (HAL links, OpenAPI, the guide) keeps the request's origin either way.
   A registration no sign-in has used lives a week (its first code exchanged or device token collected gives it a
   year), and unused registrations and open consent tickets are capped (10 000 each by default; past it the oldest
   goes), so rows written without auth stay bounded; the database store prunes expired rows on a write, at most once a
@@ -232,7 +236,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 - `Cache-Control`: API `private, no-cache`; media `private, max-age=86400, immutable`; guides and OpenAPI
   `private, max-age=300`; any error `no-store`. **Anything behind auth is `private`, never `public`**: a CDN in front
   (Cloudflare caches `.png`, `.jpg`, `.svg` by extension) would otherwise serve it to anyone. Only discovery files and the
-  front door's own page assets are `public`, and the OAuth metadata and auth.md only with `publicOrigin` (§7).
+  front door's own page assets are `public`, and the OAuth metadata and auth.md only with `publicOrigin` (§7); with it,
+  every public discovery file names that origin, never a forwarded host.
 
 ## 9. Cost and slow work
 
@@ -427,7 +432,7 @@ CORS:
 | `/.well-known/ai-catalog.json` | AI Catalog (ARD): the API, the MCP server and each skill, with representative queries |
 | `/sitemap.xml` (`discovery.sitemap`) | the public pages only, named in robots.txt |
 | `/.well-known/agent-card.json` (`a2a.ts`) | A2A 1.0 Agent Card: the JSON-RPC interface, security schemes, skills |
-| `/.well-known/poppy.json` (`discovery.poppy`) | Personal Agent Protocol 0.3: the organization (this host), its APIs and agent protocols, the issuer with scope hints |
+| `/.well-known/poppy.json` (`discovery.poppy`) | Personal Agent Protocol 0.3: the organization (this host, or the OAuth server's `publicOrigin`), its APIs and agent protocols, the issuer with scope hints |
 | with `oauth.ts` | `/.well-known/oauth-protected-resource[/<path>]`, `/.well-known/oauth-authorization-server` (with `agent_auth`, `protected_resources`, `poppy_domains`), `/.well-known/jwks.json`, `/auth.md` |
 
 An app with a public page adds WebMCP there itself (tools registered on load); DNS-AID records live in DNS, outside

@@ -20,7 +20,7 @@ import { z } from '@hono/zod-openapi'
 import type { Context, Hono } from 'hono'
 import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, TOOLS_HASH_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
 import { attachSkills, instructionsWithSkills } from './skills.js'
-import { MODERN_PROTOCOL_VERSION, mountedOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN, type AgentBrand, type ServerIcon } from '../core/discovery.js'
+import { MODERN_PROTOCOL_VERSION, mountedOf, publicOriginOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN, type AgentBrand, type ServerIcon } from '../core/discovery.js'
 import { originOf, pathWith } from '../core/hal.js'
 
 type Query = Record<string, string | number | boolean | string[] | null | undefined>
@@ -321,7 +321,7 @@ export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, all
   // The Server Card (SEP-2127): at its reserved place beside the endpoint, and where domain scanners look
   const card = (origin: string) => serverCard(origin, path, serverInfoOf(factory.info, brandOf(), origin), [MODERN_PROTOCOL_VERSION, ...SUPPORTED_PROTOCOL_VERSIONS])
   recordMounted(app, { mcp: { path, card, tools: factory.tools, resources: factory.resources } })
-  for (const at of [`${path}/server-card`, WELL_KNOWN.serverCard]) app.get(at, (c: Context) => sendPublic(c, JSON.stringify(card(originOf(c)), null, 2), SERVER_CARD_TYPE))
+  for (const at of [`${path}/server-card`, WELL_KNOWN.serverCard]) app.get(at, (c: Context) => sendPublic(c, JSON.stringify(card(publicOriginOf(app, c)), null, 2), SERVER_CARD_TYPE))
   app.all(path, async (c: Context) => {
     const rejected = originValidationResponse(c.req.raw, allowedHostnames)
     if (rejected) return rejected

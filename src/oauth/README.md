@@ -238,12 +238,17 @@ const oauth = createOAuth({
 
 - **`publicOrigin`** is the one origin of the issuer, every token's `iss` (and `verify`'s check of it), every metadata
   document, auth.md, the 401's `resource_metadata`, the device and claim links, `rootOf` (so the resource check and
-  the root audience), the same-origin rule on every approval POST, the ticket cookie's name, and `poppy.json`'s issuer.
-  A forged `X-Forwarded-Host` then changes nothing, and the metadata and auth.md are cached publicly (`public,
-  max-age=300`). Unset, each request's own origin is used, forwarded host included, and those documents are
-  `no-store`, so a forged host can't reach a shared cache. HAL links and the rest of discovery keep the request's
-  origin. It must be an origin with no path (`createOAuth` throws otherwise), and it must be the origin tokens were
-  issued under: setting one that differs signs everyone out, since their tokens' `iss` no longer matches.
+  the root audience), the same-origin rule on every approval POST and the ticket cookie's name. `createAgentApi` also
+  names it in every discovery document cached publicly (`public, max-age=3600`): `api-catalog`, `robots.txt`,
+  `sitemap.xml`, `poppy.json` (organization, APIs and issuer), and with their parts the Server Card, the Agent Card,
+  the skills index and archives, and the AI Catalog. A forged `X-Forwarded-Host` then reaches no shared cache, and the
+  metadata and auth.md are cached publicly (`public, max-age=300`). Unset, each request's own origin is used,
+  forwarded host included, and the metadata and auth.md are `no-store`; the other discovery documents stay
+  `public, max-age=3600` as before, so behind a proxy that passes a caller's `X-Forwarded-Host` through, they can be
+  poisoned. Not covered either way: what is never cached publicly (HAL links, `/openapi.json`, the guide, problem
+  `type` URLs) keeps the request's origin. It must be an origin with no path (`createOAuth` throws otherwise), and it
+  must be the origin tokens were issued under: setting one that differs signs everyone out, since their tokens' `iss`
+  no longer matches.
 - **A registration no sign-in has used lives a week** (`/oauth/register`; long enough for an invite of a day, with
   room). Its first use (a code exchanged, a device token collected) gives it a year from then. One that lapses meets
   the page that says to remove the connection in the app and add it again (a client never hears `invalid_client` at

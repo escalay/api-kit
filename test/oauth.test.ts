@@ -8,7 +8,7 @@ import { SignJWT, decodeJwt, importJWK } from 'jose'
 import { count, eq } from 'drizzle-orm'
 import type { Context } from 'hono'
 import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryGuardStore, memoryOAuthStore, memoryStore, oauthKeys, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
-import { ASSETS } from './brand-fixture.js'
+import { ASSETS, cookbookApi } from './brand-fixture.js'
 import { approveSignIn } from '../src/testing/index.js'
 import { approvedCode, audOf, authorizeQuery, browserOf, callerWith, formWithTwoResources, joinApp, oauthApp, oauthStoreContract, refreshWith, registered, signedIn, ticketIn, typeClaim } from './oauth-store-contract.js'
 
@@ -1432,6 +1432,23 @@ describe('OAuth open endpoints: one public origin, lifetimes, caps and limits fo
     const canonicalApp = (await oauthApp(store, { publicOrigin: 'HTTPS://Sample.Example.test:443/' })).app
     expect(await (await canonicalApp.request('/.well-known/oauth-authorization-server')).json()).toMatchObject({ issuer: PUBLIC })
     for (const wrong of ['https://sample.example.test/app', 'sample.example.test', 'https://sample.example.test/?x=1']) expect(() => createOAuth({ ...keyed, publicOrigin: wrong }), wrong).toThrow(/publicOrigin/)
+  })
+
+  it('a forged x-forwarded-host reaches no publicly cached discovery document when publicOrigin is set', async () => {
+    const oauth = createOAuth({ name: 'Cookbook', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null, publicOrigin: PUBLIC })
+    const app = await cookbookApi({ oauth, discovery: { sitemap: ['/llms.txt'], poppy: { name: 'Cookbook', apis: [{ type: 'openapi', path: '/openapi.json', description: 'The API' }] } } })
+    const documents = ['/.well-known/api-catalog', '/robots.txt', '/sitemap.xml', '/.well-known/poppy.json', '/.well-known/ai-catalog.json', '/.well-known/agent-card.json', '/mcp/server-card', '/.well-known/mcp/server-card.json', '/.well-known/agent-skills/index.json']
+    for (const path of documents) {
+      const answer = await app.request(path, { headers: FORGED })
+      expect([answer.status, answer.headers.get('cache-control')], path).toEqual([200, 'public, max-age=3600'])
+      expect(await answer.text(), path).not.toContain('elsewhere.example.test')
+    }
+    const poppy = await (await app.request('/.well-known/poppy.json', { headers: FORGED })).json()
+    expect(poppy).toMatchObject({ organization: { domain: 'sample.example.test' }, auth: { issuer: PUBLIC }, apis: [{ url: `${PUBLIC}/openapi.json` }] })
+    expect(await (await app.request('/.well-known/api-catalog', { headers: FORGED })).text()).toContain(`${PUBLIC}/api`)
+    // Without publicOrigin, each request's origin, as before
+    const plain = await cookbookApi({ oauth: createOAuth({ name: 'Cookbook', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null }) })
+    expect(await (await plain.request('/.well-known/api-catalog', { headers: FORGED })).text()).toContain('https://elsewhere.example.test/api')
   })
 
   it('without publicOrigin the metadata is no-store', async () => {

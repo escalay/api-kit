@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AuthInfo } from '@modelcontextprotocol/server'
 import type { Context, Hono } from 'hono'
-import { mountedOf, sendPublic, WELL_KNOWN, type AgentBrand } from '../core/discovery.js'
+import { mountedOf, publicOriginOf, sendPublic, WELL_KNOWN, type AgentBrand } from '../core/discovery.js'
 import { originOf } from '../core/hal.js'
 import { callWaiting, FORWARDED, problemText, type CallApi, type McpTool } from '../mcp/index.js'
 import { memoryStore, type KeyValueStore } from '../core/kv.js'
@@ -125,7 +125,7 @@ export const mountA2A = (app: Hono<any, any, any>, config: A2AConfig) => {
   if (!config.store && globalThis.navigator?.userAgent === 'Cloudflare-Workers') console.warn('mountA2A: tasks are kept in memory; on Workers pass a store in the database (dbOAuthStore(db) fits)')
   const byId = new Map(skills.map((skill) => [skill.tool.name, skill]))
 
-  app.get(WELL_KNOWN.agentCard, (c: Context) => sendPublic(c, JSON.stringify(agentCard(originOf(c), { ...config, brand: config.brand ?? mountedOf(app).brand }), null, 2), 'application/json'))
+  app.get(WELL_KNOWN.agentCard, (c: Context) => sendPublic(c, JSON.stringify(agentCard(publicOriginOf(app, c), { ...config, brand: config.brand ?? mountedOf(app).brand }), null, 2), 'application/json'))
 
   /** Whose tasks these are: an OAuth agent by its client and grant (as the guards key it), never by its display name. */
   const ownerOf = (c: Context) => {

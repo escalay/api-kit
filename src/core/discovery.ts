@@ -129,14 +129,14 @@ export const robotsTxt = ({ contentSignal = {}, crawl = false, sitemap, private:
 export const sitemapXml = (origin: string, paths: string[]) =>
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${paths.map((path) => `  <url><loc>${origin}${path.replace(/&/g, '&amp;')}</loc></url>`).join('\n')}\n</urlset>\n`
 
-/** `/.well-known/poppy.json` (Personal Agent Protocol draft 0.3, section 3): this origin is the organization and, unless `issuer` names the OAuth server's fixed one, the issuer. */
-export const poppyJson = (origin: string, { name, apis = [], protocols = [], scopes }: NonNullable<DiscoveryConfig['poppy']>, withIssuer: boolean, issuer = origin) => ({
+/** `/.well-known/poppy.json` (Personal Agent Protocol draft 0.3, section 3): this origin is the organization and the issuer. */
+export const poppyJson = (origin: string, { name, apis = [], protocols = [], scopes }: NonNullable<DiscoveryConfig['poppy']>, withIssuer: boolean) => ({
   protocol_version: '0.3',
   organization: { name, domain: new URL(origin).hostname },
   ...(withIssuer
     ? {
         auth: {
-          issuer,
+          issuer: origin,
           ...(scopes
             ? {
                 scopes: Object.fromEntries(Object.entries(scopes).map(([scope, one]) => [scope, one.description])),
@@ -292,12 +292,21 @@ type Mounted = {
   refreshSkills?: (origin: string, credentials?: Record<string, string>) => Promise<SkillArtifact[]>
   mcp?: { path: string; card: (origin: string) => ReturnType<typeof serverCard>; tools: ToolLike[]; resources?: ResourceLike[] }
   brand?: AgentBrand
+  /** The OAuth server's fixed origin (`createAgentApi` records its `issuerOf`): what publicly cached documents name. */
+  publicOrigin?: (c: Context) => string
 }
 const mountedByApp = new WeakMap<object, Mounted>()
 
 /** `serveGuide` and `mountMcp` record what they serve so `serveAiCatalog` lists exactly that. */
 export const recordMounted = (app: object, part: Mounted) => mountedByApp.set(app, { ...mountedByApp.get(app), ...part })
 export const mountedOf = (app: object) => mountedByApp.get(app) ?? {}
+
+/**
+ * The origin a publicly cached document names: the OAuth server's `publicOrigin` when the app set one, else the
+ * request's own, so a forged `X-Forwarded-Host` can't put another origin in a shared cache.
+ * @example sendPublic(c, JSON.stringify(apiCatalog(publicOriginOf(app, c))), API_CATALOG_TYPE)
+ */
+export const publicOriginOf = (app: object, c: Context) => mountedOf(app).publicOrigin?.(c) ?? originOf(c)
 
 // ---- AI Catalog (ARD) ----
 
@@ -341,7 +350,8 @@ export const serveAiCatalog = (app: Hono<any, any, any>, config: AiCatalogConfig
   app.get(WELL_KNOWN.aiCatalog, async (c) => {
     const mounted = mountedOf(app)
     // The caller's own credentials: a private service renders its skills only for them
-    await mounted.refreshSkills?.(originOf(c), Object.fromEntries((['authorization', 'cookie', 'cf-access-jwt-assertion'] as const).flatMap((name) => (c.req.header(name) ? [[name, c.req.header(name)!]] : []))))
-    return sendPublic(c, JSON.stringify(aiCatalog(originOf(c), config, mounted, config.apiTitle), null, 2), AI_CATALOG_TYPE)
+    const origin = publicOriginOf(app, c)
+    await mounted.refreshSkills?.(origin, Object.fromEntries((['authorization', 'cookie', 'cf-access-jwt-assertion'] as const).flatMap((name) => (c.req.header(name) ? [[name, c.req.header(name)!]] : []))))
+    return sendPublic(c, JSON.stringify(aiCatalog(origin, config, mounted, config.apiTitle), null, 2), AI_CATALOG_TYPE)
   })
 }

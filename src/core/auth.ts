@@ -28,7 +28,7 @@ export type OAuthServer = {
   mount: (app: Hono<any>) => void
   verify: NonNullable<AuthOptions['tokens']>
   resourceMetadataFor: (c: Context) => string
-  /** The issuer's origin for a request (its `publicOrigin` when set), named in `poppy.json`. Default the request's. */
+  /** The issuer's origin for a request (its `publicOrigin` when set): what publicly cached discovery documents name. Default the request's. */
   issuerOf?: (c: Context) => string
   /** Where MCP is mounted: a relay, so a `read` token may POST there. Default `/mcp`. */
   mcpPath?: string
