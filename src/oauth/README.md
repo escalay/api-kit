@@ -54,7 +54,11 @@ root without. More than one `resource`, or one not sent as a string, is refused:
 approval, refresh token or agent registration from before audiences ignores `resource` altogether, two of them
 included: it stays aud-less. Errors at authorize are pages, never redirects.
 
-An app serving several MCP resources, one per space (`/s/alpha/mcp`), passes three options:
+An app serving several MCP resources, one per space (`/s/alpha/mcp`), passes `resources` and `resourceOf`. The
+default `accepts` then takes a token whose audience is exactly `resourceOf(c)` (RFC 8707's own rule), besides an
+aud-less one and one for the root or `mcpPath`, so each space's token works at its own address and nowhere else. MCP
+tools that call `/api` in-process with the same bearer lose the space's path, so a space's token is refused there
+unless the app passes its own `accepts`, as here:
 
 ```ts
 const SPACE = /^\/s\/[a-z0-9-]+\/mcp/
@@ -93,9 +97,10 @@ for them, or otherwise verify they are the intended recipient):
 
 - **A token with no `aud` is accepted** by the default `accepts`: every token, code, device approval, refresh token and
   agent registration from before audiences has none, and none ever gains one. Connections made before keep working.
-- **A root token may be accepted at a space's resource** by the app's own `accepts`, never by the default: a client
-  that sends no `resource`, or a connection made before the app had spaces, keeps working there. The app, with one
-  issuer and a row per grant, is then what verifies the token is meant for it.
+- **A root token is accepted at a space's resource** by the default `accepts`, which takes it everywhere on the
+  origin: a client that sends no `resource`, or a connection made before the app had spaces, keeps working there. The
+  app, with one issuer and a row per grant, is then what verifies the token is meant for it. An app that wants a space
+  to take only its own tokens refuses the root there in its `accepts`.
 
 ## Callers, grants and revoking
 

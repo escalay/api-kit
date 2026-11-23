@@ -178,18 +178,20 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   is never held against a resource the client sends later. More than one resource is refused everywhere: a page at
   authorize, `invalid_target` at the device authorization and token endpoints, except by a grant from before
   audiences, which ignores `resource` altogether. The server checks a resource's
-  origin itself; an app serving several MCP resources passes `resources` (a pure check of the path, never a lookup),
-  `resourceOf` and `accepts`, and then an unknown resource or another origin is `invalid_target` and metadata is never
-  served for a resource that cannot be granted (404). A token that does not fit a request is a 401 `invalid_token` whose
+  origin itself; an app serving several MCP resources passes `resources` (a pure check of the path, never a lookup)
+  and `resourceOf`, and then an unknown resource or another origin is `invalid_target` and metadata is never
+  served for a resource that cannot be granted (404). The default `accepts` takes a token whose audience is exactly
+  `resourceOf(c)`, so each resource's token works at its own address; an in-process `/api` call with a path-scoped
+  token has lost that path and needs the app's own `accepts`. A token that does not fit a request is a 401 `invalid_token` whose
   `resource_metadata` points at the requested resource's document (`/.well-known/oauth-protected-resource<path>`).
   Two exceptions to "reject a token whose audience is not this resource", each with its reason:
   - **A token with no `aud` is accepted** (the default `accepts`): every token, code, device approval, refresh token
     and agent registration from before audiences has none, and none ever gains one, so connections made before keep
     working.
-  - **A root token may be accepted at a path-scoped resource**, by the app's own `accepts` (never the kit's default):
+  - **A root token is accepted at a path-scoped resource** (the default `accepts` takes it everywhere on the origin):
     a client that sent no resource, or a connection made before the app had path-scoped resources, keeps working
     there. The app, one process with one issuer and a row per grant, is then the one that verifies it is the
-    intended recipient.
+    intended recipient; an app that wants a resource to take only its own tokens refuses the root in its `accepts`.
 
 ## 8. Caching
 

@@ -619,6 +619,23 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
     expect(await (await app.request('/s/beta/mcp', { method: 'POST', headers: { authorization: `Bearer ${root.access_token}` } })).json()).toEqual({ api: 200 })
   })
 
+  it('with resources and no accepts, takes a token at its own resource and refuses it at another and at /api, in-process calls included', async () => {
+    const { app } = await oauthApp(memoryOAuthStore(), { resources: (path) => /^\/s\/[a-z]+\/mcp$/.test(path), resourceOf })
+    app.post('/s/:name/mcp', async (c) => c.json({ api: (await app.request('/api/v1/things', { headers: { authorization: c.req.header('authorization') ?? '' } })).status }))
+    const { exchange } = await approvedCode(app, { resource: ALPHA })
+    const auth = { authorization: `Bearer ${(await (await exchange()).json()).access_token}` }
+    const here = await app.request('/s/alpha/mcp', { method: 'POST', headers: auth })
+    // The in-process /api call has lost the space's path: only the app's own accepts can let it in
+    expect([here.status, await here.json()]).toEqual([200, { api: 401 }])
+    for (const [path, method] of [['/s/beta/mcp', 'POST'], ['/api/v1/things', 'GET'], ['/mcp', 'POST']] as const) {
+      const refused = await app.request(path, { method, headers: auth })
+      expect([refused.status, refused.headers.get('www-authenticate')], path).toEqual([401, expect.stringContaining('error="invalid_token"')])
+    }
+    // The default still takes a root token at every resource
+    const { tokens: root } = await signedIn(app)
+    expect((await app.request('/s/beta/mcp', { method: 'POST', headers: { authorization: `Bearer ${root.access_token}` } })).status).toBe(200)
+  })
+
   it('refuses a resource the server does not issue for with invalid_target: a page at authorize, JSON at the token endpoints', async () => {
     const { app } = await spacesApi()
     await refusedAtAuthorize(app, `${ORIGIN}/s/alpha/files`)

@@ -82,7 +82,8 @@ export type OAuthConfig = {
    * issues for. The kit has already checked the resource's origin is the issuer's, so this sees the path only. Keep it
    * a pure check of the string, with no lookup: it answers the metadata path too, so a lookup would tell anyone which
    * resources exist. Set, it also refuses: an unknown resource or another origin is `invalid_target`, and metadata for
-   * a path it refuses is 404. Unset, an unknown resource gets the root audience, as no resource does.
+   * a path it refuses is 404. Unset, an unknown resource gets the root audience, as no resource does. With `resourceOf`
+   * and no `accepts`, a token works at its own resource's address; an in-process `/api` call with it needs `accepts`.
    *
    * @example
    * resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path)
@@ -99,7 +100,9 @@ export type OAuthConfig = {
   /**
    * Whether a valid token fits this request: true lets it in, a sentence refuses it (a 401 `invalid_token` whose
    * metadata points at `resourceOf(c)`). Asked on every request, in-process calls included (an MCP tool calling `/api`
-   * with the same bearer). Default: a token with no audience, or one for the origin or `mcpPath`, fits everywhere.
+   * with the same bearer). Default: a token with no audience, or one for the origin or `mcpPath`, fits everywhere, and
+   * one whose audience is exactly `resourceOf(c)` fits there (RFC 8707's own rule). An in-process `/api` call has lost
+   * the path that named its resource, so a path-scoped token works there only through the app's own `accepts`.
    *
    * @example
    * accepts: async (caller, c) => !caller.resource || caller.resource === oauth.rootOf(c) || caller.resource === spaceOf(c) || 'This token is for another space.'
@@ -282,8 +285,9 @@ export const createOAuth = (config: OAuthConfig) => {
 
   const defaultAccepts = async (caller: TokenCaller, c: Context): Promise<true | string> => {
     const root = rootOf(c)
-    if (!caller.resource || caller.resource === root || caller.resource === root + mcpPath) return true
-    return `This token is for ${caller.resource} only: connect again from ${resourceOf(c)} for a token here.`
+    const here = resourceOf(c)
+    if (!caller.resource || caller.resource === root || caller.resource === root + mcpPath || caller.resource === here) return true
+    return `This token is for ${caller.resource} only: connect again from ${here} for a token here.`
   }
   const accepts = config.accepts ?? defaultAccepts
 
