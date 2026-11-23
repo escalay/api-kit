@@ -722,6 +722,13 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
     const { audience: _audience, ...row } = (await store.get('registration', before.registration_id))!
     await store.put('registration', before.registration_id, row, Math.floor(Date.now() / 1000) + 3600)
     expect(await tokensOf(before)).toEqual([undefined, undefined, undefined])
+    // Registered before audiences and claimed after: its grant was made at registration, so it stays aud-less too
+    const registered = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Late shift' }))).json()
+    const { audience: _unclaimed, ...unclaimed } = (await store.get('registration', registered.registration_id))!
+    await store.put('registration', registered.registration_id, unclaimed, Math.floor(Date.now() / 1000) + 3600)
+    const claim_attempt_token = new URL(registered.claim.verification_uri).searchParams.get('claim_attempt_token')!
+    await app.request('/oauth/claim', { ...form({ claim_attempt_token, user_code: registered.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    expect(await tokensOf(registered)).toEqual([undefined, undefined, undefined])
   })
 
   it('refuses a token for another resource under the default accepts, and takes one without aud or for the origin or MCP', async () => {

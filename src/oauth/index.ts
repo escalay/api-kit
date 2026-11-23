@@ -515,8 +515,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const claimToken = token('clm')
       const expires = now() + REGISTRATION_TTL
       const name = typeof body.client_name === 'string' && body.client_name.trim() ? body.client_name.trim().slice(0, 80) : `Agent ${registrationId.slice(4, 10)}`
-      // Its grant from the start, so approvals racing for it can't write two
-      await store.put('registration', registrationId, { name, type: body.type, claimed: false, email: body.login_hint ?? null, family: newGrant() }, expires)
+      // Its grant from the start, so approvals racing for it can't write two; it names no resource, so it gets the root
+      await store.put('registration', registrationId, { name, type: body.type, claimed: false, email: body.login_hint ?? null, family: newGrant(), audience: rootOf(c), resource: null }, expires)
       await store.put('claim-token', sha(claimToken), { registration: registrationId }, expires)
       const assertion = await sign({ sub: registrationId, typ: 'agent_identity' }, REGISTRATION_TTL, origin)
       const base = { registration_id: registrationId, registration_type: body.type, claim_url: `${origin}/agent/identity/claim`, claim_token: claimToken, claim_token_expires: new Date(expires * 1000).toISOString(), post_claim_scopes: [...SCOPES] }
@@ -580,8 +580,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       // One approval per registration: a second would give its jwt-bearer tokens a grant its claim and refresh tokens lack
       if (registration.claimed) return c.html(page('Already approved', `<h1>Already approved</h1><p>${escape(String(registration.name))} was approved already; this code is spent. You can close this page.</p>`), 409)
       // One grant for the claim: its claim, refresh and jwt-bearer tokens all carry it (made at registration; older rows get one here)
-      // A claim names no resource: its grant gets the root
-      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: registration.family ?? newGrant(), audience: rootOf(c), resource: null }, now() + REGISTRATION_TTL)
+      // The audience came with the grant at registration: one registered before audiences stays without
+      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: registration.family ?? newGrant() }, now() + REGISTRATION_TTL)
       return c.html(page('Approved', `<h1>Approved</h1><p>${escape(String(registration.name))} can now use ${escape(config.name)}. You can close this page.</p>`))
     })
 

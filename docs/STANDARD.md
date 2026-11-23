@@ -182,7 +182,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   `resource_metadata` points at the requested resource's document (`/.well-known/oauth-protected-resource<path>`).
   Two exceptions to "reject a token whose audience is not this resource", each with its reason:
   - **A token with no `aud` is accepted** (the default `accepts`): every token, code, device approval, refresh token
-    and claim from before audiences has none, and none ever gains one, so connections made before keep working.
+    and agent registration from before audiences has none, and none ever gains one, so connections made before keep
+    working.
   - **A root token may be accepted at a path-scoped resource**, by the app's own `accepts` (never the kit's default):
     a client that sent no resource, or a connection made before the app had path-scoped resources, keeps working
     there. The app, one process with one issuer and a row per grant, is then the one that verifies it is the

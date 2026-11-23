@@ -38,7 +38,9 @@ Every grant is bound to one resource, signed as its tokens' `aud` and on the cal
   it: the origin, `mcpPath` (default `/mcp`), and with `resources` set, what it approves.
 - Else the **root**, the issuer's origin: a client that sends no `resource`, or (without `resources`) one the app does
   not describe. The default `accepts` takes a root token everywhere on the origin, so nothing changes for it.
-- A claimed agent (auth.md) names no resource: its claim, refresh and jwt-bearer tokens carry the root.
+- An agent registered at `/agent/identity` (auth.md) names no resource: its grant gets the root when it registers,
+  and its claim, refresh and jwt-bearer tokens carry it. One registered before audiences stays without, even if
+  claimed after.
 
 The audience is fixed at the authorization request. A token request naming another resource is `invalid_target`,
 checked before anything is written, so the code or refresh token still works with the right one. Refresh keeps the
@@ -89,7 +91,7 @@ Two exceptions to "a token is accepted only by its audience" (MCP 2026-07-28 ask
 for them, or otherwise verify they are the intended recipient):
 
 - **A token with no `aud` is accepted** by the default `accepts`: every token, code, device approval, refresh token and
-  claim from before audiences has none, and none ever gains one. Connections made before keep working.
+  agent registration from before audiences has none, and none ever gains one. Connections made before keep working.
 - **A root token may be accepted at a space's resource** by the app's own `accepts`, never by the default: a client
   that sends no `resource`, or a connection made before the app had spaces, keeps working there. The app, with one
   issuer and a row per grant, is then what verifies the token is meant for it.
@@ -218,6 +220,6 @@ Defaults that change when an app takes this version:
   `/mcpx` no longer does. `createAgentApi`'s default relay follows `mcpPath`, so an app with MCP mounted elsewhere
   that passes it stops needing `write` for every MCP POST.
 
-Codes, device approvals, refresh tokens and claims from before audiences never gain one, whatever resource the client
-sends: their tokens stay aud-less, accepted everywhere. A code written by the previous version kept the query's
-`resource` as it came; it is never signed.
+Codes, device approvals, refresh tokens and agent registrations from before audiences (claimed or not) never gain one,
+whatever resource the client sends: their tokens stay aud-less, accepted everywhere. A code written by the previous
+version kept the query's `resource` as it came; it is never signed.
