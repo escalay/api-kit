@@ -22,7 +22,7 @@ import { secureHeaders } from 'hono/secure-headers'
 import { authenticate, OAUTH_OPEN_PATHS, SCOPES, type OAuthServer } from './auth.js'
 import { cacheControl, CACHE } from './cache.js'
 import { idempotency, type AddressTrust, type GuardStore, type IdempotencyOptions } from './guards.js'
-import { API_CATALOG_TYPE, apiCatalog, LINK_HEADER, markdownTokens, MARKDOWN_TYPE, poppyJson, recordMounted, robotsTxt, sendPublic, sitemapXml, WELL_KNOWN, wantsMarkdown, type AgentBrand, type DiscoveryConfig } from './discovery.js'
+import { API_CATALOG_TYPE, apiCatalog, LINK_HEADER, markdownTokens, MARKDOWN_TYPE, poppyJson, publicOriginOf, recordMounted, robotsTxt, sendPublic, sitemapXml, WELL_KNOWN, wantsMarkdown, type AgentBrand, type DiscoveryConfig } from './discovery.js'
 import { HAL_JSON, originOf } from './hal.js'
 import { errorHandler, notFoundHandler, PROBLEMS, problemResponse, problemResponses, validationHook, type ProblemCode } from './problem.js'
 
@@ -259,11 +259,13 @@ export const createAgentApi = (config: AgentApiConfig) => {
       return c.html((await page.text()).replace(/<head(?:\s[^>]*)?>/i, (head) => head + brand.headTags(originOf(c))), page.status as 200)
     })
 
-  app.get(WELL_KNOWN.apiCatalog, (c) => sendPublic(c, JSON.stringify(apiCatalog(originOf(c)), null, 2), API_CATALOG_TYPE))
-  app.get('/robots.txt', (c) => sendPublic(c, robotsTxt(config.private ? { private: true } : (config.discovery ?? {}), originOf(c)), 'text/plain; charset=utf-8'))
+  // With the OAuth server's publicOrigin, every publicly cached document names it, never a forwarded host
+  if (config.oauth?.issuerOf) recordMounted(app, { publicOrigin: config.oauth.issuerOf })
+  app.get(WELL_KNOWN.apiCatalog, (c) => sendPublic(c, JSON.stringify(apiCatalog(publicOriginOf(app, c)), null, 2), API_CATALOG_TYPE))
+  app.get('/robots.txt', (c) => sendPublic(c, robotsTxt(config.private ? { private: true } : (config.discovery ?? {}), publicOriginOf(app, c)), 'text/plain; charset=utf-8'))
   const { sitemap, poppy } = config.private ? {} : (config.discovery ?? {})
-  if (sitemap?.length) app.get('/sitemap.xml', (c) => sendPublic(c, sitemapXml(originOf(c), sitemap), 'application/xml; charset=utf-8'))
-  if (poppy) app.get('/.well-known/poppy.json', (c) => sendPublic(c, JSON.stringify(poppyJson(originOf(c), poppy, Boolean(config.oauth)), null, 2), 'application/json'))
+  if (sitemap?.length) app.get('/sitemap.xml', (c) => sendPublic(c, sitemapXml(publicOriginOf(app, c), sitemap), 'application/xml; charset=utf-8'))
+  if (poppy) app.get('/.well-known/poppy.json', (c) => sendPublic(c, JSON.stringify(poppyJson(publicOriginOf(app, c), poppy, Boolean(config.oauth)), null, 2), 'application/json'))
   if (home) app.get('/', (c) => c.redirect(home === 'app' ? '/app/' : '/docs', 302))
   // The app's files are served under /app/, so the bare path is sent there too
   if (home === 'app') app.get('/app', (c) => c.redirect('/app/', 302))

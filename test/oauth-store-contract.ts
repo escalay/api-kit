@@ -145,6 +145,23 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect(await store.markUsed!('code', `${id}-none`)).toBeNull()
     })
 
+    it('trims a kind to its newest unused rows, never a used one, one from before `used`, or another kind', async () => {
+      const store = await make()
+      const kind = `capped-${crypto.randomUUID()}`
+      for (const [id, life] of [['a', 100], ['b', 200], ['c', 300], ['d', 400]] as const) await store.put(kind, id, { used: false }, now() + life)
+      // Two written in the same second: the later one is the newer
+      await store.put(kind, 'e', { used: false }, now() + 400)
+      await store.put(kind, 'used', { used: true }, now() + 50)
+      await store.put(kind, 'before', { name: 'Before' }, now() + 60)
+      await store.put(`${kind}-other`, 'x', { used: false }, now() + 10)
+      const live = async () => (await Promise.all(['a', 'b', 'c', 'd', 'e', 'used', 'before'].map(async (id) => ((await store.get(kind, id)) ? id : null)))).filter(Boolean)
+      await store.trim!(kind, 2)
+      expect(await live()).toEqual(['d', 'e', 'used', 'before'])
+      expect(await store.get(`${kind}-other`, 'x')).not.toBeNull()
+      await store.trim!(kind, 0)
+      expect(await live()).toEqual(['used', 'before'])
+    })
+
     // workers-oauth-provider #420; better-auth GHSA-7w99-5wm4-3g79; OAuth 2.1 §4.1.3
     it('gives one token for two exchanges of a code at once, and the second valid one revokes what the first got', async () => {
       const { app } = await oauthApp(await make())

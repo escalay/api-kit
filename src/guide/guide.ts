@@ -22,7 +22,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import type { Context, Hono } from 'hono'
 import { CACHE } from '../core/cache.js'
-import { frontmatterOf, recordMounted, mountedOf, sendPublic, skillsIndex, tarGz, WELL_KNOWN, type SkillArtifact } from '../core/discovery.js'
+import { frontmatterOf, recordMounted, mountedOf, publicOriginOf, sendPublic, skillsIndex, tarGz, WELL_KNOWN, type SkillArtifact } from '../core/discovery.js'
 import { originOf } from '../core/hal.js'
 import { problemResponse } from '../core/problem.js'
 import { brandVars, generatedVars, type CliCommandLike, type OpenApiDoc } from './reference.js'
@@ -148,9 +148,12 @@ export const serveGuide = (app: Hono<any, any, any> & Requester, { vars, full, c
   }
   recordMounted(app, { skills: (origin) => built.get(origin) ?? [], refreshSkills: artifactsNow })
 
-  app.get(WELL_KNOWN.skillsIndex, async (c) => sendPublic(c, JSON.stringify(skillsIndex(originOf(c), await artifactsNow(originOf(c), credentialsOf(c))), null, 2), 'application/json'))
+  app.get(WELL_KNOWN.skillsIndex, async (c) => {
+    const origin = publicOriginOf(app, c)
+    return sendPublic(c, JSON.stringify(skillsIndex(origin, await artifactsNow(origin, credentialsOf(c))), null, 2), 'application/json')
+  })
   app.get('/.well-known/agent-skills/:file', async (c) => {
-    const skill = (await artifactsNow(originOf(c), credentialsOf(c))).find((one) => one.url === c.req.path)
+    const skill = (await artifactsNow(publicOriginOf(app, c), credentialsOf(c))).find((one) => one.url === c.req.path)
     return skill ? sendPublic(c, skill.bytes, skill.mediaType) : problemResponse(c, 'not_found', { detail: `No ${c.req.path}. The index is ${WELL_KNOWN.skillsIndex}.` })
   })
   return { files, render }
