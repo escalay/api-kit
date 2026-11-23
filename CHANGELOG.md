@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.29.0](https://github.com/escalay/api-kit/compare/v1.28.0...v1.29.0) (2026-11-23)
+
+
+### New
+
+* **oauth:** bind each token to the resource it was asked for ([#87](https://github.com/escalay/api-kit/issues/87)) ([280b023](https://github.com/escalay/api-kit/commit/280b02396e622f26de6ec55d070977bed8c6832a))
+* **oauth:** let the app decide who approves a sign-in ([#89](https://github.com/escalay/api-kit/issues/89)) ([4c724de](https://github.com/escalay/api-kit/commit/4c724de4fe9562b2ff98533d260d9c410a727219))
+
+
+### Fixed
+
+* **oauth:** harden the open endpoints for sign-ins by non-owners ([#90](https://github.com/escalay/api-kit/issues/90)) ([887fb3d](https://github.com/escalay/api-kit/commit/887fb3dca80126b562c7c9e2f6cf7a55242a321a))
+
 ## [1.28.0](https://github.com/escalay/api-kit/compare/v1.27.1...v1.28.0) (2026-11-22)
 
 
