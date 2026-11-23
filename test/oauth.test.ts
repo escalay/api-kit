@@ -90,6 +90,19 @@ describe('OAuth for agents', () => {
     expect((await moved.request('/ai/mcp', { method: 'POST', headers: { authorization: `Bearer ${readOnly.access_token}` } })).status).toBe(200)
   })
 
+  it('answers 401, never 500, when the forwarded host is no host at all', async () => {
+    const { app } = await sampleApi()
+    for (const host of ['exa mple.test', '[::1', 'example.test:abc']) {
+      for (const [path, method, suffix] of [['/api/v1/things', 'GET', ''], ['/mcp', 'POST', '/mcp']] as const) {
+        for (const authorization of [undefined, 'Bearer a.b.c']) {
+          const answer = await app.request(path, { method, headers: { 'x-forwarded-host': host, ...(authorization ? { authorization } : {}) } })
+          expect(answer.status, `${host} ${path} ${authorization}`).toBe(401)
+          expect(answer.headers.get('www-authenticate')).toContain(`/.well-known/oauth-protected-resource${suffix}"`)
+        }
+      }
+    }
+  })
+
   it('runs authorization code with PKCE, refresh and revocation, with the owner approving', async () => {
     const { app } = await sampleApi()
     const registered = await app.request('/oauth/register', json({ client_name: 'Claude', redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] }))

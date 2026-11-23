@@ -160,8 +160,8 @@ const canonical = (uri: string) => {
   return written === resource || written === `${resource}/` ? resource : null
 }
 
-/** A resource's path: what follows its origin (empty for the origin itself). */
-const pathOf = (resource: string) => resource.slice(new URL(resource).origin.length)
+/** A resource's path: what follows its scheme and authority (empty for the origin). Plain string handling, so a resource built on an unparseable forwarded host never throws. */
+const pathOf = (resource: string) => resource.replace(/^[a-z][a-z\d+.-]*:\/\/[^/]*/i, '')
 
 const UNSAFE_SCHEMES = new Set(['javascript:', 'data:', 'file:', 'vbscript:', 'blob:'])
 
