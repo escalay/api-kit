@@ -695,6 +695,10 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
     // The default still takes a root token at every resource
     const { tokens: root } = await signedIn(app)
     expect((await app.request('/s/beta/mcp', { method: 'POST', headers: { authorization: `Bearer ${root.access_token}` } })).status).toBe(200)
+    // And an mcpPath token, which in-process calls carry to the whole origin
+    const { tokens: mcp } = await signedIn(app, { resource: `${ORIGIN}/mcp` })
+    expect(audOf(mcp.access_token)).toBe(`${ORIGIN}/mcp`)
+    expect(await (await app.request('/s/beta/mcp', { method: 'POST', headers: { authorization: `Bearer ${mcp.access_token}` } })).json()).toEqual({ api: 200 })
   })
 
   it('refuses a resource the server does not issue for with invalid_target: a page at authorize, JSON at the token endpoints', async () => {
