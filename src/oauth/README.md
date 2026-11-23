@@ -106,15 +106,18 @@ const oauth = createOAuth({
   `/s/*/mcp` matches `/s/alpha/mcp` and not `/s/alpha/mcp/x`. It replaces the default (`mcpPath` and `/a2a`), so list
   those too.
 
-Two exceptions to "a token is accepted only by its audience" (MCP 2026-07-28 asks servers to reject tokens not meant
+Three exceptions to "a token is accepted only by its audience" (MCP 2026-07-28 asks servers to reject tokens not meant
 for them, or otherwise verify they are the intended recipient):
 
 - **A token with no `aud` is accepted** by the default `accepts`: every token, code, device approval, refresh token and
   agent registration from before audiences has none, and none ever gains one. Connections made before keep working.
-- **A root token is accepted at a space's resource** by the default `accepts`, which takes it everywhere on the
-  origin: a client that sends no `resource`, or a connection made before the app had spaces, keeps working there. The
-  app, with one issuer and a row per grant, is then what verifies the token is meant for it. An app that wants a space
-  to take only its own tokens refuses the root there in its `accepts`.
+- **A root token is accepted at a space's resource:** the default `accepts` takes it everywhere on the origin, so a
+  client that sends no `resource`, or a connection made before the app had spaces, keeps working there. The app, with
+  one issuer and a row per grant, is then what verifies the token is meant for it. An app that wants a space to take
+  only its own tokens refuses the root there in its own `accepts`.
+- **A token whose `aud` is the origin plus `mcpPath` is accepted everywhere on the origin** by the default `accepts`:
+  MCP tools call `/api` in-process with the same bearer, so the token for the single MCP must fit the whole origin,
+  spaces included. An app that wants otherwise refuses it in its own `accepts`, as for the root.
 
 ## Callers, grants and revoking
 

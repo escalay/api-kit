@@ -184,14 +184,19 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   `resourceOf(c)`, so each resource's token works at its own address; an in-process `/api` call with a path-scoped
   token has lost that path and needs the app's own `accepts`. A token that does not fit a request is a 401 `invalid_token` whose
   `resource_metadata` points at the requested resource's document (`/.well-known/oauth-protected-resource<path>`).
-  Two exceptions to "reject a token whose audience is not this resource", each with its reason:
+  Three exceptions to "reject a token whose audience is not this resource", each with its reason:
   - **A token with no `aud` is accepted** (the default `accepts`): every token, code, device approval, refresh token
     and agent registration from before audiences has none, and none ever gains one, so connections made before keep
     working.
-  - **A root token is accepted at a path-scoped resource** (the default `accepts` takes it everywhere on the origin):
-    a client that sent no resource, or a connection made before the app had path-scoped resources, keeps working
+  - **A root token is accepted at a path-scoped resource:** the default `accepts` takes it everywhere on the origin,
+    so a client that sent no resource, or a connection made before the app had path-scoped resources, keeps working
     there. The app, one process with one issuer and a row per grant, is then the one that verifies it is the
-    intended recipient; an app that wants a resource to take only its own tokens refuses the root in its `accepts`.
+    intended recipient. An app that wants a resource to take only its own tokens refuses the root in its own
+    `accepts`.
+  - **A token whose `aud` is the origin plus `mcpPath` is accepted everywhere on the origin** (the default
+    `accepts`): MCP tools call `/api` in-process with the same bearer, so the token for the single MCP must fit the
+    whole origin, path-scoped resources included. An app that wants otherwise refuses it in its own `accepts`, as for
+    the root.
 
 ## 8. Caching
 
