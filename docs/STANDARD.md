@@ -145,8 +145,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   `/icon-512.png`, `/apple-touch-icon.png`, `/og.png`, `/site.webmanifest`, and `/icon-dark.svg`,
   `/icon-dark-192.png`, `/icon-dark-512.png` with a dark icon. In Access, these paths and `/api/*`, `/mcp` bypass SSO;
   the app's key check guards them.
-- A 401 carries `WWW-Authenticate: Bearer realm="<app>"` (plus `error="invalid_token"` for a wrong key). Keys never go
-  in URLs or logs.
+- A 401 carries `WWW-Authenticate: Bearer realm="<app>"` (plus `error="invalid_token"` for a wrong key; with OAuth on,
+  `resource_metadata` and `scope="read write"`). Keys never go in URLs or logs.
 - **Agents that get their own token (optional, `oauth.ts`):** the app is its own OAuth server. MCP clients follow the
   401's `resource_metadata` to `/.well-known/oauth-protected-resource[/mcp]`, register (RFC 7591, public clients), and
   send the owner to `/oauth/authorize` (code + PKCE S256); other agents follow `/auth.md` (anonymous or by email),
@@ -164,10 +164,39 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   access tokens at once (`revokeGrant`), and a claimed agent's identity assertion with them; `revokeClient` also drops the registration and refuses a code, device approval or claim token not yet collected, and a claim token collected after its grant was revoked is refused too (the revoke markers outlive anything issued behind them, so nothing may be issued into a revoked grant or client). A code, a refresh token, a device code and a claim token are
   used once under concurrent requests, and so is each approval (a consent ticket, a typed claim or device code: a
   double-clicked Approve approves once): a second valid exchange of a code, or a refresh token sent again (outside an
-  optional `reuseGraceSeconds`, default 0), revokes the grant. OAuth rows live in SQLite or D1, never KV. Scopes: `read` for safe methods, `write` for the rest; the relay endpoints (`/mcp`, `/a2a`,
-  `auth.relay`) need only `read`, since each call they make reaches a route that checks its own scope. In Access, only
+  optional `reuseGraceSeconds`, default 0), revokes the grant. OAuth rows live in SQLite or D1, never KV. Scopes: `read` for safe methods, `write` for the rest; the relay endpoints (`/mcp` or the OAuth
+  server's `mcpPath`, `/a2a`, `auth.relay`) need only `read`, since each call they make reaches a route that checks its own scope (`auth.relay` takes the same path patterns as the open list, a star inside one whole segment: `/s/*/mcp`). In Access, only
   `/oauth/authorize`, `/oauth/claim` and `/oauth/device` stay gated; `/oauth/register|token|revoke|device_authorization`,
   `/agent/identity*`, `/auth.md` and `/.well-known/*` bypass it.
+- **Audiences (RFC 8707, RFC 9728, MCP 2026-07-28):** every grant is bound to one resource, signed as the token's
+  `aud`. It is the resource the client sent at the authorization request (or device authorization) when the server
+  issues for it, else the **root** (the issuer's origin): a client that sends none, or (without `resources`) one the
+  app does not describe, gets the root. A resource is compared in one canonical form: an absolute http(s) URL, scheme
+  and host lower-cased, the default port and one trailing slash dropped; a user part, a query, a fragment, a dot
+  segment or an encoded dot makes it no resource. The audience is fixed at the authorization request: a token request
+  naming another is `invalid_target` (before anything is written), refresh keeps it, and an audience the server chose
+  is never held against a resource the client sends later. More than one resource is refused everywhere: a page at
+  authorize, `invalid_target` at the device authorization and token endpoints, except by a grant from before
+  audiences, which ignores `resource` altogether. The server checks a resource's
+  origin itself; an app serving several MCP resources passes `resources` (a pure check of the path, never a lookup)
+  and `resourceOf`, and then an unknown resource or another origin is `invalid_target` and metadata is never
+  served for a resource that cannot be granted (404). The default `accepts` takes a token whose audience is exactly
+  `resourceOf(c)`, so each resource's token works at its own address; an in-process `/api` call with a path-scoped
+  token has lost that path and needs the app's own `accepts`. A token that does not fit a request is a 401 `invalid_token` whose
+  `resource_metadata` points at the requested resource's document (`/.well-known/oauth-protected-resource<path>`).
+  Three exceptions to "reject a token whose audience is not this resource", each with its reason:
+  - **A token with no `aud` is accepted** (the default `accepts`): every token, code, device approval, refresh token
+    and agent registration from before audiences has none, and none ever gains one, so connections made before keep
+    working.
+  - **A root token is accepted at a path-scoped resource:** the default `accepts` takes it everywhere on the origin,
+    so a client that sent no resource, or a connection made before the app had path-scoped resources, keeps working
+    there. The app, one process with one issuer and a row per grant, is then the one that verifies it is the
+    intended recipient. An app that wants a resource to take only its own tokens refuses the root in its own
+    `accepts`.
+  - **A token whose `aud` is the origin plus `mcpPath` is accepted everywhere on the origin** (the default
+    `accepts`): MCP tools call `/api` in-process with the same bearer, so the token for the single MCP must fit the
+    whole origin, path-scoped resources included. An app that wants otherwise refuses it in its own `accepts`, as for
+    the root.
 
 ## 8. Caching
 
@@ -277,8 +306,11 @@ fact, steps with checkable done-when criteria.
   same tools from a laptop against the remote API.
 - Auth is the API's: the same bearer key, or an OAuth token when the app runs `oauth.ts` (then MCP clients such as
   hosted chat apps connect with no key at all: the 401 on `/mcp` points at `/.well-known/oauth-protected-resource/mcp`).
-  Never publish protected-resource metadata without a working authorization server: it sends clients into a flow that
-  cannot succeed.
+  Never publish protected-resource metadata without a working authorization server, nor for a resource no token can
+  be granted for: it sends clients into a flow that cannot succeed. Tokens are audience-bound when the client sends
+  `resource` (§7); MCP mounted away from `/mcp` passes the same path as `mcpPath`, and a server serving several MCP
+  resources passes `resources`, `resourceOf` and `accepts`, whose `accepts` also judges the in-process `/api` calls its
+  tools make with the same bearer.
 - `mountMcp` publishes the Server Card (SEP-2127) at `<mcp>/server-card` and `/.well-known/mcp/server-card.json`.
 - **Resources** (`mcpResource`) let a client attach a thing (a recipe with its picture, a tree): a URI template read
   through the routes, JSON as text and images as blobs; a part marked `optional` (an image that may be missing) is

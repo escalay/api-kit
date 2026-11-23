@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { createBrand, defineBrand, type BrandAssets } from '../src/brand/index.js'
+import { createOAuth, generateOAuthKey, memoryOAuthStore } from '../src/index.js'
 import { mcpServerFactory } from '../src/mcp/index.js'
 import { guideGaps, lintOpenApi } from '../src/testing/index.js'
 import { ASSETS, AUTH, cookbookApi, mcpCall, pngOf, surfacesOf } from './brand-fixture.js'
@@ -110,6 +111,15 @@ describe('brand', () => {
       name: 'Cookbook', short_name: 'Cookbook', description: 'Recipes and menus for agents.', start_url: '/', display: 'standalone', theme_color: '#2563eb', background_color: '#ffffff',
       icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }, { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml' }],
     })
+  })
+
+  it('never answers an OAuth metadata path that `resources` refuses', async () => {
+    const oauth = createOAuth({ name: 'Cookbook', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null, resources: (path) => path === '/s/alpha/mcp' })
+    const app = await branded({ oauth })
+    expect((await app.request('/.well-known/oauth-protected-resource/s/alpha/files')).status).toBe(404)
+    expect((await app.request('/.well-known/oauth-protected-resource/favicon.ico')).status).toBe(404)
+    expect((await app.request('/.well-known/oauth-protected-resource/s/alpha/mcp')).status).toBe(200)
+    expect((await app.request('/favicon.ico')).status).toBe(200)
   })
 
   it('changes a file’s ETag when its bytes change under the same inputs, as after the first `kit brand` or a new renderer', async () => {
