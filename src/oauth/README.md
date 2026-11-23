@@ -242,6 +242,11 @@ Defaults that change when an app takes this version:
 - The 401 pointer uses `mcpPath` exactly: `/mcp` and `/mcp/…` point at `/.well-known/oauth-protected-resource/mcp`,
   `/mcpx` no longer does. `createAgentApi`'s default relay follows `mcpPath`, so an app with MCP mounted elsewhere
   that passes it stops needing `write` for every MCP POST.
+- A star inside a pattern in `auth.open`, `guards.skip` and `auth.relay` now matches one whole path segment: `/a/*/b`
+  matches `/a/x/b` and not `/a/x/y/b`, and `/a/**` matches `/a/x` and `/a/x/y`. Before, such a star was literal and
+  matched nothing an app serves, so check those lists for an inner or doubled star before updating. Exact,
+  leading-star and trailing-star patterns are unchanged in `open` and `skip`; `relay` compared paths exactly before,
+  so a star anywhere in it was literal and now matches as in `open`.
 
 Codes, device approvals, refresh tokens and agent registrations from before audiences (claimed or not) never gain one,
 whatever resource the client sends: their tokens stay aud-less, accepted everywhere. A code written by the previous
