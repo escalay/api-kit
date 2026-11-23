@@ -94,7 +94,8 @@ export type OAuthConfig = {
    * plus `mcpPath` under it, else the origin.
    *
    * @example
-   * resourceOf: (c) => oauth.rootOf(c) + (/^\/s\/[a-z0-9-]+\/mcp/.exec(c.req.path)?.[0] ?? '')
+   * resourceOf: (c) =>
+   *   oauth.rootOf(c) + (/^\/s\/[a-z0-9-]+\/mcp/.exec(c.req.path)?.[0] ?? (c.req.path === oauth.mcpPath || c.req.path.startsWith(oauth.mcpPath + '/') ? oauth.mcpPath : ''))
    */
   resourceOf?: (c: Context) => string
   /**
@@ -105,7 +106,13 @@ export type OAuthConfig = {
    * the path that named its resource, so a path-scoped token works there only through the app's own `accepts`.
    *
    * @example
-   * accepts: async (caller, c) => !caller.resource || caller.resource === oauth.rootOf(c) || caller.resource === spaceOf(c) || 'This token is for another space.'
+   * // The path decides at an MCP address; elsewhere the app reads the space an in-process call carries (`spaceOf`).
+   * // The whole example: the oauth README's "Audiences (RFC 8707)".
+   * accepts: async (caller, c) => {
+   *   const root = oauth.rootOf(c)
+   *   const here = oauth.resourceOf(c) === root ? (spaceOf(c) ?? root) : oauth.resourceOf(c)
+   *   return !caller.resource || caller.resource === root || caller.resource === root + oauth.mcpPath || caller.resource === here || 'This token is for another space.'
+   * }
    */
   accepts?: (caller: TokenCaller, c: Context) => Promise<true | string>
   /**
