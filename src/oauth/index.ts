@@ -24,8 +24,8 @@
  * audiences never gains one. `accepts` judges whether a token's audience fits a request.
  * The endpoints anyone may call stay bounded: `publicOrigin` fixes the one origin every document, token and check
  * names; a registration no sign-in has used lives a week and unused ones are capped, as are open consent tickets; and
- * `limits` counts registrations, device authorizations, sign-in pages and token misses per address. Rules after
- * cloudflare/workers-oauth-provider (MIT): a registration's life starts again when it is first used.
+ * `limits` counts registrations and claims, device authorizations, sign-in pages and token misses per address. Rules
+ * after cloudflare/workers-oauth-provider (MIT): a registration's life starts again when it is first used.
  *
  * @example
  * const oauth = createOAuth({ name: 'Cookbook', signingKey: env.OAUTH_SIGNING_KEY, store, owner: (c) => ownerOf(c) })
@@ -121,9 +121,9 @@ export type OAuthConfig = {
    */
   publicOrigin?: string
   /**
-   * Per-address limits on the endpoints anyone may call (registration, device authorization, the sign-in page, token
-   * misses), counted in `store` and read with `addressOf` (`address`, default the app's). The owner is never counted.
-   * Default false: none.
+   * Per-address limits on the endpoints anyone may call (registration and claims, device authorization, the sign-in
+   * page, token misses), counted in `store` and read with `addressOf` (`address`, default the app's). The owner is never
+   * counted. Default false: none.
    *
    * @example
    * limits: { store: await dbGuardStore(db), address: { header: 'cf-connecting-ip' } }
@@ -694,6 +694,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       }
       app.post('/oauth/register', limited('register'))
       app.post('/agent/identity', limited('register'))
+      app.post('/agent/identity/claim', limited('register'))
       app.post('/oauth/device_authorization', limited('device'))
       app.get('/oauth/authorize', async (c, next) => {
         const retry = await overLimit(c, 'authorize')

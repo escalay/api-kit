@@ -1667,6 +1667,22 @@ describe('OAuth open endpoints: one public origin, lifetimes, caps and limits fo
     expect((await register(unnamed, from('2001:db8:5:6::2'))).status).toBe(201)
   })
 
+  it('claim calls count in the registration bucket, and the owner is never counted', async () => {
+    const { app } = await oauthApp(memoryOAuthStore(), { limits: { store: memoryGuardStore(), address: { header: 'x-forwarded-for' } } })
+    const registration = await (await app.request('/agent/identity', json({ type: 'anonymous', client_name: 'Night shift' }, { 'x-forwarded-for': '203.0.113.20' }))).json()
+    const claim = (headers: Record<string, string>) => app.request('/agent/identity/claim', json({ claim_token: registration.claim_token, email: OWNER }, headers))
+    const shared = { 'x-forwarded-for': '203.0.113.21' }
+    // Each call writes a claim attempt: 20 an hour per address, with registrations
+    for (let n = 0; n < 20; n++) expect((await claim(shared)).status).toBe(200)
+    const refused = await claim(shared)
+    expect(refused.status).toBe(429)
+    expect((await refused.json()).error).toBe('too_many_requests')
+    expect(Number(refused.headers.get('retry-after'))).toBeGreaterThan(0)
+    expect((await register(app, shared)).status).toBe(429)
+    expect((await claim({ 'x-forwarded-for': '203.0.113.22' })).status).toBe(200)
+    // The owner on that address is never counted
+    for (let n = 0; n < 5; n++) expect((await claim({ ...shared, 'x-test-owner': OWNER })).status).toBe(200)
+  })
 })
 
 oauthStoreContract('memory', async () => memoryOAuthStore())

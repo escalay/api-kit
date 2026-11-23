@@ -274,7 +274,7 @@ const oauth = createOAuth({
 
 | Endpoint | Limit per address |
 |---|---|
-| `POST /oauth/register` and `POST /agent/identity`, together | 20 an hour |
+| `POST /oauth/register`, `POST /agent/identity` and `POST /agent/identity/claim`, together | 20 an hour |
 | `POST /oauth/device_authorization` | 20 an hour |
 | `GET /oauth/authorize` | 60 a minute |
 | `POST /oauth/token`: misses only (`invalid_grant`), counted after the lookup | 30 a minute |
