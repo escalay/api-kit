@@ -69,8 +69,9 @@ const oauth = createOAuth({
   resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path),
   resourceOf,                                                  // where a 401 points (RFC 9728 §3.3)
   accepts: async (caller, c) => {
-    // A tool's in-process /api call has the space's path no more: the app knows its space another way (`spaceOf`)
-    const here = spaceOf(c) ?? resourceOf(c)
+    // The path decides when it names a space. A tool's in-process /api call has the space's path no more: only then
+    // does the app read the space it carries (`spaceOf`)
+    const here = SPACE.test(c.req.path) ? resourceOf(c) : (spaceOf(c) ?? resourceOf(c))
     return !caller.resource || caller.resource === oauth.rootOf(c) || caller.resource === here || `This token is for ${caller.resource}: connect again at ${here}.`
   },
 })
@@ -83,7 +84,10 @@ const oauth = createOAuth({
 - `resources` must be a pure function of the string, with no lookup: it answers the metadata path too, so a lookup
   would tell anyone which spaces exist. Whether one exists or is open is decided when the person approves.
 - `accepts` runs on every request after the token's signature and revocation checks, in-process calls included: MCP
-  tools call `/api` with the same bearer, and apps rewrite paths before the kit runs. A sentence refuses: 401
+  tools call `/api` with the same bearer, and apps rewrite paths before the kit runs. Whatever carries the space to an
+  in-process call (`spaceOf`) must be something a client cannot set, such as a header the app strips from every
+  outside request, and the request's own path outranks it whenever the path names a space: otherwise a client sends
+  the carrier with one space's token and reaches another. A sentence refuses: 401
   `invalid_token`, the sentence as `detail` (and its printable ASCII as `error_description`), `resource_metadata` at
   `resourceOf(c)`. Compare audiences with `oauth.rootOf(c)`, the root as the kit signs it (canonical: a forwarded
   host in capitals or with its default port is the same root), not the raw origin.

@@ -560,7 +560,7 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
   const SPACE = /^\/s\/[a-z]+\/mcp/
   const resourceOf = (c: Context) => `${originOf(c)}${SPACE.exec(c.req.path)?.[0] ?? (c.req.path === '/mcp' || c.req.path.startsWith('/mcp/') ? '/mcp' : '')}`
 
-  /** An app with one MCP resource per space (`/s/<name>/mcp`); a test header stands in for how the app knows which resource an in-process call serves. */
+  /** An app with one MCP resource per space (`/s/<name>/mcp`); a test header stands in for how the app knows which resource an in-process call serves, which a real app makes something no client can set. */
   const spacesApi = async () => {
     const oauth = createOAuth({
       name: 'Sample',
@@ -571,7 +571,8 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
       resources: (path) => /^\/s\/[a-z]+\/mcp$/.test(path),
       resourceOf,
       accepts: async (caller, c) => {
-        const here = c.req.header('x-test-resource') ?? resourceOf(c)
+        // The path decides when it names a space; only an in-process call, whose path no longer does, reads the carrier
+        const here = SPACE.test(c.req.path) ? resourceOf(c) : (c.req.header('x-test-resource') ?? resourceOf(c))
         // The app's choice: an aud-less or root token works in every space
         return !caller.resource || caller.resource === originOf(c) || caller.resource === here ? true : `This token is for ${caller.resource}, not ${here}: connect again there.`
       },
@@ -617,6 +618,15 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
     const { tokens: root } = await signedIn(app)
     expect(audOf(root.access_token)).toBe(ORIGIN)
     expect(await (await app.request('/s/beta/mcp', { method: 'POST', headers: { authorization: `Bearer ${root.access_token}` } })).json()).toEqual({ api: 200 })
+  })
+
+  it('lets the path decide the space when it names one, so a client setting the in-process carrier gets nothing', async () => {
+    const { app } = await spacesApi()
+    const { exchange } = await approvedCode(app, { resource: ALPHA })
+    const auth = { authorization: `Bearer ${(await (await exchange()).json()).access_token}` }
+    const forged = await app.request('/s/beta/mcp', { method: 'POST', headers: { ...auth, 'x-test-resource': ALPHA } })
+    expect(forged.status).toBe(401)
+    expect((await forged.json()).detail).toContain(`not ${BETA}`)
   })
 
   it('with resources and no accepts, takes a token at its own resource and refuses it at another and at /api, in-process calls included', async () => {
