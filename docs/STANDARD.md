@@ -165,7 +165,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   used once under concurrent requests, and so is each approval (a consent ticket, a typed claim or device code: a
   double-clicked Approve approves once): a second valid exchange of a code, or a refresh token sent again (outside an
   optional `reuseGraceSeconds`, default 0), revokes the grant. OAuth rows live in SQLite or D1, never KV. Scopes: `read` for safe methods, `write` for the rest; the relay endpoints (`/mcp` or the OAuth
-  server's `mcpPath`, `/a2a`, `auth.relay`) need only `read`, since each call they make reaches a route that checks its own scope. In Access, only
+  server's `mcpPath`, `/a2a`, `auth.relay`) need only `read`, since each call they make reaches a route that checks its own scope (`auth.relay` takes the same path patterns as the open list, a star inside one whole segment: `/s/*/mcp`). In Access, only
   `/oauth/authorize`, `/oauth/claim` and `/oauth/device` stay gated; `/oauth/register|token|revoke|device_authorization`,
   `/agent/identity*`, `/auth.md` and `/.well-known/*` bypass it.
 - **Audiences (RFC 8707, RFC 9728, MCP 2026-07-28):** every grant is bound to one resource, signed as the token's

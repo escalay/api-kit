@@ -92,14 +92,21 @@ export const accessOwner = (access: AccessOptions) => {
 }
 
 /**
- * Whether a path fits a pattern: `/llms.txt` matches itself, `/skills/x.md` matches `/skills/*`, and a leading star
- * matches a suffix (`/mcp/server-card`).
+ * Whether a path fits a pattern: `/llms.txt` matches itself, `/skills/x.md` matches `/skills/*`, a leading star
+ * matches a suffix (`/mcp/server-card`), and a star inside a pattern is one whole path segment (`/s/*\/mcp` matches
+ * `/s/alpha/mcp`, never `/s/alpha/mcp/x`).
  *
  * @example
  * matches('/oauth/token', '/oauth/*') // true
+ * matches('/s/alpha/mcp', '/s/*\/mcp') // true
  */
-export const matches = (path: string, pattern: string) =>
-  pattern.endsWith('*') ? path.startsWith(pattern.slice(0, -1)) : pattern.startsWith('*') ? path.endsWith(pattern.slice(1)) : path === pattern
+export const matches = (path: string, pattern: string): boolean => {
+  if (pattern.slice(1, -1).includes('*')) {
+    const middle = pattern.replace(/^\*|\*$/g, '').split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]+')
+    return new RegExp(`^${pattern.startsWith('*') ? '.*' : ''}${middle}${pattern.endsWith('*') ? '.*' : ''}$`).test(path)
+  }
+  return pattern.endsWith('*') ? path.startsWith(pattern.slice(0, -1)) : pattern.startsWith('*') ? path.endsWith(pattern.slice(1)) : path === pattern
+}
 
 export type AccessOptions = {
   team: string
@@ -125,7 +132,14 @@ export type AuthOptions = {
   tokens?: (jwt: string, c: Context) => Promise<{ kind: 'agent'; name: string; client?: string; grant?: string; scopes: string[]; owner: string; resource?: string } | { refused: string } | null>
   /** Where a 401 points (`WWW-Authenticate: … resource_metadata=`): a URL, or one per request. */
   resourceMetadata?: string | ((c: Context) => string)
-  /** Endpoints that POST but only relay to routes in-process (MCP, A2A): a token needs just `read` there, each route checks its own scope. */
+  /**
+   * Endpoints that POST but only relay to routes in-process (MCP, A2A): a token needs just `read` there, each route
+   * checks its own scope. The same patterns as `open` (`matches`). Passed to `createAgentApi`, it replaces the default
+   * (`[mcpPath, '/a2a']`), so list those too.
+   *
+   * @example
+   * relay: ['/mcp', '/a2a', '/s/*\/mcp']
+   */
   relay?: string[]
   /** A signed-in browser session (`people` part: a passkey, then a cookie): the request → its person, or null. Asked when no Bearer is sent, before Access. */
   session?: (c: Context) => Promise<{ email: string; role?: Role } | null>
@@ -159,7 +173,7 @@ export const authenticate = ({ realm, keys, storedKeys, access, open = [], token
       return problemResponse(c, 'unauthorized', { detail: agent.refused, headers: { 'www-authenticate': challengeOf(['error="invalid_token"', `error_description=${quoted(agent.refused)}`]) } })
     if (agent) {
       // read covers what an agent can look at; anything that changes state needs write
-      const needed = SAFE.has(c.req.method) || relay.includes(c.req.path) ? 'read' : 'write'
+      const needed = SAFE.has(c.req.method) || relay.some((pattern) => matches(c.req.path, pattern)) ? 'read' : 'write'
       if (!agent.scopes.includes(needed)) {
         const metadata = metadataOf()
         const challenge = [`Bearer realm="${realm}"`, 'error="insufficient_scope"', `scope="${needed}"`, ...(metadata ? [`resource_metadata="${metadata}"`] : [])].join(', ')

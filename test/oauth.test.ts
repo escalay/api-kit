@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SignJWT, importJWK } from 'jose'
 import type { Context } from 'hono'
-import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, memoryStore, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore } from '../src/index.js'
+import { createAgentApi, createOAuth, generateOAuthKey, matches, memoryOAuthStore, memoryStore, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore } from '../src/index.js'
 import { approvedCode, audOf, callerWith, formWithTwoResources, oauthApp, oauthStoreContract, refreshWith, signedIn } from './oauth-store-contract.js'
 
 const OWNER = 'owner@example.test'
@@ -618,6 +618,34 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
     const { tokens: root } = await signedIn(app)
     expect(audOf(root.access_token)).toBe(ORIGIN)
     expect(await (await app.request('/s/beta/mcp', { method: 'POST', headers: { authorization: `Bearer ${root.access_token}` } })).json()).toEqual({ api: 200 })
+  })
+
+  it('lets a read token POST to every space’s MCP when auth.relay names them with a pattern', async () => {
+    const withRelay = async (relay?: string[]) => {
+      const oauth = createOAuth({ name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async (c) => c.req.header('x-test-owner') ?? null, owners: [OWNER], resources: (path) => /^\/s\/[a-z]+\/mcp(\/x)?$/.test(path), resourceOf: (c) => `${originOf(c)}${c.req.path}` })
+      const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(''), ...(relay ? { relay } : {}) }, oauth })
+      app.post('/s/:name/mcp', (c) => c.json({ ok: true }))
+      app.post('/s/:name/mcp/x', (c) => c.json({ ok: true }))
+      const post = async (path: string) => {
+        const { exchange } = await approvedCode(app, { resource: `${ORIGIN}${path}`, scope: 'read' })
+        return (await app.request(path, { method: 'POST', headers: { authorization: `Bearer ${(await (await exchange()).json()).access_token}` } })).status
+      }
+      return post
+    }
+    const relayed = await withRelay(['/s/*/mcp'])
+    expect(await relayed('/s/alpha/mcp')).toBe(200)
+    // A star inside a pattern is one path segment
+    expect(await relayed('/s/alpha/mcp/x')).toBe(403)
+    expect(await (await withRelay())('/s/alpha/mcp')).toBe(403)
+  })
+
+  it('reads a star inside a pattern as one path segment, and the old forms as before', () => {
+    expect(matches('/s/alpha/mcp', '/s/*/mcp')).toBe(true)
+    for (const path of ['/s/alpha/mcp/x', '/s//mcp', '/s/a/b/mcp', '/s/alpha/mcpx']) expect(matches(path, '/s/*/mcp'), path).toBe(false)
+    expect(matches('/s/alpha/mcp/x', '/s/*/mcp/*')).toBe(true)
+    expect(matches('/s/a.b/mcp', '/s/*/mcp')).toBe(true)
+    expect(matches('/s/alpha/mcp', '/s/*.b/mcp')).toBe(false)
+    expect([matches('/oauth/token', '/oauth/*'), matches('/oauth', '/oauth/*'), matches('/mcp/server-card', '*/server-card'), matches('/llms.txt', '/llms.txt'), matches('/llms.txt', '/llms.txt/')]).toEqual([true, false, true, true, false])
   })
 
   it('lets the path decide the space when it names one, so a client setting the in-process carrier gets nothing', async () => {

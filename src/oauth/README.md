@@ -95,6 +95,10 @@ const oauth = createOAuth({
   origin and `mcpPath`). Never list per-space resources there.
 - `mcpPath` keeps the pointer, the metadata, the listed resources and the relay (`read` may POST there) on MCP when it
   is mounted elsewhere: pass `mountMcp`'s `path`.
+- The spaces' MCP endpoints are relays too, so a `read` token may POST there: `auth: { …, relay: ['/mcp', '/a2a',
+  '/s/*/mcp'] }`. `relay` takes the same patterns as `open` (`matches`): a star inside is one whole path segment, so
+  `/s/*/mcp` matches `/s/alpha/mcp` and not `/s/alpha/mcp/x`. It replaces the default (`mcpPath` and `/a2a`), so list
+  those too.
 
 Two exceptions to "a token is accepted only by its audience" (MCP 2026-07-28 asks servers to reject tokens not meant
 for them, or otherwise verify they are the intended recipient):
