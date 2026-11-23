@@ -18,6 +18,9 @@
  * or not, shares it), never by the name it registered, which is for display. Revoking a grant ends its access tokens
  * at once. Single use under concurrent requests (codes, refresh tokens) and replay handling follow rules after
  * cloudflare/workers-oauth-provider and better-auth (both MIT), written again here with their tests.
+ * Every grant is bound to an audience (RFC 8707): the resource the client asked for at the authorization request when
+ * this server issues for it, else the root (the issuer's origin). It never changes on refresh, and a grant from before
+ * audiences never gains one. `accepts` judges whether a token's audience fits a request.
  *
  * @example
  * const oauth = createOAuth({ name: 'Cookbook', signingKey: env.OAUTH_SIGNING_KEY, store, owner: (c) => ownerOf(c) })
@@ -72,12 +75,55 @@ export type OAuthConfig = {
    * successor, never a second one. 0 (the default): any replay revokes the grant.
    */
   reuseGraceSeconds?: number
+  /** Where MCP is mounted (`mountMcp`'s `path`): its resource, metadata pointer and relay. Default `/mcp`. */
+  mcpPath?: string
+  /**
+   * Whether this server issues tokens for a resource path (`/s/alpha/mcp`), besides the origin and `mcpPath` it always
+   * issues for. The kit has already checked the resource's origin is the issuer's, so this sees the path only. Keep it
+   * a pure check of the string, with no lookup: it answers the metadata path too, so a lookup would tell anyone which
+   * resources exist. Set, it also refuses: an unknown resource or another origin is `invalid_target`, and metadata for
+   * a path it refuses is 404. Unset, an unknown resource gets the root audience, as no resource does.
+   *
+   * @example
+   * resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path)
+   */
+  resources?: (path: string) => boolean
+  /**
+   * The canonical resource a request is for, as a full URL: where its 401 points (RFC 9728 §3.3). Default: the origin
+   * plus `mcpPath` under it, else the origin.
+   *
+   * @example
+   * resourceOf: (c) => oauth.rootOf(c) + (/^\/s\/[a-z0-9-]+\/mcp/.exec(c.req.path)?.[0] ?? '')
+   */
+  resourceOf?: (c: Context) => string
+  /**
+   * Whether a valid token fits this request: true lets it in, a sentence refuses it (a 401 `invalid_token` whose
+   * metadata points at `resourceOf(c)`). Asked on every request, in-process calls included (an MCP tool calling `/api`
+   * with the same bearer). Default: a token with no audience, or one for the origin or `mcpPath`, fits everywhere.
+   *
+   * @example
+   * accepts: async (caller, c) => !caller.resource || caller.resource === oauth.rootOf(c) || caller.resource === spaceOf(c) || 'This token is for another space.'
+   */
+  accepts?: (caller: TokenCaller, c: Context) => Promise<true | string>
+  /**
+   * The resources the metadata lists (`protected_resources`). Default `[origin, origin + mcpPath]`.
+   *
+   * @example
+   * listResources: (origin) => [origin, `${origin}/mcp`]
+   */
+  listResources?: (origin: string) => string[]
 }
 
-/** An OAuth caller: `client` is its client_id, `grant` the approval its token came from, `name` only for display. */
-export type TokenCaller = { kind: 'agent'; name: string; client: string; grant?: string; scopes: string[]; owner: string }
-/** What a token is issued for; `grant` is the approval (stored as `family` on refresh rows). */
-type Grant = { client: string; name: string; owner: string; scopes: string[]; grant: string }
+/**
+ * An OAuth caller: `client` is its client_id, `grant` the approval its token came from, `name` only for display,
+ * `resource` the audience its token was issued for (none on tokens from before audiences).
+ */
+export type TokenCaller = { kind: 'agent'; name: string; client: string; grant?: string; scopes: string[]; owner: string; resource?: string }
+/**
+ * What a token is issued for; `grant` is the approval (stored as `family` on refresh rows), `audience` what it is signed
+ * for, `resource` the one the client asked for and got (null when the audience was the server's choice).
+ */
+type Grant = { client: string; name: string; owner: string; scopes: string[]; grant: string; audience?: string; resource?: string | null }
 
 const now = () => Math.floor(Date.now() / 1000)
 const token = (prefix: string) => `${prefix}_${randomBytes(24).toString('base64url')}`
@@ -97,6 +143,25 @@ export const generateOAuthKey = async () => {
   const { privateKey } = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
   return JSON.stringify({ ...(await exportJWK(privateKey)), alg: 'ES256' })
 }
+
+/**
+ * A resource indicator's one stored form (RFC 8707), `origin + path`, or null: not an absolute http(s) URL, a user
+ * part, a query, a fragment, an encoded dot, or anything that does not read back as itself once the scheme and host are
+ * lower-cased, a default port and one trailing slash dropped (so dot segments fail). Rules after
+ * cloudflare/workers-oauth-provider (MIT).
+ */
+const canonical = (uri: string) => {
+  if (!URL.canParse(uri) || /[?#]|%2e/i.test(uri)) return null
+  const url = new URL(uri)
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) return null
+  const resource = url.origin + url.pathname.replace(/\/$/, '')
+  const [, scheme = '', authority = '', rest = ''] = /^([^:]+):\/\/([^/]*)(.*)$/.exec(uri) ?? []
+  const written = `${scheme.toLowerCase()}://${authority.toLowerCase().replace(scheme.toLowerCase() === 'https' ? /:443$/ : /:80$/, '')}${rest}`
+  return written === resource || written === `${resource}/` ? resource : null
+}
+
+/** A resource's path: what follows its origin (empty for the origin itself). */
+const pathOf = (resource: string) => resource.slice(new URL(resource).origin.length)
 
 const UNSAFE_SCHEMES = new Set(['javascript:', 'data:', 'file:', 'vbscript:', 'blob:'])
 
@@ -148,7 +213,8 @@ export const createOAuth = (config: OAuthConfig) => {
 
   const issue = async (origin: string, grant: Grant) => {
     const jti = randomBytes(12).toString('base64url')
-    const access = await sign({ sub: grant.owner, client_id: grant.client, name: grant.name, grant: grant.grant, scope: grant.scopes.join(' '), jti }, ACCESS_TTL, origin)
+    const audience = grant.audience ? { aud: grant.audience } : {}
+    const access = await sign({ sub: grant.owner, client_id: grant.client, name: grant.name, grant: grant.grant, scope: grant.scopes.join(' '), jti, ...audience }, ACCESS_TTL, origin)
     await store.put('access', jti, { client: grant.client, grant: grant.grant }, now() + ACCESS_TTL)
     return { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL, scope: grant.scopes.join(' ') }
   }
@@ -181,11 +247,42 @@ export const createOAuth = (config: OAuthConfig) => {
   /** Ends one approval at once: its access tokens fail `verify`, its refresh tokens are refused. */
   const revokeGrant = (grant: string) => store.put('revoked-family', grant, {}, now() + REVOKED_TTL)
 
-  /** The protected-resource metadata URL for a request: suffixed with `/mcp` for MCP, the bare one elsewhere. */
-  const resourceMetadataFor = (c: Context) => `${originOf(c)}/.well-known/oauth-protected-resource${c.req.path.startsWith('/mcp') ? '/mcp' : ''}`
+  const mcpPath = config.mcpPath ?? '/mcp'
+  /** The root resource: the issuer's origin in canonical form, what a grant gets when no resource it issues for was asked. */
+  const rootOf = (c: Context) => canonical(originOf(c)) ?? originOf(c)
+  const resourceOf = config.resourceOf ?? ((c: Context) => rootOf(c) + (c.req.path === mcpPath || c.req.path.startsWith(`${mcpPath}/`) ? mcpPath : ''))
+  /** Whether this server issues for a canonical resource: the root and MCP always, others when `resources` says so, on this origin only. */
+  const issues = (root: string, resource: string) =>
+    resource === root || resource === root + mcpPath || (config.resources !== undefined && new URL(resource).origin === root && config.resources(pathOf(resource)))
 
-  /** An access token → its caller, or null (expired, revoked, or not ours). */
-  const verify = async (jwt: string, c: Context): Promise<TokenCaller | null> => {
+  /** The audience of a new grant from the resource asked (or none): that resource when issued for, else the root; with `resources` set, an unknown one is refused. */
+  const audienceFor = (c: Context, asked: string | undefined): { audience: string; resource: string | null } | { refused: string } => {
+    const root = rootOf(c)
+    if (asked === undefined) return { audience: root, resource: null }
+    const resource = canonical(asked)
+    if (resource && issues(root, resource)) return { audience: resource, resource }
+    if (config.resources) return { refused: resource ? `This server issues no tokens for ${resource}.` : 'resource must be an absolute http(s) URL with no user, query, fragment or dot segments.' }
+    return { audience: root, resource: null }
+  }
+
+  /** A stored row's audience, or nothing for a row from before audiences: it never gains one. */
+  const boundOf = (row: Record<string, unknown>) => (typeof row.audience === 'string' ? { audience: row.audience, resource: typeof row.resource === 'string' ? row.resource : null } : {})
+  /** A token request naming a resource other than the one its grant asked for (RFC 8707 §2.2); an audience the server chose is never held against it. */
+  const otherTarget = (row: Record<string, unknown>, sent: string | undefined) =>
+    sent !== undefined && typeof row.audience === 'string' && typeof row.resource === 'string' && canonical(sent) !== row.resource
+
+  const defaultAccepts = async (caller: TokenCaller, c: Context): Promise<true | string> => {
+    const root = rootOf(c)
+    if (!caller.resource || caller.resource === root || caller.resource === root + mcpPath) return true
+    return `This token is for ${caller.resource} only: connect again from ${resourceOf(c)} for a token here.`
+  }
+  const accepts = config.accepts ?? defaultAccepts
+
+  /** The protected-resource metadata URL for a request: the one for the resource it is for (RFC 9728 §3.3). */
+  const resourceMetadataFor = (c: Context) => `${originOf(c)}/.well-known/oauth-protected-resource${pathOf(resourceOf(c))}`
+
+  /** An access token → its caller, a sentence when `accepts` refuses it here, or null (expired, revoked, or not ours). */
+  const verify = async (jwt: string, c: Context): Promise<TokenCaller | { refused: string } | null> => {
     const { publicKey } = await ready
     const origin = originOf(c)
     const { payload } = await jwtVerify(jwt, publicKey, { issuer: origin, algorithms: ['ES256'] }).catch(() => ({ payload: null }))
@@ -195,7 +292,11 @@ export const createOAuth = (config: OAuthConfig) => {
     // One round trip: the issued row and both revocation markers at once
     const [issued, revokedClient, revokedGrant] = await Promise.all([store.get('access', payload.jti), store.get('revoked-client', payload.client_id), grant ? store.get('revoked-family', grant) : null])
     if (!issued || revokedClient || revokedGrant) return null
-    return { kind: 'agent', name: String(payload.name ?? payload.client_id), client: payload.client_id, ...(grant ? { grant } : {}), scopes: String(payload.scope ?? '').split(' ').filter(Boolean), owner: String(payload.sub) }
+    // Tokens from before audiences carry none
+    const resource = typeof payload.aud === 'string' ? { resource: payload.aud } : {}
+    const caller: TokenCaller = { kind: 'agent', name: String(payload.name ?? payload.client_id), client: payload.client_id, ...(grant ? { grant } : {}), scopes: String(payload.scope ?? '').split(' ').filter(Boolean), owner: String(payload.sub), ...resource }
+    const judged = await accepts(caller, c)
+    return judged === true ? caller : { refused: judged }
   }
 
   const authorizationServer = (origin: string) => ({
@@ -220,7 +321,7 @@ export const createOAuth = (config: OAuthConfig) => {
     authorization_servers: [origin],
     bearer_methods_supported: ['header'],
     // Personal Agent Protocol (3.2): the resources this issuer speaks for, and the domains it confirms
-    protected_resources: [origin, `${origin}/mcp`],
+    protected_resources: config.listResources?.(origin) ?? [origin, `${origin}${mcpPath}`],
     poppy_domains: [new URL(origin).hostname],
     agent_auth: {
       skill: `${origin}/auth.md`,
@@ -252,12 +353,12 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
 ## A. OAuth with the owner in the browser (MCP clients, apps)
 
 1. Call any API route without a token. The 401 carries
-   \`WWW-Authenticate: Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"\` (\`/mcp\` adds \`/mcp\`).
+   \`WWW-Authenticate: Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"\` (\`${mcpPath}\` adds \`${mcpPath}\`).
 2. Read that document, then \`${origin}/.well-known/oauth-authorization-server\`.
 3. Register: \`POST ${origin}/oauth/register\` with \`{"client_name": "…", "redirect_uris": ["https://…/callback"]}\`
    (RFC 7591, public client, no secret). Keep the \`client_id\`.
 4. Send the owner to \`${origin}/oauth/authorize?response_type=code&client_id=…&redirect_uri=…&code_challenge=…&code_challenge_method=S256&state=…&scope=read%20write\`.
-   They sign in and approve.
+   They sign in and approve. Add \`&resource=<the URL you will call>\` (RFC 8707, e.g. \`${origin}${mcpPath}\`) to bind the token to it.
 5. Exchange the code: \`POST ${origin}/oauth/token\` with \`grant_type=authorization_code&code=…&redirect_uri=…&client_id=…&code_verifier=…\`.
    You get an access token (one hour) and a refresh token (\`grant_type=refresh_token\`, rotated on each use).
 
@@ -305,7 +406,15 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     app.get('/.well-known/oauth-authorization-server', (c) => json(c, authorizationServer(originOf(c))))
     app.get('/.well-known/oauth-authorization-server/*', (c) => json(c, authorizationServer(originOf(c))))
     app.get('/.well-known/oauth-protected-resource', (c) => json(c, protectedResource(originOf(c), '')))
-    app.get('/.well-known/oauth-protected-resource/*', (c) => json(c, protectedResource(originOf(c), c.req.path.slice('/.well-known/oauth-protected-resource'.length))))
+    app.get('/.well-known/oauth-protected-resource/*', (c) => {
+      const suffix = c.req.path.slice('/.well-known/oauth-protected-resource'.length)
+      // With resources, never metadata for a resource no token can be granted for: it would start a flow that fails
+      if (config.resources) {
+        const resource = canonical(rootOf(c) + suffix)
+        if (!resource || !issues(rootOf(c), resource)) return c.notFound()
+      }
+      return json(c, protectedResource(originOf(c), suffix))
+    })
     app.get('/.well-known/jwks.json', async (c) => json(c, { keys: [(await ready).publicJwk] }))
     app.get('/auth.md', (c) => c.body(authMd(originOf(c)), 200, { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'public, max-age=300' }))
 
@@ -351,6 +460,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         if (checked.redirect && params.redirect_uri) return c.redirect(backTo(params.redirect_uri, originOf(c), { error: 'invalid_request', error_description: checked.error, state: params.state }), 302)
         return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(checked.error!)}</p>`), 400)
       }
+      // A page, never a redirect: the resource is checked before anything is written
+      if ((c.req.queries('resource')?.length ?? 0) > 1) return c.html(page('Can’t approve this', '<h1>Can’t approve this request</h1><p>Send one resource: the address the token is for.</p>'), 400)
+      const bound = audienceFor(c, params.resource)
+      if ('refused' in bound) return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(bound.refused)} (invalid_target)</p>`), 400)
       const ticket = token('consent')
       await store.put('consent', ticket, { ...params, owner }, now() + CODE_TTL)
       const what = checked.scopes.includes('write') ? 'read everything and make changes' : 'read everything'
@@ -374,8 +487,11 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if (body.decision !== 'allow') return c.redirect(backTo(params.redirect_uri!, origin, { error: 'access_denied', error_description: 'The owner said no.', state: params.state }), 302)
       const checked = await authorizeParams(c, params)
       if ('error' in checked) return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(checked.error!)}</p>`), 400)
+      // Resolved again from the request, never read back from the ticket
+      const bound = audienceFor(c, params.resource)
+      if ('refused' in bound) return c.html(page('Can’t approve this', `<h1>Can’t approve this request</h1><p>${escape(bound.refused)} (invalid_target)</p>`), 400)
       const code = token('code')
-      await store.put('code', sha(code), { client: params.client_id, redirectUri: params.redirect_uri, challenge: params.code_challenge, scopes: checked.scopes, owner, name: checked.client.name, resource: params.resource ?? null, grant: newGrant(), used: false }, now() + CODE_TTL)
+      await store.put('code', sha(code), { client: params.client_id, redirectUri: params.redirect_uri, challenge: params.code_challenge, scopes: checked.scopes, owner, name: checked.client.name, ...bound, grant: newGrant(), used: false }, now() + CODE_TTL)
       return c.redirect(backTo(params.redirect_uri!, origin, { code, state: params.state }), 302)
     })
 
@@ -455,7 +571,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       // One approval per registration: a second would give its jwt-bearer tokens a grant its claim and refresh tokens lack
       if (registration.claimed) return c.html(page('Already approved', `<h1>Already approved</h1><p>${escape(String(registration.name))} was approved already; this code is spent. You can close this page.</p>`), 409)
       // One grant for the claim: its claim, refresh and jwt-bearer tokens all carry it (made at registration; older rows get one here)
-      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: registration.family ?? newGrant() }, now() + REGISTRATION_TTL)
+      // A claim names no resource: its grant gets the root
+      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: registration.family ?? newGrant(), audience: rootOf(c), resource: null }, now() + REGISTRATION_TTL)
       return c.html(page('Approved', `<h1>Approved</h1><p>${escape(String(registration.name))} can now use ${escape(config.name)}. You can close this page.</p>`))
     })
 
@@ -466,13 +583,15 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if (!client) return oauthError(c, 401, 'invalid_client', 'This client is not registered here (or its registration expired). Register at /oauth/register first.')
       const scopes = (body.scope || SCOPES.join(' ')).split(' ').filter((scope) => (SCOPES as readonly string[]).includes(scope))
       if (!scopes.length) return oauthError(c, 400, 'invalid_scope', `Ask for any of: ${SCOPES.join(', ')}.`)
+      const bound = audienceFor(c, body.resource)
+      if ('refused' in bound) return oauthError(c, 400, 'invalid_target', bound.refused)
       const origin = originOf(c)
       const deviceCode = token('dc')
       let userCode = deviceUserCode()
       while (await store.get('device-user', userCodeKey(userCode))) userCode = deviceUserCode()
       const expiresAt = now() + DEVICE_TTL
       // Kept a window past its expiry, so a late poll hears expired_token rather than an unknown code
-      await store.put('device', sha(deviceCode), { client: body.client_id!, name: String(client.name), scopes, expiresAt, interval: DEVICE_INTERVAL, polledAt: 0 }, expiresAt + DEVICE_TTL)
+      await store.put('device', sha(deviceCode), { client: body.client_id!, name: String(client.name), scopes, ...bound, expiresAt, interval: DEVICE_INTERVAL, polledAt: 0 }, expiresAt + DEVICE_TTL)
       await store.put('device-user', userCodeKey(userCode), { device: sha(deviceCode) }, expiresAt)
       return c.json(
         { device_code: deviceCode, user_code: userCode, verification_uri: `${origin}/oauth/device`, verification_uri_complete: `${origin}/oauth/device?user_code=${userCode}`, expires_in: DEVICE_TTL, interval: DEVICE_INTERVAL },
@@ -556,6 +675,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const key = sha(body.code ?? '')
           const row = body.code ? await store.get('code', key) : null
           if (!row) return oauthError(c, 400, 'invalid_grant', 'This code is used, expired or unknown.')
+          // Before any write: the resource is fixed at the authorization request
+          if (otherTarget(row, body.resource)) return oauthError(c, 400, 'invalid_target', 'resource differs from the one the authorization request named.')
           // Codes from before grants carry none: the code's own hash names it, so a replay still finds it
           const grant = String(row.grant ?? key)
           const verified = Boolean(body.code_verifier) && same(createHash('sha256').update(body.code_verifier ?? '').digest('base64url'), String(row.challenge))
@@ -570,7 +691,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (!sameRequest) return oauthError(c, 400, 'invalid_grant', 'client_id or redirect_uri differ from the authorization request.')
           if (!verified) return oauthError(c, 400, 'invalid_grant', 'The code_verifier doesn’t match the code_challenge.')
           if (await store.get('revoked-client', String(row.client))) return oauthError(c, 400, 'invalid_grant', 'This client was revoked: register again.')
-          const issued = { client: String(row.client), name: String(row.name), owner: String(row.owner), scopes: row.scopes as string[], grant }
+          const issued = { client: String(row.client), name: String(row.name), owner: String(row.owner), scopes: row.scopes as string[], grant, ...boundOf(row) }
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
         }
         case 'refresh_token': {
@@ -578,10 +699,12 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const key = sha(refresh)
           const held = refresh ? await store.get('refresh', key) : null
           if (!held) return oauthError(c, 400, 'invalid_grant', 'This refresh token is expired, revoked or unknown: authorize again.')
+          // A refresh keeps its grant's audience and can't retarget it; a row from before audiences stays without one
+          if (otherTarget(held, body.resource)) return oauthError(c, 400, 'invalid_target', 'resource differs from the one this sign-in was granted for.')
           // Rows from before families carry none: the token's own hash starts one
           const grant = String(held.family ?? key)
           if ((await store.get('revoked-family', grant)) || (await store.get('revoked-client', String(held.client)))) return oauthError(c, 400, 'invalid_grant', 'This refresh token is revoked: authorize again.')
-          const issued = { client: String(held.client), name: String(held.name), owner: String(held.owner), scopes: held.scopes as string[], grant }
+          const issued = { client: String(held.client), name: String(held.name), owner: String(held.owner), scopes: held.scopes as string[], grant, ...boundOf(held) }
           const successor = successorOf(refresh)
           // Kept as used, not deleted, so a replay is recognised for as long as the newest token of its family lives
           if (!(await markUsed('refresh', key, now() + REFRESH_TTL))) {
@@ -611,7 +734,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           // grant would outlive the marker and undo the revoke
           const [revokedGrant, revokedLate] = await Promise.all([store.get('revoked-family', grant), store.get('revoked-client', client)])
           if (revokedGrant || revokedLate) return oauthError(c, 400, 'invalid_grant', 'This sign-in is revoked: register again.')
-          const issued = { client, name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant }
+          const issued = { client, name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant, ...boundOf(registration) }
           const assertion = await sign({ sub: client, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued), identity_assertion: assertion, assertion_expires: new Date((now() + REGISTRATION_TTL) * 1000).toISOString() }, 200, { 'cache-control': 'no-store' })
         }
@@ -619,6 +742,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const key = sha(body.device_code ?? '')
           const record = body.device_code ? await store.get('device', key) : null
           if (!record || record.client !== body.client_id) return oauthError(c, 400, 'invalid_grant', 'This device_code is unknown or belongs to another client_id: start again at /oauth/device_authorization.')
+          if (otherTarget(record, body.resource)) return oauthError(c, 400, 'invalid_target', 'resource differs from the one the device authorization named.')
           const keepUntil = Number(record.expiresAt) + DEVICE_TTL
           if (await store.get('revoked-client', String(record.client))) {
             await store.delete('device', key)
@@ -638,7 +762,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           }
           if (decision?.status === 'denied') return oauthError(c, 400, 'access_denied', 'The owner said no.')
           if (decision?.status === 'approved') {
-            const issued = { client: String(record.client), name: String(record.name), owner: String(decision.owner), scopes: record.scopes as string[], grant: newGrant() }
+            const issued = { client: String(record.client), name: String(record.name), owner: String(decision.owner), scopes: record.scopes as string[], grant: newGrant(), ...boundOf(record) }
             return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
           }
           const interval = Number(record.interval)
@@ -658,7 +782,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const grant = String(registration.family ?? payload!.sub)
           // The assertion belongs to the claim's sign-in: once that grant is revoked it buys nothing, never a dead token
           if (await store.get('revoked-family', grant)) return oauthError(c, 400, 'invalid_grant', 'This sign-in is revoked (a used refresh token came back, or the owner ended it): register again.')
-          return c.json(await issue(origin, { client: String(payload!.sub), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant }), 200, { 'cache-control': 'no-store' })
+          return c.json(await issue(origin, { client: String(payload!.sub), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant, ...boundOf(registration) }), 200, { 'cache-control': 'no-store' })
         }
         default:
           return oauthError(c, 400, 'unsupported_grant_type', `grant_type must be one of: authorization_code, refresh_token, ${DEVICE_GRANT}, ${JWT_BEARER}, ${CLAIM_GRANT}.`)
@@ -691,7 +815,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     await store.delete('registration', clientId)
   }
 
-  return { mount, verify, resourceMetadataFor, revokeGrant, revokeClient, authorizationServer, protectedResource, authMd }
+  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, mcpPath, revokeGrant, revokeClient, authorizationServer, protectedResource, authMd }
 }
 
 export type OAuth = ReturnType<typeof createOAuth>

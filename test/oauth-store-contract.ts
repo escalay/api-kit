@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { decodeJwt } from 'jose'
 import { describe, expect, it } from 'vitest'
 import { createAgentApi, createOAuth, generateOAuthKey, parseApiKeys, type OAuthConfig, type OAuthStore } from '../src/index.js'
 
@@ -9,6 +10,7 @@ import { createAgentApi, createOAuth, generateOAuthKey, parseApiKeys, type OAuth
  */
 
 export const OWNER = 'owner@example.test'
+const ORIGIN = 'http://localhost'
 const REDIRECT = 'http://localhost:7777/cb'
 const now = () => Math.floor(Date.now() / 1000)
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -27,11 +29,11 @@ export const oauthApp = async (store: OAuthStore, options: Partial<OAuthConfig> 
 type App = Awaited<ReturnType<typeof oauthApp>>['app']
 
 /** Registers a client (unless given one), has the owner approve it, and returns the code with what exchanges it. */
-export const approvedCode = async (app: App, { clientId, name = 'Sample' }: { clientId?: string; name?: string } = {}) => {
+export const approvedCode = async (app: App, { clientId, name = 'Sample', resource, scope = 'read write' }: { clientId?: string; name?: string; resource?: string; scope?: string } = {}) => {
   const client_id = clientId ?? (await (await app.request('/oauth/register', json({ client_name: name, redirect_uris: [REDIRECT] }))).json()).client_id as string
   const verifier = randomBytes(32).toString('base64url')
   const challenge = createHash('sha256').update(verifier).digest('base64url')
-  const query = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', scope: 'read write' })
+  const query = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', scope, ...(resource === undefined ? {} : { resource }) })
   const page = await (await app.request(`/oauth/authorize?${query}`, { headers: { 'x-test-owner': OWNER } })).text()
   const ticket = /name="ticket" value="([^"]+)"/.exec(page)![1]!
   const approved = await app.request('/oauth/authorize', { ...form({ ticket, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
@@ -41,14 +43,17 @@ export const approvedCode = async (app: App, { clientId, name = 'Sample' }: { cl
 }
 
 /** A client signed in: its tokens, and calls that use them. */
-export const signedIn = async (app: App, options: { clientId?: string; name?: string } = {}) => {
+export const signedIn = async (app: App, options: { clientId?: string; name?: string; resource?: string } = {}) => {
   const { client_id, exchange } = await approvedCode(app, options)
   const tokens = (await (await exchange()).json()) as { access_token: string; refresh_token: string }
   return { client_id, tokens }
 }
 
 export const callerWith = (app: App, accessToken: string) => app.request('/api/v1/things', { headers: { authorization: `Bearer ${accessToken}` } })
-export const refreshWith = (app: App, refreshToken: string) => app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: refreshToken }))
+export const refreshWith = (app: App, refreshToken: string, resource?: string) =>
+  app.request('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: refreshToken, ...(resource === undefined ? {} : { resource }) }))
+/** The audience an access token was signed for, if any. */
+export const audOf = (accessToken: string) => decodeJwt(accessToken).aud
 /** The owner types an agent's claim code on the claim page. */
 const typeClaim = (app: App, attempt: { verification_uri: string; user_code: string }) =>
   app.request('/oauth/claim', { ...form({ claim_attempt_token: new URL(attempt.verification_uri).searchParams.get('claim_attempt_token')!, user_code: attempt.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
@@ -383,5 +388,79 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       const answers = await Promise.all([poll(), poll()])
       expect(answers.map((answer) => answer.status).sort()).toEqual([200, 400])
       expect((await answers.find((answer) => answer.status === 400)!.json()).error).toBe('expired_token')
+    })
+    // RFC 8707; MCP 2026-07-28: every grant made now is bound to an audience
+    it('binds a grant whose client named no resource to the root, which works everywhere on the origin', async () => {
+      const { app } = await oauthApp(await make())
+      app.post('/mcp', (c) => c.json({ caller: c.get('caller' as never) }))
+      const { tokens } = await signedIn(app)
+      expect(audOf(tokens.access_token)).toBe(ORIGIN)
+      expect((await callerWith(app, tokens.access_token)).status).toBe(200)
+      expect((await app.request('/mcp', { method: 'POST', headers: { authorization: `Bearer ${tokens.access_token}` } })).status).toBe(200)
+      // The audience was the server's choice, so a resource sent on refresh is not held against it
+      const rotated = await (await refreshWith(app, tokens.refresh_token, `${ORIGIN}/mcp`)).json()
+      expect(audOf(rotated.access_token)).toBe(ORIGIN)
+      expect((await callerWith(app, rotated.access_token)).status).toBe(200)
+    })
+
+    it('gives the root to a resource the server does not describe, and takes that same resource again at the token endpoint and on refresh', async () => {
+      const { app } = await oauthApp(await make())
+      const asked = `${ORIGIN}/s/alpha/mcp`
+      const { exchange } = await approvedCode(app, { resource: asked })
+      const tokens = await (await exchange({ resource: asked })).json()
+      expect(audOf(tokens.access_token)).toBe(ORIGIN)
+      const rotated = await (await refreshWith(app, tokens.refresh_token, asked)).json()
+      expect(audOf(rotated.access_token)).toBe(ORIGIN)
+    })
+
+    it('keeps an asked audience through every refresh, and refuses a refresh that asks for another', async () => {
+      const store = await make()
+      const { app } = await oauthApp(store)
+      const asked = `${ORIGIN}/mcp`
+      const { exchange } = await approvedCode(app, { resource: asked })
+      const tokens = await (await exchange({ resource: asked })).json()
+      expect(audOf(tokens.access_token)).toBe(asked)
+      const other = await refreshWith(app, tokens.refresh_token, ORIGIN)
+      expect([other.status, (await other.json()).error]).toEqual([400, 'invalid_target'])
+      // invalid_target comes before any write: the token is still unused
+      const rotated = await (await refreshWith(app, tokens.refresh_token, `${asked}/`)).json()
+      expect(audOf(rotated.access_token)).toBe(asked)
+      const silent = await (await refreshWith(app, rotated.refresh_token)).json()
+      expect(audOf(silent.access_token)).toBe(asked)
+      expect(await store.get('refresh', sha(silent.refresh_token))).toMatchObject({ audience: asked })
+    })
+
+    it('keeps a code, a device approval and a refresh token from before audiences aud-less, whatever resource the client sends', async () => {
+      const store = await make()
+      const { app } = await oauthApp(store)
+      const asked = `${ORIGIN}/mcp`
+      // 1.28.0 kept the query's resource as it came, or null; older kits left it out
+      for (const kept of [{ resource: null }, { resource: asked }, { resource: `${ORIGIN}/s/alpha/mcp` }, {}]) {
+        const { client_id, code, verifier, challenge } = await approvedCode(app)
+        await store.put('code', sha(code), { client: client_id, redirectUri: REDIRECT, challenge, scopes: ['read', 'write'], owner: OWNER, name: 'Sample', grant: `g-${crypto.randomUUID()}`, used: false, ...kept }, now() + 600)
+        const tokens = await (await app.request('/oauth/token', form({ grant_type: 'authorization_code', code, client_id, code_verifier: verifier, resource: ORIGIN }))).json()
+        expect(audOf(tokens.access_token), JSON.stringify(kept)).toBeUndefined()
+        expect((await callerWith(app, tokens.access_token)).status).toBe(200)
+        const rotated = await (await refreshWith(app, tokens.refresh_token, asked)).json()
+        expect(audOf(rotated.access_token)).toBeUndefined()
+        expect(await store.get('refresh', sha(rotated.refresh_token))).not.toHaveProperty('audience')
+      }
+
+      const device = 'urn:ietf:params:oauth:grant-type:device_code'
+      const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+      const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+      const expiresAt = now() + 600
+      await store.put('device', sha(device_code), { client: client_id, name: 'Terminal', scopes: ['read', 'write'], expiresAt, interval: 5, polledAt: 0 }, expiresAt + 600)
+      await app.request('/oauth/device', { ...form({ user_code, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+      const fromDevice = await (await app.request('/oauth/token', form({ grant_type: device, device_code, client_id, resource: asked }))).json()
+      expect(audOf(fromDevice.access_token)).toBeUndefined()
+
+      const legacy = `rt_${crypto.randomUUID()}`
+      await store.put('refresh', sha(legacy), { client: client_id, name: 'Terminal', owner: OWNER, scopes: ['read'], family: `g-${crypto.randomUUID()}`, used: false }, now() + 3600)
+      const first = await (await refreshWith(app, legacy, asked)).json()
+      expect(audOf(first.access_token)).toBeUndefined()
+      const second = await (await refreshWith(app, first.refresh_token, ORIGIN)).json()
+      expect(audOf(second.access_token)).toBeUndefined()
+      expect((await callerWith(app, second.access_token)).status).toBe(200)
     })
   })

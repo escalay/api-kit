@@ -5,8 +5,9 @@ import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SignJWT, importJWK } from 'jose'
-import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, memoryStore, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore } from '../src/index.js'
-import { approvedCode, callerWith, oauthApp, oauthStoreContract, refreshWith, signedIn } from './oauth-store-contract.js'
+import type { Context } from 'hono'
+import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, memoryStore, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore } from '../src/index.js'
+import { approvedCode, audOf, callerWith, oauthApp, oauthStoreContract, refreshWith, signedIn } from './oauth-store-contract.js'
 
 const OWNER = 'owner@example.test'
 const ORIGIN = 'http://localhost'
@@ -75,6 +76,18 @@ describe('OAuth for agents', () => {
     const { app } = await sampleApi()
     expect((await app.request('/api/v1/things')).headers.get('www-authenticate')).toContain(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource"`)
     expect((await app.request('/mcp', { method: 'POST' })).headers.get('www-authenticate')).toContain(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp"`)
+    expect((await app.request('/mcpx', { method: 'POST' })).headers.get('www-authenticate')).toContain(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource"`)
+
+    // MCP mounted elsewhere: the pointer, the metadata, the listed resources and the relay follow mcpPath
+    const { app: moved } = await oauthApp(memoryOAuthStore(), { mcpPath: '/ai/mcp' })
+    moved.post('/ai/mcp', (c) => c.json({ ok: true }))
+    expect((await moved.request('/ai/mcp', { method: 'POST' })).headers.get('www-authenticate')).toContain(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/ai/mcp"`)
+    expect((await (await moved.request('/.well-known/oauth-protected-resource/ai/mcp')).json()).resource).toBe(`${ORIGIN}/ai/mcp`)
+    expect((await (await moved.request('/.well-known/oauth-authorization-server')).json()).protected_resources).toEqual([ORIGIN, `${ORIGIN}/ai/mcp`])
+    const { exchange } = await approvedCode(moved, { resource: `${ORIGIN}/ai/mcp`, scope: 'read' })
+    const readOnly = await (await exchange()).json()
+    expect(audOf(readOnly.access_token)).toBe(`${ORIGIN}/ai/mcp`)
+    expect((await moved.request('/ai/mcp', { method: 'POST', headers: { authorization: `Bearer ${readOnly.access_token}` } })).status).toBe(200)
   })
 
   it('runs authorization code with PKCE, refresh and revocation, with the owner approving', async () => {
@@ -369,7 +382,7 @@ describe('OAuth callers: the client and the grant, not the name', () => {
   it('names an agent by its client_id and grant, with its registered name for display', async () => {
     const { app } = await oauthApp(memoryOAuthStore())
     const { client_id, tokens } = await signedIn(app, { name: 'Sample' })
-    expect(await callerOf(app, tokens.access_token)).toEqual({ kind: 'agent', name: 'Sample', client: client_id, grant: expect.any(String), scopes: ['read', 'write'], owner: OWNER })
+    expect(await callerOf(app, tokens.access_token)).toEqual({ kind: 'agent', name: 'Sample', client: client_id, grant: expect.any(String), scopes: ['read', 'write'], owner: OWNER, resource: ORIGIN })
   })
 
   it('keeps two clients that register the same name apart: their rate windows and idempotency answers', async () => {
@@ -525,6 +538,212 @@ describe('OAuth callers: the client and the grant, not the name', () => {
     const devicePoll = () => app.request('/oauth/token', form({ grant_type: device, device_code, client_id }))
     expect((await (await devicePoll()).json()).access_token).toBeTruthy()
     expect((await (await devicePoll()).json()).error).toBe('invalid_grant')
+  })
+})
+
+describe('OAuth audiences: each token bound to the resource it was asked for (RFC 8707, RFC 9728)', () => {
+  const ALPHA = `${ORIGIN}/s/alpha/mcp`
+  const BETA = `${ORIGIN}/s/beta/mcp`
+  const SPACE = /^\/s\/[a-z]+\/mcp/
+  const resourceOf = (c: Context) => `${originOf(c)}${SPACE.exec(c.req.path)?.[0] ?? (c.req.path === '/mcp' || c.req.path.startsWith('/mcp/') ? '/mcp' : '')}`
+
+  /** An app with one MCP resource per space (`/s/<name>/mcp`); a test header stands in for how the app knows which resource an in-process call serves. */
+  const spacesApi = async () => {
+    const oauth = createOAuth({
+      name: 'Sample',
+      signingKey: await generateOAuthKey(),
+      store: memoryOAuthStore(),
+      owner: async (c) => c.req.header('x-test-owner') ?? null,
+      owners: [OWNER],
+      resources: (path) => /^\/s\/[a-z]+\/mcp$/.test(path),
+      resourceOf,
+      accepts: async (caller, c) => {
+        const here = c.req.header('x-test-resource') ?? resourceOf(c)
+        // The app's choice: an aud-less or root token works in every space
+        return !caller.resource || caller.resource === originOf(c) || caller.resource === here ? true : `This token is for ${caller.resource}, not ${here}: connect again there.`
+      },
+    })
+    const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys('') }, oauth })
+    app.get('/api/v1/things', (c) => c.json({ caller: c.get('caller' as never) }))
+    app.post('/s/:name/mcp', async (c) => {
+      // A tool calling the API in-process with the same bearer
+      const inner = await app.request('/api/v1/things', { headers: { authorization: c.req.header('authorization') ?? '', 'x-test-resource': resourceOf(c) } })
+      return c.json({ api: inner.status })
+    })
+    return { app, oauth }
+  }
+  type App = Awaited<ReturnType<typeof oauthApp>>['app']
+  const authorizeWith = async (app: App, resources: string[]) => {
+    const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Sample', redirect_uris: ['http://localhost:7777/cb'] }))).json()
+    const query = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: 'http://localhost:7777/cb', code_challenge: 'x'.repeat(43), code_challenge_method: 'S256' })
+    for (const resource of resources) query.append('resource', resource)
+    return app.request(`/oauth/authorize?${query}`, { headers: { 'x-test-owner': OWNER } })
+  }
+  const refusedAtAuthorize = async (app: App, resource: string) => {
+    const page = await authorizeWith(app, [resource])
+    expect([page.status, page.headers.get('location')], resource).toEqual([400, null])
+    expect(await page.text(), resource).toContain('invalid_target')
+  }
+  const audienceFor = async (app: App, resource: string) => audOf((await (await (await approvedCode(app, { resource })).exchange({ resource })).json()).access_token)
+
+  it('lets a token asked for one resource work there, in-process calls included, and nowhere else', async () => {
+    const { app } = await spacesApi()
+    const { exchange } = await approvedCode(app, { resource: ALPHA })
+    const tokens = await (await exchange({ resource: ALPHA })).json()
+    expect(audOf(tokens.access_token)).toBe(ALPHA)
+    const auth = { authorization: `Bearer ${tokens.access_token}` }
+    const here = await app.request('/s/alpha/mcp', { method: 'POST', headers: auth })
+    expect([here.status, await here.json()]).toEqual([200, { api: 200 }])
+    const there = await app.request('/s/beta/mcp', { method: 'POST', headers: auth })
+    expect(there.status).toBe(401)
+    expect(there.headers.get('www-authenticate')).toContain('error="invalid_token"')
+    expect(there.headers.get('www-authenticate')).toContain(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/s/beta/mcp"`)
+    expect((await there.json()).detail).toContain(`This token is for ${ALPHA}`)
+    expect((await app.request('/api/v1/things', { headers: auth })).status).toBe(401)
+    // A root token is the app's to accept in every space
+    const { tokens: root } = await signedIn(app)
+    expect(audOf(root.access_token)).toBe(ORIGIN)
+    expect(await (await app.request('/s/beta/mcp', { method: 'POST', headers: { authorization: `Bearer ${root.access_token}` } })).json()).toEqual({ api: 200 })
+  })
+
+  it('refuses a resource the server does not issue for with invalid_target: a page at authorize, JSON at the token endpoints', async () => {
+    const { app } = await spacesApi()
+    await refusedAtAuthorize(app, `${ORIGIN}/s/alpha/files`)
+    const { exchange } = await approvedCode(app, { resource: ALPHA })
+    const other = await exchange({ resource: BETA })
+    expect([other.status, (await other.json()).error]).toEqual([400, 'invalid_target'])
+    // Refused before anything is written: the code still works for its own resource
+    expect(audOf((await (await exchange({ resource: ALPHA })).json()).access_token)).toBe(ALPHA)
+    const device = 'urn:ietf:params:oauth:grant-type:device_code'
+    const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+    const started = await app.request('/oauth/device_authorization', form({ client_id, resource: `${ORIGIN}/s/alpha/files` }))
+    expect([started.status, (await started.json()).error]).toEqual([400, 'invalid_target'])
+  })
+
+  it('with resources set, refuses a resource on another origin whatever resources says; without it, gives the root', async () => {
+    const { app } = await oauthApp(memoryOAuthStore(), { resources: () => true })
+    const elsewhere = ['https://example.test/s/alpha/mcp', 'http://localhost.example.test/mcp', 'http://localhost:8080/mcp', 'https://localhost/mcp']
+    for (const resource of elsewhere) await refusedAtAuthorize(app, resource)
+    const { app: plain } = await oauthApp(memoryOAuthStore())
+    for (const resource of elsewhere) expect(await audienceFor(plain, resource), resource).toBe(ORIGIN)
+  })
+
+  it('refuses a resource with a query, a user part, a fragment, dot segments or encoded dots, or one that is not an http URL', async () => {
+    const malformed = [`${ALPHA}?x=1`, `${ALPHA}?`, `${ALPHA}#top`, `${ALPHA}#`, 'http://someone@localhost/s/alpha/mcp', 'http://:secret@localhost/s/alpha/mcp', `${ORIGIN}/s/beta/../alpha/mcp`,
+      `${ORIGIN}/s/beta/%2e%2e/alpha/mcp`, `${ORIGIN}/s/alpha/%2E/mcp`, `${ORIGIN}/s/al%2epha/mcp`, `${ORIGIN}\\s\\alpha\\mcp`, '/s/alpha/mcp', 'ftp://localhost/s/alpha/mcp', '']
+    const { app } = await oauthApp(memoryOAuthStore(), { resources: () => true })
+    for (const resource of malformed) await refusedAtAuthorize(app, resource)
+    // Without resources nothing is refused: the grant gets the root, as a client that asks for nothing does
+    const { app: plain } = await oauthApp(memoryOAuthStore())
+    for (const resource of malformed) expect(await audienceFor(plain, resource), resource).toBe(ORIGIN)
+  })
+
+  it('reads an upper-case scheme or host, a default port and a trailing slash as the same resource, never a path in another case', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    for (const resource of ['HTTP://LOCALHOST/mcp/', 'http://localhost:80/mcp', 'http://Localhost/mcp']) expect(await audienceFor(app, resource), resource).toBe(`${ORIGIN}/mcp`)
+    expect(await audienceFor(app, 'http://localhost/')).toBe(ORIGIN)
+    const { exchange } = await approvedCode(app, { resource: `${ORIGIN}/mcp` })
+    expect((await (await exchange({ resource: `${ORIGIN}/MCP` })).json()).error).toBe('invalid_target')
+  })
+
+  it('without resources, gives a resource the app does not describe the root, which works as before', async () => {
+    const { app } = await sampleApi()
+    const { exchange } = await approvedCode(app, { resource: ALPHA })
+    const tokens = await (await exchange({ resource: ALPHA })).json()
+    expect(audOf(tokens.access_token)).toBe(ORIGIN)
+    for (const [path, method] of [['/api/v1/things', 'GET'], ['/api/v1/things', 'POST'], ['/mcp', 'POST']] as const)
+      expect((await app.request(path, { method, headers: { authorization: `Bearer ${tokens.access_token}` } })).status, path).toBeLessThan(300)
+  })
+
+  it('refuses a resource at the token endpoint other than the code’s, and a code bound to one needs it sent no more', async () => {
+    const { app } = await sampleApi()
+    const { exchange } = await approvedCode(app, { resource: `${ORIGIN}/mcp` })
+    expect((await (await exchange({ resource: ORIGIN })).json()).error).toBe('invalid_target')
+    expect(audOf((await (await exchange()).json()).access_token)).toBe(`${ORIGIN}/mcp`)
+  })
+
+  it('refuses more than one resource at authorize', async () => {
+    const { app } = await sampleApi()
+    const page = await authorizeWith(app, [ORIGIN, `${ORIGIN}/mcp`])
+    expect([page.status, await page.text()]).toEqual([400, expect.stringContaining('Send one resource')])
+  })
+
+  it('binds a device grant to the resource asked for at device_authorization', async () => {
+    const { app } = await sampleApi()
+    const device = 'urn:ietf:params:oauth:grant-type:device_code'
+    const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+    const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id, resource: `${ORIGIN}/mcp` }))).json()
+    await app.request('/oauth/device', { ...form({ user_code, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+    const poll = (resource?: string) => app.request('/oauth/token', form({ grant_type: device, device_code, client_id, ...(resource ? { resource } : {}) }))
+    expect((await (await poll(ORIGIN)).json()).error).toBe('invalid_target')
+    const tokens = await (await poll(`${ORIGIN}/mcp`)).json()
+    expect(audOf(tokens.access_token)).toBe(`${ORIGIN}/mcp`)
+    expect(audOf((await (await refreshWith(app, tokens.refresh_token)).json()).access_token)).toBe(`${ORIGIN}/mcp`)
+  })
+
+  it('binds a claimed agent to the root across its claim, refresh and jwt-bearer tokens, and leaves one claimed before audiences aud-less', async () => {
+    const store = memoryOAuthStore()
+    const { app } = await oauthApp(store)
+    const claim = async () => {
+      const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+      const claim_attempt_token = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
+      await app.request('/oauth/claim', { ...form({ claim_attempt_token, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+      return registration
+    }
+    const tokensOf = async (registration: { claim_token: string }) => {
+      const granted = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))).json()
+      const refreshed = await (await refreshWith(app, granted.refresh_token, `${ORIGIN}/mcp`)).json()
+      const bearing = await (await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: granted.identity_assertion }))).json()
+      return [granted, refreshed, bearing].map((one) => audOf(one.access_token))
+    }
+    expect(await tokensOf(await claim())).toEqual([ORIGIN, ORIGIN, ORIGIN])
+    const before = await claim()
+    const { audience: _audience, ...row } = (await store.get('registration', before.registration_id))!
+    await store.put('registration', before.registration_id, row, Math.floor(Date.now() / 1000) + 3600)
+    expect(await tokensOf(before)).toEqual([undefined, undefined, undefined])
+  })
+
+  it('refuses a token for another resource under the default accepts, and takes one without aud or for the origin or MCP', async () => {
+    const store = memoryOAuthStore()
+    const signingKey = await generateOAuthKey()
+    const { app } = await oauthApp(store, { signingKey })
+    const tokenFor = async (aud?: string) => {
+      const jti = `jti-${randomBytes(6).toString('hex')}`
+      await store.put('access', jti, { client: 'client_one' }, Math.floor(Date.now() / 1000) + 3600)
+      return new SignJWT({ sub: OWNER, client_id: 'client_one', name: 'One', scope: 'read', jti, ...(aud ? { aud } : {}) })
+        .setProtectedHeader({ alg: 'ES256' }).setIssuer(ORIGIN).setIssuedAt().setExpirationTime('1h').sign(await importJWK(JSON.parse(signingKey), 'ES256'))
+    }
+    for (const aud of [undefined, ORIGIN, `${ORIGIN}/mcp`]) expect((await callerWith(app, await tokenFor(aud))).status, aud).toBe(200)
+    const elsewhere = await callerWith(app, await tokenFor(ALPHA))
+    expect(elsewhere.status).toBe(401)
+    expect(elsewhere.headers.get('www-authenticate')).toContain('error="invalid_token"')
+    expect((await elsewhere.json()).detail).toContain(ALPHA)
+  })
+
+  it('says an app’s refusal in the problem, and only its printable ASCII in the header', async () => {
+    const sentence = 'This token isn’t for here.\r\nConnect again.'
+    const { app } = await oauthApp(memoryOAuthStore(), { accepts: async () => sentence })
+    const { tokens } = await signedIn(app)
+    const refused = await callerWith(app, tokens.access_token)
+    expect(refused.status).toBe(401)
+    expect((await refused.json()).detail).toBe(sentence)
+    expect(refused.headers.get('www-authenticate')).toContain('error_description="This token isnt for here.Connect again."')
+  })
+
+  it('points the 401 at a path-scoped MCP at that path’s metadata, whose resource is the URL asked (RFC 9728 §3.3)', async () => {
+    const { app } = await spacesApi()
+    const pointer = /resource_metadata="([^"]+)"/.exec((await app.request('/s/alpha/mcp', { method: 'POST' })).headers.get('www-authenticate')!)![1]!
+    expect(pointer).toBe(`${ORIGIN}/.well-known/oauth-protected-resource/s/alpha/mcp`)
+    expect((await (await app.request(new URL(pointer).pathname)).json()).resource).toBe(ALPHA)
+  })
+
+  it('serves metadata for a resource that cannot be granted only when resources is not set', async () => {
+    const { app } = await spacesApi()
+    expect((await app.request('/.well-known/oauth-protected-resource/s/alpha/files')).status).toBe(404)
+    expect((await app.request('/.well-known/oauth-protected-resource/s/alpha/mcp/..')).status).toBe(404)
+    for (const path of ['', '/mcp', '/s/alpha/mcp']) expect((await app.request(`/.well-known/oauth-protected-resource${path}`)).status, path).toBe(200)
+    const { app: plain } = await sampleApi()
+    expect((await (await plain.request('/.well-known/oauth-protected-resource/s/alpha/files')).json()).resource).toBe(`${ORIGIN}/s/alpha/files`)
   })
 })
 

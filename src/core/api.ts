@@ -186,7 +186,7 @@ export const createAgentApi = (config: AgentApiConfig) => {
     app.use('*', linkHeaders)
     app.use('*', markdownForAgents(app))
   }
-  app.use('*', authenticate({ relay: ['/mcp', '/a2a'], ...config.auth, open, ...(config.oauth ? { tokens: config.oauth.verify, resourceMetadata: config.oauth.resourceMetadataFor } : {}) }) as MiddlewareHandler)
+  app.use('*', authenticate({ relay: [config.oauth?.mcpPath ?? '/mcp', '/a2a'], ...config.auth, open, ...(config.oauth ? { tokens: config.oauth.verify, resourceMetadata: config.oauth.resourceMetadataFor } : {}) }) as MiddlewareHandler)
   app.use('*', cacheControl({ '/openapi.json': CACHE.docs, '/problems/': CACHE.docs, '/api/': CACHE.api }))
   // Resources under /api are HAL; Hono writes plain JSON, so name the media type once here
   app.use('/api/*', async (c, next) => {

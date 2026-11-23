@@ -15,7 +15,7 @@ import { guideGaps, guideRoutes, lintOpenApi, toolRoutes } from '../src/testing/
 import { migrate, openDb } from '../src/db/index.js'
 import { OAUTH_MIGRATIONS } from '../src/oauth/schema.js'
 import { memoryOAuthStore } from '../src/oauth/index.js'
-import { oauthApp, signedIn } from './oauth-store-contract.js'
+import { approvedCode, oauthApp, signedIn } from './oauth-store-contract.js'
 
 const { key, hash } = mintApiKey('test')
 
@@ -127,6 +127,17 @@ describe('the standard API', () => {
     expect(response.headers.get('www-authenticate')).toBe('Bearer realm="sample"')
     expect(await response.json()).toMatchObject({ code: 'unauthorized', status: 401, type: 'http://localhost/problems/unauthorized' })
     expect((await app.request('/api/v1/apps', { headers: { authorization: 'Bearer nope' } })).headers.get('www-authenticate')).toContain('error="invalid_token"')
+  })
+
+  it('names the scopes on the 401 challenge only with OAuth on, and the metadata on insufficient_scope', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    app.post('/api/v1/notes', (c) => c.json({}, 201))
+    const metadata = 'resource_metadata="http://localhost/.well-known/oauth-protected-resource"'
+    expect((await app.request('/api/v1/things')).headers.get('www-authenticate')).toBe(`Bearer realm="sample", ${metadata}, scope="read write"`)
+    const { access_token } = await (await (await approvedCode(app, { scope: 'read' })).exchange()).json()
+    const short = await app.request('/api/v1/notes', { method: 'POST', headers: { authorization: `Bearer ${access_token}` } })
+    expect(short.status).toBe(403)
+    expect(short.headers.get('www-authenticate')).toBe(`Bearer realm="sample", error="insufficient_scope", scope="write", ${metadata}`)
   })
 
   it('renders a private service\u2019s guide for its callers, endpoints and all', async () => {

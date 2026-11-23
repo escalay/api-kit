@@ -28,12 +28,15 @@ export type OAuthServer = {
   mount: (app: Hono<any>) => void
   verify: NonNullable<AuthOptions['tokens']>
   resourceMetadataFor: (c: Context) => string
+  /** Where MCP is mounted: a relay, so a `read` token may POST there. Default `/mcp`. */
+  mcpPath?: string
 }
 
 /** A person's role, when the app keeps a team (`people` part): the owner may do everything, a member everything but admin. */
 export type Role = 'owner' | 'member'
 
-export type Caller = { kind: 'key'; name: string } | { kind: 'person'; email: string; role?: Role } | { kind: 'agent'; name: string; client?: string; grant?: string; scopes: string[]; owner: string }
+/** An OAuth agent's `resource` is the audience its token was issued for (none on tokens from before audiences). */
+export type Caller = { kind: 'key'; name: string } | { kind: 'person'; email: string; role?: Role } | { kind: 'agent'; name: string; client?: string; grant?: string; scopes: string[]; owner: string; resource?: string }
 
 export const hashApiKey = (key: string) => createHash('sha256').update(key).digest('hex')
 
@@ -114,8 +117,12 @@ export type AuthOptions = {
   storedKeys?: (hash: string) => Promise<string | undefined>
   access?: AccessOptions
   open?: string[]
-  /** OAuth access tokens (`oauth.ts`): a JWT → its caller, or null. Keys still work beside them. */
-  tokens?: (jwt: string, c: Context) => Promise<{ kind: 'agent'; name: string; client?: string; grant?: string; scopes: string[]; owner: string } | null>
+  /**
+   * OAuth access tokens (`oauth.ts`): a JWT → its caller, a sentence when the token is valid but not for this request
+   * (another resource: a 401 `invalid_token` that says so), or null. Keys still work beside them. Set, the 401 challenge
+   * names the scopes.
+   */
+  tokens?: (jwt: string, c: Context) => Promise<{ kind: 'agent'; name: string; client?: string; grant?: string; scopes: string[]; owner: string; resource?: string } | { refused: string } | null>
   /** Where a 401 points (`WWW-Authenticate: … resource_metadata=`): a URL, or one per request. */
   resourceMetadata?: string | ((c: Context) => string)
   /** Endpoints that POST but only relay to routes in-process (MCP, A2A): a token needs just `read` there, each route checks its own scope. */
@@ -125,6 +132,8 @@ export type AuthOptions = {
 }
 
 const isJwt = (value: string) => /^[\w-]+\.[\w-]+\.[\w-]+$/.test(value)
+/** A quoted-string parameter of a challenge (RFC 9110 §11.2): printable ASCII only, no quotes or backslashes. */
+const quoted = (value: string) => `"${value.replace(/[^\x20-\x7e]|["\\]/g, '')}"`
 
 export const authenticate = ({ realm, keys, storedKeys, access, open = [], tokens, resourceMetadata, relay = [], session }: AuthOptions): MiddlewareHandler => {
   const verifyAccess = access?.verify ?? (access?.audience ? accessVerifier(access) : null)
@@ -138,11 +147,24 @@ export const authenticate = ({ realm, keys, storedKeys, access, open = [], token
       c.set('caller' as never, { kind: 'key', name } satisfies Caller as never)
       return next()
     }
+    const metadataOf = () => (typeof resourceMetadata === 'function' ? resourceMetadata(c) : resourceMetadata)
+    /** The Bearer challenge: the metadata pointer, and with OAuth on, the scopes to ask for. */
+    const challengeOf = (params: string[]) => {
+      const metadata = metadataOf()
+      return [`Bearer realm="${realm}"`, ...params, ...(metadata ? [`resource_metadata="${metadata}"`] : []), ...(tokens ? [`scope="${SCOPES.join(' ')}"`] : [])].join(', ')
+    }
     const agent = key && tokens && isJwt(key) ? await tokens(key, c) : null
+    // A valid token for another resource: invalid_token with the reason, pointing at this request's metadata
+    if (agent && 'refused' in agent)
+      return problemResponse(c, 'unauthorized', { detail: agent.refused, headers: { 'www-authenticate': challengeOf(['error="invalid_token"', `error_description=${quoted(agent.refused)}`]) } })
     if (agent) {
       // read covers what an agent can look at; anything that changes state needs write
       const needed = SAFE.has(c.req.method) || relay.includes(c.req.path) ? 'read' : 'write'
-      if (!agent.scopes.includes(needed)) return problemResponse(c, 'forbidden', { detail: `This token lacks the ${needed} scope: authorize again asking for it.`, headers: { 'www-authenticate': `Bearer realm="${realm}", error="insufficient_scope", scope="${needed}"` } })
+      if (!agent.scopes.includes(needed)) {
+        const metadata = metadataOf()
+        const challenge = [`Bearer realm="${realm}"`, 'error="insufficient_scope"', `scope="${needed}"`, ...(metadata ? [`resource_metadata="${metadata}"`] : [])].join(', ')
+        return problemResponse(c, 'forbidden', { detail: `This token lacks the ${needed} scope: authorize again asking for it.`, headers: { 'www-authenticate': challenge } })
+      }
       c.set('caller' as never, agent satisfies Caller as never)
       return next()
     }
@@ -171,8 +193,7 @@ export const authenticate = ({ realm, keys, storedKeys, access, open = [], token
         return next()
       }
     }
-    const metadata = typeof resourceMetadata === 'function' ? resourceMetadata(c) : resourceMetadata
-    const challenge = [`Bearer realm="${realm}"`, ...(key ? ['error="invalid_token"'] : []), ...(metadata ? [`resource_metadata="${metadata}"`] : [])].join(', ')
+    const challenge = challengeOf(key ? ['error="invalid_token"'] : [])
     const howToGetOne = tokens ? ' Or get a token yourself: OAuth from the resource metadata in WWW-Authenticate, or /auth.md.' : ''
     return problemResponse(c, 'unauthorized', {
       detail: key ? `This token or API key is not valid (expired, revoked, mistyped, or for another service).${howToGetOne}` : `Send an API key: \`Authorization: Bearer <key>\`. Keys are issued per client; ask the owner for one.${howToGetOne}`,
