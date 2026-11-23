@@ -23,7 +23,7 @@ POST /oauth/register              { client_name, grant_types: ["urn:ietf:params:
 POST /oauth/device_authorization  client_id, scope → { device_code, user_code: "BDKM-QXTW", verification_uri,
                                                        verification_uri_complete, expires_in: 600, interval: 5 }
 GET  /oauth/device[?user_code=]   the page where the signed-in owner types the code (HTML, like /oauth/authorize)
-POST /oauth/device                user_code [, decision=allow|deny]   (same-site only)
+POST /oauth/device                user_code [, decision=allow|deny]   (same-origin only)
 POST /oauth/token                 grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=…&client_id=…
                                   → authorization_pending | slow_down (+ interval) | expired_token | access_denied | tokens
 ```
@@ -119,6 +119,108 @@ for them, or otherwise verify they are the intended recipient):
   MCP tools call `/api` in-process with the same bearer, so the token for the single MCP must fit the whole origin,
   spaces included. An app that wants otherwise refuses it in its own `accepts`, as for the root.
 
+## Who approves a sign-in
+
+By default the owner approves every sign-in on the kit's own page at `/oauth/authorize`, behind the single sign-on
+(`owner`). An app that decides for itself (an invite, an ask to join, a page for strangers) passes `approve`, and hears
+every first token in `onGrant`:
+
+- `approve(c, ask)` runs at `GET /oauth/authorize` once the kit has checked the client, its redirect, PKCE and the
+  resource, before `owner`. A Response is the app's page; null shows the kit's page to the owner. `ask` is a
+  `SignInAsk`: `ticket`, `client` (`id`, `name`, `redirectUris`), `redirectUri`, `redirectHost` (a host, or an app's
+  scheme such as `sample-app:`), `onThisComputer` (a loopback or app-scheme redirect), `scopes`, `resource` (the audience
+  the grant gets), `state`, and `arrival` (`site`: the first GET's `Sec-Fetch-Site`, `referrerOrigin`: its
+  `Referer`'s origin, each null when not sent).
+- The app's page posts the ticket to the app's own route, which reads it with `oauth.ticketOf(c, ticket)` (null when
+  expired, answered, or opened in another browser; then `oauth.answeredOf(c, ticket)` says `approved`, `denied` or
+  `answered` for a ticket this browser spent already, so the route can say "Already approved") and answers with `oauth.complete(c, ticket, decision)`:
+  `{ approver, scopes?, data? }` or `'deny'`. `approver` becomes the token's `sub` (`caller.owner`), `scopes` may only
+  narrow what was asked (a wider or empty list is a 400 page), `data` goes on the code and reaches `onGrant`. The
+  resource is the ticket's; `complete` never sets one. It returns the 302 to the client (`code`, `state`, `iss`, or
+  `access_denied`) or a 400/403 page. A blank `approver` is a 400 page, and the ticket stays live.
+- `onGrant(grant, c)` hears the first token of every grant: `kind` (`code`, `device` or `claim`), `grant`, `client`
+  (`id`, `name`), `approver`, `scopes`, `resource` (absent on a grant from before audiences) and `data`. It runs after
+  the kit's own checks (client, redirect and verifier for a code; the owner's answer for a device; the collected claim
+  token for a claim), once per grant however many polls race. false withdraws it: `invalid_grant` ("This sign-in was
+  withdrawn: start again"), the code or device code spent, a claim's grant revoked. It is not asked on refresh or
+  jwt-bearer: judge later requests in `accepts`. An app that keeps its own rows per grant makes them here and refuses
+  a token whose grant has none.
+
+An app that approves by an invite typed on its own page (`test/oauth.test.ts` runs it as written):
+
+```ts
+// The invites the owner made, each for one person (an app keeps them in its database)
+const INVITES = new Map([['garden-42', 'owner@example.test']])
+const invitePage = (ask: SignInAsk, note = '') => `<!doctype html><meta name="referrer" content="same-origin"><title>Join Sample</title>
+<p>${escape(ask.client.name)} asks to use Sample (${escape(ask.resource)}) and returns to ${ask.onThisComputer ? 'an app on this computer' : escape(ask.redirectHost)}. ${note}</p>
+<form method="post" action="/join"><input type="hidden" name="ticket" value="${ask.ticket}"><input name="invite" aria-label="Invite code"><button>Join</button></form>`
+
+const oauth = createOAuth({
+  name: 'Sample', signingKey, store, owner,
+  approve: async (c, ask) => c.html(invitePage(ask)),                                          // every sign-in starts at the app's page
+  onGrant: async (grant) => grant.kind !== 'code' || INVITES.delete(grant.data?.invite ?? ''),  // spent with the first token
+})
+const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(''), open: ['/join'] }, oauth })
+app.post('/join', async (c) => {
+  const body = await c.req.parseBody()
+  const ticket = String(body.ticket ?? '')
+  const ask = await oauth.ticketOf(c, ticket)
+  if (!ask) return c.html((await oauth.answeredOf(c, ticket)) === 'approved' ? '<p>Already approved: return to your app.</p>' : '<p>This sign-in expired: start again from your app.</p>', 400)
+  const holder = INVITES.get(String(body.invite ?? ''))
+  if (!holder) return c.html(invitePage(ask, 'That invite code is not one of ours.'), 400)
+  return oauth.complete(c, ask.ticket, { approver: holder, scopes: ['read'], data: { invite: String(body.invite) } })
+})
+```
+
+- `escape` is the app's own HTML escaping. The app's routes are its own to open (`auth.open`) and to limit.
+- **An app's own approval page carries `<meta name="referrer" content="same-origin">`** (or a proxy in
+  front of the app sets that policy), as the kit's pages do. `createAgentApi` serves every page with `Referrer-Policy: no-referrer` and replaces
+  one a route sets; under it a browser posts the form with `Origin: null`, and where it sends no `Sec-Fetch-Site`
+  either (plain http at an address other than this machine's) the POST is refused (403).
+- **Nothing is granted without a click.** There is no approve-at-once answer: a grant follows only `complete`, from a
+  same-origin POST, by the browser that opened the ticket, once. A stored approval never stands in for one: the same
+  client and approver signing in again see the page again.
+- **The ticket is bound to the browser.** Every `GET /oauth/authorize` that stores a ticket sets an HttpOnly,
+  SameSite=Lax nonce cookie, `__Host-oauth_ticket` on https (`oauth_ticket` on http; on https only the `__Host-` name is
+  read), Path `/`, Max-Age 600. A live one is reused and its Max-Age renewed, so a second sign-in in the same browser
+  neither breaks the first nor shortens the second. The ticket keeps only the nonce's SHA-256.
+- **Same-origin, not same-site.** `complete`, the kit's consent POST, `/oauth/claim` and `/oauth/device` take a POST
+  only with `Sec-Fetch-Site: same-origin`, or, with no such header, an `Origin` equal to the issuer's. A missing
+  header with no matching `Origin` is refused (403), and so is `same-site`: a sibling host is same-site. `Origin: null`
+  never matches; the kit's pages set their referrer policy to `same-origin` so a browser sends the real one.
+- **A ticket is answered once.** It is marked used and kept, its nonce hash and the answer only, until its 10 minutes
+  end. Posted again from the browser that answered it (a double click, a tab brought back), it is a page that says the
+  sign-in went through ("Already approved") or was refused, with no code and no redirect; from another browser it is
+  "This approval expired".
+- **With `approve` set, `/oauth/authorize` never redirects before a person acts:** every error (an unknown client, a
+  wrong redirect, `response_type`, PKCE, the resource) is a 400 page with no link. Without it, today's order holds:
+  the owner first, then a `response_type` or PKCE error goes back to the client's redirect.
+- The kit's page answers only for the owner it was shown to: a ticket the app's page holds can't be approved there.
+- `/oauth/claim` and `/oauth/device` stay the owner's (`owner`, `owners`); `approve` is for `/oauth/authorize` only.
+- In Access, `/oauth/authorize` may bypass the sign-in once the app passes `approve`: the app's page decides. Keep it
+  gated otherwise. A ticket is stored only when a page holds it: the app's, or the kit's shown to the owner. A visit
+  `approve` sends to the owner's sign-in stores nothing; one the app's page answers stores a 10-minute row, as an open
+  `/oauth/register` stores a client.
+- With `onGrant` set, a claimed agent's identity assertion (jwt-bearer) works only once its claim was collected and
+  heard, so an anonymous agent can't skip `onGrant` with the assertion it got at registration.
+- Every page the kit shows (consent, device, claim, errors) carries the app's brand when it has one
+  (`createAgentApi({ brand })`, or `brand` here): its head tags, icon, title and accent. Without one, the plain look.
+  A client is named by text only: a `logo_uri` it registers is never fetched or shown.
+- The consent page names what is asked for, `Sample: /s/alpha/mcp` (all of Sample for the root), and where it
+  returns: a host, or "an app on this computer" for a loopback or app-scheme redirect.
+- Rules after cloudflare/workers-oauth-provider (the browser-bound, single-use consent ticket; never redirect before
+  the redirect is checked) and oidc-provider (the grant is saved before the code exists), both MIT.
+
+In tests, `approveSignIn(app, query, { headers })` from the `testing` part approves on the kit's page the way a
+browser does: it opens the page, keeps its ticket cookie, and posts same-origin.
+
+```ts
+import { approveSignIn } from './kit/testing/index.js'
+
+const answer = await approveSignIn(app, { response_type: 'code', client_id, redirect_uri, code_challenge, code_challenge_method: 'S256' }, { headers: { 'x-test-owner': 'owner@example.test' } })
+const code = new URL(answer.headers.get('location')!).searchParams.get('code')
+```
+
 ## Callers, grants and revoking
 
 An OAuth caller is `{ kind: 'agent', client, grant, name, scopes, owner }`:
@@ -157,7 +259,8 @@ a write there could reset a successor already used.
 
 | File | What |
 |---|---|
-| `index.ts` | `createOAuth` (the server; `revokeClient` is the owner's kill switch; `rootOf`, `resourceOf` and `mcpPath` as it reads them), `generateOAuthKey` (a new signing key) |
+| `index.ts` | `createOAuth` (the server; `revokeClient` is the owner's kill switch; `rootOf`, `resourceOf` and `mcpPath` as it reads them; `ticketOf`, `answeredOf` and `complete` for the app's own sign-in page), `generateOAuthKey` (a new signing key) |
+| `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`; the ticket cookie and the same-origin rule |
 | `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take` and `markUsed`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start), `memoryOAuthStore` |
 | `schema.ts` | the `oauth` table and `OAUTH_MIGRATIONS` |
 
@@ -165,7 +268,8 @@ a write there could reset a successor already used.
 
 - The signing key lives in the app's secrets, never in the repo; rotating it signs everyone out. `createOAuth` parses
   it when called: a malformed key throws there, at start, not on the first OAuth request.
-- `owner` decides who may approve: behind Cloudflare Access, `accessOwner(access)` (the signed-in email).
+- `owner` decides who may approve on the kit's pages: behind Cloudflare Access, `accessOwner(access)` (the signed-in
+  email). `approve` lets the app decide at `/oauth/authorize` instead (above).
 - Refresh tokens last 30 days and rotate on each use; MCP clients and claimed agents both get one. Only their hashes
   are kept. A used token sent again revokes its grant (every refresh token of that sign-in, and its access tokens at
   once), as does revoking any one of them. Two refreshes of one token at once rotate once: the second is that replay,
@@ -178,10 +282,10 @@ a write there could reset a successor already used.
 - A device code and a claim token give tokens once, however many polls arrive together: the owner's device answer is
   marked collected, and the claim token is taken. The polls that lose hear `invalid_grant` (device) or `expired_token`
   (claim).
-- An approval form posted twice at once (a double-clicked Approve) approves once: the consent page takes its ticket
-  (the other post gets "This approval expired", 400), the claim page takes the claim attempt ("This code expired",
-  410), and the device page takes the typed code (the code form again, 400), so Allow and Deny from two tabs write one
-  answer.
+- An approval form posted twice at once (a double-clicked Approve) approves once: the consent page marks its ticket
+  used (the other post gets "Already approved", or "Already answered" while the first is still saying so; 400, no
+  code), the claim page takes the claim attempt ("This code expired", 410), and the device page takes the typed code
+  (the code form again, 400), so Allow and Deny from two tabs write one answer.
 - Revoking an access token (`/oauth/revoke`) ends only that token; `revokeGrant` ends the sign-in.
 - The store makes single use hold under concurrent requests: `markUsed` (codes, refresh tokens) and `take` are one
   statement each in `dbOAuthStore`, honour expiry, and read a row with no `used` key (a sign-in from before) as
@@ -193,7 +297,8 @@ a write there could reset a successor already used.
 - Device codes: 8 letters from `BCDFGHJKLMNPQRSTVWXZ` (no vowels), shown as `XXXX-XXXX`, case and dashes ignored;
   10 minutes; single use; only hashes kept. A signed-in person may type 5 wrong codes in 10 minutes, then 429. When
   `owners` is set, only they may approve. Polling sooner than `interval` answers `slow_down` and adds 5 seconds.
-- In Access, `/oauth/device` stays behind the sign-in (like `/oauth/authorize` and `/oauth/claim`);
+- In Access, `/oauth/device` stays behind the sign-in (like `/oauth/claim`, and `/oauth/authorize` unless the app
+  passes `approve`);
   `/oauth/device_authorization` bypasses it. Name the path exactly: an Access path without `*` covers only itself, while
   `/oauth/device*` would also gate `/oauth/device_authorization` and break every device.
 - Keep the OAuth paths open (`OAUTH_OPEN_PATHS`); `createAgentApi` does it when `oauth` is set, private mode included.
@@ -251,3 +356,27 @@ Defaults that change when an app takes this version:
 Codes, device approvals, refresh tokens and agent registrations from before audiences (claimed or not) never gain one,
 whatever resource the client sends: their tokens stay aud-less, accepted everywhere. A code written by the previous
 version kept the query's `resource` as it came; it is never signed.
+
+## Upgrading to approvals
+
+New, off unless set: `approve`, `onGrant`, `ticketOf`, `answeredOf`, `complete`, and `brand` (the app's brand on the kit's pages is
+on by itself once the app has one). Defaults that change when an app takes this version:
+
+- **Breaking for tests:** a POST to `/oauth/authorize` needs the ticket cookie its page set, and is refused (403) when
+  `Sec-Fetch-Site` is absent and `Origin` is not the issuer's; `/oauth/claim` and `/oauth/device` take the same origin
+  rule (before, an absent header passed). Over https and on this machine's own address, browsers send
+  `Sec-Fetch-Site`, so people notice nothing. Over plain http at another address they may not, and then only `Origin`
+  decides: the kit's pages carry `<meta name="referrer" content="same-origin">` so it is the issuer's, and an app's own
+  approval page needs the same tag (without it the browser sends `Origin: null`, refused). A test that posts an
+  approval by hand breaks. Use `approveSignIn` from the `testing` part, and add `'sec-fetch-site': 'same-origin'` to
+  hand-made claim and device POSTs.
+- A ticket opened before the update has no nonce: it is refused once ("This approval expired") and lapses within 10
+  minutes; the person starts again.
+- A consent ticket posted again from the browser that answered it says "Already approved" (or "Already answered")
+  instead of "This approval expired". Still 400, still no code.
+- The page for an unknown or expired `client_id` says to remove the connection in the app and add it again. The
+  consent page names the resource asked for and says "an app on this computer" for a loopback or app-scheme redirect;
+  the device page says when the client has no page to send anyone back to.
+- With `onGrant` set, a claimed agent's identity assertion (jwt-bearer) is refused until its claim token was collected
+  and heard. An agent claimed before the app set `onGrant` keeps its refresh tokens; its assertion (a day at most) is
+  refused, so it refreshes or registers again.

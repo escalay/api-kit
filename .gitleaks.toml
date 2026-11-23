@@ -1,0 +1,8 @@
+# gitleaks' default rules, plus what is known not to be a secret
+[extend]
+useDefault = true
+
+[allowlist]
+description = "GitHub security advisory ids (GHSA-xxxx-xxxx-xxxx) cited in comments"
+regexTarget = "line"
+regexes = ['''GHSA(-[2-9cfghjmpqrvwx]{4}){3}''']

@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SignJWT, importJWK } from 'jose'
 import type { Context } from 'hono'
-import { createAgentApi, createOAuth, generateOAuthKey, matches, memoryOAuthStore, memoryStore, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore } from '../src/index.js'
-import { approvedCode, audOf, callerWith, formWithTwoResources, oauthApp, oauthStoreContract, refreshWith, signedIn } from './oauth-store-contract.js'
+import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryOAuthStore, memoryStore, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
+import { ASSETS } from './brand-fixture.js'
+import { approveSignIn } from '../src/testing/index.js'
+import { approvedCode, audOf, authorizeQuery, browserOf, callerWith, formWithTwoResources, joinApp, oauthApp, oauthStoreContract, refreshWith, registered, signedIn, ticketIn, typeClaim } from './oauth-store-contract.js'
 
 const OWNER = 'owner@example.test'
 const ORIGIN = 'http://localhost'
@@ -113,13 +115,14 @@ describe('OAuth for agents', () => {
     const { verifier, challenge } = pkce()
     const query = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: 'https://claude.ai/api/mcp/auth_callback', code_challenge: challenge, code_challenge_method: 'S256', state: 's1', scope: 'read write' })
     expect((await app.request(`/oauth/authorize?${query}`)).status).toBe(401)
-    const consent = await app.request(`/oauth/authorize?${query}`, { headers: { 'x-test-owner': OWNER } })
+    const browser = browserOf(app, { 'x-test-owner': OWNER })
+    const consent = await browser.request(`/oauth/authorize?${query}`)
     const html = await consent.text()
     expect(html).toContain('Allow <strong>Claude</strong>')
     const ticket = /name="ticket" value="([^"]+)"/.exec(html)![1]!
     // Another site can't approve through the owner's session
-    expect((await app.request('/oauth/authorize', { ...form({ ticket, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'cross-site' } })).status).toBe(403)
-    const approved = await app.request('/oauth/authorize', { ...form({ ticket, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+    expect((await browser.post('/oauth/authorize', { ticket, decision: 'allow' }, { 'sec-fetch-site': 'cross-site' })).status).toBe(403)
+    const approved = await browser.post('/oauth/authorize', { ticket, decision: 'allow' })
     const back = new URL(approved.headers.get('location')!)
     expect(back.searchParams.get('state')).toBe('s1')
     expect(back.searchParams.get('iss')).toBe(ORIGIN)
@@ -135,8 +138,7 @@ describe('OAuth for agents', () => {
     const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Cursor', redirect_uris: ['http://localhost:7777/cb'] }))).json()
     const { verifier, challenge } = pkce()
     const query = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: 'http://localhost:7777/cb', code_challenge: challenge, code_challenge_method: 'S256', scope: 'read' })
-    const ticket = /name="ticket" value="([^"]+)"/.exec(await (await app.request(`/oauth/authorize?${query}`, { headers: { 'x-test-owner': OWNER } })).text())![1]!
-    const location = (await app.request('/oauth/authorize', { ...form({ ticket, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })).headers.get('location')!
+    const location = (await approveSignIn(app, query, { headers: { 'x-test-owner': OWNER } })).headers.get('location')!
     const tokens = await (await app.request('/oauth/token', form({ grant_type: 'authorization_code', code: new URL(location).searchParams.get('code')!, client_id, redirect_uri: 'http://localhost:7777/cb', code_verifier: verifier }))).json()
     expect(tokens).toMatchObject({ token_type: 'Bearer', expires_in: 3600, scope: 'read' })
 
@@ -174,7 +176,7 @@ describe('OAuth for agents', () => {
     expect((await (await poll()).json()).error).toBe('authorization_pending')
 
     const attemptToken = new URL(claim_attempt.verification_uri).searchParams.get('claim_attempt_token')!
-    const signedIn = { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER }
+    const signedIn = { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' }
     expect(await (await app.request(`/oauth/claim?claim_attempt_token=${attemptToken}`, { headers: signedIn })).text()).toContain('Research bot')
     expect((await app.request('/oauth/claim', { ...form({ claim_attempt_token: attemptToken, user_code: '000000' === claim_attempt.user_code ? '111111' : '000000' }), headers: signedIn })).status).toBe(400)
     expect((await app.request('/oauth/claim', { ...form({ claim_attempt_token: attemptToken, user_code: claim_attempt.user_code }), headers: signedIn })).status).toBe(200)
@@ -190,7 +192,7 @@ describe('OAuth for agents', () => {
     const { app, oauth } = await sampleApi()
     const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
     const attemptToken = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
-    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attemptToken, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attemptToken, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
     const granted = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))).json()
     expect(granted.refresh_token).toMatch(/^rt_/)
 
@@ -213,7 +215,7 @@ describe('OAuth for agents', () => {
     // Another agent's sign-in is untouched by that, and the owner's kill switch ends it
     const registration2 = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER }))).json()
     const attempt2 = new URL(registration2.claim.verification_uri).searchParams.get('claim_attempt_token')!
-    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attempt2, user_code: registration2.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attempt2, user_code: registration2.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
     const granted2 = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration2.claim_token }))).json()
     expect((await app.request('/api/v1/things', { headers: { authorization: `Bearer ${granted2.access_token}` } })).status).toBe(200)
     expect((await (await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: granted2.identity_assertion }))).json()).access_token).toBeTruthy()
@@ -373,7 +375,7 @@ describe('OAuth for agents', () => {
     const { app, oauth } = await sampleApi()
     const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER }))).json()
     const attemptToken = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
-    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attemptToken, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attemptToken, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
     const granted = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))).json()
     await oauth.revokeClient(registration.registration_id)
     expect((await app.request('/api/v1/things', { headers: { authorization: `Bearer ${granted.access_token}` } })).status).toBe(401)
@@ -385,7 +387,7 @@ describe('OAuth callers: the client and the grant, not the name', () => {
   const claimed = async (app: Awaited<ReturnType<typeof oauthApp>>['app'], name = 'Night shift') => {
     const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: name }))).json()
     const attemptToken = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
-    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attemptToken, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    await app.request('/oauth/claim', { ...form({ claim_attempt_token: attemptToken, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
     const granted = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))).json()
     return { registration, granted }
   }
@@ -487,7 +489,7 @@ describe('OAuth callers: the client and the grant, not the name', () => {
     const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
     const { claim_attempt } = await (await app.request('/agent/identity/claim', json({ claim_token: registration.claim_token }))).json()
     const type = (attempt: { verification_uri: string; user_code: string }) =>
-      app.request('/oauth/claim', { ...form({ claim_attempt_token: new URL(attempt.verification_uri).searchParams.get('claim_attempt_token')!, user_code: attempt.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+      app.request('/oauth/claim', { ...form({ claim_attempt_token: new URL(attempt.verification_uri).searchParams.get('claim_attempt_token')!, user_code: attempt.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
     expect((await type(registration.claim)).status).toBe(200)
     const granted = await (await app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))).json()
     const second = await type(claim_attempt)
@@ -803,7 +805,7 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
     const claim = async () => {
       const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
       const claim_attempt_token = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
-      await app.request('/oauth/claim', { ...form({ claim_attempt_token, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+      await app.request('/oauth/claim', { ...form({ claim_attempt_token, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
       return registration
     }
     const tokensOf = async (registration: { claim_token: string }) => {
@@ -836,7 +838,7 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
     const { audience: _unclaimed, ...unclaimed } = (await store.get('registration', registered.registration_id))!
     await store.put('registration', registered.registration_id, unclaimed, Math.floor(Date.now() / 1000) + 3600)
     const claim_attempt_token = new URL(registered.claim.verification_uri).searchParams.get('claim_attempt_token')!
-    await app.request('/oauth/claim', { ...form({ claim_attempt_token, user_code: registered.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+    await app.request('/oauth/claim', { ...form({ claim_attempt_token, user_code: registered.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
     expect(await tokensOf(registered)).toEqual([undefined, undefined, undefined])
   })
 
@@ -881,6 +883,464 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
     for (const path of ['', '/mcp', '/s/alpha/mcp']) expect((await app.request(`/.well-known/oauth-protected-resource${path}`)).status, path).toBe(200)
     const { app: plain } = await sampleApi()
     expect((await (await plain.request('/.well-known/oauth-protected-resource/s/alpha/files')).json()).resource).toBe(`${ORIGIN}/s/alpha/files`)
+  })
+})
+
+describe('OAuth approvals: the app decides who approves a sign-in', () => {
+  type App = Awaited<ReturnType<typeof oauthApp>>['app']
+  afterEach(() => vi.useRealTimers())
+  const exchangeAt = (app: App, location: string | null, client_id: string, extra: Record<string, string> = {}) =>
+    app.request('/oauth/token', form({ grant_type: 'authorization_code', code: new URL(location!).searchParams.get('code')!, client_id, code_verifier: 'v'.repeat(43), ...extra }))
+  const cookieOf = (answer: Response) => answer.headers.getSetCookie().find((line) => /^(__Host-)?oauth_ticket=/.test(line))
+
+  it('runs the oauth README’s invite example as written', async () => {
+    const escape = (text: string) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`)
+    const signingKey = await generateOAuthKey()
+    const store = memoryOAuthStore()
+    const owner = async (c: Context) => c.req.header('x-test-owner') ?? null
+
+    // The invites the owner made, each for one person (an app keeps them in its database)
+    const INVITES = new Map([['garden-42', 'owner@example.test']])
+    const invitePage = (ask: SignInAsk, note = '') => `<!doctype html><meta name="referrer" content="same-origin"><title>Join Sample</title>
+<p>${escape(ask.client.name)} asks to use Sample (${escape(ask.resource)}) and returns to ${ask.onThisComputer ? 'an app on this computer' : escape(ask.redirectHost)}. ${note}</p>
+<form method="post" action="/join"><input type="hidden" name="ticket" value="${ask.ticket}"><input name="invite" aria-label="Invite code"><button>Join</button></form>`
+
+    const oauth = createOAuth({
+      name: 'Sample', signingKey, store, owner,
+      approve: async (c, ask) => c.html(invitePage(ask)),                                          // every sign-in starts at the app's page
+      onGrant: async (grant) => grant.kind !== 'code' || INVITES.delete(grant.data?.invite ?? ''),  // spent with the first token
+    })
+    const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(''), open: ['/join'] }, oauth })
+    app.post('/join', async (c) => {
+      const body = await c.req.parseBody()
+      const ticket = String(body.ticket ?? '')
+      const ask = await oauth.ticketOf(c, ticket)
+      if (!ask) return c.html((await oauth.answeredOf(c, ticket)) === 'approved' ? '<p>Already approved: return to your app.</p>' : '<p>This sign-in expired: start again from your app.</p>', 400)
+      const holder = INVITES.get(String(body.invite ?? ''))
+      if (!holder) return c.html(invitePage(ask, 'That invite code is not one of ours.'), 400)
+      return oauth.complete(c, ask.ticket, { approver: holder, scopes: ['read'], data: { invite: String(body.invite) } })
+    })
+
+    app.get('/api/v1/things', (c) => c.json({ caller: c.get('caller' as never) }))
+    const client_id = await registered(app)
+    const browser = browserOf(app)
+    const page = await browser.request(`/oauth/authorize?${authorizeQuery(client_id, { resource: `${ORIGIN}/mcp` })}`)
+    const html = await page.text()
+    expect(html).toContain(`Sample asks to use Sample (${ORIGIN}/mcp) and returns to an app on this computer.`)
+    expect(html).toContain('<meta name="referrer" content="same-origin">')
+    expect((await browser.post('/join', { ticket: ticketIn(html), invite: 'garden-1' })).status).toBe(400)
+    const joined = await browser.post('/join', { ticket: ticketIn(html), invite: 'garden-42' })
+    // Posted again from this browser (a double click, a tab brought back): it went through; from another, it expired
+    const again = await browser.post('/join', { ticket: ticketIn(html), invite: 'garden-42' })
+    expect([again.status, again.headers.get('location'), await again.text()]).toEqual([400, null, expect.stringContaining('Already approved')])
+    expect(await (await browserOf(app).post('/join', { ticket: ticketIn(html), invite: 'garden-42' })).text()).toContain('This sign-in expired')
+    const tokens = await (await exchangeAt(app, joined.headers.get('location'), client_id)).json()
+    expect(tokens.scope).toBe('read')
+    expect((await (await callerWith(app, tokens.access_token)).json()).caller).toMatchObject({ owner: OWNER, client: client_id, scopes: ['read'], resource: `${ORIGIN}/mcp` })
+    // Spent: the same invite opens nothing a second time
+    const second = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+    expect((await browser.post('/join', { ticket: second, invite: 'garden-42' })).status).toBe(400)
+  })
+
+  it('lets an app approve at its own page, and the client gets a code with state and iss', async () => {
+    const { app, heard, asks } = await joinApp(memoryOAuthStore())
+    const client_id = await registered(app, 'Sample client', 'https://client.example.test/callback')
+    const browser = browserOf(app, { referer: 'https://client.example.test/settings', 'sec-fetch-site': 'cross-site' })
+    const query = authorizeQuery(client_id, { redirect_uri: 'https://client.example.test/callback', resource: `${ORIGIN}/mcp`, scope: 'read write', state: 'abc' })
+    const page = await browser.request(`/oauth/authorize?${query}`)
+    expect([page.status, page.headers.get('location')]).toEqual([200, null])
+    expect(cookieOf(page)).toMatch(/^oauth_ticket=[\w-]{32,};/)
+    expect(asks).toEqual([{
+      ticket: ticketIn(await page.text()),
+      client: { id: client_id, name: 'Sample client', redirectUris: ['https://client.example.test/callback'] },
+      redirectUri: 'https://client.example.test/callback',
+      redirectHost: 'client.example.test',
+      onThisComputer: false,
+      scopes: ['read', 'write'],
+      resource: `${ORIGIN}/mcp`,
+      state: 'abc',
+      arrival: { site: 'cross-site', referrerOrigin: 'https://client.example.test' },
+    }])
+    const done = await browser.post('/join', { ticket: asks[0]!.ticket, invite: 'garden-42' })
+    expect(done.status).toBe(302)
+    const back = new URL(done.headers.get('location')!)
+    expect([back.origin + back.pathname, back.searchParams.get('state'), back.searchParams.get('iss')]).toEqual(['https://client.example.test/callback', 'abc', ORIGIN])
+    const tokens = await (await exchangeAt(app, done.headers.get('location'), client_id, { redirect_uri: 'https://client.example.test/callback' })).json()
+    const caller = (await (await callerWith(app, tokens.access_token)).json()).caller
+    expect(caller).toMatchObject({ owner: OWNER, client: client_id, scopes: ['read', 'write'], resource: `${ORIGIN}/mcp` })
+    expect(heard).toEqual([{ kind: 'code', grant: caller.grant, client: { id: client_id, name: 'Sample client' }, approver: OWNER, scopes: ['read', 'write'], resource: `${ORIGIN}/mcp`, data: { invite: 'garden-42' } }])
+    // Refresh never asks onGrant again
+    expect((await refreshWith(app, tokens.refresh_token)).status).toBe(200)
+    expect(heard).toHaveLength(1)
+  })
+
+  it('needs the browser that opened the ticket to complete it', async () => {
+    const { app } = await joinApp(memoryOAuthStore())
+    const opener = browserOf(app)
+    const ticket = ticketIn(await (await opener.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)).text())
+    // Another browser (its own ticket cookie) and one with none
+    const other = browserOf(app)
+    await other.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)
+    for (const browser of [other, browserOf(app)]) {
+      const answer = await browser.post('/join/direct', { ticket, invite: 'garden-42' })
+      expect([answer.status, answer.headers.get('location')]).toEqual([403, null])
+      expect((await browser.post('/join', { ticket, invite: 'garden-42' })).status).toBe(400)
+    }
+    expect((await opener.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+  })
+
+  it('refuses a cross-site, same-site-sibling or originless approval, on the kit’s page and at complete alike', async () => {
+    const refusedHeaders: Record<string, string>[] = [{ 'sec-fetch-site': 'cross-site' }, { 'sec-fetch-site': 'same-site' }, { 'sec-fetch-site': 'none' }, {}, { origin: 'null' }, { origin: 'http://localhost.example.test' }, { origin: 'http://sub.localhost' }, { origin: 'https://localhost' }]
+    const { app } = await joinApp(memoryOAuthStore(), { approve: async (c, ask) => (ask.state === 'kit' ? null : c.html(`<input name="ticket" value="${ask.ticket}">`)) })
+    const client_id = await registered(app)
+    const browser = browserOf(app, { 'x-test-owner': OWNER })
+    for (const headers of refusedHeaders) {
+      const kit = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id, { state: 'kit' })}`)).text())
+      const own = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      for (const [path, ticket] of [['/oauth/authorize', kit], ['/join/direct', own]] as const) {
+        const answer = await browser.post(path, { ticket, decision: 'allow', invite: 'garden-42' }, headers)
+        expect([answer.status, answer.headers.get('location')], `${path} ${JSON.stringify(headers)}`).toEqual([403, null])
+      }
+      // Refused before anything was spent: the same tickets still go through from this site
+      expect((await browser.post('/oauth/authorize', { ticket: kit, decision: 'allow' }, { origin: ORIGIN })).headers.get('location')).toContain('code=')
+      expect((await browser.post('/join/direct', { ticket: own, invite: 'garden-42' }, { origin: 'HTTP://LOCALHOST:80' })).headers.get('location')).toContain('code=')
+    }
+  })
+
+  it('makes one code when complete is called twice: the second finds the ticket spent', async () => {
+    const { app } = await joinApp(memoryOAuthStore())
+    const client_id = await registered(app)
+    const browser = browserOf(app)
+    const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+    const first = await browser.post('/join/direct', { ticket, invite: 'garden-42' })
+    const second = await browser.post('/join/direct', { ticket, invite: 'garden-42' })
+    expect([first.status, second.status, second.headers.get('location')]).toEqual([302, 400, null])
+    expect(await second.text()).toContain('Already approved')
+    expect((await browser.post('/join', { ticket, invite: 'garden-42' })).status).toBe(400)
+  })
+
+  it('refuses a blank approver before the ticket is spent', async () => {
+    const { app } = await joinApp(memoryOAuthStore())
+    const browser = browserOf(app)
+    const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)).text())
+    for (const approver of ['', '  ']) {
+      const refused = await browser.post('/join/direct', { ticket, approver })
+      expect([refused.status, refused.headers.get('location'), await refused.text()]).toEqual([400, null, expect.stringContaining('needs an approver')])
+    }
+    expect((await browser.post('/join/direct', { ticket, approver: OWNER })).headers.get('location')).toContain('code=')
+  })
+
+  it('stores no ticket for a stranger the app’s approve sends to the owner’s sign-in', async () => {
+    const store = memoryOAuthStore()
+    const tickets: string[] = []
+    const { app } = await joinApp(store, { approve: async (_c, ask) => (tickets.push(ask.ticket), null) })
+    const answer = await app.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)
+    expect([answer.status, cookieOf(answer)]).toEqual([401, undefined])
+    expect(await answer.text()).toContain('Sign in first')
+    expect(tickets).toHaveLength(1)
+    expect(await store.get('consent', tickets[0]!)).toBeNull()
+  })
+
+  it('lets an approval narrow the scopes, never widen them, and a refresh keeps it read-only', async () => {
+    const { app } = await joinApp(memoryOAuthStore())
+    const client_id = await registered(app)
+    const browser = browserOf(app)
+    const open = async (scope: string) => ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id, { scope })}`)).text())
+    const narrowed = await browser.post('/join', { ticket: await open('read write'), invite: 'garden-42', scopes: 'read' })
+    const tokens = await (await exchangeAt(app, narrowed.headers.get('location'), client_id)).json()
+    expect(tokens.scope).toBe('read')
+    const rotated = await (await refreshWith(app, tokens.refresh_token)).json()
+    expect(rotated.scope).toBe('read')
+    expect((await app.request('/api/v1/things', { method: 'POST', headers: { authorization: `Bearer ${rotated.access_token}` } })).status).toBe(403)
+    // Wider than asked, or nothing at all: refused, and the ticket is still there to answer properly
+    const readOnly = await open('read')
+    for (const scopes of ['read write', 'admin', ' ']) {
+      const refused = await browser.post('/join', { ticket: readOnly, invite: 'garden-42', scopes })
+      expect([refused.status, refused.headers.get('location')], scopes).toEqual([400, null])
+    }
+    expect((await browser.post('/join', { ticket: readOnly, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+    // An empty list passed by the app is refused too
+    const { app: own, oauth } = await oauthApp(memoryOAuthStore(), { approve: async (c, ask) => c.html(`<input name="ticket" value="${ask.ticket}">`) }, { open: ['/none'] })
+    own.post('/none', async (c) => oauth.complete(c, String((await c.req.parseBody()).ticket ?? ''), { approver: OWNER, scopes: [] }))
+    const ownBrowser = browserOf(own)
+    const ticket = ticketIn(await (await ownBrowser.request(`/oauth/authorize?${authorizeQuery(await registered(own))}`)).text())
+    const none = await ownBrowser.post('/none', { ticket })
+    expect([none.status, none.headers.get('location')]).toEqual([400, null])
+  })
+
+  it('completes a sign-in that asked only for unknown scopes on the kit’s page, as before approvals: a token with no scopes', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    const client_id = await registered(app)
+    const owner = browserOf(app, { 'x-test-owner': OWNER })
+    const page = await owner.request(`/oauth/authorize?${authorizeQuery(client_id, { scope: 'admin' })}`)
+    expect(page.status).toBe(200)
+    const allowed = await owner.post('/oauth/authorize', { ticket: ticketIn(await page.text()), decision: 'allow' })
+    expect([allowed.status, allowed.headers.get('location')]).toEqual([302, expect.stringContaining('code=')])
+    const tokens = await (await exchangeAt(app, allowed.headers.get('location'), client_id)).json()
+    expect(tokens.scope).toBe('')
+    // A token with no scopes reads nothing
+    expect((await callerWith(app, tokens.access_token)).status).toBe(403)
+  })
+
+  it('hands onGrant the data, and false spends the code and issues nothing', async () => {
+    const { app, heard } = await joinApp(memoryOAuthStore())
+    const client_id = await registered(app)
+    const browser = browserOf(app)
+    const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+    const location = (await browser.post('/join', { ticket, invite: 'not-an-invite' })).headers.get('location')
+    const refused = await (await exchangeAt(app, location, client_id)).json()
+    expect(refused).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('withdrawn') })
+    expect(refused.access_token).toBeUndefined()
+    expect(heard.map((grant) => [grant.kind, grant.data])).toEqual([['code', { invite: 'not-an-invite' }]])
+    expect((await (await exchangeAt(app, location, client_id)).json()).error).toBe('invalid_grant')
+    expect(heard).toHaveLength(1)
+  })
+
+  it('asks onGrant for the device and claim grants, once each, and false issues nothing', async () => {
+    const device = 'urn:ietf:params:oauth:grant-type:device_code'
+    const CLAIM = 'urn:workos:agent-auth:grant-type:claim'
+    const BEARER = 'urn:ietf:params:oauth:grant-type:jwt-bearer'
+    for (const allowed of [true, false]) {
+      const heard: { kind: string; approver: string; resource?: string; grant: string }[] = []
+      const { app } = await oauthApp(memoryOAuthStore(), { onGrant: async (grant) => (heard.push(grant), allowed) })
+      const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+      const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+      await browserOf(app, { 'x-test-owner': OWNER }).post('/oauth/device', { user_code, decision: 'allow' })
+      const poll = () => app.request('/oauth/token', form({ grant_type: device, device_code, client_id }))
+      const polls = await Promise.all([poll(), poll(), poll()])
+      const bodies = await Promise.all(polls.map((answer) => answer.json()))
+      expect(bodies.filter((body) => body.access_token)).toHaveLength(allowed ? 1 : 0)
+      if (!allowed) expect(bodies.map((body) => body.error_description).join(' ')).toContain('withdrawn')
+      expect(heard).toMatchObject([{ kind: 'device', approver: OWNER, resource: ORIGIN, client: { id: client_id, name: 'Terminal' } }])
+
+      // An anonymous agent holds its assertion from the start: it buys no token before the claim is collected
+      const registration = await (await app.request('/agent/identity', json({ type: 'anonymous', client_name: 'Night shift' }))).json()
+      const { claim_attempt } = await (await app.request('/agent/identity/claim', json({ claim_token: registration.claim_token, email: OWNER }))).json()
+      expect((await typeClaim(app, claim_attempt)).status).toBe(200)
+      const bearing = () => app.request('/oauth/token', form({ grant_type: BEARER, assertion: registration.identity_assertion }))
+      expect((await (await bearing()).json()).error).toBe('invalid_grant')
+      const claimPoll = () => app.request('/oauth/token', form({ grant_type: CLAIM, claim_token: registration.claim_token }))
+      const claimed = await Promise.all([claimPoll(), claimPoll()])
+      const claimBodies = await Promise.all(claimed.map((answer) => answer.json()))
+      expect(claimBodies.filter((body) => body.access_token)).toHaveLength(allowed ? 1 : 0)
+      expect(heard.map((grant) => grant.kind)).toEqual(['device', 'claim'])
+      expect(heard[1]).toMatchObject({ approver: OWNER, client: { id: registration.registration_id, name: 'Night shift' } })
+      // Collected and allowed, the assertion works from then on without asking again; withdrawn, it never does
+      const after = await (await bearing()).json()
+      expect(Boolean(after.access_token)).toBe(allowed)
+      if (allowed) expect((await refreshWith(app, claimBodies.find((body) => body.refresh_token).refresh_token)).status).toBe(200)
+      expect(heard).toHaveLength(2)
+    }
+  })
+
+  it('with approve set, answers a bad request with a page, never a redirect', async () => {
+    const { app, asks } = await joinApp(memoryOAuthStore(), { resources: (path) => path === '/s/alpha/mcp' })
+    const client_id = await registered(app)
+    for (const extra of <Record<string, string>[]>[{ response_type: 'token' }, { code_challenge: '' }, { code_challenge_method: 'plain' }, { resource: `${ORIGIN}/s/beta/mcp` }, { resource: 'https://elsewhere.example.test/s/alpha/mcp' }, { redirect_uri: 'https://elsewhere.example.test/cb' }, { client_id: 'client_nope' }]) {
+      const answer = await app.request(`/oauth/authorize?${authorizeQuery(client_id, extra)}`)
+      expect([answer.status, answer.headers.get('location')], JSON.stringify(extra)).toEqual([400, null])
+      expect(await answer.text()).not.toContain('<a ')
+    }
+    expect(asks).toEqual([])
+    // Without approve the kit keeps today's order: the owner first, then an error the client may hear at its redirect
+    const { app: plain } = await oauthApp(memoryOAuthStore())
+    const plainClient = await registered(plain)
+    expect((await plain.request(`/oauth/authorize?${authorizeQuery(plainClient, { response_type: 'token' })}`)).status).toBe(401)
+    expect((await plain.request(`/oauth/authorize?${authorizeQuery(plainClient, { response_type: 'token' })}`, { headers: { 'x-test-owner': OWNER } })).status).toBe(302)
+  })
+
+  it('falls back to the owner’s page when approve answers null, and never lets a ticket from the app’s page be approved there', async () => {
+    const { app } = await joinApp(memoryOAuthStore(), { approve: async (c, ask) => (ask.resource === ORIGIN ? null : c.html(`<input name="ticket" value="${ask.ticket}">`)) })
+    const client_id = await registered(app)
+    expect((await app.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).status).toBe(401)
+    const owner = browserOf(app, { 'x-test-owner': OWNER })
+    const page = await owner.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+    expect(await page.clone().text()).toContain('Allow <strong>Sample</strong>')
+    expect((await owner.post('/oauth/authorize', { ticket: ticketIn(await page.text()), decision: 'allow' })).headers.get('location')).toContain('code=')
+    const appTicket = ticketIn(await (await owner.request(`/oauth/authorize?${authorizeQuery(client_id, { resource: `${ORIGIN}/mcp` })}`)).text())
+    const refused = await owner.post('/oauth/authorize', { ticket: appTicket, decision: 'allow' })
+    expect([refused.status, refused.headers.get('location')]).toEqual([403, null])
+  })
+
+  it('without approve, refuses a hand-made approval that lacks the ticket cookie, or comes from another owner', async () => {
+    const { app } = await oauthApp(memoryOAuthStore(), { owners: [OWNER, 'second@example.test'] })
+    const client_id = await registered(app)
+    const owner = browserOf(app, { 'x-test-owner': OWNER })
+    const ticket = ticketIn(await (await owner.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+    const bare = await app.request('/oauth/authorize', { ...form({ ticket, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+    expect([bare.status, bare.headers.get('location')]).toEqual([403, null])
+    const someoneElse = await owner.post('/oauth/authorize', { ticket, decision: 'allow' }, { 'sec-fetch-site': 'same-origin', 'x-test-owner': 'second@example.test' })
+    expect(someoneElse.headers.get('location')).toBeNull()
+    expect((await owner.post('/oauth/authorize', { ticket, decision: 'allow' })).headers.get('location')).toContain('code=')
+  })
+
+  it('sets the ticket cookie with the __Host- prefix over https, and reads only that name there', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    const client_id = await registered(app)
+    const https = browserOf(app, { 'x-test-owner': OWNER, 'x-forwarded-proto': 'https', 'x-forwarded-host': 'example.test' })
+    const page = await https.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+    const cookie = cookieOf(page)!
+    expect(cookie).toMatch(/^__Host-oauth_ticket=[\w-]{32,}; /)
+    for (const part of ['Max-Age=600', 'Path=/', 'HttpOnly', 'Secure', 'SameSite=Lax']) expect(cookie).toContain(part)
+    expect(cookie).not.toContain('Domain')
+    const ticket = ticketIn(await page.text())
+    const nonce = /=([^;]+)/.exec(cookie)![1]!
+    // The same value under the plain name, which a sibling host could set, is not the ticket's browser
+    const plainName = await app.request('/oauth/authorize', { ...form({ ticket, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'x-forwarded-proto': 'https', 'x-forwarded-host': 'example.test', 'sec-fetch-site': 'same-origin', cookie: `oauth_ticket=${nonce}` } })
+    expect(plainName.status).toBe(403)
+    expect((await https.post('/oauth/authorize', { ticket, decision: 'allow' })).headers.get('location')).toContain('code=')
+    // Over http, no prefix and no Secure
+    const http = cookieOf(await browserOf(app, { 'x-test-owner': OWNER }).request(`/oauth/authorize?${authorizeQuery(client_id)}`))!
+    expect(http).toMatch(/^oauth_ticket=/)
+    expect(http).not.toContain('Secure')
+  })
+
+  it('completes two sign-ins opened in one browser, the second opened in the first’s ninth minute', async () => {
+    let at = Date.now()
+    vi.useFakeTimers({ toFake: ['Date'], now: at })
+    const { app } = await oauthApp(memoryOAuthStore())
+    const client_id = await registered(app)
+    const browser = browserOf(app, { 'x-test-owner': OWNER })
+    const firstPage = await browser.request(`/oauth/authorize?${authorizeQuery(client_id, { state: 'one' })}`)
+    const first = ticketIn(await firstPage.clone().text())
+    vi.setSystemTime((at += 8.5 * 60 * 1000))
+    const secondPage = await browser.request(`/oauth/authorize?${authorizeQuery(client_id, { state: 'two' })}`)
+    // The same nonce, its life renewed: neither sign-in breaks the other
+    expect(/=([^;]+)/.exec(cookieOf(secondPage)!)![1]).toBe(/=([^;]+)/.exec(cookieOf(firstPage)!)![1])
+    expect(cookieOf(secondPage)).toContain('Max-Age=600')
+    vi.setSystemTime((at += 60 * 1000))
+    expect(new URL((await browser.post('/oauth/authorize', { ticket: first, decision: 'allow' })).headers.get('location')!).searchParams.get('state')).toBe('one')
+    vi.setSystemTime((at += 8 * 60 * 1000))
+    expect(new URL((await browser.post('/oauth/authorize', { ticket: ticketIn(await secondPage.text()), decision: 'allow' })).headers.get('location')!).searchParams.get('state')).toBe('two')
+  })
+
+  it('refuses a claim or device approval posted with no Sec-Fetch-Site and no matching Origin', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+    const claim_attempt_token = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
+    const device = 'urn:ietf:params:oauth:grant-type:device_code'
+    const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+    const { user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+    const owner = browserOf(app, { 'x-test-owner': OWNER })
+    for (const headers of <Record<string, string>[]>[{}, { origin: 'http://localhost.example.test' }, { 'sec-fetch-site': 'same-site' }]) {
+      expect((await owner.post('/oauth/claim', { claim_attempt_token, user_code: registration.claim.user_code }, headers)).status, JSON.stringify(headers)).toBe(403)
+      expect((await owner.post('/oauth/device', { user_code, decision: 'allow' }, headers)).status, JSON.stringify(headers)).toBe(403)
+    }
+    expect((await owner.post('/oauth/claim', { claim_attempt_token, user_code: registration.claim.user_code }, { origin: ORIGIN })).status).toBe(200)
+    expect((await owner.post('/oauth/device', { user_code, decision: 'allow' }, { origin: ORIGIN })).status).toBe(200)
+  })
+
+  it('sends a referrer policy on every kit page with a form, so its POST carries the real Origin', async () => {
+    const REFERRER = '<meta name="referrer" content="same-origin">'
+    const { app } = await oauthApp(memoryOAuthStore())
+    const owner = browserOf(app, { 'x-test-owner': OWNER })
+    const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+    const device = 'urn:ietf:params:oauth:grant-type:device_code'
+    const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+    const { user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+    const pages = {
+      consent: await owner.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`),
+      claim: await owner.request(new URL(registration.claim.verification_uri).pathname + new URL(registration.claim.verification_uri).search),
+      deviceCode: await owner.request('/oauth/device'),
+      deviceConsent: await owner.request(`/oauth/device?user_code=${user_code}`),
+      deviceConfirm: await owner.post('/oauth/device', { user_code }),
+      deviceWrongCode: await owner.post('/oauth/device', { user_code: 'WXYZ-WXYZ' }),
+    }
+    for (const [name, answer] of Object.entries(pages)) {
+      const html = await answer.text()
+      expect(html, name).toContain('<form method="post"')
+      expect(html, name).toContain(REFERRER)
+      // The header stays strict; the page's own policy is what its form POST follows
+      expect(answer.headers.get('referrer-policy'), name).toBe('no-referrer')
+    }
+  })
+
+  it('refuses an approval POST with no Sec-Fetch-Site and Origin null, and takes one with the issuer’s Origin', async () => {
+    // A browser sends Origin: null from a page served with no-referrer and no policy of its own; over plain http at a
+    // non-loopback address it may send no Sec-Fetch-Site either, so only the page's referrer policy lets it through
+    const { app } = await joinApp(memoryOAuthStore(), { approve: async (c, ask) => (ask.state === 'kit' ? null : c.html(`<input name="ticket" value="${ask.ticket}">`)) })
+    const owner = browserOf(app, { 'x-test-owner': OWNER })
+    const posts = async () => {
+      const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+      const claim_attempt_token = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
+      const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: ['urn:ietf:params:oauth:grant-type:device_code'] }))).json()
+      const { user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+      const signIn = await registered(app)
+      const kit = ticketIn(await (await owner.request(`/oauth/authorize?${authorizeQuery(signIn, { state: 'kit' })}`)).text())
+      const own = ticketIn(await (await owner.request(`/oauth/authorize?${authorizeQuery(signIn)}`)).text())
+      return [
+        ['/oauth/authorize', { ticket: kit, decision: 'allow' }],
+        ['/join/direct', { ticket: own, invite: 'garden-42' }],
+        ['/oauth/claim', { claim_attempt_token, user_code: registration.claim.user_code }],
+        ['/oauth/device', { user_code, decision: 'allow' }],
+      ] as const
+    }
+    for (const [path, fields] of await posts()) {
+      expect((await owner.post(path, fields, { origin: 'null' })).status, path).toBe(403)
+      const taken = await owner.post(path, fields, { origin: ORIGIN })
+      expect(taken.status, path).toBe(path === '/oauth/authorize' || path === '/join/direct' ? 302 : 200)
+    }
+  })
+
+  it('tells a person at authorize with an unknown or expired client id to add the connection again', async () => {
+    for (const options of [{}, { approve: async () => null }]) {
+      const { app } = await oauthApp(memoryOAuthStore(), options)
+      const page = await app.request(`/oauth/authorize?${authorizeQuery('client_gone')}`, { headers: { 'x-test-owner': OWNER } })
+      expect([page.status, page.headers.get('location')]).toEqual([400, null])
+      const text = await page.text()
+      expect(text).toContain('not registered')
+      expect(text).toContain('Remove this connection in your app and add it again.')
+    }
+  })
+
+  it('names what is asked for on the kit’s consent page, and where it returns: a host, or an app on this computer', async () => {
+    const { app } = await oauthApp(memoryOAuthStore(), { resources: (path) => path === '/s/alpha/mcp' })
+    const owner = browserOf(app, { 'x-test-owner': OWNER })
+    const pageFor = async (redirect: string, extra: Record<string, string> = {}) =>
+      (await owner.request(`/oauth/authorize?${authorizeQuery(await registered(app, 'Sample', redirect), { redirect_uri: redirect, ...extra })}`)).text()
+    expect(await pageFor('https://client.example.test/cb', { resource: `${ORIGIN}/s/alpha/mcp` })).toContain('<code>Sample: /s/alpha/mcp</code>')
+    expect(await pageFor('https://client.example.test/cb', { resource: `${ORIGIN}/mcp` })).toContain('<code>Sample: /mcp</code>')
+    expect(await pageFor('https://client.example.test/cb')).toContain('all of Sample')
+    const hosted = await pageFor('https://client.example.test/cb')
+    expect(hosted).toContain('<code>client.example.test</code>')
+    expect(hosted).not.toContain('this computer')
+    expect(await pageFor('http://127.0.0.1:33418/cb')).toContain('an app on this computer (<code>127.0.0.1:33418</code>)')
+    expect(await pageFor('sample-app://oauth/callback')).toContain('an app on this computer (<code>sample-app:</code>)')
+  })
+
+  describe('the brand on the kit’s own pages', () => {
+    const BRAND = defineBrand({ name: 'sample', title: 'Sample Notes', description: 'Notes for agents.', accent: '#2563eb' })
+    const brandedApp = async (brand = true) => {
+      const oauth = createOAuth({ name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async (c) => c.req.header('x-test-owner') ?? null, owners: [OWNER] })
+      return createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys('') }, oauth, ...(brand ? { brand: createBrand(BRAND, ASSETS) } : {}) })
+    }
+    const pagesOf = async (app: App) => {
+      const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Sample', redirect_uris: ['http://localhost:7777/cb'], logo_uri: 'https://tracker.example.test/logo.png' }))).json()
+      const owner = browserOf(app, { 'x-test-owner': OWNER })
+      const consent = await (await owner.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text()
+      const signIn = await (await app.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text()
+      const error = await (await owner.request(`/oauth/authorize?${authorizeQuery('client_gone')}`)).text()
+      const device = await (await owner.request('/oauth/device')).text()
+      const expired = await (await owner.post('/oauth/authorize', { ticket: 'consent_gone', decision: 'allow' })).text()
+      return { consent, signIn, error, device, expired }
+    }
+
+    it('carries the app’s brand: head tags, icon, name and accent, and never a client’s logo_uri', async () => {
+      for (const [name, html] of Object.entries(await pagesOf(await brandedApp()))) {
+        expect(html, name).toContain('<link rel="icon" href="/icon.svg" type="image/svg+xml">')
+        expect(html, name).toContain('<meta name="theme-color" content="#2563eb">')
+        expect(html, name).toContain('<img src="/icon.svg"')
+        expect(html, name).toContain('Sample Notes')
+        expect(html, name).toContain('--accent:#2563eb')
+        expect(html, name).not.toContain('tracker.example.test')
+      }
+    })
+
+    it('keeps today’s look without a brand', async () => {
+      for (const [name, html] of Object.entries(await pagesOf(await brandedApp(false)))) {
+        for (const absent of ['<link rel="icon"', 'theme-color', '<img', '--accent', 'tracker.example.test']) expect(html, name).not.toContain(absent)
+      }
+    })
   })
 })
 

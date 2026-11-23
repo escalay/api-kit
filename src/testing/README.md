@@ -34,6 +34,16 @@ const { tools, resources } = mountedMcp(app)
 expect(cliGaps({ tools, resources, jobs })).toEqual([])
 ```
 
+`approveSignIn(app, query, { headers, decision })` approves an OAuth sign-in on the kit's consent page the way a
+browser does: it opens `/oauth/authorize`, keeps the ticket cookie the page sets, and posts the answer same-origin with
+it, returning the 302 to the client. A hand-made approval POST without the cookie and a same-origin header is refused
+(the `oauth` part's README).
+
+```ts
+const answer = await approveSignIn(app, { response_type: 'code', client_id, redirect_uri, code_challenge, code_challenge_method: 'S256' }, { headers: { 'x-test-owner': 'owner@example.test' } })
+const code = new URL(answer.headers.get('location')!).searchParams.get('code')
+```
+
 ## Rules
 
 - Name every tool's command (`cli` on `mcpTool`) when the tool is written; `cliGaps` runs in every app's tests.

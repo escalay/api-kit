@@ -116,7 +116,7 @@
       "name": "oauth",
       "type": "registry:item",
       "title": "OAuth server",
-      "description": "The app as its own OAuth server: metadata, `/oauth/*`, agent registration (auth.md), ES256 tokens; `createOAuth`, `dbOAuthStore`, `memoryOAuthStore`, `generateOAuthKey`",
+      "description": "The app as its own OAuth server: metadata, `/oauth/*`, agent registration (auth.md), ES256 tokens; `createOAuth` (with `approve`, `onGrant`, `ticketOf`, `answeredOf`, `complete`: the app's own sign-in page), `dbOAuthStore`, `memoryOAuthStore`, `generateOAuthKey`",
       "registryDependencies": [
         "escalay/api-kit/core",
         "escalay/api-kit/db"
@@ -126,6 +126,11 @@
           "path": "src/oauth/index.ts",
           "type": "registry:file",
           "target": "~/src/kit/oauth/index.ts"
+        },
+        {
+          "path": "src/oauth/approval.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/oauth/approval.ts"
         },
         {
           "path": "src/oauth/schema.ts",
@@ -636,7 +641,7 @@
       "name": "testing",
       "type": "registry:item",
       "title": "Testing",
-      "description": "Checks for an app's tests: lintOpenApi, guideRoutes, guideGaps, toolRoutes, toolsRun, cliGaps and cliSnapshot (the command line), and softAuthenticator (passkeys in CI)",
+      "description": "Checks for an app's tests: lintOpenApi, guideRoutes, guideGaps, toolRoutes, toolsRun, cliGaps and cliSnapshot (the command line), softAuthenticator (passkeys in CI) and approveSignIn (an OAuth approval as a browser makes it)",
       "registryDependencies": [
         "escalay/api-kit/guide"
       ],

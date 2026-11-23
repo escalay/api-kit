@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { decodeJwt } from 'jose'
 import { describe, expect, it } from 'vitest'
 import { createAgentApi, createOAuth, generateOAuthKey, parseApiKeys, type OAuthConfig, type OAuthStore } from '../src/index.js'
+import { approveSignIn } from '../src/testing/index.js'
 
 /**
  * What every OAuth store must do, and the attacks on the token endpoint that a store decides: the same checks run on
@@ -21,15 +22,35 @@ const json = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'a
 export const formWithTwoResources = (fields: Record<string, string>, resources = [ORIGIN, `${ORIGIN}/mcp`]) =>
   ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: [new URLSearchParams(fields), ...resources.map((resource) => `resource=${encodeURIComponent(resource)}`)].join('&') })
 
-/** A sample app with the kit's OAuth over `store`; a header stands in for the single sign-on. */
-export const oauthApp = async (store: OAuthStore, options: Partial<OAuthConfig> = {}) => {
+/** A sample app with the kit's OAuth over `store`; a header stands in for the single sign-on. `open` names the app's own sign-in pages. */
+export const oauthApp = async (store: OAuthStore, options: Partial<OAuthConfig> = {}, { open }: { open?: string[] } = {}) => {
   const oauth = createOAuth({ name: 'Sample', signingKey: await generateOAuthKey(), store, owner: async (c) => c.req.header('x-test-owner') ?? null, owners: [OWNER], ...options })
-  const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys('') }, oauth })
+  const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(''), ...(open ? { open } : {}) }, oauth })
   app.get('/api/v1/things', (c) => c.json({ caller: c.get('caller' as never) }))
   return { app, oauth }
 }
 
 type App = Awaited<ReturnType<typeof oauthApp>>['app']
+
+/** A browser: keeps the cookies answers set and sends them back; `headers` go on every request. */
+export const browserOf = (app: App, headers: Record<string, string> = {}) => {
+  const jar = new Map<string, string>()
+  const request = async (path: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}) => {
+    const cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ')
+    const answer = await app.request(path, { ...init, headers: { ...headers, ...(cookie ? { cookie } : {}), ...init.headers } })
+    for (const line of answer.headers.getSetCookie()) {
+      const pair = line.split(';')[0]!
+      jar.set(pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1))
+    }
+    return answer
+  }
+  /** A form posted from one of this site's own pages. */
+  const post = (path: string, fields: Record<string, string>, extra: Record<string, string> = { 'sec-fetch-site': 'same-origin' }) =>
+    request(path, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', ...extra }, body: new URLSearchParams(fields).toString() })
+  return { request, post, jar }
+}
+/** The ticket a sign-in page holds. */
+export const ticketIn = (html: string) => /name="ticket" value="([^"]+)"/.exec(html)![1]!
 
 /** Registers a client (unless given one), has the owner approve it, and returns the code with what exchanges it. */
 export const approvedCode = async (app: App, { clientId, name = 'Sample', resource, scope = 'read write' }: { clientId?: string; name?: string; resource?: string; scope?: string } = {}) => {
@@ -37,9 +58,7 @@ export const approvedCode = async (app: App, { clientId, name = 'Sample', resour
   const verifier = randomBytes(32).toString('base64url')
   const challenge = createHash('sha256').update(verifier).digest('base64url')
   const query = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: REDIRECT, code_challenge: challenge, code_challenge_method: 'S256', scope, ...(resource === undefined ? {} : { resource }) })
-  const page = await (await app.request(`/oauth/authorize?${query}`, { headers: { 'x-test-owner': OWNER } })).text()
-  const ticket = /name="ticket" value="([^"]+)"/.exec(page)![1]!
-  const approved = await app.request('/oauth/authorize', { ...form({ ticket, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+  const approved = await approveSignIn(app, query, { headers: { 'x-test-owner': OWNER } })
   const code = new URL(approved.headers.get('location')!).searchParams.get('code')!
   const exchange = (fields: Record<string, string> = {}) => app.request('/oauth/token', form({ grant_type: 'authorization_code', code, client_id, redirect_uri: REDIRECT, code_verifier: verifier, ...fields }))
   return { client_id, code, verifier, challenge, exchange }
@@ -58,9 +77,44 @@ export const refreshWith = (app: App, refreshToken: string, resource?: string) =
 /** The audience an access token was signed for, if any. */
 export const audOf = (accessToken: string) => decodeJwt(accessToken).aud
 /** The owner types an agent's claim code on the claim page. */
-const typeClaim = (app: App, attempt: { verification_uri: string; user_code: string }) =>
-  app.request('/oauth/claim', { ...form({ claim_attempt_token: new URL(attempt.verification_uri).searchParams.get('claim_attempt_token')!, user_code: attempt.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+export const typeClaim = (app: App, attempt: { verification_uri: string; user_code: string }) =>
+  app.request('/oauth/claim', { ...form({ claim_attempt_token: new URL(attempt.verification_uri).searchParams.get('claim_attempt_token')!, user_code: attempt.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
 const claimPoll = (app: App, claimToken: string) => app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: claimToken }))
+
+/** A sign-in started in a browser: the client's query, and the browser holding its ticket cookie. */
+export const authorizeQuery = (client_id: string, extra: Record<string, string> = {}) =>
+  new URLSearchParams({ response_type: 'code', client_id, redirect_uri: REDIRECT, code_challenge: createHash('sha256').update('v'.repeat(43)).digest('base64url'), code_challenge_method: 'S256', state: 's1', ...extra })
+export const registered = async (app: App, name = 'Sample', redirect = REDIRECT) => (await (await app.request('/oauth/register', json({ client_name: name, redirect_uris: [redirect] }))).json()).client_id as string
+
+/**
+ * An app that approves at its own page: the person types an invite, and the app completes the ticket as the person the
+ * invite was made for (or `approver` when posted). `heard` is every grant `onGrant` saw; `/join/direct` completes without reading the ticket first.
+ */
+export const joinApp = async (store: OAuthStore, options: Partial<OAuthConfig> = {}) => {
+  const heard: Parameters<NonNullable<OAuthConfig['onGrant']>>[0][] = []
+  const asks: Parameters<NonNullable<OAuthConfig['approve']>>[1][] = []
+  const pageOf = (ticket: string, note = '') => `<!doctype html><title>Join Sample</title><p>${note}</p><form method="post" action="/join"><input type="hidden" name="ticket" value="${ticket}"><input name="invite"><button>Join</button></form>`
+  const { app, oauth } = await oauthApp(store, {
+    approve: async (c, ask) => (asks.push(ask), c.html(pageOf(ask.ticket))),
+    onGrant: async (grant) => (heard.push(grant), grant.kind !== 'code' || grant.data?.invite === 'garden-42'),
+    ...options,
+  }, { open: ['/join', '/join/direct'] })
+  const spentPages = { approved: 'Already approved: return to your app.', denied: 'You said no to this sign-in.', answered: 'This sign-in was answered already.', expired: 'This sign-in expired: start again from your app.' }
+  const decisionOf = (body: Record<string, unknown>) =>
+    body.decision === 'deny' ? ('deny' as const) : { approver: body.approver === undefined ? OWNER : String(body.approver), data: { invite: String(body.invite ?? '') }, ...(body.scopes ? { scopes: String(body.scopes).split(' ') } : {}) }
+  app.post('/join', async (c) => {
+    const body = await c.req.parseBody()
+    const ticket = String(body.ticket ?? '')
+    const ask = await oauth.ticketOf(c, ticket)
+    if (!ask) return c.html(`<p>${spentPages[(await oauth.answeredOf(c, ticket)) ?? 'expired']}</p>`, 400)
+    return oauth.complete(c, ask.ticket, decisionOf(body))
+  })
+  app.post('/join/direct', async (c) => {
+    const body = await c.req.parseBody()
+    return oauth.complete(c, String(body.ticket ?? ''), decisionOf(body))
+  })
+  return { app, oauth, heard, asks }
+}
 
 export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>) =>
   describe(`OAuthStore: ${name}`, () => {
@@ -362,10 +416,15 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       const { app } = await oauthApp(await make())
       const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Sample', redirect_uris: [REDIRECT] }))).json()
       const query = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: REDIRECT, code_challenge: 'x'.repeat(43), code_challenge_method: 'S256' })
-      const ticket = /name="ticket" value="([^"]+)"/.exec(await (await app.request(`/oauth/authorize?${query}`, { headers: { 'x-test-owner': OWNER } })).text())![1]!
-      const allow = () => app.request('/oauth/authorize', { ...form({ ticket, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+      const browser = browserOf(app, { 'x-test-owner': OWNER })
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${query}`)).text())
+      const allow = () => browser.post('/oauth/authorize', { ticket, decision: 'allow' })
       const answers = await Promise.all([allow(), allow()])
       expect(answers.map((answer) => answer.status).sort()).toEqual([302, 400])
+      // The second click lands in the same browser: it hears the ticket was answered (approved, once the first has said
+      // so), never a second code
+      const second = answers.find((answer) => answer.status === 400)!
+      expect([second.headers.get('location'), await second.text()]).toEqual([null, expect.stringMatching(/Already (approved|answered)/)])
     })
 
     it('takes one answer when the device form is posted twice at once', async () => {
@@ -385,12 +444,113 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
     it('issues one sign-in for a claim polled from two places at once', async () => {
       const { app } = await oauthApp(await make())
       const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
-      const claim_attempt_token = new URL(registration.claim.verification_uri).searchParams.get('claim_attempt_token')!
-      await app.request('/oauth/claim', { ...form({ claim_attempt_token, user_code: registration.claim.user_code }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER } })
+      await typeClaim(app, registration.claim)
       const poll = () => app.request('/oauth/token', form({ grant_type: 'urn:workos:agent-auth:grant-type:claim', claim_token: registration.claim_token }))
       const answers = await Promise.all([poll(), poll()])
       expect(answers.map((answer) => answer.status).sort()).toEqual([200, 400])
       expect((await answers.find((answer) => answer.status === 400)!.json()).error).toBe('expired_token')
+    })
+
+    it('answers a completed ticket posted again from its browser with already approved, and another browser with expired', async () => {
+      const { app } = await oauthApp(await make())
+      const query = authorizeQuery(await registered(app))
+      const browser = browserOf(app, { 'x-test-owner': OWNER })
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${query}`)).text())
+      expect((await browser.post('/oauth/authorize', { ticket, decision: 'allow' })).status).toBe(302)
+      const again = await browser.post('/oauth/authorize', { ticket, decision: 'allow' })
+      expect([again.status, again.headers.get('location'), await again.text()]).toEqual([400, null, expect.stringContaining('Already approved')])
+      const elsewhere = await browserOf(app, { 'x-test-owner': OWNER }).post('/oauth/authorize', { ticket, decision: 'allow' })
+      expect([elsewhere.status, elsewhere.headers.get('location'), await elsewhere.text()]).toEqual([400, null, expect.stringContaining('This approval expired')])
+      // A denied ticket never reads as approved
+      const denied = ticketIn(await (await browser.request(`/oauth/authorize?${query}`)).text())
+      expect(new URL((await browser.post('/oauth/authorize', { ticket: denied, decision: 'deny' })).headers.get('location')!).searchParams.get('error')).toBe('access_denied')
+      const deniedAgain = await (await browser.post('/oauth/authorize', { ticket: denied, decision: 'allow' })).text()
+      expect(deniedAgain).not.toContain('Already approved')
+      expect(deniedAgain).toContain('Already answered')
+    })
+
+    it('tells the app’s route a ticket this browser answered from one that expired or another browser holds', async () => {
+      const store = await make()
+      const { app } = await joinApp(store)
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect((await browser.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      const again = await browser.post('/join', { ticket, invite: 'garden-42' })
+      expect([again.status, again.headers.get('location'), await again.text()]).toEqual([400, null, expect.stringContaining('Already approved')])
+      // Another browser with a ticket of its own, and one with none
+      const other = browserOf(app)
+      await other.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+      for (const elsewhere of [other, browserOf(app)]) expect(await (await elsewhere.post('/join', { ticket, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+      const denied = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect(new URL((await browser.post('/join', { ticket: denied, decision: 'deny' })).headers.get('location')!).searchParams.get('error')).toBe('access_denied')
+      expect(await (await browser.post('/join', { ticket: denied, invite: 'garden-42' })).text()).toContain('You said no')
+      // Spent, its answer not written yet (the post that spent it still running): answered, never expired
+      const { nonce } = (await store.get('consent', ticket))!
+      await store.put('consent', ticket, { nonce, used: true }, now() + 600)
+      expect(await (await browser.post('/join', { ticket, invite: 'garden-42' })).text()).toContain('answered already')
+      const fresh = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect(await (await browser.post('/join', { ticket: `${fresh}x`, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+    })
+
+    it('completes a ticket once when the app’s page posts it twice at once', async () => {
+      const { app, heard } = await joinApp(await make())
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)).text())
+      const answers = await Promise.all([browser.post('/join/direct', { ticket, invite: 'garden-42' }), browser.post('/join/direct', { ticket, invite: 'garden-42' })])
+      expect(answers.map((answer) => answer.status).sort()).toEqual([302, 400])
+      expect(await answers.find((answer) => answer.status === 400)!.text()).toMatch(/Already (approved|answered)/)
+      expect(answers.filter((answer) => answer.headers.get('location')?.includes('code='))).toHaveLength(1)
+      expect(heard).toEqual([])
+    })
+
+    // better-auth's stored consent (findConsent) answered a later sign-in with no click
+    it('never lets a stored approval stand in for a click: the same client and approver need the page again', async () => {
+      const { app, asks } = await joinApp(await make())
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      const first = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect((await browser.post('/join', { ticket: first, invite: 'garden-42' })).status).toBe(302)
+      const again = await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+      expect([again.status, again.headers.get('location')]).toEqual([200, null])
+      const second = ticketIn(await again.text())
+      expect(second).not.toBe(first)
+      expect(asks).toHaveLength(2)
+      // Nothing but complete makes its code: the first ticket is spent, the built-in page won't take the second
+      expect((await browser.post('/join', { ticket: first, invite: 'garden-42' })).headers.get('location')).toBeNull()
+      expect((await browser.post('/oauth/authorize', { ticket: second, decision: 'allow' }, { 'sec-fetch-site': 'same-origin', 'x-test-owner': OWNER })).headers.get('location')).toBeNull()
+      expect((await browser.post('/join', { ticket: second, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+
+      // The kit's own page asks again too
+      const { app: plain } = await oauthApp(await make())
+      const plainClient = await registered(plain)
+      const owner = browserOf(plain, { 'x-test-owner': OWNER })
+      for (let round = 0; round < 2; round++) {
+        const page = await owner.request(`/oauth/authorize?${authorizeQuery(plainClient)}`)
+        expect([page.status, page.headers.get('location')]).toEqual([200, null])
+        expect((await owner.post('/oauth/authorize', { ticket: ticketIn(await page.text()), decision: 'allow' })).headers.get('location')).toContain('code=')
+      }
+    })
+
+    // better-auth GHSA-cq3f-vc6p-68fh, GHSA-q84f-53jg-9ppm
+    it('approves a device only for the owner, naming a client with no page to send anyone back to', async () => {
+      const { app } = await joinApp(await make())
+      const device = 'urn:ietf:params:oauth:grant-type:device_code'
+      const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+      const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+      const poll = () => app.request('/oauth/token', form({ grant_type: device, device_code, client_id }))
+      // approve is for /oauth/authorize only: the device page stays the owner's
+      for (const who of <Record<string, string>[]>[{}, { 'x-test-owner': 'someone@else.test' }]) {
+        const stranger = browserOf(app, who)
+        expect((await stranger.request(`/oauth/device?user_code=${user_code}`)).status).toBeGreaterThanOrEqual(400)
+        expect((await stranger.post('/oauth/device', { user_code, decision: 'allow' })).status).toBeGreaterThanOrEqual(400)
+      }
+      expect((await (await poll()).json()).error).toBe('authorization_pending')
+      const owner = browserOf(app, { 'x-test-owner': OWNER })
+      const page = await (await owner.request(`/oauth/device?user_code=${user_code}`)).text()
+      expect(page).toContain('Allow <strong>Terminal</strong>')
+      expect(page).toContain('no page to send you back to')
+      expect((await owner.post('/oauth/device', { user_code, decision: 'allow' })).status).toBe(200)
     })
     // RFC 8707; MCP 2026-07-28: every grant made now is bound to an audience
     it('binds a grant whose client named no resource to the root, which works everywhere on the origin', async () => {

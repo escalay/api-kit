@@ -225,6 +225,7 @@ export const createBrand = (brand: Brand, assets: BrandAssets): AgentBrand => {
     ...(brand.websiteUrl ? { websiteUrl: brand.websiteUrl } : {}),
     ...(brand.termsUrl ? { termsUrl: brand.termsUrl } : {}),
     background: brand.background ?? '#ffffff',
+    accent: brand.accent,
     logo: assets.png ? '/icon-512.png' : '/icon.svg',
     paths: Object.keys(files),
     icons: (origin, options) => brandIcons(origin, assets, options),
