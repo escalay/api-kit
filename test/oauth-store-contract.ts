@@ -17,6 +17,9 @@ const sha = (value: string) => createHash('sha256').update(value).digest('hex')
 
 export const form = (fields: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(fields).toString() })
 const json = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+/** A form that names `resource` twice, which a grant from before audiences ignores like any other. */
+export const formWithTwoResources = (fields: Record<string, string>, resources = [ORIGIN, `${ORIGIN}/mcp`]) =>
+  ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: [new URLSearchParams(fields), ...resources.map((resource) => `resource=${encodeURIComponent(resource)}`)].join('&') })
 
 /** A sample app with the kit's OAuth over `store`; a header stands in for the single sign-on. */
 export const oauthApp = async (store: OAuthStore, options: Partial<OAuthConfig> = {}) => {
@@ -444,7 +447,17 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
         const rotated = await (await refreshWith(app, tokens.refresh_token, asked)).json()
         expect(audOf(rotated.access_token)).toBeUndefined()
         expect(await store.get('refresh', sha(rotated.refresh_token))).not.toHaveProperty('audience')
+        // Two resources are ignored too: the row has no audience to hold them against
+        const twice = await (await app.request('/oauth/token', formWithTwoResources({ grant_type: 'refresh_token', refresh_token: rotated.refresh_token }))).json()
+        expect(twice.error).toBeUndefined()
+        expect(audOf(twice.access_token), JSON.stringify(kept)).toBeUndefined()
       }
+      const { client_id: twiceClient, code: twiceCode, verifier: twiceVerifier, challenge: twiceChallenge } = await approvedCode(app)
+      await store.put('code', sha(twiceCode), { client: twiceClient, redirectUri: REDIRECT, challenge: twiceChallenge, scopes: ['read'], owner: OWNER, name: 'Sample', grant: `g-${crypto.randomUUID()}`, used: false }, now() + 600)
+      const twiceTokens = await (await app.request('/oauth/token', formWithTwoResources({ grant_type: 'authorization_code', code: twiceCode, client_id: twiceClient, code_verifier: twiceVerifier }))).json()
+      expect(twiceTokens.error).toBeUndefined()
+      expect(audOf(twiceTokens.access_token)).toBeUndefined()
+      expect((await callerWith(app, twiceTokens.access_token)).status).toBe(200)
 
       const device = 'urn:ietf:params:oauth:grant-type:device_code'
       const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
@@ -454,13 +467,19 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       await app.request('/oauth/device', { ...form({ user_code, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
       const fromDevice = await (await app.request('/oauth/token', form({ grant_type: device, device_code, client_id, resource: asked }))).json()
       expect(audOf(fromDevice.access_token)).toBeUndefined()
+      const second = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+      await store.put('device', sha(second.device_code), { client: client_id, name: 'Terminal', scopes: ['read'], expiresAt, interval: 5, polledAt: 0 }, expiresAt + 600)
+      await app.request('/oauth/device', { ...form({ user_code: second.user_code, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+      const fromDeviceTwice = await (await app.request('/oauth/token', formWithTwoResources({ grant_type: device, device_code: second.device_code, client_id }))).json()
+      expect(fromDeviceTwice.error).toBeUndefined()
+      expect(audOf(fromDeviceTwice.access_token)).toBeUndefined()
 
       const legacy = `rt_${crypto.randomUUID()}`
       await store.put('refresh', sha(legacy), { client: client_id, name: 'Terminal', owner: OWNER, scopes: ['read'], family: `g-${crypto.randomUUID()}`, used: false }, now() + 3600)
       const first = await (await refreshWith(app, legacy, asked)).json()
       expect(audOf(first.access_token)).toBeUndefined()
-      const second = await (await refreshWith(app, first.refresh_token, ORIGIN)).json()
-      expect(audOf(second.access_token)).toBeUndefined()
-      expect((await callerWith(app, second.access_token)).status).toBe(200)
+      const rotatedLegacy = await (await refreshWith(app, first.refresh_token, ORIGIN)).json()
+      expect(audOf(rotatedLegacy.access_token)).toBeUndefined()
+      expect((await callerWith(app, rotatedLegacy.access_token)).status).toBe(200)
     })
   })

@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { SignJWT, importJWK } from 'jose'
 import type { Context } from 'hono'
 import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, memoryStore, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, testDb, type OAuthStore } from '../src/index.js'
-import { approvedCode, audOf, callerWith, oauthApp, oauthStoreContract, refreshWith, signedIn } from './oauth-store-contract.js'
+import { approvedCode, audOf, callerWith, formWithTwoResources, oauthApp, oauthStoreContract, refreshWith, signedIn } from './oauth-store-contract.js'
 
 const OWNER = 'owner@example.test'
 const ORIGIN = 'http://localhost'
@@ -731,6 +731,20 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
       return [granted, refreshed, bearing].map((one) => audOf(one.access_token))
     }
     expect(await tokensOf(await claim())).toEqual([ORIGIN, ORIGIN, ORIGIN])
+    // Two resources: refused for a registration bound to the root, before its claim token is taken; ignored for one from before audiences
+    const CLAIM = 'urn:workos:agent-auth:grant-type:claim'
+    const bound = await claim()
+    expect((await (await app.request('/oauth/token', formWithTwoResources({ grant_type: CLAIM, claim_token: bound.claim_token }))).json()).error).toBe('invalid_target')
+    const boundTokens = await (await app.request('/oauth/token', form({ grant_type: CLAIM, claim_token: bound.claim_token }))).json()
+    expect(audOf(boundTokens.access_token)).toBe(ORIGIN)
+    expect((await (await app.request('/oauth/token', formWithTwoResources({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: boundTokens.identity_assertion }))).json()).error).toBe('invalid_target')
+    const unbound = await claim()
+    const { audience: _bound, ...unboundRow } = (await store.get('registration', unbound.registration_id))!
+    await store.put('registration', unbound.registration_id, unboundRow, Math.floor(Date.now() / 1000) + 3600)
+    const claimedTwice = await (await app.request('/oauth/token', formWithTwoResources({ grant_type: CLAIM, claim_token: unbound.claim_token }))).json()
+    const bearingTwice = await (await app.request('/oauth/token', formWithTwoResources({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: claimedTwice.identity_assertion }))).json()
+    expect([claimedTwice.error, bearingTwice.error]).toEqual([undefined, undefined])
+    expect([audOf(claimedTwice.access_token), audOf(bearingTwice.access_token)]).toEqual([undefined, undefined])
     const before = await claim()
     const { audience: _audience, ...row } = (await store.get('registration', before.registration_id))!
     await store.put('registration', before.registration_id, row, Math.floor(Date.now() / 1000) + 3600)

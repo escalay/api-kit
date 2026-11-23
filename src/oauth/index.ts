@@ -680,14 +680,15 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     app.post('/oauth/token', async (c) => {
       const body = await bodyOf(c)
       const origin = originOf(c)
-      // Before any grant reads or writes a row
-      if (await manyResources(c)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
+      /** More than one resource for a row bound to one, checked before any write; a row from before audiences ignores resource altogether. */
+      const manyFor = async (row: Record<string, unknown>) => typeof row.audience === 'string' && (await manyResources(c))
       switch (body.grant_type) {
         case 'authorization_code': {
           const key = sha(body.code ?? '')
           const row = body.code ? await store.get('code', key) : null
           if (!row) return oauthError(c, 400, 'invalid_grant', 'This code is used, expired or unknown.')
           // Before any write: the resource is fixed at the authorization request
+          if (await manyFor(row)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
           if (otherTarget(row, body.resource)) return oauthError(c, 400, 'invalid_target', 'resource differs from the one the authorization request named.')
           // Codes from before grants carry none: the code's own hash names it, so a replay still finds it
           const grant = String(row.grant ?? key)
@@ -712,6 +713,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const held = refresh ? await store.get('refresh', key) : null
           if (!held) return oauthError(c, 400, 'invalid_grant', 'This refresh token is expired, revoked or unknown: authorize again.')
           // A refresh keeps its grant's audience and can't retarget it; a row from before audiences stays without one
+          if (await manyFor(held)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
           if (otherTarget(held, body.resource)) return oauthError(c, 400, 'invalid_target', 'resource differs from the one this sign-in was granted for.')
           // Rows from before families carry none: the token's own hash starts one
           const grant = String(held.family ?? key)
@@ -738,6 +740,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (revokedClient) return oauthError(c, 400, 'invalid_grant', 'This agent was revoked: register again.')
           if (!registration) return oauthError(c, 400, 'expired_token', 'The registration expired: register again.')
           if (!registration.claimed) return oauthError(c, 400, 'authorization_pending', 'The owner hasn’t typed the code yet.')
+          if (await manyFor(registration)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
           // Single use under concurrent polls: only the one that takes the claim token gets tokens
           if (!(await take('claim-token', sha(body.claim_token!)))) return oauthError(c, 400, 'expired_token', 'The claim window closed: register again.')
           // A registration claimed before grants carries none: its id is the grant, the same in every token
@@ -754,6 +757,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const key = sha(body.device_code ?? '')
           const record = body.device_code ? await store.get('device', key) : null
           if (!record || record.client !== body.client_id) return oauthError(c, 400, 'invalid_grant', 'This device_code is unknown or belongs to another client_id: start again at /oauth/device_authorization.')
+          if (await manyFor(record)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
           if (otherTarget(record, body.resource)) return oauthError(c, 400, 'invalid_target', 'resource differs from the one the device authorization named.')
           const keepUntil = Number(record.expiresAt) + DEVICE_TTL
           if (await store.get('revoked-client', String(record.client))) {
@@ -791,6 +795,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const registration = payload?.typ === 'agent_identity' && typeof payload.sub === 'string' ? await store.get('registration', payload.sub) : null
           if (!registration || (await store.get('revoked-client', String(payload!.sub)))) return oauthError(c, 400, 'invalid_grant', 'This assertion is expired, revoked or unknown: register again.')
           if (!registration.claimed) return oauthError(c, 400, 'invalid_grant', 'Not claimed yet: an unclaimed registration has no scopes. Run the claim (auth.md step B2).')
+          if (await manyFor(registration)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
           const grant = String(registration.family ?? payload!.sub)
           // The assertion belongs to the claim's sign-in: once that grant is revoked it buys nothing, never a dead token
           if (await store.get('revoked-family', grant)) return oauthError(c, 400, 'invalid_grant', 'This sign-in is revoked (a used refresh token came back, or the owner ended it): register again.')
