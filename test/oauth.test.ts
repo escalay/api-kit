@@ -1652,6 +1652,21 @@ describe('OAuth open endpoints: one public origin, lifetimes, caps and limits fo
     const approved = await approveSignIn(app, authorizeQuery(client_id), { headers: { ...shared, 'x-test-owner': OWNER } })
     expect(approved.status).toBe(302)
   })
+
+  it('limits group IPv6 by its /64 only from a named source, as a Workers app names cf-connecting-ip', async () => {
+    const from = (address: string) => ({ 'cf-connecting-ip': address })
+    // Named, as on Workers: two addresses in one /64 share a bucket
+    const { app: named } = await oauthApp(memoryOAuthStore(), { limits: { store: memoryGuardStore(), address: { header: 'cf-connecting-ip' } } })
+    for (let n = 0; n < 20; n++) expect((await register(named, from('2001:db8:5:6::1'))).status).toBe(201)
+    expect((await register(named, from('2001:db8:5:6::2'))).status).toBe(429)
+    expect((await register(named, from('2001:db8:5:7::1'))).status).toBe(201)
+    // Unnamed, the default read takes the header as sent: each address of that /64 counts on its own
+    const { app: unnamed } = await oauthApp(memoryOAuthStore(), { limits: { store: memoryGuardStore() } })
+    for (let n = 0; n < 20; n++) expect((await register(unnamed, from('2001:db8:5:6::1'))).status).toBe(201)
+    expect((await register(unnamed, from('2001:db8:5:6::1'))).status).toBe(429)
+    expect((await register(unnamed, from('2001:db8:5:6::2'))).status).toBe(201)
+  })
+
 })
 
 oauthStoreContract('memory', async () => memoryOAuthStore())
