@@ -1501,6 +1501,15 @@ describe('OAuth open endpoints: one public origin, lifetimes, caps and limits fo
     expect(await (await authorizePage(app, ids[0]!)).text()).toContain('Remove this connection in your app and add it again.')
   })
 
+  it('takes only a whole number of rows, zero or more, as a cap', async () => {
+    const keyed = { name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null }
+    for (const wrong of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY]) {
+      expect(() => createOAuth({ ...keyed, maxUnusedClients: wrong }), String(wrong)).toThrow(/maxUnusedClients/)
+      expect(() => createOAuth({ ...keyed, maxUnusedTickets: wrong }), String(wrong)).toThrow(/maxUnusedTickets/)
+    }
+    expect(() => createOAuth({ ...keyed, maxUnusedClients: 0, maxUnusedTickets: 3 })).not.toThrow()
+  })
+
   it('a burst of registrations is pruned and never stops a new one', async () => {
     const tick = clock()
     const db = await testDb()

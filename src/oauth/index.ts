@@ -129,9 +129,9 @@ export type OAuthConfig = {
    * limits: { store: await dbGuardStore(db), address: { header: 'cf-connecting-ip' } }
    */
   limits?: { store: GuardStore; address?: AddressTrust } | false
-  /** Registrations no sign-in has used yet, kept at most (default 10 000): past it a new one evicts the oldest. */
+  /** Registrations no sign-in has used yet, kept at most (a whole number, default 10 000): past it a new one evicts the oldest. */
   maxUnusedClients?: number
-  /** Consent tickets stored and not yet answered, kept at most (default 10 000): past it a new one evicts the oldest. */
+  /** Consent tickets stored and not yet answered, kept at most (a whole number, default 10 000): past it a new one evicts the oldest. */
   maxUnusedTickets?: number
   /** Extra fields for the authorization server metadata, e.g. `poppy_domains`. */
   metadata?: Record<string, unknown>
@@ -273,6 +273,10 @@ export const createOAuth = (config: OAuthConfig) => {
   const { store } = config
   const publicOrigin = config.publicOrigin === undefined ? undefined : (canonical(config.publicOrigin) ?? '')
   if (publicOrigin !== undefined && (!publicOrigin || pathOf(publicOrigin))) throw new Error(`createOAuth: publicOrigin must be an origin with no path, query or fragment (https://sample.example.test), not ${config.publicOrigin}.`)
+  for (const cap of ['maxUnusedClients', 'maxUnusedTickets'] as const) {
+    const max = config[cap]
+    if (max !== undefined && !(Number.isSafeInteger(max) && max >= 0)) throw new Error(`createOAuth: ${cap} must be a whole number of rows, 0 or more, not ${max}.`)
+  }
   /** The issuer's origin: `publicOrigin`, else the request's own. */
   const issuerOf = (c: Context) => publicOrigin ?? originOf(c)
   const jwk = JSON.parse(config.signingKey) as JWK

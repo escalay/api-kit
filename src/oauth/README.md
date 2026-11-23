@@ -258,7 +258,11 @@ const oauth = createOAuth({
   oldest unused one, so the table stays bounded whatever the addresses. A used client, or one from before, is never
   evicted. **Open consent tickets are capped the same way** (`maxUnusedTickets`, default 10 000): an answered ticket
   takes no place. The cap needs the store's `trim` (`dbOAuthStore` and `memoryOAuthStore` have it); a store without it
-  is not capped.
+  is not capped. Both caps are whole numbers, 0 or more (`createOAuth` throws otherwise). The cap is soft under
+  concurrency: each write trims before it inserts, so requests that arrive together can all pass the trim and leave
+  the table over the cap by as many as were in flight, until the next write trims it back. Each capped write runs one
+  trim over its kind's unused rows; with `limits` off, nothing slows a flood of them, so an app whose sign-in is
+  reachable outside Access also passes `limits`.
 - **`dbOAuthStore` prunes expired rows** on a write, at most once a minute, besides when it is made.
 - **`limits`** (default `false`: none) counts per address, read by `addressOf` from `address` (default the app's
   `createAgentApi({ address })`; IPv6 by its /64). Past a limit: 429 with `Retry-After` (JSON
