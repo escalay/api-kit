@@ -25,6 +25,16 @@ describe('memoryGuardStore past maxEntries', () => {
     expect(await store.claim('done-0', 60_000, 2_000)).toBeNull()
   })
 
+  it('passes over running locks when it caps, however many there are', async () => {
+    const store = memoryGuardStore({ maxEntries: 100 })
+    const started = performance.now()
+    // Each claim scanning every lock before it would take seconds here
+    for (let n = 0; n < 50_000; n++) expect(await store.claim(`running-${n}`, 60_000, 1_000)).toBeNull()
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(await store.claim('running-0', 60_000, 2_000)).toBe('running')
+    expect(await store.claim('running-49999', 60_000, 2_000)).toBe('running')
+  })
+
   it('keeps at most maxEntries rate windows, letting go of the one counted longest ago', async () => {
     const store = memoryGuardStore({ maxEntries: 3 })
     for (const id of ['a', 'b', 'c', 'd']) await store.count(id, 3_600_000, 1_000)

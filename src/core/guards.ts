@@ -51,15 +51,18 @@ const PRUNE_MS = 60_000
  * createAgentApi({ …, guards: { store: memoryGuardStore({ maxEntries: 5000 }) } })
  */
 export const memoryGuardStore = ({ maxEntries = 2000 }: { maxEntries?: number } = {}): GuardStore => {
-  // Both maps keep their oldest entry first: a window moves to the end when counted
+  // The maps keep their oldest entry first: a window moves to the end when counted
   const windows = new Map<string, { start: number; used: number; endsAt: number }>()
-  const keys = new Map<string, { answer: StoredAnswer | null; expiresAt: number }>()
+  // A key is either running (a request holds it, until `expiresAt`) or answered, never both
+  const running = new Map<string, number>()
+  const answers = new Map<string, { answer: StoredAnswer; expiresAt: number }>()
   let prunedAt = -Infinity
   const prune = (now: number) => {
     if (now - prunedAt < PRUNE_MS) return
     prunedAt = now
     for (const [id, window] of windows) if (window.endsAt <= now) windows.delete(id)
-    for (const [id, entry] of keys) if (entry.expiresAt <= now) keys.delete(id)
+    for (const [id, expiresAt] of running) if (expiresAt <= now) running.delete(id)
+    for (const [id, entry] of answers) if (entry.expiresAt <= now) answers.delete(id)
   }
   const capWindows = () => {
     for (const id of windows.keys()) {
@@ -69,9 +72,9 @@ export const memoryGuardStore = ({ maxEntries = 2000 }: { maxEntries?: number } 
   }
   // A running lock stays: its request is still answering, and letting go would let a retry run it twice
   const capKeys = () => {
-    for (const [id, entry] of keys) {
-      if (keys.size <= maxEntries) return
-      if (entry.answer) keys.delete(id)
+    for (const id of answers.keys()) {
+      if (running.size + answers.size <= maxEntries) return
+      answers.delete(id)
     }
   }
   return {
@@ -87,19 +90,22 @@ export const memoryGuardStore = ({ maxEntries = 2000 }: { maxEntries?: number } 
     },
     claim: async (id, lockMs, now) => {
       prune(now)
-      const entry = keys.get(id)
       // A lapsed answer or lock no longer holds the key, pruned yet or not
-      if (entry && entry.expiresAt > now) return entry.answer ?? 'running'
-      keys.set(id, { answer: null, expiresAt: now + lockMs })
+      const answered = answers.get(id)
+      if (answered && answered.expiresAt > now) return answered.answer
+      if ((running.get(id) ?? -Infinity) > now) return 'running'
+      answers.delete(id)
+      running.set(id, now + lockMs)
       capKeys()
       return null
     },
     save: async (id, answer, expiresAt) => {
-      keys.set(id, { answer, expiresAt })
+      running.delete(id)
+      answers.set(id, { answer, expiresAt })
       capKeys()
     },
     release: async (id) => {
-      if (keys.get(id)?.answer === null) keys.delete(id)
+      running.delete(id)
     },
   }
 }
