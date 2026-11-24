@@ -183,6 +183,20 @@ describe('idempotency', () => {
       expect(JSON.stringify(state.kept)).not.toContain('token')
     })
 
+    it('refuses a blank replay, so a marked answer is never kept whole', async () => {
+      const app = new Hono()
+      const store = memoryGuardStore()
+      const kept: unknown[] = []
+      app.use('*', idempotency({ store: { ...store, save: (id, answer, expiresAt) => (kept.push(answer), store.save(id, answer, expiresAt)) } }))
+      for (const blank of ['', '  ']) app.post(`/blank/${blank.length}`, (c) => (showOnce(c, blank), c.json({ key: 'sk_secret' }, 201)))
+      for (const path of ['/blank/0', '/blank/2']) {
+        const answer = await app.request(path, { method: 'POST', headers: { 'idempotency-key': `k${path}` }, body: '{}' })
+        expect(answer.status, path).toBe(500)
+      }
+      expect(() => showOnce({ set: () => {} } as never, '')).toThrow('showOnce needs the words a retry is told')
+      expect(kept).toEqual([])
+    })
+
     it('still answers another body under the same key with a 422, and a new key runs again', async () => {
       const { state, post } = secrets()
       await post('k1')

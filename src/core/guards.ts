@@ -205,17 +205,20 @@ const SHOWN_ONCE = 'kit:shown-once'
  * Marks this request's answer as showing a secret once (a new key, an enrolment, a session cookie): `idempotency` then
  * keeps only `replay`, and a retry with the same Idempotency-Key gets it as a 409 `shown_once` instead of the answer.
  * `replay` says what was made, where to see it, that the secret is never shown again, and what to do if it was lost;
- * never the secret.
+ * never the secret. A blank one throws: the answer would be kept whole.
  *
  * @example
  * showOnce(c, `Made the key ${name} (GET ${path}/${id}) with this Idempotency-Key; the key was shown once, in that answer, and is never shown again. Lost it? Revoke it and make another.`)
  */
-export const showOnce = (c: Context, replay: string) => c.set(SHOWN_ONCE as never, replay as never)
+export const showOnce = (c: Context, replay: string) => {
+  if (!replay.trim()) throw new Error('showOnce needs the words a retry is told: what was made, and where to see it.')
+  c.set(SHOWN_ONCE as never, replay as never)
+}
 
 /** What the guard keeps of this request's answer: only what a replay is told when it showed a secret once, else all of it. */
 const storedAnswerOf = async (c: Context, bodyHash: string): Promise<StoredAnswer> => {
   const shownOnce = c.get(SHOWN_ONCE as never) as string | undefined
-  if (shownOnce) return { bodyHash, shownOnce }
+  if (shownOnce !== undefined) return { bodyHash, shownOnce }
   const body = Buffer.from(await c.res.clone().arrayBuffer()).toString('base64')
   return { bodyHash, status: c.res.status, headers: [...c.res.headers.entries()], body }
 }
