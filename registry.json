@@ -86,7 +86,22 @@
           "type": "registry:file",
           "target": "~/src/kit/core/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          12,
+          14
+        ]
+      }
     },
     {
       "name": "db",
@@ -115,7 +130,12 @@
           "type": "registry:file",
           "target": "~/src/kit/db/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          1
+        ]
+      }
     },
     {
       "name": "oauth",
@@ -152,7 +172,13 @@
           "type": "registry:file",
           "target": "~/src/kit/oauth/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          7,
+          11
+        ]
+      }
     },
     {
       "name": "pagination",
@@ -173,7 +199,12 @@
           "type": "registry:file",
           "target": "~/src/kit/pagination/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          4
+        ]
+      }
     },
     {
       "name": "guide",
@@ -199,7 +230,12 @@
           "type": "registry:file",
           "target": "~/src/kit/guide/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          10
+        ]
+      }
     },
     {
       "name": "mcp",
@@ -230,7 +266,11 @@
         }
       ],
       "meta": {
-        "entry": true
+        "entry": true,
+        "standard": [
+          11,
+          19
+        ]
       }
     },
     {
@@ -254,7 +294,10 @@
         }
       ],
       "meta": {
-        "entry": true
+        "entry": true,
+        "standard": [
+          11
+        ]
       }
     },
     {
@@ -277,7 +320,10 @@
       "meta": {
         "optionalDependencies": {
           "sharp": "^0.34.5"
-        }
+        },
+        "standard": [
+          15
+        ]
       }
     },
     {
@@ -302,7 +348,10 @@
         }
       ],
       "meta": {
-        "entry": true
+        "entry": true,
+        "standard": [
+          15
+        ]
       }
     },
     {
@@ -327,7 +376,12 @@
           "type": "registry:file",
           "target": "~/src/kit/web/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          16
+        ]
+      }
     },
     {
       "name": "brand",
@@ -348,7 +402,12 @@
           "type": "registry:file",
           "target": "~/src/kit/brand/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          22
+        ]
+      }
     },
     {
       "name": "boards",
@@ -402,7 +461,10 @@
         }
       ],
       "meta": {
-        "entry": true
+        "entry": true,
+        "standard": [
+          17
+        ]
       }
     },
     {
@@ -450,7 +512,12 @@
           "type": "registry:file",
           "target": "~/src/kit/keys/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          7
+        ]
+      }
     },
     {
       "name": "people",
@@ -510,7 +577,12 @@
           "type": "registry:file",
           "target": "~/src/kit/people/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          7
+        ]
+      }
     },
     {
       "name": "setup",
@@ -541,7 +613,12 @@
           "type": "registry:file",
           "target": "~/src/kit/setup/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          7
+        ]
+      }
     },
     {
       "name": "telemetry",
@@ -583,7 +660,12 @@
           "type": "registry:file",
           "target": "~/src/kit/telemetry/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          18
+        ]
+      }
     },
     {
       "name": "switches",
@@ -640,7 +722,12 @@
           "type": "registry:file",
           "target": "~/src/kit/switches/README.md"
         }
-      ]
+      ],
+      "meta": {
+        "standard": [
+          21
+        ]
+      }
     },
     {
       "name": "testing",
@@ -673,7 +760,10 @@
         }
       ],
       "meta": {
-        "entry": true
+        "entry": true,
+        "standard": [
+          13
+        ]
       }
     },
     {
@@ -695,7 +785,11 @@
       ],
       "meta": {
         "entry": true,
-        "web": true
+        "web": true,
+        "standard": [
+          16
+        ],
+        "layerOf": "vector-search"
       }
     },
     {
@@ -723,7 +817,11 @@
       ],
       "meta": {
         "entry": true,
-        "web": true
+        "web": true,
+        "standard": [
+          16
+        ],
+        "layerOf": "vector-search"
       }
     },
     {
@@ -753,7 +851,11 @@
       ],
       "meta": {
         "entry": true,
-        "web": true
+        "web": true,
+        "standard": [
+          16
+        ],
+        "layerOf": "vector-search"
       }
     },
     {
@@ -775,7 +877,11 @@
       ],
       "meta": {
         "entry": true,
-        "web": true
+        "web": true,
+        "standard": [
+          21
+        ],
+        "layerOf": "switches"
       }
     },
     {
@@ -803,7 +909,11 @@
       ],
       "meta": {
         "entry": true,
-        "web": true
+        "web": true,
+        "standard": [
+          21
+        ],
+        "layerOf": "switches"
       }
     },
     {
@@ -833,7 +943,11 @@
       ],
       "meta": {
         "entry": true,
-        "web": true
+        "web": true,
+        "standard": [
+          21
+        ],
+        "layerOf": "switches"
       }
     },
     {
@@ -860,7 +974,11 @@
       ],
       "meta": {
         "entry": true,
-        "web": true
+        "web": true,
+        "standard": [
+          17
+        ],
+        "layerOf": "boards"
       }
     },
     {
@@ -888,7 +1006,11 @@
       ],
       "meta": {
         "entry": true,
-        "web": true
+        "web": true,
+        "standard": [
+          17
+        ],
+        "layerOf": "boards"
       }
     },
     {

@@ -1,11 +1,29 @@
 # oauth
 
-The app as its own OAuth server, so MCP clients (Claude, ChatGPT) and agents connect without a pasted key: dynamic
-client registration, authorization code with PKCE, the device authorization grant (RFC 8628) for CLIs and devices
-without a browser, refresh rotation, revocation, agent registration through `/auth.md` with a 6-digit owner claim,
-ES256 tokens with `read` / `write` scopes, and the metadata documents.
+The app as its own OAuth server, so MCP clients (Claude, ChatGPT) and agents connect without a pasted key: dynamic client registration, authorization code with PKCE, the device authorization grant (RFC 8628) for CLIs and devices without a browser, refresh rotation, revocation, agent registration through `/auth.md` with a 6-digit owner claim, ES256 tokens with `read` / `write` scopes bound to an audience, and the metadata documents.
 
-Needs: `core`, `db`.
+## Use it when
+
+- MCP clients and agents should connect by themselves, each approved by a person, each revocable on its own.
+- A CLI or a device without a browser needs a sign-in (the device grant).
+- The app decides who approves a sign-in: an invite, an ask to join, a page for strangers (`approve`).
+- One app serves several spaces, each with its own MCP address and tokens that work only there (audiences).
+
+## Don't use it when
+
+- Only the owner's own machines call the API: keys are simpler (`API_KEYS`, the keys part).
+- The rows would live in Workers KV: KV is eventually consistent, so a new code reads as unknown and a revoke can be
+  undone. Use SQLite or D1 (`dbOAuthStore`).
+
+## Add it
+
+```bash
+npx @escalay/kit add oauth
+```
+
+Needs `core` and `db`. A signing key in the app's secrets: `generateOAuthKey()` makes one.
+
+## Wire it
 
 ```ts
 import { accessOwner, createAgentApi, createOAuth, dbOAuthStore, generateOAuthKey } from './kit/index.js'
@@ -36,162 +54,7 @@ owner: async (c) => {
 
 The starter (`npm create escalay`) sets `reuseGraceSeconds: 30` and says this beside its `owner`.
 
-## Device authorization (RFC 8628)
-
-```
-POST /oauth/register              { client_name, grant_types: ["urn:ietf:params:oauth:grant-type:device_code"] }  (no redirect_uris)
-POST /oauth/device_authorization  client_id, scope → { device_code, user_code: "BDKM-QXTW", verification_uri,
-                                                       verification_uri_complete, expires_in: 600, interval: 5 }
-GET  /oauth/device[?user_code=]   the page where the signed-in owner types the code (HTML, like /oauth/authorize)
-POST /oauth/device                user_code [, decision=allow|deny]   (same-origin only)
-POST /oauth/token                 grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=…&client_id=…
-                                  → authorization_pending | slow_down (+ interval) | expired_token | access_denied | tokens
-```
-
-Nothing to wire: `mount` adds it, and the metadata names `device_authorization_endpoint`.
-
-## Audiences (RFC 8707)
-
-> **The default `accepts` takes a root token at every space.** A client that sends no `resource` gets the root, and a
-> root token works everywhere on the origin, every space included. An app that signs people in by invite binds each
-> grant to the invite's space: `oauth.complete(c, ticket, { approver, resource: <the space's resource> })`. Its token
-> then works at that space only, even when the client asked for nothing. An app that wants a space to take only its
-> own tokens also refuses the root there in its own `accepts` (below).
-
-Every grant is bound to one resource, signed as its tokens' `aud` and on the caller as `resource`:
-
-- The resource the client sends at `/oauth/authorize` (or `/oauth/device_authorization`), when this server issues for
-  it: the origin, `mcpPath` (default `/mcp`), and with `resources` set, what it approves.
-- Else the **root**, the issuer's origin: a client that sends no `resource`, or (without `resources`) one the app does
-  not describe. The default `accepts` takes a root token everywhere on the origin, so nothing changes for it.
-- An agent registered at `/agent/identity` (auth.md) names no resource: its grant gets the root when it registers,
-  and its claim, refresh and jwt-bearer tokens carry it. One registered before audiences stays without, even if
-  claimed after.
-
-The audience is fixed at the authorization request. A token request naming another resource is `invalid_target`,
-checked before anything is written, so the code or refresh token still works with the right one. Refresh keeps the
-audience. When the server chose the audience (the root), a `resource` the client sends later is not held against it.
-
-A resource is compared in its canonical form: an absolute http(s) URL, scheme and host lower-cased, the default port
-and one trailing slash dropped (`HTTP://Example.test:443/mcp/` is `https://example.test/mcp`). A user part, a query,
-a fragment, a dot segment or an encoded dot (`%2e`) makes it no resource: `invalid_target` with `resources` set, the
-root without. More than one `resource`, or one not sent as a string, is refused: a 400 page at authorize,
-`invalid_target` at `/oauth/device_authorization` and the token endpoint, before anything is written. A code, device
-approval, refresh token or agent registration from before audiences ignores `resource` altogether, two of them
-included: it stays aud-less. Errors at authorize are pages, never redirects.
-
-An app serving several MCP resources, one per space (`/s/alpha/mcp`), passes `resources` and `resourceOf`. The
-default `accepts` then takes a token whose audience is exactly `resourceOf(c)` (RFC 8707's own rule), besides an
-aud-less one and one for the root or `mcpPath`, so each space's token works at its own address and nowhere else. MCP
-tools that call `/api` in-process with the same bearer lose the space's path, so a space's token is refused there
-unless the app passes its own `accepts`, as here:
-
-```ts
-const SPACE = /^\/s\/[a-z0-9-]+\/mcp/
-const resourceOf = (c: Context) =>
-  oauth.rootOf(c) + (SPACE.exec(c.req.path)?.[0] ?? (c.req.path === oauth.mcpPath || c.req.path.startsWith(oauth.mcpPath + '/') ? oauth.mcpPath : ''))
-const oauth = createOAuth({
-  …,
-  // A pure check of the path: the kit has checked the origin, and the metadata path asks it too
-  resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path),
-  resourceOf,                                                  // where a 401 points (RFC 9728 §3.3)
-  accepts: async (caller, c) => {
-    // The path decides at an MCP address, a space's or mcpPath. Elsewhere, as in a tool's in-process /api call, the
-    // path names none: only then does the app read the space the call carries (`spaceOf`)
-    const root = oauth.rootOf(c)
-    const here = resourceOf(c) === root ? (spaceOf(c) ?? root) : resourceOf(c)
-    // An aud-less, root or mcpPath token works everywhere, as with the default
-    return !caller.resource || caller.resource === root || caller.resource === root + oauth.mcpPath || caller.resource === here || `This token is for ${caller.resource}, not ${here}: connect again there.`
-  },
-})
-```
-
-- With `resources` set, the kit checks the resource's origin is the issuer's, exactly (a longer host that starts with
-  it is another origin), then asks `resources` for the path. Another origin or a refused path is `invalid_target`,
-  and `/.well-known/oauth-protected-resource<path>` is 404 for a path it refuses. Without it, the metadata echoes any
-  path, as before.
-- `resources` must be a pure function of the string, with no lookup: it answers the metadata path too, so a lookup
-  would tell anyone which spaces exist. Whether one exists or is open is decided when the person approves.
-- `accepts` runs on every request after the token's signature and revocation checks, in-process calls included: MCP
-  tools call `/api` with the same bearer, and apps rewrite paths before the kit runs. Whatever carries the space to an
-  in-process call (`spaceOf`) must be something a client cannot set, such as a header the app strips from every
-  outside request, and the request's own path outranks it at every MCP address, a space's or `mcpPath`: otherwise a
-  client sends the carrier with one space's token and reaches another, or `mcpPath`. A sentence refuses: 401
-  `invalid_token`, the sentence as `detail` (and its printable ASCII as `error_description`), `resource_metadata` at
-  `resourceOf(c)`. Compare audiences with `oauth.rootOf(c)`, the root as the kit signs it (canonical: a forwarded
-  host in capitals or with its default port is the same root), not the raw origin.
-- Keep `mcpPath` in `resourceOf` and in `accepts`: without it, a token asked for `<origin>/mcp` (what MCP clients
-  send) is refused at `/mcp`, `/api` and every space, and the 401 at `/mcp` points at the origin's metadata.
-  `test/oauth.test.ts` runs this example as written.
-- `listResources(origin)` names what the authorization server metadata lists (`protected_resources`, default the
-  origin and `mcpPath`). Never list per-space resources there.
-- `mcpPath` keeps the pointer, the metadata, the listed resources and the relay (`read` may POST there) on MCP when it
-  is mounted elsewhere: pass `mountMcp`'s `path`.
-- The spaces' MCP endpoints are relays too, so a `read` token may POST there: `auth: { …, relay: ['/mcp', '/a2a',
-  '/s/*/mcp'] }`. `relay` takes the same patterns as `open` (`matches`): a star inside is one whole path segment, so
-  `/s/*/mcp` matches `/s/alpha/mcp` and not `/s/alpha/mcp/x`. It replaces the default (`mcpPath` and `/a2a`), so list
-  those too.
-
-Three exceptions to "a token is accepted only by its audience" (MCP 2026-07-28 asks servers to reject tokens not meant
-for them, or otherwise verify they are the intended recipient):
-
-- **A token with no `aud` is accepted** by the default `accepts`: every token, code, device approval, refresh token and
-  agent registration from before audiences has none, and none ever gains one. Connections made before keep working.
-- **A root token is accepted at a space's resource:** the default `accepts` takes it everywhere on the origin, so a
-  client that sends no `resource`, or a connection made before the app had spaces, keeps working there. The app, with
-  one issuer and a row per grant, is then what verifies the token is meant for it. An app that wants a space to take
-  only its own tokens refuses the root there in its own `accepts`.
-- **A token whose `aud` is the origin plus `mcpPath` is accepted everywhere on the origin** by the default `accepts`:
-  MCP tools call `/api` in-process with the same bearer, so the token for the single MCP must fit the whole origin,
-  spaces included. An app that wants otherwise refuses it in its own `accepts`, as for the root.
-
-## Who approves a sign-in
-
-By default the owner approves every sign-in on the kit's own page at `/oauth/authorize`, behind the single sign-on
-(`owner`). An app that decides for itself (an invite, an ask to join, a page for strangers) passes `approve`, and hears
-every first token in `onGrant`:
-
-- `approve(c, ask)` runs at `GET /oauth/authorize` once the kit has checked the client, its redirect, PKCE and the
-  resource, before `owner`. A Response is the app's page; null shows the kit's page to the owner. `ask` is a
-  `SignInAsk`: `ticket`, `client` (`id`, `name`, `redirectUris`), `redirectUri`, `redirectHost` (a host, or an app's
-  scheme such as `sample-app:`), `onThisComputer` (a loopback or app-scheme redirect), `scopes`, `resource` (the audience
-  the grant gets), `state`, and `arrival` (`site`: the first GET's `Sec-Fetch-Site`, `referrerOrigin`: its
-  `Referer`'s origin, each null when not sent).
-- The app's page posts the ticket to the app's own route, which reads it with `oauth.ticketOf(c, ticket)` (null when
-  expired, answered, or opened in another browser; then `oauth.answeredOf(c, ticket)` says `approved`, `denied` or
-  `answered` for a ticket this browser spent already, so the route can say "Already approved") and answers with
-  `oauth.complete(c, ticket, decision)`: `{ approver, scopes?, data?, resource? }` or `'deny'`. `approver` becomes the token's
-  `sub` (`caller.owner`), `scopes` may only narrow what was asked (a wider or empty list is a 400 page), `data` goes
-  on the code and reaches `onGrant`. `resource` binds the grant to a resource this server issues for (an invite's
-  space), checked as a client's would be (`resources`, the issuer's origin, the canonical form) when the client named
-  none; a client that named one keeps it, the same one again is fine, and any other, or one not issued for, is a 400
-  page (`invalid_target`) with the ticket still live. The audience the app chose is the server's choice: a `resource`
-  the client sends later at the token endpoint is not held against it, and refresh keeps it. Without `resource`, the
-  ticket's audience. It returns the 302 to the client (`code`, `state`, `iss`, or `access_denied`) or a 400/403 page.
-  A blank `approver` is a 400 page, and the ticket stays live.
-- `onGrant(grant, c)` hears the first token of every grant: `kind` (`code`, `device` or `claim`), `grant`, `client`
-  (`id`, `name`), `approver`, `scopes`, `resource` (absent on a grant from before audiences) and `data`. It runs after
-  the kit's own checks (client, redirect and verifier for a code; the owner's answer for a device; the collected claim
-  token for a claim), once per grant however many polls race. false withdraws it: `invalid_grant` ("This sign-in was
-  withdrawn: start again"), the code or device code spent, the grant ended (`onRevoke` hears `withdrawn`). It is not
-  asked on refresh or jwt-bearer: judge later requests in `accepts`. An app that keeps its own rows per grant makes
-  them here and refuses a token whose grant has none.
-- `onRevoke(revoked)` hears every grant the kit ends, after it has ended it: `grant`, `client` and `reason`. A grant
-  that lapses (its refresh token unused for 30 days) is not told: nothing ends it, its tokens just expire.
-  `revoked`: `revokeGrant` (no `client`: the kit keeps no grant-to-client index) or a refresh token at `/oauth/revoke`.
-  `replayed`: a used code or refresh token sent again, its row kept or not. `withdrawn`: `onGrant` said no.
-  `client_revoked`: `revokeClient`, naming the client and no grant, since it ends every grant of the client. Revoking
-  an access token alone ends no grant and is not told. It is told at least once: a grant ended again (a code sent a
-  third time) is told again, so the app's handler is idempotent. A throw is logged (`onRevoke failed: …`), never
-  answered: the revoke has happened and the request answers as it would have.
-
-**Mirror grants with `onGrant` and `onRevoke`.** An app that lists who holds access (a space's members, their agents)
-makes its row when `onGrant` says yes and drops it when `onRevoke` names its grant, or every grant of a client on
-`client_revoked`. Its `accepts` refuses a token whose grant has no row, so a row the app dropped stops the token on its
-next request, whatever the kit's markers say. A lapsed grant is never named, so the app ages its own rows: `accepts`
-writes the row's last-seen time (every request with the grant's tokens passes there), and a row with none for 30 days
-is dropped with `revokeGrant(grant)`. A grant that refreshed but made no request in those 30 days is ended that way
-too, so its client signs in again rather than holding tokens no row backs.
+### The app's own approval page
 
 An app that approves by an invite typed on its own page (`test/oauth.test.ts` runs it as written):
 
@@ -224,6 +87,342 @@ app.post('/join', async (c) => {
   front of the app sets that policy), as the kit's pages do. `createAgentApi` serves every page with `Referrer-Policy: no-referrer` and replaces
   one a route sets; under it a browser posts the form with `Origin: null`, and where it sends no `Sec-Fetch-Site`
   either (plain http at an address other than this machine's) the POST is refused (403).
+
+### One MCP per space
+
+An app serving several MCP resources, one per space (`/s/alpha/mcp`), passes `resources` and `resourceOf`. The
+default `accepts` then takes a token whose audience is exactly `resourceOf(c)` (RFC 8707's own rule), besides an
+aud-less one and one for the root or `mcpPath`, so each space's token works at its own address and nowhere else. MCP
+tools that call `/api` in-process with the same bearer lose the space's path, so a space's token is refused there
+unless the app passes its own `accepts`, as here (`test/oauth.test.ts` runs this example as written):
+
+```ts
+const SPACE = /^\/s\/[a-z0-9-]+\/mcp/
+const resourceOf = (c: Context) =>
+  oauth.rootOf(c) + (SPACE.exec(c.req.path)?.[0] ?? (c.req.path === oauth.mcpPath || c.req.path.startsWith(oauth.mcpPath + '/') ? oauth.mcpPath : ''))
+const oauth = createOAuth({
+  …,
+  // A pure check of the path: the kit has checked the origin, and the metadata path asks it too
+  resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path),
+  resourceOf,                                                  // where a 401 points (RFC 9728 §3.3)
+  accepts: async (caller, c) => {
+    // The path decides at an MCP address, a space's or mcpPath. Elsewhere, as in a tool's in-process /api call, the
+    // path names none: only then does the app read the space the call carries (`spaceOf`)
+    const root = oauth.rootOf(c)
+    const here = resourceOf(c) === root ? (spaceOf(c) ?? root) : resourceOf(c)
+    // An aud-less, root or mcpPath token works everywhere, as with the default
+    return !caller.resource || caller.resource === root || caller.resource === root + oauth.mcpPath || caller.resource === here || `This token is for ${caller.resource}, not ${here}: connect again there.`
+  },
+})
+```
+
+The spaces' MCP endpoints are relays too, so a `read` token may POST there: `auth: { …, relay: ['/mcp', '/a2a',
+'/s/*/mcp'] }`. `relay` takes the same patterns as `open` (`matches`): a star inside is one whole path segment, so
+`/s/*/mcp` matches `/s/alpha/mcp` and not `/s/alpha/mcp/x`. It replaces the default (`mcpPath` and `/a2a`), so list
+those too.
+
+### Open to anyone
+
+Registration, device authorization, `/agent/identity`, the token endpoint and, with `approve`, `/oauth/authorize` answer
+anyone and write rows without auth. Once people other than the owner sign in, they are a public surface:
+
+```ts
+const oauth = createOAuth({
+  …,
+  publicOrigin: 'https://sample.example.test',                                  // the only origin it names or checks
+  limits: { store: await dbGuardStore(db), address: { header: 'cf-connecting-ip' } },   // per address, never the owner
+})
+```
+
+## Options
+
+`createOAuth(config)`:
+
+| Option | Type | Default | What it does |
+|---|---|---|---|
+| `name` | string | required | shown on the consent page and in the metadata (`resource_name`) |
+| `signingKey` | string | required | the private ES256 key as a JWK JSON string (`generateOAuthKey()`); parsed when called, so a bad key throws at start |
+| `store` | `OAuthStore` | required | `dbOAuthStore(db)` (SQLite or D1), `memoryOAuthStore()` in tests |
+| `owner` | `(c) => Promise<email \| null>` | required | the signed-in person on the kit's approval pages, or null: only they may approve |
+| `owners` | string[] | whoever `owner` lets in | emails allowed to claim an agent and to approve a device |
+| `approve` | `(c, ask) => Promise<Response \| null>` | none: the kit's page | the app's own page for a sign-in; null shows the kit's page to the owner |
+| `onGrant` | `(grant, c) => Promise<boolean>` | yes to every grant | hears the first token of every grant; false withdraws it |
+| `onRevoke` | `(revoked) => void` | none | hears every grant the kit ends, and why |
+| `ticketTtl` | seconds | 600 | a consent ticket's life and its nonce cookie's: whole, from 60 to a week |
+| `reuseGraceSeconds` | seconds | 0 | a used refresh token sent again inside it gets the same successor; 0: any replay revokes the grant |
+| `publicOrigin` | origin | the request's own | the one origin of the issuer, every document, token and check |
+| `limits` | `{ store, address? }` \| false | false | per-address limits on the open endpoints, never the owner |
+| `maxUnusedClients` | whole number | 10 000 | registrations no sign-in has used, kept at most of each kind |
+| `maxUnusedTickets` | whole number | 10 000 | codes waiting for a person, kept at most of each kind |
+| `mcpPath` | path | `/mcp` | where MCP is mounted (`mountMcp`'s `path`): its resource, metadata pointer and relay |
+| `resources` | `(path) => boolean` | none: the origin and `mcpPath` only | whether this server issues tokens for a resource path; a pure check of the string |
+| `resourceOf` | `(c) => URL` | the origin, plus `mcpPath` under it | the canonical resource a request is for: where its 401 points |
+| `accepts` | `(caller, c) => Promise<true \| string>` | aud-less, root or `mcpPath` everywhere, and `resourceOf(c)` there | whether a valid token fits this request; a sentence refuses it |
+| `listResources` | `(origin) => string[]` | `[origin, origin + mcpPath]` | what the metadata lists as `protected_resources` |
+| `metadata` | object | none | extra fields for the authorization server metadata (`poppy_domains`) |
+| `brand` | `AgentBrand` | the app's | the brand on the kit's pages |
+
+What the app's hooks take and give (`approval.ts`):
+
+| Shape | Fields |
+|---|---|
+| `SignInAsk` (to `approve`) | `ticket`, `client` (`id`, `name`, `redirectUris`), `redirectUri`, `redirectHost` (a host, or an app's scheme such as `sample-app:`), `onThisComputer` (a loopback or app-scheme redirect), `scopes`, `resource` (the audience the grant gets), `state`, and `arrival` (`site`: the first GET's `Sec-Fetch-Site`, `referrerOrigin`: its `Referer`'s origin, each null when not sent) |
+| `SignInDecision` (to `complete`) | `{ approver, scopes?, data?, resource? }` or `'deny'` |
+| `SignInGrant` (to `onGrant`) | `kind` (`code`, `device` or `claim`), `grant`, `client` (`id`, `name`), `approver`, `scopes`, `resource` (absent on a grant from before audiences), `data` |
+| `SignInRevoked` (to `onRevoke`) | `grant` (none on `client_revoked`), `client` (none from `revokeGrant`), `reason`: `revoked`, `replayed`, `withdrawn`, `client_revoked` |
+
+An OAuth caller (`c.get('caller')`) is `{ kind: 'agent', client, grant, name, scopes, owner, resource }`:
+
+- `client` is the client_id (a registration id for a claimed agent). Rate limits, idempotency answers and MCP's
+  `authInfo.clientId` key on it, with `grant`; `name` is what the client called itself, for display only, so two
+  clients that register the same name are two callers.
+- `grant` is one approval: every token from one sign-in (a code, a device approval, a claim), rotated or not, carries
+  it. Tokens issued before grants have none and run to their hour, known by `client`.
+- `owner` is the approver (the token's `sub`); `resource` the audience the token was issued for, absent on tokens from
+  before audiences.
+
+## Exports
+
+| Export | What |
+|---|---|
+| `createOAuth(config)` | the server (below) |
+| `oauth.mount(app)` | the metadata, `/oauth/*`, `/agent/identity*` and `/auth.md`; `createAgentApi({ oauth })` calls it |
+| `oauth.verify(jwt, c)` | an access token → its caller, `{ refused }` when `accepts` turns it away here (truthy: check `'refused' in answer`), or null (expired, revoked, not ours); `createAgentApi` passes it as `auth.tokens` |
+| `oauth.resourceMetadataFor(c)` | the protected-resource metadata URL for a request's resource (RFC 9728 §3.3): where a 401 points |
+| `oauth.issuerOf(c)` | the issuer's origin: `publicOrigin`, else the request's |
+| `oauth.rootOf(c)`, `oauth.resourceOf(c)`, `oauth.mcpPath` | the root resource (the issuer's origin, canonical), the resource a request is for, where MCP is mounted |
+| `oauth.authorizationServer(origin)` | the authorization server metadata document (RFC 8414) |
+| `oauth.protectedResource(origin, suffix)` | the protected-resource metadata document for `origin + suffix` (RFC 9728) |
+| `oauth.authMd(origin)` | the `/auth.md` text: how an agent registers and is claimed |
+| `oauth.ticketOf(c, ticket)`, `oauth.answeredOf(c, ticket)`, `oauth.complete(c, ticket, decision)` | the app's own sign-in page: the waiting ask, what this browser answered already, the answer |
+| `oauth.revokeGrant(grant)`, `oauth.revokeClient(clientId)` | end one sign-in; end every sign-in of a client and drop its registration (the owner's kill switch) |
+| `generateOAuthKey()` | a new signing key, a private JWK JSON string |
+| `dbOAuthStore(db)`, `memoryOAuthStore()`, `OAuthStore` | the stores: `get`, `put`, `delete`, plus `take`, `markUsed` and `trim` |
+| `OAUTH_MIGRATIONS`, `oauthKeys` | the `oauth` table and its steps |
+| `SignInAsk`, `SignInDecision`, `SignInGrant`, `SignInRevoked`, `TokenCaller`, `OAuthConfig` | the types |
+
+| File | What |
+|---|---|
+| `index.ts` | `createOAuth` and everything it returns, `generateOAuthKey` |
+| `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`, `SignInRevoked`; the ticket cookie and the same-origin rule |
+| `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take`, `markUsed` and `trim`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start, then on a write at most once a minute), `memoryOAuthStore` |
+| `schema.ts` | the `oauth` table, its `expires_at` index, and `OAUTH_MIGRATIONS` |
+
+## Flows
+
+### Authorize, with the consent ticket
+
+```mermaid
+sequenceDiagram
+  participant Client as MCP client
+  participant Browser
+  participant Kit as /oauth/authorize
+  participant App as the app's page and route
+  Client->>Browser: open /oauth/authorize (client, redirect, PKCE, resource)
+  Browser->>Kit: GET
+  Kit->>Kit: check client, redirect, PKCE, resource (with approve: errors are pages)
+  alt approve answers a page
+    Kit->>App: approve(c, ask)
+    Kit-->>Browser: the app's page, a ticket stored for ticketTtl, the nonce cookie
+    Browser->>App: POST the ticket (same-origin)
+    App->>Kit: ticketOf(c, ticket), then complete(c, ticket, decision)
+  else the kit's page
+    Kit-->>Browser: the consent page for the owner, a ticket, the nonce cookie
+    Browser->>Kit: POST allow or deny (same-origin, the cookie)
+  end
+  Kit->>Kit: the ticket marked used once, the grant saved, then the code
+  Kit-->>Browser: 302 to the client: code, state, iss (or access_denied)
+  Browser->>Client: the redirect
+```
+
+### Deciding later (`ticketTtl`)
+
+```mermaid
+sequenceDiagram
+  participant Asker as the asker's browser
+  participant App
+  participant Owner
+  participant Kit
+  Asker->>Kit: GET /oauth/authorize
+  Kit->>App: approve(c, ask)
+  App->>App: record the ask (ask.ticket, the client, who asks)
+  App-->>Asker: a waiting page holding the ticket in a form
+  loop until there is a decision, within ticketTtl
+    Asker->>App: GET the decision for the ticket
+  end
+  Owner->>App: decide on the app's own screen, hours later
+  Asker->>App: submit the form: a same-origin POST from the browser that opened the ticket
+  App->>Kit: complete(c, ticket, decision)
+  Kit-->>Asker: 302 back to the client
+```
+
+### Code to token, and a replayed code
+
+```mermaid
+sequenceDiagram
+  participant Client
+  participant Token as /oauth/token
+  participant Store
+  Client->>Token: authorization_code, code, code_verifier
+  Token->>Store: markUsed(code): one statement
+  alt first use
+    Token->>Token: client, redirect, verifier, the client not revoked
+    Token->>Token: onGrant (false withdraws it: invalid_grant)
+    Token-->>Client: access token (an hour) and refresh token (generation 0)
+  else used already, sent again with the right client and verifier
+    Token->>Store: end the grant the first exchange got (onRevoke: replayed)
+    Token-->>Client: invalid_grant
+  else used already, a wrong verifier
+    Token-->>Client: invalid_grant, nothing ended
+  end
+```
+
+### Refresh, with the grace and a replay
+
+```mermaid
+sequenceDiagram
+  participant Client
+  participant Token as /oauth/token
+  participant Store
+  Client->>Token: refresh_token rt_grant.gen.nonce.MAC
+  alt no row, a valid MAC, and its family moved past its generation
+    Token->>Store: end the grant (onRevoke: replayed)
+    Token-->>Client: invalid_grant "already used"
+  else no row otherwise
+    Token-->>Client: invalid_grant, nothing ended
+  else a row: markUsed wins
+    Token->>Store: the family's row to the next generation, the successor's row
+    Token-->>Client: new access token, the successor
+  else a row already used
+    alt inside reuseGraceSeconds and its successor unused
+      Token-->>Client: the same successor again
+    else
+      Token->>Store: end the grant (onRevoke: replayed)
+      Token-->>Client: invalid_grant "already used"
+    end
+  end
+```
+
+### Revoking, and `onRevoke`
+
+```mermaid
+flowchart LR
+  revokeGrant["revokeGrant(grant)"] --> marker["a revoked marker for the grant, kept 30 days and 20 minutes"]
+  revokeEndpoint["/oauth/revoke with a refresh token"] --> marker
+  replay["a used code or refresh token sent again"] --> marker
+  withdrawn["onGrant said false"] --> marker
+  marker --> told["onRevoke: grant, client, reason (a throw is logged)"]
+  revokeClient["revokeClient(client)"] --> clientMarker["a revoked marker for the client, the registration dropped"]
+  clientMarker --> toldClient["onRevoke: client, client_revoked"]
+  told --> next["verify reads the markers on every request: the next one fails"]
+  toldClient --> next
+```
+
+### Device authorization (RFC 8628)
+
+```mermaid
+sequenceDiagram
+  participant Device
+  participant Kit
+  participant Owner as the owner's browser
+  Device->>Kit: POST /oauth/register (device grant, no redirect_uris)
+  Device->>Kit: POST /oauth/device_authorization: client_id, scope
+  Kit-->>Device: device_code, user_code BDKM-QXTW, verification_uri, expires_in 600, interval 5
+  Owner->>Kit: GET /oauth/device (signed in), types the code
+  Owner->>Kit: POST /oauth/device allow or deny (same-origin)
+  loop every interval
+    Device->>Kit: POST /oauth/token device_code
+    Kit-->>Device: authorization_pending, slow_down (+5 s), expired_token, access_denied
+  end
+  Kit-->>Device: tokens, once (onGrant first)
+```
+
+### Agent claim (auth.md)
+
+```mermaid
+sequenceDiagram
+  participant Agent
+  participant Kit
+  participant Owner as the owner's browser
+  Agent->>Kit: POST /agent/identity (anonymous, or service_auth with the owner's email)
+  Kit-->>Agent: registration_id, claim_token, an identity assertion (anonymous)
+  Agent->>Kit: POST /agent/identity/claim: claim_token, email
+  Kit-->>Agent: a 6-digit user_code and a verification_uri (10 minutes)
+  Agent->>Owner: hands over the code and the link
+  Owner->>Kit: GET /oauth/claim, types the code (signed in as that email, 5 tries)
+  Kit->>Kit: the registration claimed, once
+  loop until claimed
+    Agent->>Kit: POST /oauth/token, the claim grant with claim_token
+  end
+  Kit-->>Agent: tokens with a refresh token (onGrant first), the claim token taken
+```
+
+## Rules
+
+### Threats, and what stops them
+
+| Threat | What stops it |
+|---|---|
+| a code seen in a redirect (a log, a Referer, a shared history) used by someone else | PKCE binds the code; it is used once, even by a failed exchange; sent again with the right client and verifier it revokes the grant the first exchange got (OAuth 2.1 §4.1.3) |
+| a stolen refresh token | rotation on every use; any earlier token of a live family, sent again or revoked at `/oauth/revoke`, ends the grant; the grace only ever gives the same successor |
+| a refresh token made up from a grant id (every access token carries its grant) | its MAC under a secret derived from the signing key: a made-up one ends nothing |
+| an approval posted from another site | the same-origin rule on every approval POST: `Sec-Fetch-Site: same-origin`, or with no such header an `Origin` equal to the issuer's; `same-site` and `Origin: null` are refused |
+| a ticket opened in one browser approved in another | an HttpOnly, SameSite=Lax nonce cookie binds the ticket to the browser that opened it; the ticket keeps only its SHA-256 |
+| a double-clicked Allow, or two tabs | a ticket, a claim attempt and a typed device code are each taken once |
+| a stored approval standing in for a click | none exists: the same client and approver signing in again see the page again |
+| a redirect before anything is checked | with `approve`, `/oauth/authorize` never redirects before a person acts; redirect URIs are https, http only on this machine, or an app's own scheme |
+| a forged `X-Forwarded-Host` in a cached document or a token's `iss` | `publicOrigin`: the one origin every document, token and check names |
+| a flood of registrations, tickets or device codes | every row written without auth is capped per kind, unused registrations lapse in a week, and `limits` counts per address |
+| guessing a device code or a claim code | 8 letters from 20, 10 minutes, 5 wrong codes in 10 minutes per signed-in person; a claim code dies after 5 wrong tries |
+| a space's token used at another space | the grant's audience (RFC 8707) and `accepts`; an invite binds its space with `complete`'s `resource` |
+| a resource check telling anyone which spaces exist | `resources` is a pure function of the string, with no lookup |
+| a client's logo used to impersonate someone | a client is named by text only: a `logo_uri` it registers is never fetched or shown |
+| an anonymous agent skipping `onGrant` with its identity assertion | with `onGrant` set, jwt-bearer works only once its claim was collected and heard |
+| a revoke undone or missed | revocation reads are never cached; markers outlive anything issued behind them; rows never in Workers KV |
+
+### Who approves a sign-in
+
+By default the owner approves every sign-in on the kit's own page at `/oauth/authorize`, behind the single sign-on
+(`owner`). An app that decides for itself (an invite, an ask to join, a page for strangers) passes `approve`, and hears
+every first token in `onGrant`:
+
+- `approve(c, ask)` runs at `GET /oauth/authorize` once the kit has checked the client, its redirect, PKCE and the
+  resource, before `owner`. A Response is the app's page; null shows the kit's page to the owner.
+- The app's page posts the ticket to the app's own route, which reads it with `oauth.ticketOf(c, ticket)` (null when
+  expired, answered, or opened in another browser; then `oauth.answeredOf(c, ticket)` says `approved`, `denied` or
+  `answered` for a ticket this browser spent already, so the route can say "Already approved") and answers with
+  `oauth.complete(c, ticket, decision)`. `approver` becomes the token's `sub` (`caller.owner`), `scopes` may only
+  narrow what was asked (a wider or empty list is a 400 page), `data` goes on the code and reaches `onGrant`.
+  `resource` binds the grant to a resource this server issues for (an invite's space), checked as a client's would be
+  (`resources`, the issuer's origin, the canonical form) when the client named none; a client that named one keeps it,
+  the same one again is fine, and any other, or one not issued for, is a 400 page (`invalid_target`) with the ticket
+  still live. The audience the app chose is the server's choice: a `resource` the client sends later at the token
+  endpoint is not held against it, and refresh keeps it. Without `resource`, the ticket's audience. It returns the 302
+  to the client (`code`, `state`, `iss`, or `access_denied`) or a 400/403 page. A blank `approver` is a 400 page, and
+  the ticket stays live.
+- `onGrant(grant, c)` hears the first token of every grant. It runs after the kit's own checks (client, redirect and
+  verifier for a code; the owner's answer for a device; the collected claim token for a claim), once per grant however
+  many polls race. false withdraws it: `invalid_grant` ("This sign-in was withdrawn: start again"), the code or device
+  code spent, the grant ended (`onRevoke` hears `withdrawn`). It is not asked on refresh or jwt-bearer: judge later
+  requests in `accepts`. An app that keeps its own rows per grant makes them here and refuses a token whose grant has
+  none.
+- `onRevoke(revoked)` hears every grant the kit ends, after it has ended it. A grant that lapses (its refresh token
+  unused for 30 days) is not told: nothing ends it, its tokens just expire. `revoked`: `revokeGrant` (no `client`: the
+  kit keeps no grant-to-client index) or a refresh token at `/oauth/revoke`. `replayed`: a used code or refresh token
+  sent again, its row kept or not. `withdrawn`: `onGrant` said no. `client_revoked`: `revokeClient`, naming the client
+  and no grant, since it ends every grant of the client. Revoking an access token alone ends no grant and is not told.
+  It is told at least once: a grant ended again (a code sent a third time) is told again, so the app's handler is
+  idempotent. A throw is logged (`onRevoke failed: …`), never answered: the revoke has happened and the request
+  answers as it would have.
+
+**Mirror grants with `onGrant` and `onRevoke`.** An app that lists who holds access (a space's members, their agents)
+makes its row when `onGrant` says yes and drops it when `onRevoke` names its grant, or every grant of a client on
+`client_revoked`. Its `accepts` refuses a token whose grant has no row, so a row the app dropped stops the token on its
+next request, whatever the kit's markers say. A lapsed grant is never named, so the app ages its own rows: `accepts`
+writes the row's last-seen time (every request with the grant's tokens passes there), and a row with none for 30 days
+is dropped with `revokeGrant(grant)`. A grant that refreshed but made no request in those 30 days is ended that way
+too, so its client signs in again rather than holding tokens no row backs.
+
 - **Nothing is granted without a click.** There is no approve-at-once answer: a grant follows only `complete`, from a
   same-origin POST, by the browser that opened the ticket, once. A stored approval never stands in for one: the same
   client and approver signing in again see the page again.
@@ -241,8 +440,8 @@ app.post('/join', async (c) => {
   page that says the sign-in went through ("Already approved") or was refused, with no code and no redirect; from
   another browser it is "This approval expired".
 - **With `approve` set, `/oauth/authorize` never redirects before a person acts:** every error (an unknown client, a
-  wrong redirect, `response_type`, PKCE, the resource) is a 400 page with no link. Without it, today's order holds:
-  the owner first, then a `response_type` or PKCE error goes back to the client's redirect.
+  wrong redirect, `response_type`, PKCE, the resource) is a 400 page with no link. Without it, the owner first, then a
+  `response_type` or PKCE error goes back to the client's redirect.
 - The kit's page answers only for the owner it was shown to: a ticket the app's page holds can't be approved there.
 - `/oauth/claim` and `/oauth/device` stay the owner's (`owner`, `owners`); `approve` is for `/oauth/authorize` only.
 - In Access, `/oauth/authorize` may bypass the sign-in once the app passes `approve`: the app's page decides. Keep it
@@ -251,11 +450,8 @@ app.post('/join', async (c) => {
   minutes by default), as an open `/oauth/register` stores a client. An app whose sign-in is reachable outside Access
   passes `publicOrigin` and `limits` (below): `oauth.mount` runs inside `createAgentApi`, before any middleware the
   app adds, so the app can't limit these endpoints itself.
-- With `onGrant` set, a claimed agent's identity assertion (jwt-bearer) works only once its claim was collected and
-  heard, so an anonymous agent can't skip `onGrant` with the assertion it got at registration.
 - Every page the kit shows (consent, device, claim, errors) carries the app's brand when it has one
   (`createAgentApi({ brand })`, or `brand` here): its head tags, icon, title and accent. Without one, the plain look.
-  A client is named by text only: a `logo_uri` it registers is never fetched or shown.
 - The consent page names what is asked for, `Sample: /s/alpha/mcp` (all of Sample for the root), and where it
   returns: a host, or "an app on this computer" for a loopback or app-scheme redirect.
 - Rules after cloudflare/workers-oauth-provider (the browser-bound, single-use consent ticket; never redirect before
@@ -287,28 +483,71 @@ this pattern. Two ways a waiting ask ends before its life does:
   `/oauth/authorize`, so an app that decides later passes `limits` (it slows a flood per address, it doesn't stop one
   from many addresses) and a `maxUnusedTickets` well above the asks it expects to have waiting at once.
 
-In tests, `approveSignIn(app, query, { headers })` from the `testing` part approves on the kit's page the way a
-browser does: it opens the page, keeps its ticket cookie, and posts same-origin.
+### Audiences (RFC 8707)
 
-```ts
-import { approveSignIn } from './kit/testing/index.js'
+> **The default `accepts` takes a root token at every space.** A client that sends no `resource` gets the root, and a
+> root token works everywhere on the origin, every space included. An app that signs people in by invite binds each
+> grant to the invite's space: `oauth.complete(c, ticket, { approver, resource: <the space's resource> })`. Its token
+> then works at that space only, even when the client asked for nothing. An app that wants a space to take only its
+> own tokens also refuses the root there in its own `accepts` (One MCP per space, above).
 
-const answer = await approveSignIn(app, { response_type: 'code', client_id, redirect_uri, code_challenge, code_challenge_method: 'S256' }, { headers: { 'x-test-owner': 'owner@example.test' } })
-const code = new URL(answer.headers.get('location')!).searchParams.get('code')
-```
+Every grant is bound to one resource, signed as its tokens' `aud` and on the caller as `resource`:
 
-## Open endpoints: one origin, lifetimes, caps and limits
+- The resource the client sends at `/oauth/authorize` (or `/oauth/device_authorization`), when this server issues for
+  it: the origin, `mcpPath` (default `/mcp`), and with `resources` set, what it approves.
+- Else the **root**, the issuer's origin: a client that sends no `resource`, or (without `resources`) one the app does
+  not describe. The default `accepts` takes a root token everywhere on the origin, so nothing changes for it.
+- An agent registered at `/agent/identity` (auth.md) names no resource: its grant gets the root when it registers,
+  and its claim, refresh and jwt-bearer tokens carry it. One registered before audiences stays without, even if
+  claimed after.
 
-Registration, device authorization, `/agent/identity`, the token endpoint and, with `approve`, `/oauth/authorize` answer
-anyone and write rows without auth. Once people other than the owner sign in, they are a public surface:
+The audience is fixed at the authorization request. A token request naming another resource is `invalid_target`,
+checked before anything is written, so the code or refresh token still works with the right one. Refresh keeps the
+audience. When the server chose the audience (the root), a `resource` the client sends later is not held against it.
 
-```ts
-const oauth = createOAuth({
-  …,
-  publicOrigin: 'https://sample.example.test',                                  // the only origin it names or checks
-  limits: { store: await dbGuardStore(db), address: { header: 'cf-connecting-ip' } },   // per address, never the owner
-})
-```
+A resource is compared in its canonical form: an absolute http(s) URL, scheme and host lower-cased, the default port
+and one trailing slash dropped (`HTTP://Example.test:443/mcp/` is `https://example.test/mcp`). A user part, a query,
+a fragment, a dot segment or an encoded dot (`%2e`) makes it no resource: `invalid_target` with `resources` set, the
+root without. More than one `resource`, or one not sent as a string, is refused: a 400 page at authorize,
+`invalid_target` at `/oauth/device_authorization` and the token endpoint, before anything is written. A code, device
+approval, refresh token or agent registration from before audiences ignores `resource` altogether, two of them
+included: it stays aud-less. Errors at authorize are pages, never redirects.
+
+- With `resources` set, the kit checks the resource's origin is the issuer's, exactly (a longer host that starts with
+  it is another origin), then asks `resources` for the path. Another origin or a refused path is `invalid_target`,
+  and `/.well-known/oauth-protected-resource<path>` is 404 for a path it refuses. Without it, the metadata echoes any
+  path.
+- `resources` must be a pure function of the string, with no lookup: it answers the metadata path too, so a lookup
+  would tell anyone which spaces exist. Whether one exists or is open is decided when the person approves.
+- `accepts` runs on every request after the token's signature and revocation checks, in-process calls included: MCP
+  tools call `/api` with the same bearer, and apps rewrite paths before the kit runs. Whatever carries the space to an
+  in-process call (`spaceOf`) must be something a client cannot set, such as a header the app strips from every
+  outside request, and the request's own path outranks it at every MCP address, a space's or `mcpPath`: otherwise a
+  client sends the carrier with one space's token and reaches another, or `mcpPath`. A sentence refuses: 401
+  `invalid_token`, the sentence as `detail` (and its printable ASCII as `error_description`), `resource_metadata` at
+  `resourceOf(c)`. Compare audiences with `oauth.rootOf(c)`, the root as the kit signs it (canonical: a forwarded
+  host in capitals or with its default port is the same root), not the raw origin.
+- Keep `mcpPath` in `resourceOf` and in `accepts`: without it, a token asked for `<origin>/mcp` (what MCP clients
+  send) is refused at `/mcp`, `/api` and every space, and the 401 at `/mcp` points at the origin's metadata.
+- `listResources(origin)` names what the authorization server metadata lists (`protected_resources`, default the
+  origin and `mcpPath`). Never list per-space resources there.
+- `mcpPath` keeps the pointer, the metadata, the listed resources and the relay (`read` may POST there) on MCP when it
+  is mounted elsewhere: pass `mountMcp`'s `path`.
+
+Three exceptions to "a token is accepted only by its audience" (MCP 2026-07-28 asks servers to reject tokens not meant
+for them, or otherwise verify they are the intended recipient):
+
+- **A token with no `aud` is accepted** by the default `accepts`: every token, code, device approval, refresh token and
+  agent registration from before audiences has none, and none ever gains one. Connections made before keep working.
+- **A root token is accepted at a space's resource:** the default `accepts` takes it everywhere on the origin, so a
+  client that sends no `resource`, or a connection made before the app had spaces, keeps working there. The app, with
+  one issuer and a row per grant, is then what verifies the token is meant for it. An app that wants a space to take
+  only its own tokens refuses the root there in its own `accepts`.
+- **A token whose `aud` is the origin plus `mcpPath` is accepted everywhere on the origin** by the default `accepts`:
+  MCP tools call `/api` in-process with the same bearer, so the token for the single MCP must fit the whole origin,
+  spaces included. An app that wants otherwise refuses it in its own `accepts`, as for the root.
+
+### Open endpoints: one origin, lifetimes, caps and limits
 
 - **`publicOrigin`** is the one origin of the issuer, every token's `iss` (and `verify`'s check of it), every metadata
   document, auth.md, the 401's `resource_metadata`, the device and claim links, `rootOf` (so the resource check and
@@ -318,7 +557,7 @@ const oauth = createOAuth({
   the skills index and archives, and the AI Catalog. A forged `X-Forwarded-Host` then reaches no shared cache, and the
   metadata and auth.md are cached publicly (`public, max-age=300`). Unset, each request's own origin is used,
   forwarded host included, and the metadata and auth.md are `no-store`; the other discovery documents stay
-  `public, max-age=3600` as before, so behind a proxy that passes a caller's `X-Forwarded-Host` through, they can be
+  `public, max-age=3600`, so behind a proxy that passes a caller's `X-Forwarded-Host` through, they can be
   poisoned. Not covered either way: what is never cached publicly (HAL links, `/openapi.json`, the guide, problem
   `type` URLs) keeps the request's origin. It must be an origin with no path (`createOAuth` throws otherwise), and it
   must be the origin tokens were issued under: setting one that differs signs everyone out, since their tokens' `iss`
@@ -326,11 +565,11 @@ const oauth = createOAuth({
 - **A registration no sign-in has used lives a week** (`/oauth/register`; long enough for an invite of a day, with
   room). Its first use (a code exchanged, a device token collected) gives it a year from then. One that lapses meets
   the page that says to remove the connection in the app and add it again (a client never hears `invalid_client` at
-  `/oauth/authorize`), and `invalid_client` at `/oauth/device_authorization`. A client registered before this version
-  has no `used` flag and keeps its year. An agent's `/agent/identity` registration lives a day, as before. An approval
-  after the lapse is refused, but a code approved in the last minutes of the week can still be exchanged after it (a
-  code lives 10 minutes), and the lapsed client is not made again: that sign-in's tokens and refresh tokens work,
-  while a new sign-in with that client_id meets the "add it again" page.
+  `/oauth/authorize`), and `invalid_client` at `/oauth/device_authorization`. A client registered before the caps has
+  no `used` flag and keeps its year. An agent's `/agent/identity` registration lives a day. An approval after the
+  lapse is refused, but a code approved in the last minutes of the week can still be exchanged after it (a code lives
+  10 minutes), and the lapsed client is not made again: that sign-in's tokens and refresh tokens work, while a new
+  sign-in with that client_id meets the "add it again" page.
 - **Every row anyone may write without auth is capped**, so the table stays bounded whatever the addresses: past its
   cap, a new row evicts the oldest unused row of its kind (`maxUnusedClients` and `maxUnusedTickets`, default 10 000
   each, whole numbers, 0 or more; `createOAuth` throws otherwise).
@@ -383,18 +622,12 @@ const oauth = createOAuth({
   one IPv6 host gets a bucket per address. Where the named source is missing every caller shares the single `local`
   bucket, which anyone can fill.
 
-## Callers, grants and revoking
+### Grants and revoking
 
-An OAuth caller is `{ kind: 'agent', client, grant, name, scopes, owner }`:
-
-- `client` is the client_id (a registration id for a claimed agent). Rate limits, idempotency answers and MCP's
-  `authInfo.clientId` key on it, with `grant`; `name` is what the client called itself, for display only, so two
-  clients that register the same name are two callers.
-- `grant` is one approval: every token from one sign-in (a code, a device approval, a claim), rotated or not, carries
-  it. A claimed agent's claim, refresh and jwt-bearer tokens share one, so once that grant is revoked (a replayed
+- A claimed agent's claim, refresh and jwt-bearer tokens share one grant, so once that grant is revoked (a replayed
   refresh token, `revokeGrant`) its identity assertion is refused too: the agent registers again. A registration is
-  approved once: a second claim code typed for it gets an "Already approved" page (409), never a second grant. Tokens issued before
-  grants have none and run to their hour, known by `client`; a claim from before grants uses its registration id.
+  approved once: a second claim code typed for it gets an "Already approved" page (409), never a second grant. A
+  claim from before grants uses its registration id.
 - `verify` reads the issued row and both revocation markers (the client's, and the grant's when the token has one) in
   one round trip: three row reads per request with a grant, two without.
 
@@ -419,34 +652,15 @@ so a retry gets the same successor and no token can be made from the key and a g
 carries its grant). Each refresh marks the token used, moves the grant's one `refresh-family` row to the next
 generation, and writes that generation's token row; the used token's row stays only for `reuseGraceSeconds` (0, the
 default: it goes at once). So a sign-in keeps two rows however often it refreshes, its newest token's and its
-family's, where 1.29.0 kept every used token 30 days (about 720 a month for a client refreshing hourly).
+family's.
 
-Replay detection is unchanged:
-
-- A used token sent again while its row is kept is reuse, as before.
+- A used token sent again while its row is kept is reuse.
 - One whose row is gone is still known: its MAC shows this server made it, and its family has moved past its
   generation, so it was used. Sending it ends the grant ("already used"), and so does revoking it at `/oauth/revoke`.
-- A made-up token that names a grant (every access token carries its grant) has no valid MAC and ends nothing.
-- A token issued by 1.29.0 (`rt_` and 32 random characters, or 43 for one it rotated) carries no family. Its first
-  refresh after the update marks it used and keeps its row 30 days, as before, and gives a token one generation past
-  its family's newest (generation 1 for a family with no row). So after a rollback shorter than 30 days, when 1.29.0
-  refreshed a token of a family this version had moved to generation 4, the family goes on at 5 and every earlier
-  token still ends it. It and the used 1.29.0 tokens before it are still known by their rows; its row also keeps the
-  generation its successor got, so a retry in the grace gets that same successor.
-- A family's row lapses 30 days after this version last rotated it, and 1.29.0 never writes it. So when 1.29.0 alone
-  rotates a sign-in for 30 days or more (a longer rollback), the family has no row when this version comes back, and
-  its next refresh starts it again at generation 1: this version's tokens from before the rollback, at generation 1 or
-  later, are then only unknown, no longer replays. That is the memory 1.29.0 had: it kept a used token's row 30 days,
-  and one used longer ago was unknown to it too.
-- A retry in the grace of a token 1.29.0 answered first (1.29.0 still serving during an update, or after a rollback)
-  gets the successor 1.29.0 gave: 1.29.0 named it `rt_` and an HMAC of the token under a secret from the signing key,
-  so this version names it the same way and finds its row. Once that successor is used, the retry is reuse and ends
-  the grant, as any other.
-- The reverse does not hold: while 1.29.0 answers (an instance not yet updated, or a rollback), it knows nothing of
-  this version's tokens. It keeps no family row and names successors its own way, so an earlier token of this
-  version reads as unknown there, and a retry or replay inside the grace of a token this version answered gets new
-  tokens from it (a retried one gets a successor no row backs, which then fails). Replay detection for those tokens
-  resumes once this version answers them again. Finish an update quickly, and keep rollbacks short.
+- A made-up token that names a grant has no valid MAC and ends nothing.
+- A refresh token from before generations (`rt_` and random characters) is known by its row: it still rotates, and an
+  earlier one is still caught as a replay. How, and what a rollback or a rollout with two versions does:
+  [docs/upgrading.md#oauth](https://github.com/escalay/api-kit/blob/main/docs/upgrading.md#oauth).
 
 Revocation reads stay uncached: `verify` reads the issued row and the markers on every request, so a revoke stops a
 client on its next request. Rotating the signing key also changes the MAC, so earlier tokens of the old key are no
@@ -457,24 +671,36 @@ its background job, or a refresh retried after a dropped answer. With the defaul
 ends the sign-in, so the person signs in again. `createOAuth({ …, reuseGraceSeconds: 30 })` (the starter sets it)
 gives a used refresh token sent again inside the window (less than `reuseGraceSeconds` after the first answer) the
 same successor: the next generation's token, which is the same each time it is made, so none is stored for it. It
-never makes a second branch: once that successor is used, or the window has passed, it is reuse. The successor is written by the first request, after it marks the used token. If
-that request dies in between, a retry in the window gets a successor no row backs, and its next refresh is
-`invalid_grant` (with 0 the retry would have revoked the grant instead). The retry never writes the row itself, since
-a write there could reset a successor already used.
+never makes a second branch: once that successor is used, or the window has passed, it is reuse. The successor is
+written by the first request, after it marks the used token. If that request dies in between, a retry in the window
+gets a successor no row backs, and its next refresh is `invalid_grant` (with 0 the retry would have revoked the grant
+instead). The retry never writes the row itself, since a write there could reset a successor already used.
 
-| File | What |
-|---|---|
-| `index.ts` | `createOAuth` (the server; `revokeClient` is the owner's kill switch; `rootOf`, `resourceOf` and `mcpPath` as it reads them; `ticketOf`, `answeredOf` and `complete` for the app's own sign-in page), `generateOAuthKey` (a new signing key) |
-| `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`, `SignInRevoked`; the ticket cookie and the same-origin rule |
-| `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take`, `markUsed` and `trim`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start, then on a write at most once a minute), `memoryOAuthStore` |
-| `schema.ts` | the `oauth` table, its `expires_at` index, and `OAUTH_MIGRATIONS` |
+### Device authorization (RFC 8628)
 
-## Rules
+```
+POST /oauth/register              { client_name, grant_types: ["urn:ietf:params:oauth:grant-type:device_code"] }  (no redirect_uris)
+POST /oauth/device_authorization  client_id, scope → { device_code, user_code: "BDKM-QXTW", verification_uri,
+                                                       verification_uri_complete, expires_in: 600, interval: 5 }
+GET  /oauth/device[?user_code=]   the page where the signed-in owner types the code (HTML, like /oauth/authorize)
+POST /oauth/device                user_code [, decision=allow|deny]   (same-origin only)
+POST /oauth/token                 grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=…&client_id=…
+                                  → authorization_pending | slow_down (+ interval) | expired_token | access_denied | tokens
+```
+
+Nothing to wire: `mount` adds it, and the metadata names `device_authorization_endpoint`.
+
+- Device codes: 8 letters from `BCDFGHJKLMNPQRSTVWXZ` (no vowels), shown as `XXXX-XXXX`, case and dashes ignored;
+  10 minutes; single use; only hashes kept. A signed-in person may type 5 wrong codes in 10 minutes, then 429. When
+  `owners` is set, only they may approve. Polling sooner than `interval` answers `slow_down` and adds 5 seconds.
+- In Access, `/oauth/device` stays behind the sign-in (like `/oauth/claim`, and `/oauth/authorize` unless the app
+  passes `approve`); `/oauth/device_authorization` bypasses it. Name the path exactly: an Access path without `*`
+  covers only itself, while `/oauth/device*` would also gate `/oauth/device_authorization` and break every device.
+
+### Everything else
 
 - The signing key lives in the app's secrets, never in the repo; rotating it signs everyone out. `createOAuth` parses
   it when called: a malformed key throws there, at start, not on the first OAuth request.
-- `owner` decides who may approve on the kit's pages: behind Cloudflare Access, `accessOwner(access)` (the signed-in
-  email). `approve` lets the app decide at `/oauth/authorize` instead (above).
 - Refresh tokens last 30 days and rotate on each use; MCP clients and claimed agents both get one. Only their hashes
   are kept, and only the newest token's row (above). A used token sent again revokes its grant (every refresh token of
   that sign-in, and its access tokens at once), as does revoking any one of them. Two refreshes of one token at once
@@ -497,133 +723,87 @@ a write there could reset a successor already used.
   unused. A store without them falls back to a read then a write, safe only one request at a time: tests.
 - OAuth rows live in SQLite or D1, never Workers KV: KV is eventually consistent, so a new code reads as unknown and a
   revoke can be undone.
-- `test/oauth-store-contract.ts` is what every store must pass, with the attacks on the token endpoint; it runs on
-  memory, node:sqlite and D1. Rules after cloudflare/workers-oauth-provider and better-auth (both MIT).
-- Device codes: 8 letters from `BCDFGHJKLMNPQRSTVWXZ` (no vowels), shown as `XXXX-XXXX`, case and dashes ignored;
-  10 minutes; single use; only hashes kept. A signed-in person may type 5 wrong codes in 10 minutes, then 429. When
-  `owners` is set, only they may approve. Polling sooner than `interval` answers `slow_down` and adds 5 seconds.
-- In Access, `/oauth/device` stays behind the sign-in (like `/oauth/claim`, and `/oauth/authorize` unless the app
-  passes `approve`);
-  `/oauth/device_authorization` bypasses it. Name the path exactly: an Access path without `*` covers only itself, while
-  `/oauth/device*` would also gate `/oauth/device_authorization` and break every device.
 - Keep the OAuth paths open (`OAUTH_OPEN_PATHS`); `createAgentApi` does it when `oauth` is set, private mode included.
 - An app whose sign-in is reachable outside Access passes `publicOrigin` and `limits`.
-- Standard: `docs/STANDARD.md` §7 (audiences there too) and §11.
+- Rules after cloudflare/workers-oauth-provider and better-auth (both MIT).
+- Standard: `docs/STANDARD.md` §7, §11
 
-## Upgrading to grants
+## Failure modes
 
-Defaults that change when an app takes this version:
+The consent page (`/oauth/authorize`):
 
-- Rate limits, stored idempotency answers and A2A task ownership key an OAuth agent by `client` and `grant`, not by
-  its name: same-named clients stop sharing a bucket or each other's tasks. A2A tasks stored under the old key (kept a
-  day) are no longer found by their agent.
-- MCP's `authInfo.clientId` is an OAuth agent's client_id (before, the name it registered). A tool that showed or
-  stored the name reads `authInfo.extra.name`; the grant is `authInfo.extra.grant`.
-- `verify` refuses a token whose grant was revoked at once (before, up to an hour), including after a refresh token is
-  replayed. A claimed agent's identity assertion is refused once its grant is revoked: it registers again.
-- A code sent twice with its verifier revokes its sign-in.
-- `revokeClient` deletes the registration: a revoked client registers again. A code or a device approval collected
-  after it gets `invalid_grant` (before, it was issued tokens `verify` refused), and so does a claim token (before,
-  `expired_token`, or tokens when the revoke landed during the poll).
-- A claim token collected after `revokeGrant` ended its grant gets `invalid_grant` (before, it was issued a refresh
-  token in the revoked grant, which outlived the revoke marker).
-- A second claim code typed for a registration already approved is refused with a 409 page (before, it replaced the
-  registration's grant, so its jwt-bearer tokens and its claim and refresh tokens no longer shared one).
-- `createOAuth` throws on a malformed signing key when called. On Node a bad key already stopped the process at start
-  (an unhandled rejection); on Workers the app now fails to build instead of failing only its OAuth requests.
+| The caller sees | Why |
+|---|---|
+| 401 "Sign in first" | no `approve`, and `owner` answers null: the person is not signed in to the site |
+| 400 "Can't approve this request" with the reason | an unknown or lapsed client ("Remove this connection in your app and add it again"), a wrong redirect, `response_type`, PKCE, more than one resource, a resource refused (`invalid_target`), a blank approver, or scopes wider than asked |
+| a 302 to the client with `error=invalid_request` | without `approve`, once the owner is signed in, a `response_type` or PKCE error goes back to the client's redirect |
+| 403 "Not allowed" | the POST is not same-origin, nobody is signed in, the ticket was opened in another browser, or it was shown to another owner |
+| 400 "This approval expired" | the ticket's life (`ticketTtl`) ended, it is unknown, or another browser answered it |
+| 400 "Already approved" / "Already answered" | this browser answered the ticket already (a double click, a tab brought back) |
+| 429 "Too many sign-ins from here" | past `limits` at authorize (60 a minute per address) |
 
-Tokens, codes, refresh rows and claims from before grants keep working.
+The claim page (`/oauth/claim`):
 
-## Upgrading to audiences
+| The caller sees | Why |
+|---|---|
+| 401 "Sign in first" | open the link in the browser signed in to the site |
+| 410 "This code expired" | the claim attempt is older than 10 minutes, was used, or a double-clicked post took it first |
+| 403 "This claim names someone else" | signed in as another email than the agent named |
+| 400 "That code doesn't match" | a wrong 6-digit code; at the fifth, "Too many tries: ask the agent for a new code" |
+| 410 "This registration expired" | the agent's registration lapsed (a day) |
+| 409 "Already approved" | the registration was approved already: one approval per registration |
 
-Defaults that change when an app takes this version:
+The device page (`/oauth/device`):
 
-- **New tokens carry `aud`.** Every grant made from now on is bound: the resource its client asked for (the origin or
-  `/mcp`), else the root (the origin). The default `accepts` takes the root and `/mcp` everywhere on the origin, so
-  tokens work where they did. Code that reads a token's claims sees `aud`, and the caller has `resource`.
-- A token request naming a resource other than the authorization request's is `invalid_target` (before, ignored).
-- More than one `resource` at `/oauth/authorize` is a 400 page (before, the first was kept); at
-  `/oauth/device_authorization` and the token endpoint it is `invalid_target`, and so is a JSON `resource` that is not a
-  string (before, ignored). A grant from before audiences still ignores it.
-- `oauth.verify` may answer `{ refused }` (a valid token `accepts` turned away), which is truthy: code calling it
-  directly checks for `'refused' in answer` before treating the answer as a caller. Only an app's own `accepts` or a
-  token for another resource gives one; `createAgentApi` already handles it.
-- With OAuth on, the 401 challenge names `scope="read write"`; a 403 `insufficient_scope` names `resource_metadata`.
-  Without OAuth the challenge is unchanged.
-- The 401 pointer uses `mcpPath` exactly: `/mcp` and `/mcp/…` point at `/.well-known/oauth-protected-resource/mcp`,
-  `/mcpx` no longer does. `createAgentApi`'s default relay follows `mcpPath`, so an app with MCP mounted elsewhere
-  that passes it stops needing `write` for every MCP POST.
-- A star inside a pattern in `auth.open`, `guards.skip` and `auth.relay` now matches one whole path segment: `/a/*/b`
-  matches `/a/x/b` and not `/a/x/y/b`, and `/a/**` matches `/a/x` and `/a/x/y`. Before, such a star was literal and
-  matched nothing an app serves, so check those lists for an inner or doubled star before updating. Exact,
-  leading-star and trailing-star patterns are unchanged in `open` and `skip`; `relay` compared paths exactly before,
-  so a star anywhere in it was literal and now matches as in `open`.
+| The caller sees | Why |
+|---|---|
+| 401 "Sign in first" | open the page in the browser signed in to the site |
+| 403 "Not allowed" | `owners` is set and the signed-in person is not one of them |
+| 400, the code form: "That code doesn't match a device waiting here" | a wrong or expired code |
+| 429 "Too many tries" | 5 wrong codes in 10 minutes |
+| 400 "This device can't be connected" | its client was revoked or its registration lapsed |
+| 400, the code form: "That code was just answered" | the same code answered from another tab |
 
-Codes, device approvals, refresh tokens and agent registrations from before audiences (claimed or not) never gain one,
-whatever resource the client sends: their tokens stay aud-less, accepted everywhere. A code written by the previous
-version kept the query's `resource` as it came; it is never signed.
+The token endpoint and the API:
 
-## Upgrading to approvals
+| The caller sees | Why |
+|---|---|
+| `invalid_grant` "This code is used, expired or unknown." | a code sent twice, too late, or made up |
+| `invalid_grant` "already used, so every refresh token from this sign-in is revoked" | a refresh token replayed: the grant is ended |
+| `invalid_grant` "This sign-in was withdrawn: start again." | `onGrant` said false |
+| `invalid_grant` "This client was revoked" / "This sign-in is revoked" | `revokeClient` or `revokeGrant` ended it |
+| `invalid_target` | a second resource, or one other than the authorization request's |
+| `authorization_pending`, `slow_down`, `expired_token`, `access_denied` | a device or a claim still waiting, polled too fast, expired, or refused |
+| `invalid_client` 401 at `/oauth/device_authorization` | the client is not registered here, or its registration lapsed |
+| 401 `invalid_token` with a sentence | a valid token `accepts` refused here: it is for another resource |
+| 429 `too_many_requests` | past `limits` on registration, device authorization or token misses |
 
-New, off unless set: `approve`, `onGrant`, `ticketOf`, `answeredOf`, `complete`, and `brand` (the app's brand on the kit's pages is
-on by itself once the app has one). Defaults that change when an app takes this version:
+## Limits
 
-- **Breaking for tests:** a POST to `/oauth/authorize` needs the ticket cookie its page set, and is refused (403) when
-  `Sec-Fetch-Site` is absent and `Origin` is not the issuer's; `/oauth/claim` and `/oauth/device` take the same origin
-  rule (before, an absent header passed). Over https and on this machine's own address, browsers send
-  `Sec-Fetch-Site`, so people notice nothing. Over plain http at another address they may not, and then only `Origin`
-  decides: the kit's pages carry `<meta name="referrer" content="same-origin">` so it is the issuer's, and an app's own
-  approval page needs the same tag (without it the browser sends `Origin: null`, refused). A test that posts an
-  approval by hand breaks. Use `approveSignIn` from the `testing` part, and add `'sec-fetch-site': 'same-origin'` to
-  hand-made claim and device POSTs.
-- A ticket opened before the update has no nonce: it is refused once ("This approval expired") and lapses within 10
-  minutes; the person starts again.
-- A consent ticket posted again from the browser that answered it says "Already approved" (or "Already answered")
-  instead of "This approval expired". Still 400, still no code.
-- The page for an unknown or expired `client_id` says to remove the connection in the app and add it again. The
-  consent page names the resource asked for and says "an app on this computer" for a loopback or app-scheme redirect;
-  the device page says when the client has no page to send anyone back to.
-- With `onGrant` set, a claimed agent's identity assertion (jwt-bearer) is refused until its claim token was collected
-  and heard. An agent claimed before the app set `onGrant` keeps its refresh tokens; its assertion (a day at most) is
-  refused, so it refreshes or registers again.
+- One `verify` costs three row reads per request with a grant (the issued row and both markers), uncached.
+- Unused rows are bounded by the caps above; the cap is soft under concurrency, by as many writes as were in flight.
+- A sign-in keeps two refresh rows (its newest token's and its family's) however often it refreshes.
+- Access tokens last an hour, refresh tokens 30 days, codes and device codes 10 minutes, consent tickets `ticketTtl`,
+  agent registrations a day, unused client registrations a week, used ones a year.
+- Node and Workers; rows in SQLite or D1 (`test/workers/oauth.test.ts` runs the store contract on D1).
 
-## Upgrading to open sign-in
+## Tests
 
-New, off unless set: `publicOrigin`, `limits`, `maxUnusedClients` and `maxUnusedTickets` (both default 10 000), and
-the store's `trim`. Defaults that change when an app takes this version:
+- `approveSignIn(app, query, { headers })` (testing part) approves on the kit's page the way a browser does: it opens
+  the page, keeps its ticket cookie, and posts same-origin.
 
-- **Without `publicOrigin`, the metadata and auth.md are `no-store`** (before, `public, max-age=300`): a forged
-  `X-Forwarded-Host` could have put another origin's documents in a shared cache. A client fetches them once more per
-  connection. Set `publicOrigin` to cache them again.
-- **A registration left unused for a week lapses** (before, every registration lived a year): the client registers
-  again, and a person who opens its sign-in link meets the "add it again" page. Its first sign-in gives it a year.
-  Registrations from before keep their year.
-- **Unused registrations are capped at 10 000**, and so are open consent tickets: past it the oldest goes.
-- `dbOAuthStore` prunes expired rows while it runs, at most once a minute.
+```ts
+import { approveSignIn } from './kit/testing/index.js'
 
-Nothing else changes until the app passes `publicOrigin` or `limits`.
+const answer = await approveSignIn(app, { response_type: 'code', client_id, redirect_uri, code_challenge, code_challenge_method: 'S256' }, { headers: { 'x-test-owner': 'owner@example.test' } })
+const code = new URL(answer.headers.get('location')!).searchParams.get('code')
+```
 
-## Upgrading to sharing
+- Hand-made claim and device POSTs carry `'sec-fetch-site': 'same-origin'`.
+- `test/oauth-store-contract.ts` is what every store must pass, with the attacks on the token endpoint; it runs on
+  memory, node:sqlite and D1. `test/oauth.test.ts` runs the flows, audiences, approvals, the open endpoints, and this
+  README's invite and spaces examples as written.
 
-New, off unless set: `ticketTtl` (default 600, as before), `complete`'s `resource`, `onRevoke`. Defaults that change
-when an app takes this version:
+## Upgrading
 
-- **Every row anyone may write without auth is capped** (before, only registrations and consent tickets): agent
-  registrations and their claim tokens under `maxUnusedClients`, claim attempts and device codes under
-  `maxUnusedTickets`. A client a live consent ticket holds is no longer evicted by the client cap. A store of the app's
-  own with a `trim` gets a third argument, `heldBy`, which it may ignore (it then evicts a held client as before).
-- **`OAUTH_MIGRATIONS` has a step 2**, an index on `expires_at`: `dbOAuthStore` applies it when made; a Workers app
-  runs `pnpm migrations` (`scripts/migrations.ts`) to write its D1 file. It is `create index if not exists`, so a
-  database `migrate()` already brought up takes the file cleanly.
-- An app that passes `approve` without both `limits` and `publicOrigin` logs one warning at start; `kit doctor` notes
-  it, and notes an app with the `people` part whose `owner` never asks `personOf`.
-- The starter sets `reuseGraceSeconds: 30` (an app made before keeps its own `createOAuth` call; the kit's default stays
-  0).
-- A code or device grant `onGrant` withdraws now gets a revoke marker too, as a withdrawn claim did: nothing was
-  issued for it, so nothing else changes.
-- **A refresh leaves no used row behind** (before, each kept 30 days): refresh tokens issued from now on name their
-  grant and generation, and a grant keeps one `refresh-family` row. Replays are found as before, 1.29.0 tokens
-  included. An app's own test that reads a used refresh row by its hash finds none once the grace has passed. With
-  `reuseGraceSeconds` set, a retry that lands across the update (the first refresh answered by 1.29.0, the retry by
-  this version) gets the successor 1.29.0 gave, which goes on working; once that successor is used, the retry ends
-  the grant, as any replay does.
+What changed between kit versions, and what to do: [docs/upgrading.md#oauth](https://github.com/escalay/api-kit/blob/main/docs/upgrading.md#oauth).
