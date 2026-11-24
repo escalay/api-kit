@@ -116,6 +116,8 @@ export const sharingMembers = sqliteTable(
     expiresAt: text('expires_at'),
     /** Written by `accepts` at most once an hour. */
     lastSeenAt: text('last_seen_at').notNull(),
+    /** When `accepts` first saw its token; null while pending, when a failed token exchange may still be undone. */
+    firstUsedAt: text('first_used_at'),
     endedAt: text('ended_at'),
     endedReason: text('ended_reason', { enum: ENDED_REASONS }),
   },
@@ -133,7 +135,7 @@ create table if not exists sharing_requests (id text primary key, space_id text 
 create index if not exists sharing_requests_space on sharing_requests(space_id, state);
 create index if not exists sharing_requests_address on sharing_requests(address_key, state);
 create index if not exists sharing_requests_expires on sharing_requests(expires_at);
-create table if not exists sharing_members (id text primary key, grant_id text not null unique, client_id text not null, space_id text not null, label text not null, app_name text not null, returns_to text not null, via text not null, invite_id text unique, request_id text unique, scope text not null, lifetime text not null, joined_at text not null, expires_at text, last_seen_at text not null, ended_at text, ended_reason text);
+create table if not exists sharing_members (id text primary key, grant_id text not null unique, client_id text not null, space_id text not null, label text not null, app_name text not null, returns_to text not null, via text not null, invite_id text unique, request_id text unique, scope text not null, lifetime text not null, joined_at text not null, expires_at text, last_seen_at text not null, first_used_at text, ended_at text, ended_reason text);
 create index if not exists sharing_members_space on sharing_members(space_id);
 create index if not exists sharing_members_client on sharing_members(client_id);
 create index if not exists sharing_members_seen on sharing_members(last_seen_at);

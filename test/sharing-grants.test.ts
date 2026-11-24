@@ -3,7 +3,7 @@ import { decodeJwt } from 'jose'
 import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
 import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, migrate, testDb, type SignInAsk, type SignInGrant, type TokenCaller } from '../src/index.js'
-import { appNameOf, createSharing, registerSharing, SHARING_MIGRATIONS } from '../src/sharing/index.js'
+import { appNameOf, createSharing, FIRST_USE_WITHIN, registerSharing, SHARING_MIGRATIONS } from '../src/sharing/index.js'
 import { BAKES, grantOf, grantsApp, ORIGIN, OWNER, sharingGrantsContract, SOUPS } from './sharing-grants-contract.js'
 import { HOUR } from './sharing-rows.js'
 
@@ -176,33 +176,69 @@ describe('onGrant', () => {
     expect((await chained.join(invite)).status).toBe(200)
   })
 
-  it('spends the invite when the exchange throws after the claim, and a retried exchange ends its member', async () => {
+  it('opens the invite again when the exchange throws after the claim: on the client’s retry, or once its first token goes unused for an hour', async () => {
+    let broken = true
     // The app chained the wrong way round, and its hook threw: the kit issues nothing and tells no one
     const chained: Awaited<ReturnType<typeof grantsApp>> = await box({
-      oauth: { onGrant: async (grant, c) => (await chained.sharing.oauth.onGrant(grant, c)) && Promise.reject(new Error('the app’s store is down')) },
+      oauth: { onGrant: async (grant, c) => (await chained.sharing.oauth.onGrant(grant, c)) && (broken ? Promise.reject(new Error('the app’s store is down')) : true) },
     })
     const invite = await chained.makeInvite()
     const { exchange } = await chained.signIn({ resource: SOUPS, decision: chained.inviteDecision(invite) })
     expect((await exchange()).status).toBe(500)
     const [member] = await chained.membersOfInvite(invite.id)
-    expect([await chained.inviteState(invite.id), member?.endedReason, chained.revoked]).toEqual(['redeemed', null, []])
-    // The code is spent, so the client's retry is a replay: the kit ends the grant and the part its row
+    expect([await chained.inviteState(invite.id), member?.firstUsedAt, chained.revoked]).toEqual(['redeemed', null, []])
+    // The code is spent, so the client's retry is a replay: the kit ends the grant, and the part deletes the row whose token was never used
     expect((await exchange()).status).toBe(400)
-    const [ended] = await chained.membersOfInvite(invite.id)
-    expect([await chained.inviteState(invite.id), ended?.endedReason]).toEqual(['redeemed', 'replayed'])
+    expect([await chained.inviteState(invite.id), await chained.membersOfInvite(invite.id), chained.revoked.map((told) => told.reason)]).toEqual(['open', [], ['replayed']])
+
+    // No retry: aging deletes the row once its first token has gone unused for an hour
+    const unretried = await chained.makeInvite()
+    expect((await (await chained.signIn({ resource: SOUPS, decision: chained.inviteDecision(unretried) })).exchange()).status).toBe(500)
+    const [stuck] = await chained.membersOfInvite(unretried.id)
+    expect(await chained.repo.deleteUnusedMembers(new Date(Date.now() - FIRST_USE_WITHIN))).toEqual([])
+    expect(await chained.repo.deleteUnusedMembers(new Date())).toEqual([stuck!.grantId])
+    broken = false
+    for (const reopened of [invite, unretried]) expect((await chained.join(reopened)).status).toBe(200)
   })
 
-  it('leaves no live member after a retried exchange while onGrant runs (race.mts)', async () => {
-    const { makeInvite, signIn, inviteDecision, membersOfInvite, revoked } = await box({ byNameDelay: 50 })
+  it('never reopens an invite whose member was used, or ended by a revoke while onGrant ran (K1’s re-check)', async () => {
+    let during: (grant: SignInGrant) => Promise<unknown> = async () => undefined
+    const chained: Awaited<ReturnType<typeof grantsApp>> = await box({
+      oauth: { onGrant: async (grant, c) => {
+        const yes = await chained.sharing.oauth.onGrant(grant, c)
+        await during(grant)
+        return yes
+      } },
+    })
+    const ends = [['revoked', (grant: SignInGrant) => chained.oauth.revokeGrant(grant.grant)], ['client_revoked', (grant: SignInGrant) => chained.oauth.revokeClient(grant.client.id)]] as const
+    for (const [reason, end] of ends) {
+      during = end
+      const invite = await chained.makeInvite()
+      expect([reason, (await chained.join(invite)).status]).toEqual([reason, 400])
+      const [member] = await chained.membersOfInvite(invite.id)
+      expect([member?.endedReason, await chained.inviteState(invite.id)]).toEqual([reason, 'redeemed'])
+    }
+    // A member whose token was used: a later replay ends it, and the invite stays spent
+    during = async () => undefined
+    const used = await chained.makeInvite()
+    const token = (await chained.join(used)).tokens.access_token
+    expect((await chained.call('/s/soups/mcp', token)).status).toBe(200)
+    await chained.sharing.oauth.onRevoke({ grant: grantOf(token), reason: 'replayed' })
+    expect([(await chained.memberOfToken(token))?.endedReason, await chained.inviteState(used.id)]).toEqual(['replayed', 'redeemed'])
+  })
+
+  it('leaves no member after a retried exchange while onGrant runs, and the invite open (race.mts)', async () => {
+    const { makeInvite, signIn, inviteDecision, membersOfInvite, inviteState, revoked } = await box({ byNameDelay: 50 })
     const invite = await makeInvite()
     const { exchange } = await signIn({ resource: SOUPS, decision: inviteDecision(invite) })
     const first = exchange()
     await new Promise((done) => setTimeout(done, 10))
     const answers = await Promise.all([first, exchange()])
     expect(answers.map((answer) => answer.status)).toEqual([400, 400])
-    const [member] = await membersOfInvite(invite.id)
-    expect(member?.endedReason).toBe('replayed')
-    expect(revoked.filter((told) => told.grant === member?.grantId).map((told) => told.reason)).toEqual(['replayed', 'replayed'])
+    // Neither exchange got a token: the replay ends the grant, told twice, and the row it never used is deleted
+    expect([await membersOfInvite(invite.id), await inviteState(invite.id)]).toEqual([[], 'open'])
+    const told = revoked.filter((one) => one.reason === 'replayed')
+    expect([told.length, new Set(told.map((one) => one.grant)).size]).toEqual([2, 1])
   })
 
   it('races revokeInvite either way round to one outcome: joined and not revoked, or revoked and not joined', async () => {
@@ -254,9 +290,13 @@ describe('accepts', () => {
     expect([answer.status, refusalOf(answer)]).toEqual([401, ONLY_ITS_SPACE])
   })
 
-  it('notes a member’s use at most once an hour', async () => {
+  it('notes a member’s first use once, and its use at most once an hour', async () => {
     const { makeInvite, join, call, memberOfToken, ageMember } = await box()
     const token = (await join(await makeInvite())).tokens.access_token
+    expect((await memberOfToken(token))?.firstUsedAt).toBeNull()
+    await call('/s/soups/mcp', token)
+    const firstUse = (await memberOfToken(token))?.firstUsedAt
+    expect(firstUse).toEqual(expect.any(String))
     const grant = grantOf(token)
     const recent = new Date(Date.now() - HOUR / 2).toISOString()
     await ageMember(grant, { lastSeenAt: recent })
@@ -265,6 +305,7 @@ describe('accepts', () => {
     await ageMember(grant, { lastSeenAt: new Date(Date.now() - 2 * HOUR).toISOString() })
     await call('/s/soups/mcp', token)
     expect(Date.parse((await memberOfToken(token))!.lastSeenAt)).toBeGreaterThan(Date.now() - 60_000)
+    expect((await memberOfToken(token))?.firstUsedAt).toBe(firstUse)
   })
 
   it('keeps a space token a space token under a forged X-Forwarded-Host, even one refreshed there', async () => {

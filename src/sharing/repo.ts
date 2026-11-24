@@ -28,7 +28,7 @@ export type RequestWithMember = RequestRow & { memberId: string | null }
 export type NewInvite = Omit<InviteRow, 'id' | 'revokedAt'>
 export type NewRequest = Omit<RequestRow, 'id' | 'state' | 'scope' | 'lifetime' | 'decidedBy' | 'decidedAt'>
 /** A member as a claim writes it; `inviteId`, `requestId` and `via` come from the claim. */
-export type NewMember = Omit<MemberRow, 'id' | 'via' | 'inviteId' | 'requestId' | 'endedAt' | 'endedReason'>
+export type NewMember = Omit<MemberRow, 'id' | 'via' | 'inviteId' | 'requestId' | 'firstUsedAt' | 'endedAt' | 'endedReason'>
 /** Where a list page starts: after this id (newest first), at most `limit` rows. */
 export type PageAt = { after?: string; limit: number }
 
@@ -40,7 +40,7 @@ const valuesOf = <Row extends Record<string, unknown>>(table: SQLiteTable, row: 
   return sql.join(keys.map((key) => sql`${row[key]}`), sql`, `)
 }
 
-const newMemberRow = (member: NewMember, claim: Pick<MemberRow, 'via' | 'inviteId' | 'requestId'>): MemberRow => ({ ...member, ...claim, id: newId('mem'), endedAt: null, endedReason: null })
+const newMemberRow = (member: NewMember, claim: Pick<MemberRow, 'via' | 'inviteId' | 'requestId'>): MemberRow => ({ ...member, ...claim, id: newId('mem'), firstUsedAt: null, endedAt: null, endedReason: null })
 
 const before = (id: SQLiteColumn, after?: string) => (after ? lt(id, after) : undefined)
 
@@ -220,6 +220,10 @@ export const sharingRepo = (db: Db) => {
     noteSeen: async (grantId: string, staleBefore: Date, now: Date) => {
       await db.update(sharingMembers).set({ lastSeenAt: iso(now) }).where(and(eq(sharingMembers.grantId, grantId), lt(sharingMembers.lastSeenAt, iso(staleBefore))))
     },
+    /** Notes the first use of a member's token, once: it is no longer pending. */
+    noteFirstUse: async (grantId: string, now: Date) => {
+      await db.update(sharingMembers).set({ firstUsedAt: iso(now) }).where(and(eq(sharingMembers.grantId, grantId), isNull(sharingMembers.firstUsedAt)))
+    },
     /** Ends a live member of this space; its grant, to revoke, or null when it was not live there. */
     endMember: async (spaceId: string, id: string, reason: EndedReason, now: Date): Promise<string | null> => {
       const [ended] = await db.update(sharingMembers).set({ endedAt: iso(now), endedReason: reason }).where(and(eq(sharingMembers.id, id), eq(sharingMembers.spaceId, spaceId), isNull(sharingMembers.endedAt))).returning({ grantId: sharingMembers.grantId })
@@ -238,6 +242,9 @@ export const sharingRepo = (db: Db) => {
     deleteMemberOfGrant: async (grantId: string) => {
       await db.delete(sharingMembers).where(eq(sharingMembers.grantId, grantId))
     },
+    /** Deletes the grant's member while it is pending (live, its first token unused), so its invite or ask is open again; whether it did. */
+    deletePendingMemberOfGrant: async (grantId: string) =>
+      (await db.delete(sharingMembers).where(and(eq(sharingMembers.grantId, grantId), isNull(sharingMembers.firstUsedAt), isNull(sharingMembers.endedAt))).returning({ id: sharingMembers.id })).length > 0,
 
     // Aging, for sweep
 
@@ -247,6 +254,9 @@ export const sharingRepo = (db: Db) => {
     /** Ends live members unseen since `unseenSince`; the rows ended. */
     endLapsedMembers: (unseenSince: Date, now: Date) =>
       db.update(sharingMembers).set({ endedAt: iso(now), endedReason: 'lapsed' }).where(and(isNull(sharingMembers.endedAt), lte(sharingMembers.lastSeenAt, iso(unseenSince)))).returning(endedColumns),
+    /** Deletes pending members joined at or before `joinedBefore` (a token exchange that failed), opening their invites and asks again; their grants, to revoke. */
+    deleteUnusedMembers: async (joinedBefore: Date) =>
+      grantsOf(await db.delete(sharingMembers).where(and(isNull(sharingMembers.firstUsedAt), isNull(sharingMembers.endedAt), lte(sharingMembers.joinedAt, iso(joinedBefore)))).returning({ grantId: sharingMembers.grantId })),
     /** Deletes members that ended before `endedBefore`; how many. */
     deleteEndedMembers: async (endedBefore: Date) => (await db.delete(sharingMembers).where(lte(sharingMembers.endedAt, iso(endedBefore))).returning({ id: sharingMembers.id })).length,
     /** Deletes invites that stopped being open before `closedBefore` (revoked, or past `redeem_by`); how many. */

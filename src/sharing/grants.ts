@@ -190,20 +190,26 @@ export const onGrantFor = (grants: Grants) => async (grant: SignInGrant) => {
 }
 
 /**
- * `onRevoke`: a withdrawn grant's row is deleted (it never became a member, so its invite opens again); any other
- * reason ends the rows of that grant, or of that client. Then, unless withdrawn, the open invites an agent made under
- * that grant or client are revoked; people who joined through them keep access. Each statement is conditional, so being
- * told twice changes nothing.
+ * What a grant's end does to its member row: deleted when it never became a member (withdrawn, or replayed while still
+ * pending, its first token unused), so its invite or ask opens again; else ended with the reason.
+ */
+const endRowOfGrant = async (repo: SharingRepo, grant: string, reason: Exclude<SignInRevoked['reason'], 'client_revoked'>, now: Date) => {
+  if (reason === 'withdrawn') return repo.deleteMemberOfGrant(grant)
+  if (reason === 'replayed' && (await repo.deletePendingMemberOfGrant(grant))) return
+  await repo.endMemberOfGrant(grant, reason, now)
+}
+
+/**
+ * `onRevoke`: a grant that never became a member (withdrawn, or replayed while pending) loses its row, so its invite
+ * opens again; any other end ends the rows of that grant, or of that client. Then, unless withdrawn, the open invites an
+ * agent made under that grant or client are revoked; people who joined through them keep access. Each statement is
+ * conditional, so being told twice changes nothing.
  *
  * @example
  * const onRevoke = onRevokeFor({ repo })   // what sharing.oauth.onRevoke is
  */
 export const onRevokeFor = ({ repo }: Pick<Grants, 'repo'>) => async ({ grant, client, reason }: SignInRevoked) => {
   const now = new Date()
-  if (reason === 'withdrawn') {
-    if (grant) await repo.deleteMemberOfGrant(grant)
-    return
-  }
   if (reason === 'client_revoked') {
     if (!client) return
     await repo.endMembersOfClient(client, now)
@@ -211,8 +217,8 @@ export const onRevokeFor = ({ repo }: Pick<Grants, 'repo'>) => async ({ grant, c
     return
   }
   if (!grant) return
-  await repo.endMemberOfGrant(grant, reason, now)
-  await repo.revokeInvitesMadeByGrant(grant, now)
+  await endRowOfGrant(repo, grant, reason, now)
+  if (reason !== 'withdrawn') await repo.revokeInvitesMadeByGrant(grant, now)
 }
 
 /** A space token at this request: its member lives, and this request is about the member's space by its name now. */
@@ -224,6 +230,7 @@ const spaceTokenFits = async ({ config, repo }: Grants, caller: TokenCaller, c: 
   if (state.state === 'ended') return endedSentence(member, state.reason)
   const space = await config.spaces.byId(member.spaceId)
   if (!space || askedSpaceOf(config, c.req.path) !== space.name) return ONLY_ITS_SPACE
+  if (state.state === 'pending') await repo.noteFirstUse(member.grantId, now)
   await repo.noteSeen(member.grantId, new Date(now.getTime() - HOUR), now)
   return true
 }

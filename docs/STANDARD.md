@@ -765,7 +765,9 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
 - **Revocation is mirrored.** The app keeps a row per grant (who is in a space, their agents): made when `onGrant`
   says yes, dropped when `onRevoke` names the grant (every grant of a client on `client_revoked`), aged out by its
   last use (`revokeGrant` after 30 days). `accepts` refuses a token whose grant has no row, so removing a member
-  stops their agents on the next request.
+  stops their agents on the next request. A row whose first token was never used is deleted, not ended, when its
+  grant is replayed (the client retrying a failed exchange) or after an hour, so a failed exchange never spends an
+  invite.
 - **Nothing leaks whether a space exists.** A caller who may not see a space gets the same 404, with the same body,
   for a space that exists and one that does not; never a 403 that confirms it. Metadata is 404 only for a path
   `resources` refuses, and a wrong code is "not one of ours" whether or not the space is real. The code page is
