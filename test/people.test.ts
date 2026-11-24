@@ -425,7 +425,7 @@ describe('Idempotency-Key on the routes that answer a secret once', () => {
     expect((await loginAgain.json()).code).toBe('shown_once')
 
     // The guard kept that each was made, never the enrolment or a session
-    expect(kept).toEqual([0, 1, 2].map(() => ({ bodyHash: expect.any(String), shownOnce: expect.any(String) })))
+    expect(kept).toEqual([0, 1, 2].map(() => ({ version: 2, bodyHash: expect.any(String), shownOnce: expect.any(String) })))
     for (const secret of [enrolment, firstSession!, secondSession!]) expect(JSON.stringify(kept)).not.toContain(secret)
   })
 })

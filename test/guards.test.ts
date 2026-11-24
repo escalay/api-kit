@@ -1,4 +1,5 @@
 import { serve } from '@hono/node-server'
+import { createHash } from 'node:crypto'
 import { Hono } from 'hono'
 import type { AddressInfo } from 'node:net'
 import { z } from '@hono/zod-openapi'
@@ -14,7 +15,7 @@ guardStoreContract('database (node:sqlite)', async () => dbGuardStore(await test
 guardTableUpgrade('node:sqlite', testDb)
 
 describe('memoryGuardStore past maxEntries', () => {
-  const answer = { bodyHash: 'h', status: 201, headers: [] as [string, string][], body: btoa('{}') }
+  const answer = { version: 2 as const, bodyHash: 'h', status: 201, headers: [] as [string, string][], body: btoa('{}') }
 
   it('never lets go of a running lock, however many answers come after it', async () => {
     const store = memoryGuardStore({ maxEntries: 2 })
@@ -181,7 +182,7 @@ describe('idempotency', () => {
     it('keeps only what a replay is told: no body, no headers', async () => {
       const { state, post } = secrets()
       await post('k1')
-      expect(state.kept).toEqual([{ bodyHash: expect.any(String), shownOnce: REPLAY }])
+      expect(state.kept).toEqual([{ version: 2, bodyHash: expect.any(String), shownOnce: REPLAY }])
       expect(JSON.stringify(state.kept)).not.toContain('secret')
       expect(JSON.stringify(state.kept)).not.toContain('token')
     })
@@ -209,6 +210,26 @@ describe('idempotency', () => {
       expect(await second.json()).toEqual({ key: 'sk_secret_2' })
       expect(state.runs).toBe(2)
     })
+  })
+
+  it.each(['memory', 'database'] as const)('never replays an answer kept whole by 1.30.0, unversioned (%s store): the request runs again', async (kind) => {
+    const store = kind === 'memory' ? memoryGuardStore() : await dbGuardStore(await testDb())
+    // What a 1.30.0 instance writes, even after the migration ran (a rolling deploy): the whole answer, no version
+    const id = 'ip:local POST /api/keys k1'
+    const now = Date.now()
+    expect(await store.claim(id, 60_000, now)).toBeNull()
+    const old = { bodyHash: createHash('sha256').update('{}').digest('hex'), status: 201, headers: [['content-type', 'application/json']], body: btoa('{"key":"sk_from_1_30"}') }
+    await store.save(id, old as never, now + 86_400_000)
+    const app = new Hono()
+    let runs = 0
+    app.use('*', idempotency({ store }))
+    app.post('/api/keys', (c) => (showOnce(c, 'Made a key; it is never shown again.'), c.json({ key: `sk_new_${++runs}` }, 201)))
+    const post = () => app.request('/api/keys', { method: 'POST', headers: { 'idempotency-key': 'k1' }, body: '{}' })
+    const first = await post()
+    expect([first.status, await first.text()]).toEqual([201, '{"key":"sk_new_1"}'])
+    const again = await post()
+    expect([again.status, (await again.json()).code]).toEqual([409, 'shown_once'])
+    expect(runs).toBe(1)
   })
 
   describe('a relay', () => {
@@ -260,7 +281,7 @@ describe('idempotency', () => {
         expect(again, kind).toContain('it is never shown again')
       }
       expect(made).toBe(2)
-      expect(kept).toEqual([0, 1].map(() => ({ bodyHash: expect.any(String), shownOnce: expect.any(String) })))
+      expect(kept).toEqual([0, 1].map(() => ({ version: 2, bodyHash: expect.any(String), shownOnce: expect.any(String) })))
     })
   })
 })

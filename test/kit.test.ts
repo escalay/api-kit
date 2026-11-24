@@ -830,7 +830,7 @@ describe('the copy-in CLI', () => {
       expect([behind.status, behind.stderr]).toEqual([1, expect.stringContaining('guards_2')])
       expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
       expect((await readdir(current)).sort().at(-1)).toBe('0007_guards_2.sql')
-      expect(await readFile(join(current, '0007_guards_2.sql'), 'utf8')).toContain("delete from kit_guards where kind = 'key';")
+      expect(await readFile(join(current, '0007_guards_2.sql'), 'utf8')).toContain("delete from kit_guards where kind = 'key' and value <> '';")
       // A database `migrate()` already brought up (local dev) takes the files without a duplicate record
       const { DatabaseSync } = await import('node:sqlite')
       const sqlite = new DatabaseSync(':memory:')

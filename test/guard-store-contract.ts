@@ -33,7 +33,7 @@ export const guardStoreContract = (name: string, make: () => Promise<GuardStore>
       const claims = await Promise.all(Array.from({ length: 5 }, () => store.claim(id, 60_000, 1_000)))
       expect(claims.filter((claim) => claim === null)).toHaveLength(1)
       expect(claims.filter((claim) => claim === 'running')).toHaveLength(4)
-      const answer = { bodyHash: 'h', status: 201, headers: [['content-type', 'application/json']] as [string, string][], body: btoa('{"ok":true}') }
+      const answer = { version: 2 as const, bodyHash: 'h', status: 201, headers: [['content-type', 'application/json']] as [string, string][], body: btoa('{"ok":true}') }
       await store.save(id, answer, 100_000)
       expect(await store.claim(id, 60_000, 2_000)).toEqual(answer)
       await store.release(id)
@@ -52,7 +52,7 @@ export const guardStoreContract = (name: string, make: () => Promise<GuardStore>
       const id = `slow-${crypto.randomUUID()}`
       expect(await store.claim(id, 60_000, 1_000)).toBeNull()
       await store.count(`slow-other-${crypto.randomUUID()}`, 1_000, 62_000)
-      const answer = { bodyHash: 'h', status: 201, headers: [] as [string, string][], body: btoa('{}') }
+      const answer = { version: 2 as const, bodyHash: 'h', status: 201, headers: [] as [string, string][], body: btoa('{}') }
       await store.save(id, answer, 200_000)
       expect(await store.claim(id, 60_000, 63_000)).toEqual(answer)
     })
@@ -71,7 +71,7 @@ export const guardStoreContract = (name: string, make: () => Promise<GuardStore>
       const post = () => app.request('/api/keys', { method: 'POST', headers: { 'idempotency-key': `once-${crypto.randomUUID()}`, 'content-type': 'application/json' }, body: '{"name":"ci"}' })
       expect((await post()).status).toBe(201)
       const kept = await store.claim(saved[0]!, 60_000, Date.now())
-      expect(kept).toEqual({ bodyHash: expect.any(String), shownOnce: 'Made the key ci (GET /api/keys/key_1); the key was shown once and is never shown again.' })
+      expect(kept).toEqual({ version: 2, bodyHash: expect.any(String), shownOnce: 'Made the key ci (GET /api/keys/key_1); the key was shown once and is never shown again.' })
       expect(JSON.stringify(kept)).not.toContain(secret)
     })
 
@@ -97,7 +97,7 @@ export const guardStoreContract = (name: string, make: () => Promise<GuardStore>
  */
 export const guardTableUpgrade = (name: string, makeDb: () => Promise<Db>) =>
   describe(`kit_guards from 1.30.0: ${name}`, () => {
-    it('drops the stored idempotency answers on the next start, and keeps the rate windows', async () => {
+    it('drops the stored idempotency answers on the next start, and keeps the locks and the rate windows', async () => {
       const db = await makeDb()
       await migrate(db, 'guards', GUARD_MIGRATIONS.slice(0, 1))
       const secret = `sk_${crypto.randomUUID()}`
@@ -112,7 +112,11 @@ export const guardTableUpgrade = (name: string, makeDb: () => Promise<Db>) =>
       ])
       await dbGuardStore(db)
       const rows = await db.select().from(kitGuards).where(like(kitGuards.id, `${prefix}%`))
-      expect(rows).toEqual([{ kind: 'rate', id: `${prefix} paid`, start: 1_000, used: 7, value: '', expiresAt: later }])
+      // A request still running holds its lock: letting go would let its retry run it twice
+      expect(rows).toEqual([
+        { kind: 'key', id: `${prefix} POST /api/keys k2`, start: 0, used: 0, value: '', expiresAt: later },
+        { kind: 'rate', id: `${prefix} paid`, start: 1_000, used: 7, value: '', expiresAt: later },
+      ])
       expect(JSON.stringify(rows)).not.toContain(answer.body)
     })
   })

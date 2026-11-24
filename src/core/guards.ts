@@ -25,11 +25,17 @@ import type { Context, MiddlewareHandler } from 'hono'
 import { matches, OAUTH_OPEN_PATHS } from './auth.js'
 import { problemResponse } from './problem.js'
 
+/**
+ * The version on every answer kept since `showOnce`. An answer without it was kept whole by 1.30.0 or earlier, maybe
+ * holding a secret shown once, and is never replayed: its request runs again.
+ */
+const ANSWER_VERSION = 2
+
 /** An answer kept whole to replay: the body is base64, so a store can keep it as JSON. */
-export type ReplayedAnswer = { bodyHash: string; status: number; headers: [string, string][]; body: string }
+export type ReplayedAnswer = { version: typeof ANSWER_VERSION; bodyHash: string; status: number; headers: [string, string][]; body: string }
 
 /** All that is kept of an answer shown once (`showOnce`): what a replay is told instead, never a body or a header. */
-export type ShownOnceAnswer = { bodyHash: string; shownOnce: string }
+export type ShownOnceAnswer = { version: typeof ANSWER_VERSION; bodyHash: string; shownOnce: string }
 
 /** What a `GuardStore` keeps for an idempotency key, as JSON. */
 export type StoredAnswer = ReplayedAnswer | ShownOnceAnswer
@@ -233,10 +239,13 @@ export const showOnce = (c: Context, replay: string) => {
 /** What the guard keeps of this request's answer: only what a replay is told when it showed a secret once, else all of it. */
 const storedAnswerOf = async (c: Context, bodyHash: string): Promise<StoredAnswer> => {
   const shownOnce = c.get(SHOWN_ONCE as never) as string | undefined
-  if (shownOnce !== undefined) return { bodyHash, shownOnce }
+  if (shownOnce !== undefined) return { version: ANSWER_VERSION, bodyHash, shownOnce }
   const body = Buffer.from(await c.res.clone().arrayBuffer()).toString('base64')
-  return { bodyHash, status: c.res.status, headers: [...c.res.headers.entries()], body }
+  return { version: ANSWER_VERSION, bodyHash, status: c.res.status, headers: [...c.res.headers.entries()], body }
 }
+
+/** A stored answer this version may replay; one kept whole by 1.30.0 (no version) counts as none. */
+const replayable = (answer: StoredAnswer | null) => (answer?.version === ANSWER_VERSION ? answer : null)
 
 /** A stored answer as the retry gets it, marked `Idempotent-Replayed`: the first answer, or a 409 when it showed a secret once. */
 const replayOf = (c: Context, answer: StoredAnswer) => {
@@ -277,8 +286,9 @@ export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, stor
     const id = `${callerOf(c)} ${c.req.method} ${c.req.path} ${key}`
     const bodyHash = createHash('sha256').update(new Uint8Array(await c.req.raw.clone().arrayBuffer())).digest('hex')
     const now = Date.now()
-    const hit = await store.claim(id, lockMs, now)
-    if (hit === 'running') return problemResponse(c, 'conflict', { detail: 'A request with this Idempotency-Key is still running. Retry when it has answered.' })
+    const claimed = await store.claim(id, lockMs, now)
+    if (claimed === 'running') return problemResponse(c, 'conflict', { detail: 'A request with this Idempotency-Key is still running. Retry when it has answered.' })
+    const hit = replayable(claimed)
     if (hit) {
       if (hit.bodyHash !== bodyHash) return problemResponse(c, 'unprocessable', { detail: 'This Idempotency-Key was used with a different body. Use a new key for a new request.' })
       return replayOf(c, hit)

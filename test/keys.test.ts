@@ -161,7 +161,7 @@ describe('a key made through a relay, wherever it is mounted', () => {
     expect(again).not.toContain(key)
     expect(again).toContain('This Idempotency-Key already made the key agent')
     // The guard kept the route's own answer, as a marker: the relay's answer is never kept
-    expect(kept).toEqual([{ bodyHash: expect.any(String), shownOnce: expect.stringContaining('the key agent') }])
+    expect(kept).toEqual([{ version: 2, bodyHash: expect.any(String), shownOnce: expect.stringContaining('the key agent') }])
     expect(await keyNamesOf(owner)).toEqual(['agent'])
   })
 })
@@ -210,7 +210,7 @@ describe('a made key and Idempotency-Key', () => {
     expect(JSON.parse(text).detail).toMatch(/never shown again/)
 
     // What the guard kept says the key was made, and holds nothing of it
-    expect(kept).toEqual([{ bodyHash: expect.any(String), shownOnce: expect.stringContaining(`/api/keys/${id}`) }])
+    expect(kept).toEqual([{ version: 2, bodyHash: expect.any(String), shownOnce: expect.stringContaining(`/api/keys/${id}`) }])
     expect(JSON.stringify(kept)).not.toContain(key)
     if (guards === 'database') {
       const rows = await db.select().from(kitGuards).where(eq(kitGuards.kind, 'key'))

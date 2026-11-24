@@ -101,7 +101,7 @@ sequenceDiagram
 - One SQLite file per Node process is the local shape; several instances share state only on a shared database (Turso,
   D1).
 - `dbGuardStore` prunes expired rows at most once a minute per store. `GUARD_MIGRATIONS` step 2 deleted the stored
-  idempotency answers once (they could hold a secret through 1.30.0); rate windows were kept.
+  idempotency answers once (they could hold a secret through 1.30.0); locks and rate windows were kept.
 - Node and Workers: `node:sqlite` on Node ≥ 22.16, D1 on Workers.
 
 ## Tests

@@ -25,11 +25,12 @@ export const kitGuards = sqliteTable('kit_guards', {
 
 /**
  * The table's steps, in order. Step 2 drops every stored idempotency answer once: through 1.30.0 an answer that showed
- * a secret once (a new key) was kept whole for a day, and it lapses within that day anyway. Rate windows stay.
+ * a secret once (a new key) was kept whole for a day, and it lapses within that day anyway. Locks of requests still
+ * running and rate windows stay. One a 1.30.0 instance writes later has no version and is never replayed.
  */
 export const GUARD_MIGRATIONS = [
   'create table if not exists kit_guards (kind text not null, id text not null, start integer not null, used integer not null, value text not null, expires_at integer not null, primary key (kind, id))',
-  "delete from kit_guards where kind = 'key'",
+  "delete from kit_guards where kind = 'key' and value <> ''",
 ] as const
 
 /** Makes the guards' table if needed; drops expired rows as it runs, at most once a minute (epoch ms throughout). */
