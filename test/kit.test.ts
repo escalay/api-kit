@@ -1053,6 +1053,15 @@ describe('the copy-in CLI', () => {
     const block = items.find((item) => item.name === 'vector-search-ui')!
     expect(block.registryDependencies).toEqual(['button', 'input', 'escalay/api-kit/search-react'])
   })
+
+  it('gives every browser file a browser part of its own', async () => {
+    const kitDir = join(import.meta.dirname, '..')
+    const items: { name: string; files: { path: string }[]; meta?: { web?: boolean } }[] = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8')).items
+    const browserFiles = (await readdir(join(kitDir, 'src/browser'))).filter((file) => file !== 'README.md').map((file) => `src/browser/${file}`)
+    const partsOf = (path: string) => items.filter((item) => item.meta?.web && item.files.some((file) => file.path === path)).map((item) => item.name)
+    // One meta.web item each: the CLI copies it to --web-dir, and `kit add <part>` names it
+    expect(browserFiles.filter((path) => partsOf(path).length !== 1).map((path) => `${path}: ${partsOf(path).join(', ') || 'no browser part'}`)).toEqual([])
+  })
 })
 
 describe('the npm-release item', () => {
@@ -1275,7 +1284,7 @@ describe('the skills', () => {
 
   it('each has a name, says when to use it, stays short and names the command that checks its rule', async () => {
     const skills = await skillTexts()
-    expect(Object.keys(skills)).toEqual(['api-kit-build', 'api-kit-cli', 'api-kit-feature', 'api-kit-review', 'api-kit-skills', 'npm-release'])
+    expect(Object.keys(skills)).toEqual(['api-kit-build', 'api-kit-cli', 'api-kit-feature', 'api-kit-part', 'api-kit-review', 'api-kit-skills', 'npm-release'])
     for (const [name, text] of Object.entries(skills)) {
       const [, frontmatter = ''] = text.match(/^---\n([\s\S]*?)\n---\n/) ?? []
       expect(frontmatter, name).toContain(`name: ${name}\n`)
