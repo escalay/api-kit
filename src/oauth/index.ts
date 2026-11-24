@@ -367,6 +367,23 @@ export const createOAuth = (config: OAuthConfig) => {
   /** How far a family has rotated: its row's generation, 0 when it has none. */
   const generationOfFamily = async (family: string) => Number((await store.get('refresh-family', family))?.generation ?? 0)
 
+  /** Whether a token used at `usedAt` may still be retried: `reuseGraceSeconds` set and not yet over. */
+  const withinGrace = (usedAt: number) => reuseGrace > 0 && usedAt > 0 && now() - usedAt <= reuseGrace
+
+  /**
+   * What a retry of a used refresh token gets: the successor the first answer held, while the grace lasts and that
+   * successor is unused; null when the token came back as a replay. `nextGeneration` is the generation a token from
+   * before generations would get now, for a first answer still writing the one it gave.
+   */
+  const retriedSuccessor = async (refresh: string, family: string, nextGeneration: number) => {
+    // Read again: the first answer writes its successor's generation on this row after marking it used
+    const used = await store.get('refresh', sha(refresh))
+    if (!used || !withinGrace(Number(used.usedAt ?? 0))) return null
+    const successor = successorOf(refresh, family, Number(used.successorGeneration ?? nextGeneration))
+    // No row yet is a first answer still writing it, so only a used successor ends the retry
+    return (await store.get('refresh', sha(successor)))?.used ? null : successor
+  }
+
   /** The store's own `markUsed`, or a read then a write: safe only one request at a time. */
   const markUsed = (kind: string, id: string, keepUntil?: number) =>
     store.markUsed
@@ -1126,14 +1143,16 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         case 'refresh_token': {
           const refresh = body.refresh_token ?? ''
           const key = sha(refresh)
-          const made = generationOf(refresh)
+          // Its family and generation, read from the token itself; null for a token from before generations (1.29.0's,
+          // kept only by its row) or a made-up one
+          const place = generationOf(refresh)
           const held = refresh ? await store.get('refresh', key) : null
           const alreadyUsed = () => oauthError(c, 400, 'invalid_grant', 'This refresh token was already used, so every refresh token from this sign-in is revoked: authorize again.')
           if (!held) {
-            // No row: a token this server made, of a family that has moved past it, is a replay
-            const family = made && (await movedPast(made))
+            // No row: a token with a generation, of a family that has moved past it, is a replay
+            const family = place && (await movedPast(place))
             if (family) {
-              await endGrant(made.family, 'replayed', String(family.client))
+              await endGrant(place.family, 'replayed', String(family.client))
               return alreadyUsed()
             }
             return oauthError(c, 400, 'invalid_grant', 'This refresh token is expired, revoked or unknown: authorize again.')
@@ -1145,33 +1164,30 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const grant = String(held.family ?? key)
           if ((await store.get('revoked-family', grant)) || (await store.get('revoked-client', String(held.client)))) return oauthError(c, 400, 'invalid_grant', 'This refresh token is revoked: authorize again.')
           const issued = { client: String(held.client), name: String(held.name), owner: String(held.owner), scopes: held.scopes as string[], grant, ...boundOf(held) }
+          const fromBeforeGenerations = place === null
           // A token from before generations has none of its own (1.29.0 may have made it after this code rotated the
           // family): it follows the family's newest, so an earlier token of the family still reads as a replay
-          const next = (made ? made.generation : await generationOfFamily(grant)) + 1
+          const nextGeneration = (place?.generation ?? (await generationOfFamily(grant))) + 1
           // Marked used, not deleted, so a retry in the grace can read when; a token from before generations is known
           // as used by this row alone, so it keeps it 30 days
           const marked = await markUsed('refresh', key, now() + REFRESH_TTL)
           if (!marked) {
-            const used = await store.get('refresh', key)
-            const usedAt = Number(used?.usedAt ?? 0)
-            // The first answer's successor: for a token from before generations, at the generation written on its row
-            const successor = successorOf(refresh, grant, Number(used?.successorGeneration ?? next))
-            // A retry inside the window gets the successor the first answer held, while it is unused: never a second branch
-            if (reuseGrace > 0 && usedAt && now() - usedAt <= reuseGrace && !(await store.get('refresh', sha(successor)))?.used)
-              return c.json({ ...(await issue(origin, issued)), refresh_token: successor }, 200, { 'cache-control': 'no-store' })
+            // A retry inside the window gets the successor the first answer held: never a second branch
+            const retried = await retriedSuccessor(refresh, grant, nextGeneration)
+            if (retried) return c.json({ ...(await issue(origin, issued)), refresh_token: retried }, 200, { 'cache-control': 'no-store' })
             await endGrant(grant, 'replayed', issued.client)
             return alreadyUsed()
           }
-          const successor = successorOf(refresh, grant, next)
+          const successor = successorOf(refresh, grant, nextGeneration)
           // Before the family moves on: a retry of a token from before generations finds its successor's generation
           // here, not from the family, which this answer is about to move
-          if (!made) await store.put('refresh', key, { ...marked, successorGeneration: next }, now() + REFRESH_TTL)
+          if (fromBeforeGenerations) await store.put('refresh', key, { ...marked, successorGeneration: nextGeneration }, now() + REFRESH_TTL)
           const access = await issue(origin, issued)
           // The family moves on before its new token exists: from here an earlier token is a replay, row or not
-          await store.put('refresh-family', grant, { generation: next, client: issued.client }, now() + REFRESH_TTL)
+          await store.put('refresh-family', grant, { generation: nextGeneration, client: issued.client }, now() + REFRESH_TTL)
           await refreshFor(issued, successor)
-          // One this server made is known by its family from now on: its row stays only while a retry may read it
-          if (made) await store.put('refresh', key, marked, now() + reuseGrace)
+          // A token with a generation is known by its family from now on: its row stays only while a retry may read it
+          if (!fromBeforeGenerations) await store.put('refresh', key, marked, now() + reuseGrace)
           return c.json({ ...access, refresh_token: successor }, 200, { 'cache-control': 'no-store' })
         }
         case CLAIM_GRANT: {
@@ -1264,10 +1280,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
      */
     const signInOf = async (refresh: string, row: Record<string, unknown> | null) => {
       if (row) return { family: String(row.family ?? sha(refresh)), client: String(row.client) }
-      const made = generationOf(refresh)
-      if (!made) return null
-      const family = await store.get('refresh-family', made.family)
-      return { family: made.family, ...(typeof family?.client === 'string' ? { client: family.client } : {}) }
+      const place = generationOf(refresh)
+      if (!place) return null
+      const family = await store.get('refresh-family', place.family)
+      return { family: place.family, ...(typeof family?.client === 'string' ? { client: family.client } : {}) }
     }
 
     // RFC 7009: always 200, whatever the token was
