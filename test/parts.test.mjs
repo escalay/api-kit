@@ -44,6 +44,12 @@ describe('docs/PARTS.md, the map of the parts', () => {
   it('reads the starter’s parts from cli.mjs, the list `init` copies', () => {
     expect(starterParts(read('cli.mjs'))).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'brand', 'switches', 'testing'])
   })
+
+  it('names in api-kit-build exactly the parts `init` copies, in its order', () => {
+    const named = starterParts(read('cli.mjs')).map((name) => `\`${name}\``)
+    const sentence = `\`init\` copies ${named.slice(0, -1).join(', ')} and ${named.at(-1)}.`
+    expect(read('skills/api-kit-build/SKILL.md').replace(/\s*\n\s*/g, ' ')).toContain(sentence)
+  })
 })
 
 /** Every STANDARD section a text points at (`§7`, both ends of `§1–3`), leaving other documents' `§3.3` alone. */
