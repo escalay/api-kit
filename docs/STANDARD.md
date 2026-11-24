@@ -358,9 +358,8 @@ fact, steps with checkable done-when criteria.
   resources passes `resources`, `resourceOf` and `accepts`, whose `accepts` also judges the in-process `/api` calls its
   tools make with the same bearer.
 - `mountMcp` publishes the Server Card (SEP-2127) at `<mcp>/server-card` and `/.well-known/mcp/server-card.json`.
-- **One MCP per space** (`/s/:space/mcp`): the mount path's parameters, decoded and set by the route alone, reach each
-  tool's call and resource read (`at.params`); a tool encodes one it puts in a path, and the route decides whether the
-  caller may reach that space. The guide, the catalogs and the well-known card describe the mount without parameters.
+- **One MCP per space** (`/s/:space/mcp`): the path's parameters reach each tool's call and resource read as
+  `at.params`, set by the route alone; the route's own `accepts` decides who may reach a space (the mcp README).
 - **Resources** (`mcpResource`) let a client attach a thing (a recipe with its picture, a tree): a URI template read
   through the routes, JSON as text and images as blobs; a part marked `optional` (an image that may be missing) is
   left out when it fails, so the rest still arrives. `resources/read` carries the URI in the `Mcp-Name` header.

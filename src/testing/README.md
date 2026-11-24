@@ -89,6 +89,8 @@ sequenceDiagram
 - Name every tool's command (`cli` on `mcpTool`) when the tool is written; `cliGaps` runs in every app's tests.
 - Run `toolsRun` over every tool in every app, with sample ids from the test's fixture data; tools run in order, so
   make what they need (a board) first and put deleting tools last.
+- `toolsRun` calls each tool with no `at` (as A2A does), so a space's tools (`at.params`, the mcp README) are run
+  through their `/s/:space/mcp` mount instead.
 - Give the app an injectable embedder and data paths (`createApp(env, { embedder })`) so tests need no network or reload.
 - A hand-made approval POST without the ticket cookie and a same-origin header is refused (the oauth README): use
   `approveSignIn`.
