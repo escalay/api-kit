@@ -1,7 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { GOALS, orderOf, partsMarkdown, starterParts } from '../scripts/parts.mjs'
+import { GOALS, orderOf, partsMarkdown, skillsIn, starterParts, useItWhen, withReadmeTables } from '../scripts/parts.mjs'
 
 const root = join(import.meta.dirname, '..')
 const read = (path) => readFileSync(join(root, path), 'utf8')
@@ -44,6 +44,32 @@ describe('docs/PARTS.md, the map of the parts', () => {
   it('reads the starter’s parts from cli.mjs, the list `init` copies', () => {
     expect(starterParts(read('cli.mjs'))).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'brand', 'switches', 'testing'])
   })
+
+  it('names in api-kit-build exactly the parts `init` copies, in its order', () => {
+    const named = starterParts(read('cli.mjs')).map((name) => `\`${name}\``)
+    const sentence = `\`init\` copies ${named.slice(0, -1).join(', ')} and ${named.at(-1)}.`
+    expect(read('skills/api-kit-build/SKILL.md').replace(/\s*\n\s*/g, ' ')).toContain(sentence)
+  })
+})
+
+/** Every STANDARD section a text points at (`§7`, both ends of `§1–3`), leaving other documents' `§3.3` alone. */
+const standardRefs = (text) => [...text.matchAll(/§(\d+)(?:–(\d+))?(?![.\d])/g)].flatMap(([, from, to]) => (to ? [from, to] : [from]).map(Number))
+const outOfRange = (text, count) => standardRefs(text).filter((number) => number < 1 || number > count)
+
+describe('docs/STANDARD.md’s section numbers', () => {
+  it('run 1, 2, 3… with none missing or repeated, so a §N never moves', () => {
+    expect(sections).toEqual(sections.map((_, index) => index + 1))
+  })
+
+  it('bound every §N in the skills, cli.mjs, README.md and the app template', () => {
+    const skills = readdirSync(join(root, 'skills')).map((name) => `skills/${name}/SKILL.md`)
+    for (const path of [...skills, 'cli.mjs', 'README.md', 'templates/app/AGENTS.md']) expect(outOfRange(read(path), sections.length), path).toEqual([])
+  })
+
+  it('catch a reference past the last section, at either end of a range', () => {
+    expect(standardRefs('§7 and §1–3, RFC 9728 §3.3')).toEqual([7, 1, 3])
+    expect(outOfRange('§7, §24 and §1–30', 23)).toEqual([24, 30])
+  })
 })
 
 describe('the root README', () => {
@@ -52,5 +78,35 @@ describe('the root README', () => {
     const table = readme.slice(readme.indexOf('## Parts'), readme.indexOf('\n## ', readme.indexOf('## Parts') + 1))
     for (const name of names) expect(table, name).toContain(`\`${name}\``)
     expect(table).toContain('](docs/PARTS.md)')
+  })
+
+  it('has the parts and skills tables `pnpm parts` writes, so neither is stale', () => {
+    expect(read('README.md'), 'README.md is stale: run `pnpm parts`').toBe(withReadmeTables(read('README.md'), registry, skillsIn(root)))
+  })
+
+  it('gives each part its registry description and its README', () => {
+    const readme = read('README.md')
+    for (const item of parts) {
+      const path = item.files.find((file) => file.path.endsWith('/README.md')).path
+      expect(readme, item.name).toContain(`| \`${item.name}\` | ${item.description.replace(/\s+/g, ' ').trim()} | [${path.split('/')[1]}](${path}) |`)
+    }
+  })
+
+  it('gives each skill folder a row, saying when to use it from its frontmatter: the first sentence, after "Use when"', () => {
+    const skills = skillsIn(root)
+    expect(skills.map((skill) => skill.name)).toEqual(readdirSync(join(root, 'skills')).sort())
+    for (const { name, description } of skills) {
+      const when = description.replace(/^Use when /, '').split('. ')[0].replace(/\.?$/, '.')
+      expect(description, name).toContain(when.slice(0, -1))
+      expect(read('README.md'), name).toContain(`| [\`${name}\`](skills/${name}/SKILL.md) | ${when} |`)
+    }
+    expect(useItWhen('Use when a thing happens. Covers a, b. Not for c.')).toBe('a thing happens.')
+    expect(useItWhen('Use when one sentence')).toBe('one sentence.')
+  })
+
+  it('refuses a README that lost a table’s markers, rather than dropping the table', () => {
+    const readme = read('README.md')
+    expect(() => withReadmeTables(readme.replace('<!-- skills:end -->', ''), registry, skillsIn(root))).toThrow('skills:end')
+    expect(() => withReadmeTables(readme.replace(/<!-- parts:start[^\n]*\n/, ''), registry, skillsIn(root))).toThrow('parts:start')
   })
 })

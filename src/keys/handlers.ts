@@ -2,6 +2,7 @@
 import type { RouteHandler } from '@hono/zod-openapi'
 import type { Context } from 'hono'
 import { mintApiKey, type Caller } from '../core/auth.js'
+import { showOnce } from '../core/guards.js'
 import { linksOf, originOf } from '../core/hal.js'
 import { tellApp } from '../core/hooks.js'
 import { newId } from '../core/ids.js'
@@ -61,6 +62,7 @@ export const keyHandlers = (repo: KeysRepo, { path, mePath, fixedKeys, keyPrefix
     await repo.create(row)
     // The key is stored and shown once: a hook that throws must not hide it behind a 500
     await tellApp('onKeyChange', () => onKeyChange?.({ id: row.id, name, action: 'created', by: createdBy }, c))
+    showOnce(c, `This Idempotency-Key already made the key ${name} (GET ${path}/${row.id}). The key itself was shown once, in that answer, and is never shown again. Lost it? Revoke it (DELETE ${path}/${row.id}) and make another with a new Idempotency-Key.`)
     return c.json({ ...cardOf(originOf(c), row), key }, 201, { location: `${path}/${row.id}`, ...NO_STORE })
   }
   const remove: RouteHandler<KeyRoutes['remove']> = async (c) => {

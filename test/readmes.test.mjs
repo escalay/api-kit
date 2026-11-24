@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { README_SHAPE, sectionsOf } from '../scripts/parts.mjs'
 
@@ -22,6 +22,62 @@ const sectionsIn = (text) => {
     } else if (heading) sections.set(heading, `${sections.get(heading)}${line}\n`)
   }
   return sections
+}
+
+const VERSION = '\\d+\\.\\d+\\.\\d+'
+const NOTE_HEADING = new RegExp(`^(?:(${VERSION})|Unreleased \\(after (${VERSION})\\))(?:: .+)?$`)
+const newer = (a, b) => {
+  const [x, y] = [a, b].map((version) => version.split('.').map(Number))
+  return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]
+}
+
+/** What is wrong with docs/upgrading.md's `###` headings: each a version or `Unreleased (after <released>)`, a topic after `: ` allowed, newest first. */
+const noteHeadingProblems = (text, released) => {
+  const problems = []
+  let part = null
+  let last = null
+  for (const line of text.split('\n')) {
+    if (line.startsWith('## ')) [part, last] = [line.slice(3), null]
+    if (!line.startsWith('### ') || !part) continue
+    const heading = line.slice(4)
+    const [, version, after] = NOTE_HEADING.exec(heading) ?? []
+    if (!version && !after) problems.push(`${part}: "${heading}" is neither a version nor Unreleased (after ${released})`)
+    else if (after && after !== released) problems.push(`${part}: "${heading}" names ${after}, the last release is ${released}`)
+    else if (after && last) problems.push(`${part}: "${heading}" comes after ${last}; Unreleased goes first`)
+    else if (version && last && newer(version, last) > 0) problems.push(`${part}: ${version} comes after ${last}; newest first`)
+    if (version) last = version
+  }
+  return problems
+}
+
+describe('docs/upgrading.md', () => {
+  const released = JSON.parse(read('.release-please-manifest.json'))['.']
+
+  it('heads each note with a version or Unreleased (after the last release), newest first', () => {
+    expect(noteHeadingProblems(upgrading, released)).toEqual([])
+  })
+
+  it('catches a heading left Unreleased past a release, out of order, or in another form', () => {
+    const notes = (...headings) => `## core\n\n${headings.map((heading) => `### ${heading}\n\n- a note\n`).join('\n')}`
+    expect(noteHeadingProblems(notes('Unreleased (after 1.2.0)', '1.2.0: approvals', '1.2.0', '1.1.0'), '1.2.0')).toEqual([])
+    expect(noteHeadingProblems(notes('Unreleased (after 1.1.0)', '1.1.0'), '1.2.0')).toEqual(['core: "Unreleased (after 1.1.0)" names 1.1.0, the last release is 1.2.0'])
+    expect(noteHeadingProblems(notes('1.1.0', '1.2.0'), '1.2.0')).toEqual(['core: 1.2.0 comes after 1.1.0; newest first'])
+    expect(noteHeadingProblems(notes('1.9.0', '1.10.0'), '1.10.0')).toEqual(['core: 1.10.0 comes after 1.9.0; newest first'])
+    expect(noteHeadingProblems(notes('1.2.0', 'Unreleased (after 1.2.0)'), '1.2.0')).toEqual(['core: "Unreleased (after 1.2.0)" comes after 1.2.0; Unreleased goes first'])
+    expect(noteHeadingProblems(notes('v1.2.0', 'Unreleased'), '1.2.0')).toEqual(['core: "v1.2.0" is neither a version nor Unreleased (after 1.2.0)', 'core: "Unreleased" is neither a version nor Unreleased (after 1.2.0)'])
+  })
+})
+
+/** The values an app can import from the parts a README covers: each entry part's entry file, else what `index.ts` re-exports (types aside). */
+const exportedBy = async (readme) => {
+  const names = new Set()
+  for (const item of registry.items.filter((one) => one.files.some((file) => file.path === readme))) {
+    const code = item.files.map((file) => file.path).filter((path) => /\.tsx?$/.test(path) && dirname(path) === dirname(readme))
+    const index = code.find((path) => path.endsWith('/index.ts'))
+    const entries = item.meta?.entry ? [index ?? code[0]] : index ? [index] : code
+    for (const entry of entries) for (const name of Object.keys(await import(join(root, entry)))) names.add(name)
+  }
+  return [...names]
 }
 
 describe.each(folders)('src/%s/README.md has the one README shape', (folder) => {
@@ -67,6 +123,11 @@ describe.each(folders)('src/%s/README.md has the one README shape', (folder) => 
   it('names the STANDARD sections the registry gives its parts', () => {
     const numbers = [...new Set(items.flatMap((item) => item.meta.standard))].sort((a, b) => a - b)
     expect(sections.get('Rules')).toContain(`Standard: \`docs/STANDARD.md\` ${sectionsOf(numbers)}`)
+  })
+
+  it('names every value its parts export', async () => {
+    const unnamed = (await exportedBy(`src/${folder}/README.md`)).filter((name) => !new RegExp(`(?<![\\w$])${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(text))
+    expect(unnamed, 'add each to Exports').toEqual([])
   })
 
   it('says something under Limits and Tests', () => {

@@ -1,16 +1,21 @@
 import { serve } from '@hono/node-server'
+import { createHash } from 'node:crypto'
 import { Hono } from 'hono'
 import type { AddressInfo } from 'node:net'
-import { addressOf, createAgentApi, dbGuardStore, idempotency, memoryGuardStore, parseApiKeys, rateLimit, testDb, type AddressTrust, type GuardStore } from '../src/index.js'
-import { countedDbStore, guardStoreContract } from './guard-store-contract.js'
+import { z } from '@hono/zod-openapi'
+import { mountA2A } from '../src/a2a/index.js'
+import { addressOf, createAgentApi, dbGuardStore, hashApiKey, idempotency, memoryGuardStore, parseApiKeys, rateLimit, showOnce, testDb, type AddressTrust, type GuardStore } from '../src/index.js'
+import { inProcess, mcpServerFactory, mcpTool, mountMcp } from '../src/mcp/index.js'
+import { countedDbStore, guardStoreContract, guardTableUpgrade } from './guard-store-contract.js'
 import { describe, expect, it } from 'vitest'
 import * as dbModule from '../src/db/index.js'
 
 guardStoreContract('memory', async () => memoryGuardStore())
 guardStoreContract('database (node:sqlite)', async () => dbGuardStore(await testDb()), async () => countedDbStore(await testDb()))
+guardTableUpgrade('node:sqlite', testDb)
 
 describe('memoryGuardStore past maxEntries', () => {
-  const answer = { bodyHash: 'h', status: 201, headers: [] as [string, string][], body: btoa('{}') }
+  const answer = { version: 2 as const, bodyHash: 'h', status: 201, headers: [] as [string, string][], body: btoa('{}') }
 
   it('never lets go of a running lock, however many answers come after it', async () => {
     const store = memoryGuardStore({ maxEntries: 2 })
@@ -143,6 +148,189 @@ describe('idempotency', () => {
     expect(state.runs).toBe(2)
     await post()
     expect((await post()).headers.get('idempotent-replayed')).toBe('true')
+  })
+
+  describe('an answer shown once', () => {
+    const REPLAY = 'Made the key ci (GET /api/keys/key_1) with this Idempotency-Key; the key was shown once and is never shown again.'
+    /** A route that answers a new secret each run and marks it shown once, beside one that doesn't. */
+    const secrets = () => {
+      const state = { runs: 0, kept: [] as unknown[] }
+      const store = memoryGuardStore()
+      const app = new Hono()
+      app.use('*', idempotency({ store: { ...store, save: (id, answer, expiresAt) => (state.kept.push(answer), store.save(id, answer, expiresAt)) } }))
+      app.post('/api/keys', (c) => {
+        showOnce(c, REPLAY)
+        return c.json({ key: `sk_secret_${++state.runs}` }, 201, { location: '/api/keys/key_1', 'set-cookie': `session=token_${state.runs}` })
+      })
+      const post = (key: string, body = '{"name":"ci"}') => app.request('/api/keys', { method: 'POST', headers: { 'idempotency-key': key, 'content-type': 'application/json' }, body })
+      return { state, post }
+    }
+
+    it('answers a replay with a 409 shown_once that says what was made, never the secret', async () => {
+      const { state, post } = secrets()
+      const first = await post('k1')
+      expect(await first.json()).toEqual({ key: 'sk_secret_1' })
+      expect(first.headers.get('location')).toBe('/api/keys/key_1')
+      const replayed = await post('k1')
+      expect(replayed.status).toBe(409)
+      expect(replayed.headers.get('idempotent-replayed')).toBe('true')
+      expect(replayed.headers.get('set-cookie')).toBeNull()
+      expect(await replayed.json()).toMatchObject({ code: 'shown_once', status: 409, detail: REPLAY })
+      expect(state.runs).toBe(1)
+    })
+
+    it('keeps only what a replay is told: no body, no headers', async () => {
+      const { state, post } = secrets()
+      await post('k1')
+      expect(state.kept).toEqual([{ version: 2, bodyHash: expect.any(String), shownOnce: REPLAY }])
+      expect(JSON.stringify(state.kept)).not.toContain('secret')
+      expect(JSON.stringify(state.kept)).not.toContain('token')
+    })
+
+    it('refuses a blank replay, so a marked answer is never kept whole', async () => {
+      const app = new Hono()
+      const store = memoryGuardStore()
+      const kept: unknown[] = []
+      app.use('*', idempotency({ store: { ...store, save: (id, answer, expiresAt) => (kept.push(answer), store.save(id, answer, expiresAt)) } }))
+      for (const blank of ['', '  ']) app.post(`/blank/${blank.length}`, (c) => (showOnce(c, blank), c.json({ key: 'sk_secret' }, 201)))
+      for (const path of ['/blank/0', '/blank/2']) {
+        const answer = await app.request(path, { method: 'POST', headers: { 'idempotency-key': `k${path}` }, body: '{}' })
+        expect(answer.status, path).toBe(500)
+      }
+      expect(() => showOnce({ set: () => {} } as never, '')).toThrow('showOnce needs the words a retry is told')
+      expect(kept).toEqual([])
+    })
+
+    it('still answers another body under the same key with a 422, and a new key runs again', async () => {
+      const { state, post } = secrets()
+      await post('k1')
+      expect((await post('k1', '{"name":"other"}')).status).toBe(422)
+      const second = await post('k2')
+      expect(second.status).toBe(201)
+      expect(await second.json()).toEqual({ key: 'sk_secret_2' })
+      expect(state.runs).toBe(2)
+    })
+  })
+
+  it.each(['memory', 'database'] as const)('never replays an answer kept whole by 1.30.0, unversioned (%s store): the request runs again', async (kind) => {
+    const store = kind === 'memory' ? memoryGuardStore() : await dbGuardStore(await testDb())
+    // What a 1.30.0 instance writes, even after the migration ran (a rolling deploy): the whole answer, no version
+    const id = 'ip:local POST /api/keys k1'
+    const now = Date.now()
+    expect(await store.claim(id, 60_000, now)).toBeNull()
+    const old = { bodyHash: createHash('sha256').update('{}').digest('hex'), status: 201, headers: [['content-type', 'application/json']], body: btoa('{"key":"sk_from_1_30"}') }
+    await store.save(id, old as never, now + 86_400_000)
+    const app = new Hono()
+    let runs = 0
+    app.use('*', idempotency({ store }))
+    app.post('/api/keys', (c) => (showOnce(c, 'Made a key; it is never shown again.'), c.json({ key: `sk_new_${++runs}` }, 201)))
+    const post = () => app.request('/api/keys', { method: 'POST', headers: { 'idempotency-key': 'k1' }, body: '{}' })
+    const first = await post()
+    expect([first.status, await first.text()]).toEqual([201, '{"key":"sk_new_1"}'])
+    const again = await post()
+    expect([again.status, (await again.json()).code]).toEqual([409, 'shown_once'])
+    expect(runs).toBe(1)
+  })
+
+  describe('a relay', () => {
+    const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} }
+    /** MCP and A2A over one tool that POSTs to `route`, each called with an Idempotency-Key. */
+    const relays = (app: Hono<any, any, any>, route: string) => {
+      const tool = mcpTool({ name: 'add_note', title: 'Add a note', description: 'Adds a note.', input: z.object({ text: z.string().describe('The note.') }), call: (body) => ({ method: 'POST', path: route, body }), summarize: (json) => JSON.stringify(json) })
+      mountMcp(app, { factory: mcpServerFactory({ info: { name: 'sample', version: '1.0.0' }, instructions: 'Notes.', tools: [tool], callApi: inProcess(app) }), allowedHostnames: ['localhost'] })
+      mountA2A(app, { info: { name: 'Sample', description: 'Notes.', version: '1.0.0' }, skills: [{ tool, text: 'text', tags: ['notes'] }], callApi: inProcess(app), waitMs: 0 })
+      const headers = (key: string) => ({ authorization: `Bearer ${KEY}`, 'idempotency-key': key, 'content-type': 'application/json' })
+      return {
+        mcp: async (key: string) =>
+          (await app.request('/mcp', { method: 'POST', headers: { ...headers(key), accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': 'add_note' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'add_note', arguments: { text: 'hi' }, _meta: META } }) })).text(),
+        a2a: async (key: string) =>
+          (await app.request('/a2a', { method: 'POST', headers: { ...headers(key), 'a2a-version': '1.0' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'SendMessage', params: { message: { messageId: 'm1', role: 'ROLE_USER', parts: [{ text: 'hi' }] } } }) })).text(),
+      }
+    }
+    const KEY = 'relay-key'
+
+    it('runs a retried tool call once: its route gets the same Idempotency-Key', async () => {
+      for (const kind of ['mcp', 'a2a'] as const) {
+        const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`tester:${hashApiKey(KEY)}`) } })
+        let runs = 0
+        app.post('/api/notes', (c) => c.json({ note: ++runs }, 201))
+        const call = relays(app, '/api/notes')[kind]
+        const first = await call('k1')
+        expect(first, kind).toContain('{\\"note\\":1}')
+        expect(await call('k1'), kind).toContain('{\\"note\\":1}')
+        expect(runs, kind).toBe(1)
+        await call('k2')
+        expect(runs, kind).toBe(2)
+      }
+    })
+
+    it('gets a slow route\'s result once its run is done, not the 202 kept under the same key', async () => {
+      for (const kind of ['mcp', 'a2a'] as const) {
+        const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`tester:${hashApiKey(KEY)}`) } })
+        let started = 0
+        // The first call starts a run; once it is done (and names no result), calling the route again answers it
+        app.post('/api/reports', (c) => (started++ ? c.json({ report: 'ready' }, 200) : c.json({ status: 'running' }, 202, { location: '/api/runs/r1' })))
+        app.get('/api/runs/r1', (c) => c.json({ status: 'done' }))
+        const answer = await relays(app, '/api/reports')[kind]('k1')
+        expect(answer, kind).toContain('ready')
+        expect(started, kind).toBe(2)
+      }
+    })
+
+    it('runs each call of a keyed JSON-RPC batch once: every call gets a key of its own', async () => {
+      const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`tester:${hashApiKey(KEY)}`) } })
+      let runs = 0
+      app.post('/api/notes', (c) => c.json({ note: ++runs }, 201))
+      relays(app, '/api/notes')
+      const call = (id: number, text: string) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'add_note', arguments: { text } } })
+      // Protocol 2025-03-26 still takes a batch: two calls in one request, under one Idempotency-Key
+      const batch = async () =>
+        (await app.request('/mcp', { method: 'POST', headers: { authorization: `Bearer ${KEY}`, 'idempotency-key': 'batch-1', 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-03-26' }, body: JSON.stringify([call(1, 'e'), call(2, 'f')]) })).text()
+      const first = await batch()
+      expect(first).not.toMatch(/isError|still running|different body/)
+      expect(runs).toBe(2)
+      // The same batch again: each call is answered as it was, and nothing runs twice
+      const again = await batch()
+      expect(again).not.toMatch(/isError/)
+      expect(again).toContain('{\\"note\\":2}')
+      expect(runs).toBe(2)
+    })
+
+    it('marks an answer shown once that a route built itself, so A2A keeps its task without it', async () => {
+      const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`tester:${hashApiKey(KEY)}`) } })
+      app.post('/api/secrets', (c) => {
+        showOnce(c, 'Made a secret; it is never shown again.')
+        return new Response(JSON.stringify({ secret: 'sk_built_by_hand' }), { status: 201, headers: { 'content-type': 'application/json' } })
+      })
+      relays(app, '/api/secrets')
+      const direct = await app.request('/api/secrets', { method: 'POST', headers: { authorization: `Bearer ${KEY}` } })
+      expect(direct.headers.get('shown-once')).toBe('true')
+      const rpc = async (method: string, params: unknown) =>
+        (await app.request('/a2a', { method: 'POST', headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json', 'a2a-version': '1.0' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })).json() as Promise<any>
+      const sent = await rpc('SendMessage', { message: { messageId: 'm1', role: 'ROLE_USER', parts: [{ text: 'hi' }] } })
+      expect(JSON.stringify(sent)).toContain('sk_built_by_hand')
+      expect(JSON.stringify(await rpc('GetTask', { id: sent.result.task.id }))).not.toContain('sk_built_by_hand')
+    })
+
+    it('keeps no secret when idempotency is wired by hand: the relay marks its own answer', async () => {
+      const app = new Hono()
+      const store = memoryGuardStore()
+      const kept: unknown[] = []
+      app.use('*', idempotency({ store: { ...store, save: (id, answer, expiresAt) => (kept.push(answer), store.save(id, answer, expiresAt)) } }))
+      app.use('*', async (c, next) => (c.set('caller' as never, { kind: 'key', name: 'tester' } as never), next()))
+      let made = 0
+      app.post('/api/secrets', (c) => (showOnce(c, `Made secret ${++made}; it is never shown again.`), c.json({ secret: `sk_secret_${made}` }, 201)))
+      const { mcp, a2a } = relays(app, '/api/secrets')
+      for (const [kind, call] of [['mcp', mcp], ['a2a', a2a]] as const) {
+        const key = `k-${kind}`
+        expect(await call(key), kind).toContain('sk_secret_')
+        const again = await call(key)
+        expect(again, kind).not.toContain('sk_secret_')
+        expect(again, kind).toContain('it is never shown again')
+      }
+      expect(made).toBe(2)
+      expect(kept).toEqual([0, 1].map(() => ({ version: 2, bodyHash: expect.any(String), shownOnce: expect.any(String) })))
+    })
   })
 })
 

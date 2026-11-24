@@ -85,6 +85,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 | `forbidden` | 403 | A valid key that may not do this. |
 | `not_found` | 404 | No such route or id in this snapshot. |
 | `conflict` | 409 | Clashes with the current state. |
+| `shown_once` | 409 | A retry with the Idempotency-Key of a request whose answer showed a secret once; `detail` says what was made. |
 | `payload_too_large` | 413 | Over the documented size. |
 | `too_many_requests` | 429 | Wait `Retry-After` seconds. |
 | `spend_cap` | 429 | A paid operation's budget is spent; free ones still work. |
@@ -111,7 +112,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   hashes (`API_KEYS=laptop:<sha256>,ci:<sha256>`); the keys live in **your secret store, scoped to the app**,
   one secret per client (`API_KEY_LAPTOP`, …). Revoke = remove its line and redeploy.
 - **Keys an app makes itself (optional, `keys` module):** for a tool whose users hand out keys without a deploy,
-  `registerKeys` adds `/api/keys` (make, list, revoke; the key shown once, only its hash kept) and `/api/me` (who is
+  `registerKeys` adds `/api/keys` (make, list, revoke; the key shown once, only its hash kept, never kept by Idempotency-Key: §9) and `/api/me` (who is
   calling). `API_KEYS` keeps working beside them. Only a key from `API_KEYS` or a signed-in person may make or revoke
   keys: a key made through the API cannot make another, so a leaked one can't make itself a spare.
 - **People:** Cloudflare Access SSO in front of the web pages; the app also verifies `Cf-Access-Jwt-Assertion` against
@@ -268,6 +269,15 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   the header on each of them. Only a success is kept: a refusal (`401`, `403`, `404`, `408`, `409`, `422`, `429`, any
   `4xx`) or a server error changed nothing, so a retry with the same key runs again. The token endpoints (`/oauth/*`,
   `/agent/identity*`) are never kept; an app lists its own open routes that answer a secret in `skip`, so they never are.
+- **A secret shown once is never kept to replay.** A route whose answer shows one (a new API key, an enrolment, a
+  session cookie, an invite code) calls `showOnce(c, replay)`: the guard keeps only `replay`, never the body or a
+  header, and a retry with the same key and body is a `409 shown_once` whose detail says what was made, where to see
+  it, that the secret is never shown again, and what to do if it was lost. The answer carries `Shown-Once: true`, so
+  a relay keeps nothing of it either (an A2A task is kept without its artifact). Never a `400`: the kit's client sends a key
+  on every create, so creating keeps working. A relay (MCP, A2A, wherever mounted) never keeps its own answer
+  (`neverKeep`) and hands the caller's Idempotency-Key to the route its tool runs, which keeps its own: a retried tool
+  call runs once and never answers a secret twice. `skip` is for a route where a retry should run again (the secret
+  is new each time); `showOnce` for one that must not run twice.
 - Paid routes sit behind `rateLimit` per caller, with the `RateLimit-Policy` / `RateLimit` headers and a `429` with
   `Retry-After` past the limit, so a looping agent can't drain the budget. `rateLimit({ key })` counts per anything
   else instead (a pack, a grant); a `null` key leaves the call uncounted.

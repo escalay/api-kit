@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, readlink, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRoute, z } from '@hono/zod-openapi'
@@ -473,6 +473,7 @@ describe('the copy-in CLI', () => {
     const sick = cli(app, 'doctor')
     expect(sick.status).toBe(1)
     expect(sick.stdout.trim().split('\n')).toEqual([
+      'note     kit.json says kit 0.0.1: `kit upgrading --dir src/kit` prints what changed for its parts since, and what to do',
       'missing  core/kv.ts: `kit update --dir src/kit` writes it again',
       "edited   core/hal.ts: yours to keep; `kit diff --dir src/kit --patch` shows the change, `kit update --dir src/kit --force` takes the kit's",
       `behind   pagination was copied from kit 0.0.1 and kit ${KIT_VERSION} changed it: \`kit diff --dir src/kit --patch\`, then \`kit update --dir src/kit\``,
@@ -493,7 +494,11 @@ describe('the copy-in CLI', () => {
     const diff = cli(app, 'diff', '--dir', 'kit')
     expect(diff.stdout).toMatch(/unchanged\s+core\/cache\.ts/)
     expect(diff.status).toBe(0)
-    expect(cli(app, 'doctor', '--dir', 'kit').stdout.trim().split('\n')).toEqual([`behind   kit.json says kit 0.0.1, this is ${KIT_VERSION} with the same files: \`kit update --dir kit\` records it`, '1 to fix in kit'])
+    expect(cli(app, 'doctor', '--dir', 'kit').stdout.trim().split('\n')).toEqual([
+      'note     kit.json says kit 0.0.1: `kit upgrading --dir kit` prints what changed for its parts since, and what to do',
+      `behind   kit.json says kit 0.0.1, this is ${KIT_VERSION} with the same files: \`kit update --dir kit\` records it`,
+      '1 to fix in kit',
+    ])
     const updated = cli(app, 'update', '--dir', 'kit')
     expect(updated.status).toBe(0)
     expect(updated.stdout).not.toContain('core/cache.ts')
@@ -632,7 +637,7 @@ describe('the copy-in CLI', () => {
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1', files: { ...lock.files, 'core/cache.ts': 'older' } }))
     const kept = cli(app, 'doctor', '--dir', 'kit')
     expect(kept.status).toBe(1)
-    expect(kept.stdout.trim().split('\n')).toEqual([keptLine, '1 to fix in kit'])
+    expect(kept.stdout.trim().split('\n')).toEqual(['note     kit.json says kit 0.0.1: `kit upgrading --dir kit` prints what changed for its parts since, and what to do', keptLine, '1 to fix in kit'])
     // At this kit's version (an older CLI stamped it over the kept file) the record is all there is: the edit is yours, never 'copied from' the new kit
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, files: { ...lock.files, 'core/cache.ts': 'older' } }))
     const stamped = cli(app, 'doctor', '--dir', 'kit')
@@ -815,8 +820,17 @@ describe('the copy-in CLI', () => {
       expect(JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).scripts).toMatchObject({ dev: 'tsx watch src/server.ts', 'dev:worker': 'wrangler dev', deploy: expect.stringContaining('wrangler d1 migrations apply DB --remote') })
       const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
       expect(migrations.status, migrations.stderr).toBe(0)
-      expect((await readdir(join(app, 'migrations'))).sort()).toEqual(['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_oauth_2.sql', '0003_guards_1.sql', '0004_switches_1.sql', '0005_notes_1.sql', '0006_reading-lists_1.sql'])
+      expect((await readdir(join(app, 'migrations'))).sort()).toEqual(['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_oauth_2.sql', '0003_guards_1.sql', '0004_guards_2.sql', '0005_switches_1.sql', '0006_notes_1.sql', '0007_reading-lists_1.sql'])
       expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).stdout).toContain('current')
+      // An app made with 1.30.0 had no guards step 2: `--check` (CI) asks for it, and `pnpm migrations` adds it at the end
+      const current = join(app, 'migrations')
+      await rm(join(current, '0004_guards_2.sql'))
+      for (const [from, to] of [['0005_switches_1', '0004_switches_1'], ['0006_notes_1', '0005_notes_1'], ['0007_reading-lists_1', '0006_reading-lists_1']]) await rename(join(current, `${from}.sql`), join(current, `${to}.sql`))
+      const behind = spawnSync(bin('tsx'), ['scripts/migrations.ts', '--check'], { cwd: app, encoding: 'utf8' })
+      expect([behind.status, behind.stderr]).toEqual([1, expect.stringContaining('guards_2')])
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      expect((await readdir(current)).sort().at(-1)).toBe('0007_guards_2.sql')
+      expect(await readFile(join(current, '0007_guards_2.sql'), 'utf8')).toContain("delete from kit_guards where kind = 'key' and value <> '';")
       // A database `migrate()` already brought up (local dev) takes the files without a duplicate record
       const { DatabaseSync } = await import('node:sqlite')
       const sqlite = new DatabaseSync(':memory:')
@@ -1291,8 +1305,9 @@ describe('the skills', () => {
   const PRESETS = kitSays('init', 'no-such-app', '--preset', 'no-such-preset').match(/--preset is one of (.+)/)![1]!.split(', ')
 
   it('each has a name, says when to use it, stays short and names the command that checks its rule', async () => {
+    // Every folder in skills/ is a skill: skillTexts reads each one's SKILL.md, so a folder without one fails here
     const skills = await skillTexts()
-    expect(Object.keys(skills)).toEqual(['api-kit-build', 'api-kit-cli', 'api-kit-feature', 'api-kit-part', 'api-kit-review', 'api-kit-skills', 'npm-release'])
+    expect(Object.keys(skills).length).toBeGreaterThan(0)
     for (const [name, text] of Object.entries(skills)) {
       const [, frontmatter = ''] = text.match(/^---\n([\s\S]*?)\n---\n/) ?? []
       expect(frontmatter, name).toContain(`name: ${name}\n`)

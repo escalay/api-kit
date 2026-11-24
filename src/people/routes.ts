@@ -120,7 +120,7 @@ export const peopleRoutes = ({ sessionPath, teamPath, tag }: { sessionPath: stri
         })
         .openapi('PasskeyRegisterAnswer', { description: 'The browser’s answer to a registration challenge.' }),
     ),
-    responses: { 200: json('Signed in.', SessionSchema), ...problemResponses(400, 401) },
+    responses: { 200: json('Signed in.', SessionSchema), ...problemResponses(400, 401, 409) },
   }),
   loginOptions: createRoute({
     method: 'post',
@@ -145,7 +145,7 @@ export const peopleRoutes = ({ sessionPath, teamPath, tag }: { sessionPath: stri
         .object({ challengeId: z.string(), response: z.record(z.string(), z.unknown()).openapi({ description: 'What `navigator.credentials.get` gave back, as JSON.' }) })
         .openapi('PasskeyLoginAnswer', { description: 'The browser’s answer to a sign-in challenge.' }),
     ),
-    responses: { 200: json('Signed in.', SessionSchema), ...problemResponses(400, 401) },
+    responses: { 200: json('Signed in.', SessionSchema), ...problemResponses(400, 401, 409) },
   }),
   passkeys: createRoute({
     method: 'get',
