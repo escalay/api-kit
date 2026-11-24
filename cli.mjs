@@ -6,6 +6,7 @@
  * `--web-dir` (relative to `--dir`, remembered in kit.json) puts the browser parts in their own folder, still
  * tracked by the one kit.json (as `@web/<file>`).
  *
+ *   kit <command> --help                      that command's lines from this list (-h too)
  *   kit list                                  parts, what they need, which are installed; then the root items
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
@@ -1241,8 +1242,23 @@ const licenseCommand = () => {
   fail('kit license keys|mint|verify')
 }
 
+/** This file's header: every command, its flags and what it does. */
+const HELP = readFileSync(fileURLToPath(import.meta.url), 'utf8').match(/\/\*\*([\s\S]*?)\*\//)[1].replace(/^ \* ?/gm, '').trim()
+
+/** One command's lines of the header: its `kit <name>` lines and the lines indented under them. */
+const usageOf = (name) => {
+  let inside = false
+  const lines = []
+  for (const line of HELP.split('\n')) {
+    if (line.startsWith('  kit ')) inside = line === `  kit ${name}` || line.startsWith(`  kit ${name} `)
+    else if (!line.startsWith('      ')) inside = false
+    if (inside) lines.push(line.slice(2))
+  }
+  return lines.join('\n')
+}
+
 const commands = {
-  help: () => console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').match(/\/\*\*([\s\S]*?)\*\//)[1].replace(/^ \* ?/gm, '').trim()),
+  help: () => console.log(HELP),
 
   list: () => {
     const installed = new Set(readLock()?.modules ?? [])
@@ -1604,4 +1620,5 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
   },
 }
 
-;(commands[command] ?? (() => fail(`unknown command "${command}". Commands: ${Object.keys(commands).join(', ')}`)))()
+if (commands[command] && (flags.has('--help') || rest.includes('-h'))) console.log(usageOf(command) || HELP)
+else (commands[command] ?? (() => fail(`unknown command "${command}". Commands: ${Object.keys(commands).join(', ')}`)))()

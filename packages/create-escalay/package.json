@@ -20,6 +20,6 @@
     "node": ">=22.16.0"
   },
   "dependencies": {
-    "@escalay/kit": "workspace:^"
+    "@escalay/kit": "workspace:*"
   }
 }

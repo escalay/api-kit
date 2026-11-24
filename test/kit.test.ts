@@ -1140,6 +1140,26 @@ describe('the npm-release item', () => {
     const manifest = JSON.parse(await read('.release-please-manifest.json'))
     for (const path of ['package.json', 'packages/create-escalay/package.json']) expect(JSON.parse(await read(path)).version, path).toBe(manifest['.'])
   })
+
+  it('pins create-escalay to its own kit version: pnpm writes `workspace:*` as the exact version, never a range', async () => {
+    expect(JSON.parse(await read('packages/create-escalay/package.json')).dependencies).toEqual({ '@escalay/kit': 'workspace:*' })
+  })
+
+  it('answers --help from create-escalay and from every kit command without making anything', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-help-'))
+    for (const flag of ['--help', '-h']) {
+      const created = spawnSync(process.execPath, [join(kitDir, 'packages/create-escalay/index.mjs'), flag], { cwd: parent, encoding: 'utf8' })
+      expect([created.status, created.stderr], flag).toEqual([0, ''])
+      expect(created.stdout).toMatch(/^Usage: npm create escalay <dir> \[-- options\]$/m)
+      expect(created.stdout).toContain('--preset api|app')
+    }
+    expect(await readdir(parent)).toEqual([])
+    const kit = (...args: string[]) => spawnSync(process.execPath, [join(kitDir, 'cli.mjs'), ...args], { cwd: parent, encoding: 'utf8' })
+    const add = kit('add', '--help')
+    expect([add.status, add.stdout.split('\n')[0]]).toEqual([0, 'kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]'])
+    expect(kit('feature', '-h').stdout).toContain('kit feature <plural-name>')
+    expect(await readdir(parent)).toEqual([])
+  })
 })
 
 describe('the app template’s container', () => {
