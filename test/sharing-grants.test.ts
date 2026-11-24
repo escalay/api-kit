@@ -2,7 +2,7 @@
 import { decodeJwt } from 'jose'
 import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
-import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, migrate, testDb, type SignInAsk, type SignInGrant, type TokenCaller } from '../src/index.js'
+import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, migrate, testDb, type OAuthStore, type SignInAsk, type SignInGrant, type TokenCaller } from '../src/index.js'
 import { appNameOf, createSharing, FIRST_USE_WITHIN, registerSharing, SHARING_MIGRATIONS } from '../src/sharing/index.js'
 import { BAKES, grantOf, grantsApp, ORIGIN, OWNER, sharingGrantsContract, SOUPS } from './sharing-grants-contract.js'
 import { HOUR } from './sharing-rows.js'
@@ -199,6 +199,28 @@ describe('onGrant', () => {
     expect(await chained.repo.deleteUnusedMembers(new Date())).toEqual([stuck!.grantId])
     broken = false
     for (const reopened of [invite, unretried]) expect((await chained.join(reopened)).status).toBe(200)
+  })
+
+  it('opens the invite again when the token issue throws after the claim, and holds it from a fresh sign-in until then', async () => {
+    let broken = true
+    const memory = memoryOAuthStore()
+    // The store fails as the kit writes the access token, after onGrant said yes
+    const store: OAuthStore = { ...memory, put: async (kind, id, value, expiresAt) => (broken && kind === 'access' ? Promise.reject(new Error('the store is down')) : memory.put(kind, id, value, expiresAt)) }
+    const { makeInvite, signIn, inviteDecision, join, membersOfInvite, inviteState, revoked } = await box({ oauth: { store } })
+    const invite = await makeInvite()
+    const { exchange } = await signIn({ resource: SOUPS, decision: inviteDecision(invite) })
+    expect((await exchange()).status).toBe(500)
+    const [member] = await membersOfInvite(invite.id)
+    expect([await inviteState(invite.id), member?.firstUsedAt, revoked]).toEqual(['redeemed', null, []])
+    // A fresh sign-in with the same invite finds it held by the pending member: withdrawn, and the pending row kept
+    broken = false
+    const fresh = await join(invite)
+    expect([fresh.status, fresh.tokens.error]).toEqual([400, 'invalid_grant'])
+    expect((await membersOfInvite(invite.id)).map((row) => row.grantId)).toEqual([member!.grantId])
+    // The retry of the spent code is a replay: the pending row goes, and the invite works again
+    expect((await exchange()).status).toBe(400)
+    expect(await inviteState(invite.id)).toBe('open')
+    expect((await join(invite)).status).toBe(200)
   })
 
   it('never reopens an invite whose member was used, or ended by a revoke while onGrant ran (K1’s re-check)', async () => {
