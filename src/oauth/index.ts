@@ -148,16 +148,17 @@ export type OAuthConfig = {
   maxUnusedClients?: number
   /**
    * Codes waiting for a person (consent tickets, claim attempts, device codes and their user codes), kept at most of
-   * each (a whole number, default 10 000): past it a new one evicts the oldest, a ticket an app is still deciding too.
+   * each (a whole number, default 10 000): past it a new one evicts the oldest. Never a ticket the app holds
+   * (`holdTicket`): those are outside the cap, and the app bounds them.
    */
   maxUnusedTickets?: number
   /**
-   * Seconds a consent ticket lives, and its browser's nonce cookie: whole, from 60 to a week (default 600). Longer for
-   * an app that decides later (an ask to join the owner answers in hours): its page waits, then posts `complete`. It
-   * never renews its client: one whose unused client lapses first can no longer be approved.
+   * Seconds a consent ticket lives, and its browser's nonce cookie: whole, from 60 to a week (default 600). An app that
+   * decides later (an ask to join the owner answers in hours) holds that one ticket with `holdTicket` and leaves this
+   * alone; a longer `ticketTtl` makes every page live as long, and newer tickets still evict a waiting one.
    *
    * @example
-   * ticketTtl: 24 * 3600   // the owner has a day to answer an ask to join
+   * ticketTtl: 300   // pages close sooner
    */
   ticketTtl?: number
   /** Extra fields for the authorization server metadata, e.g. `poppy_domains`. */
@@ -411,6 +412,17 @@ export const createOAuth = (config: OAuthConfig) => {
           const marked = { ...value, used: true, usedAt: now() }
           await store.put(kind, id, marked, keepUntil ?? now() + CODE_TTL)
           return marked
+        })
+
+  /** The store's own `hold`, or a read then a write: safe only one request at a time. */
+  const hold = (kind: string, id: string, expiresAt: number) =>
+    store.hold
+      ? store.hold(kind, id, expiresAt)
+      : store.get(kind, id).then(async (value) => {
+          if (!value || value.used) return null
+          const held = { ...value, expiresAt, held: true }
+          await store.put(kind, id, held, expiresAt)
+          return held
         })
 
   /** The store's own `take`, or a read then a delete: safe only one request at a time. */
@@ -784,6 +796,36 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     return c.redirect(backTo(params.redirect_uri!, origin, { code, state: params.state }), 302)
   }
 
+  /** When the latest ticket held in the browser with this nonce ends (epoch seconds); 0 when none was held. */
+  const heldUntilOf = async (nonce: string) => Number((await store.get('held-nonce', sha(nonce)))?.until ?? 0)
+  /** The nonce cookie's life: a page's, or longer while a ticket this browser opened is held, so no page cuts it short. */
+  const cookieLife = (heldUntil: number) => Math.max(ticketTtl, heldUntil - now())
+
+  /**
+   * Holds a ticket for a decision made later (an ask to join the owner answers in hours): it lives `seconds` from now
+   * (whole, 60 to a week), is never evicted by newer tickets, and keeps its client held as long. Only the browser that
+   * opened it may hold it; null when it expired, was answered, or this browser did not open it. Holding again moves
+   * the expiry again. Returns the new expiry and the `Set-Cookie` line that keeps the nonce cookie at least as long: the
+   * app's page appends it. Held tickets are outside `maxUnusedTickets`: the app bounds how many it holds.
+   *
+   * @example
+   * const held = await oauth.holdTicket(c, ticket, 24 * 3600)
+   * if (!held) return c.html(expiredPage, 400)
+   * return c.html(waitingPage(ticket), 200, { 'set-cookie': held.cookie })
+   */
+  const holdTicket = async (c: Context, ticket: string, seconds: number): Promise<{ expiresAt: number; cookie: string } | null> => {
+    if (!(Number.isSafeInteger(seconds) && seconds >= 60 && seconds <= UNUSED_CLIENT_TTL)) throw new Error(`holdTicket: seconds must be whole seconds from 60 to a week (604800), not ${seconds}.`)
+    const nonce = nonceOf(c, issuerOf(c))
+    const found = await consentOf(c, ticket)
+    if (!nonce || !('row' in found)) return null
+    const expiresAt = now() + seconds
+    // Conditional: a hold racing `complete` never reopens a spent ticket
+    if (!(await hold('consent', ticket, expiresAt))) return null
+    const heldUntil = Math.max(await heldUntilOf(nonce), expiresAt)
+    await store.put('held-nonce', sha(nonce), { until: heldUntil }, heldUntil)
+    return { expiresAt, cookie: ticketCookie(c, nonce, cookieLife(heldUntil), issuerOf(c)) }
+  }
+
   /**
    * The sign-in a ticket holds, for the app's own POST route: null when it expired, was answered, or this browser did
    * not open it.
@@ -906,15 +948,17 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if ((c.req.queries('resource')?.length ?? 0) > 1) return cantApprove(c, ONE_RESOURCE)
       const bound = audienceFor(c, params.resource)
       if ('refused' in bound) return cantApprove(c, `${bound.refused} (invalid_target)`)
-      // One nonce binds every ticket this browser opens: reused while it lives, its life renewed
-      const nonce = nonceOf(c, issuerOf(c)) ?? newNonce()
+      // One nonce binds every ticket this browser opens: reused while it lives, its life renewed, never below a held ticket's
+      const reused = nonceOf(c, issuerOf(c))
+      const nonce = reused ?? newNonce()
       const ticket = token('consent')
       const expiresAt = now() + ticketTtl
       // It holds its client while it lives: a flood of registrations never evicts a client a person is about to approve
       const row = { params, nonce: sha(nonce), arrival: arrivalOf(c), expiresAt, holds: params.client_id }
-      const bindTo = (page: Response) => {
+      const bindTo = async (page: Response) => {
         const bound = new Response(page.body, page)
-        bound.headers.append('set-cookie', ticketCookie(c, nonce, ticketTtl, issuerOf(c)))
+        const life = reused ? cookieLife(await heldUntilOf(reused)) : ticketTtl
+        bound.headers.append('set-cookie', ticketCookie(c, nonce, life, issuerOf(c)))
         return bound
       }
       if (config.approve) {
@@ -1333,7 +1377,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     await tellRevoked({ client: clientId, reason: 'client_revoked' })
   }
 
-  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, issuerOf, mcpPath, revokeGrant, revokeClient, ticketOf, answeredOf, complete, authorizationServer, protectedResource, authMd }
+  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, issuerOf, mcpPath, revokeGrant, revokeClient, ticketOf, answeredOf, holdTicket, complete, authorizationServer, protectedResource, authMd }
 }
 
 export type OAuth = ReturnType<typeof createOAuth>

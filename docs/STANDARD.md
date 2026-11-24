@@ -178,7 +178,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   an `approve` hook, `/oauth/authorize` may bypass Access: the app's page decides (an invite, an ask to join), and the
   grant follows only a same-origin POST from the browser that opened it (`complete`), once; nothing is granted without
   a click, and a stored approval never stands in for one. Each ticket is bound to its browser by an HttpOnly,
-  SameSite=Lax nonce cookie (`__Host-oauth_ticket` on https, living as long as the ticket: `ticketTtl`, 10 minutes by default, so an app that decides later, an ask to join, keeps it waiting up to a week; renewed and reused by a second sign-in), and
+  SameSite=Lax nonce cookie (`__Host-oauth_ticket` on https, living as long as the ticket: `ticketTtl`, 10 minutes by default; renewed and reused by a second sign-in, never below what remains of a ticket held in that browser), and
   answered once: posted again from that browser it is a page saying it went through, from another "expired". With
   `approve` set, `/oauth/authorize` never redirects before a person acts: every error is a page. Every approval POST
   (`complete`, the kit's consent, claim and device pages) needs `Sec-Fetch-Site: same-origin`, or with none an
@@ -232,7 +232,10 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   A registration no sign-in has used lives a week (its first code exchanged or device token collected gives it a
   year), and every kind of row written without auth is capped (registrations, client or agent, and claim tokens; open
   consent tickets, claim attempts and device codes; 10 000 of each by default; past it the oldest unused goes, never a
-  client a live consent ticket waits on), so rows written without auth stay bounded; the database store prunes
+  client a live consent ticket waits on), so rows written without auth stay bounded. **An app that decides later (an
+  ask to join) holds that one ticket** (`holdTicket`): from the browser that opened it, it lives as long as the app
+  holds it, up to a week, while every other page keeps `ticketTtl`; a held ticket is never evicted by newer ones and
+  sits outside the cap, so the app bounds how many it holds. The database store prunes
   expired rows on a write, at most once a minute, through an index on their expiry. `limits` counts per address, read as §9 says: a named source counts IPv6 by its /64, while the default
   `'headers'` read takes the address as sent, so a Workers app passes `address: { header: 'cf-connecting-ip' }`.
   Registration, `/agent/identity` and `/agent/identity/claim` (each call writes a claim attempt) 20 an hour
@@ -722,7 +725,7 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
   the link is remembered. Nothing is approved without a click.
 - **The owner's approval makes a space-locked grant, never an owner token.** The owner, signed in, approves an app at
   a space in one click, after the same warning for an unknown return. Asking to join waits on the owner (the asker's
-  page polls the app, then posts `complete` from the same browser: `ticketTtl`). The grant binds the space with
+  page polls the app, then posts `complete` from the same browser: the ask's ticket held for its wait, `holdTicket`). The grant binds the space with
   `complete`'s `resource`, even when the client asked for none. The default `accepts` takes a root token at every
   space, so only the owner's own sign-ins at the root get the root.
 - **The page says which app account it connects.** The approval page always carries one line: this connects the app

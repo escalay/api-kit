@@ -57,6 +57,24 @@ Nothing to do in any version recorded here.
 
 ## oauth
 
+### Unreleased (after 1.30.0)
+
+New, off unless the app calls it: `oauth.holdTicket(c, ticket, seconds)`, so an app that decides later (an ask to
+join) holds that one ticket for its wait while every other page keeps `ticketTtl`. Nothing changes for an app that
+does not call it.
+
+- **An app that set a long `ticketTtl` to decide later** keeps working, and moves to `holdTicket` when it likes: hold
+  the ask's ticket from the route its page posts to, append the `cookie` it returns, and drop `ticketTtl` back to the
+  default. A long `ticketTtl` makes every page live as long, and newer tickets still evict a waiting one; a held
+  ticket is never evicted and sits outside `maxUnusedTickets`, so the app bounds how many it holds (oauth README,
+  Deciding later: holding a ticket).
+- **`OAuthStore` has an optional `hold`** (one conditional write: a live, unused row's expiry moved and `held: true`
+  set); `dbOAuthStore` and `memoryOAuthStore` have it. A store of the app's own without it falls back to a read then
+  a write, safe only one request at a time. Its `trim` should skip rows marked `held: true` and leave them out of the
+  `keep` newest; one that does not evicts held tickets like any other.
+- When a browser that already has the ticket cookie opens another sign-in, `/oauth/authorize` reads one more row
+  (`held-nonce`, written only by `holdTicket`), so the renewed cookie never cuts a held ticket short.
+
 ### 1.30.0
 
 New, off unless set: `ticketTtl` (default 600, as before), `complete`'s `resource`, `onRevoke`. Defaults that change

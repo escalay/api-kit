@@ -11,7 +11,7 @@ import type { Context } from 'hono'
 import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryGuardStore, memoryOAuthStore, memoryStore, OAUTH_MIGRATIONS, oauthKeys, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, serveGuide, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
 import { ASSETS, cookbookApi } from './brand-fixture.js'
 import { approveSignIn } from '../src/testing/index.js'
-import { approvedCode, audOf, authorizeQuery, browserOf, callerWith, formWithTwoResources, joinApp, oauthApp, oauthStoreContract, refreshWith, registered, signedIn, ticketIn, typeClaim } from './oauth-store-contract.js'
+import { approvedCode, audOf, authorizeQuery, browserOf, callerWith, formWithTwoResources, heldTicket, joinApp, oauthApp, oauthStoreContract, refreshWith, registered, signedIn, ticketIn, typeClaim } from './oauth-store-contract.js'
 
 const OWNER = 'owner@example.test'
 const ORIGIN = 'http://localhost'
@@ -1378,6 +1378,181 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     expect([late.status, late.headers.get('location'), await late.text()]).toEqual([400, null, expect.stringContaining('This sign-in expired')])
     const direct = await browser.post('/join/direct', { ticket, invite: 'garden-42' })
     expect([direct.status, direct.headers.get('location'), await direct.text()]).toEqual([400, null, expect.stringContaining('Remove this connection in your app and add it again.')])
+  })
+
+  describe('holding a ticket for a decision made later (holdTicket)', () => {
+    const maxAgeOf = (answer: Response) => Number(/Max-Age=(\d+)/.exec(cookieOf(answer) ?? '')?.[1])
+
+    it('lets an app hold one ticket for the owner’s decision while other pages keep ten minutes', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      // The app's own table: each waiting ask, and who approved it once the owner decided
+      const decisions = new Map<string, { approver?: string }>()
+      const { app, oauth } = await oauthApp(memoryOAuthStore(), {
+        approve: async (c, ask) => c.html(`<p>Ask to join?</p><form method="post" action="/ask"><input type="hidden" name="ticket" value="${ask.ticket}"><button>Ask</button></form>`),
+      }, { open: ['/ask', '/ask/state', '/ask/continue'] })
+      // Asking holds the ticket for a day: the waiting page carries the cookie that lives as long
+      app.post('/ask', async (c) => {
+        const ticket = String((await c.req.parseBody()).ticket ?? '')
+        const held = await oauth.holdTicket(c, ticket, 24 * 3600)
+        if (!held) return c.html('<p>This sign-in expired: start again from your app.</p>', 400)
+        decisions.set(ticket, {})
+        return c.html(`<p>Waiting for the owner.</p><form method="post" action="/ask/continue"><input type="hidden" name="ticket" value="${ticket}"></form>`, 200, { 'set-cookie': held.cookie })
+      })
+      app.post('/ask/state', async (c) => {
+        const ticket = String((await c.req.parseBody()).ticket ?? '')
+        return (await oauth.ticketOf(c, ticket)) ? c.json({ decided: Boolean(decisions.get(ticket)?.approver) }) : c.json(null, 400)
+      })
+      app.post('/ask/continue', async (c) => {
+        const ticket = String((await c.req.parseBody()).ticket ?? '')
+        const approver = decisions.get(ticket)?.approver
+        return approver ? oauth.complete(c, ticket, { approver }) : c.html('<p>Still waiting for the owner.</p>', 409)
+      })
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      const page = await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+      expect(maxAgeOf(page)).toBe(600)
+      const ticket = ticketIn(await page.text())
+      const waiting = await browser.post('/ask', { ticket })
+      expect(maxAgeOf(waiting)).toBe(24 * 3600)
+      expect(await (await browser.post('/ask/state', { ticket })).json()).toEqual({ decided: false })
+      expect((await browser.post('/ask/continue', { ticket })).status).toBe(409)
+      // The owner decides twenty hours later, long after a page's ten minutes
+      vi.setSystemTime((at += 20 * 3600 * 1000))
+      decisions.set(ticket, { approver: OWNER })
+      expect(await (await browser.post('/ask/state', { ticket })).json()).toEqual({ decided: true })
+      const done = await browser.post('/ask/continue', { ticket })
+      expect((await exchangeAt(app, done.headers.get('location'), client_id)).status).toBe(200)
+
+      // A page not held keeps ten minutes
+      const unheld = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      vi.setSystemTime((at += 601 * 1000))
+      expect((await browser.post('/ask', { ticket: unheld })).status).toBe(400)
+    })
+
+    // Probe T3: a waiting ticket evicted by newer ones under the kit's own limit
+    it('keeps a held ask through maxUnusedTickets newer tickets from one address, and an unheld one goes as before', async () => {
+      const redirect = 'https://client-c.example.test/cb'
+      const store = memoryOAuthStore()
+      const { app } = await joinApp(store, { maxUnusedTickets: 5, resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path) })
+      const client_id = await registered(app, 'Sample', redirect)
+      const at = { redirect_uri: redirect, resource: `${ORIGIN}/s/soups/mcp` }
+      const newer = async () => {
+        for (let n = 0; n < 5; n++) await app.request(`/oauth/authorize?${authorizeQuery(client_id, at)}`)
+      }
+      const browser = browserOf(app)
+      const waiting = await heldTicket(app, browser, client_id, at)
+      await newer()
+      expect(await store.get('consent', waiting)).not.toBeNull()
+      expect((await browser.post('/join', { ticket: waiting, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      expect(await (await browser.post('/join', { ticket: waiting, invite: 'garden-42' })).text()).toContain('Already approved')
+
+      const unheld = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id, at)}`)).text())
+      await newer()
+      expect(await store.get('consent', unheld)).toBeNull()
+      expect(await (await browser.post('/join', { ticket: unheld, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+    })
+
+    it('holds tickets outside the cap: as many as the app holds stay, and an ordinary sign-in still opens and completes', async () => {
+      const store = memoryOAuthStore()
+      const { app } = await joinApp(store, { maxUnusedTickets: 2 })
+      const client_id = await registered(app)
+      const held = []
+      for (let n = 0; n < 3; n++) {
+        const browser = browserOf(app)
+        held.push({ browser, ticket: await heldTicket(app, browser, client_id) })
+      }
+      const browser = browserOf(app)
+      const ordinary = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect((await browser.post('/join', { ticket: ordinary, invite: 'garden-42' })).status).toBe(302)
+      for (const { browser, ticket } of held) expect((await browser.post('/join', { ticket, invite: 'garden-42' })).status).toBe(302)
+    })
+
+    it('gives null for a ticket another browser opened, one answered, expired or unknown', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      const { app } = await joinApp(memoryOAuthStore())
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      const open = async () => ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      const holdIn = async (from: ReturnType<typeof browserOf>, ticket: string) => (await from.post('/join/hold', { ticket })).json()
+
+      expect(await holdIn(browserOf(app), await open())).toBeNull()
+      const answered = await open()
+      await browser.post('/join', { ticket: answered, invite: 'garden-42' })
+      expect(await holdIn(browser, answered)).toBeNull()
+      expect(await holdIn(browser, 'consent_unknown')).toBeNull()
+      const lapsed = await open()
+      vi.setSystemTime((at += 601 * 1000))
+      expect(await holdIn(browser, lapsed)).toBeNull()
+    })
+
+    it('moves the expiry when held again, and never sets the cookie shorter than a page’s life', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      const { app } = await joinApp(memoryOAuthStore())
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)).text())
+      const first = await browser.post('/join/hold', { ticket })
+      expect([await first.json(), maxAgeOf(first)]).toEqual([{ expiresAt: Math.floor(at / 1000) + 24 * 3600 }, 24 * 3600])
+      // Twenty hours on, a day again: it lives past the first day's end
+      vi.setSystemTime((at += 20 * 3600 * 1000))
+      const again = await browser.post('/join/hold', { ticket, seconds: String(24 * 3600) })
+      expect((await again.json()).expiresAt).toBe(Math.floor(at / 1000) + 24 * 3600)
+      vi.setSystemTime((at += 10 * 3600 * 1000))
+      expect((await browser.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+
+      // A minute's hold leaves the cookie a page's ten minutes: other tickets in this browser keep theirs
+      const other = browserOf(app)
+      const short = ticketIn(await (await other.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)).text())
+      const minute = await other.post('/join/hold', { ticket: short, seconds: '60' })
+      expect([(await minute.json()).expiresAt, maxAgeOf(minute)]).toEqual([Math.floor(at / 1000) + 60, 600])
+    })
+
+    it('never shortens a held ticket’s cookie when the same browser opens another sign-in', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      const { app } = await joinApp(memoryOAuthStore())
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      const held = await heldTicket(app, browser, client_id)
+      // Two hours later the asker's app opens the sign-in again: the cookie keeps the held ticket's remaining life
+      vi.setSystemTime((at += 2 * 3600 * 1000))
+      const second = await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+      expect(maxAgeOf(second)).toBe(22 * 3600)
+      // and the new page still lives ten minutes
+      const page = ticketIn(await second.text())
+      vi.setSystemTime((at += 601 * 1000))
+      expect(await (await browser.post('/join', { ticket: page, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+      expect((await browser.post('/join', { ticket: held, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      // Once the held life is over, a sign-in sets a page's ten minutes again
+      vi.setSystemTime((at += 22 * 3600 * 1000))
+      expect(maxAgeOf(await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`))).toBe(600)
+    })
+
+    it('refuses a held ticket whose unused client lapsed with the page that says to add it again', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      const store = memoryOAuthStore()
+      const { app } = await joinApp(store)
+      const client_id = await registered(app)
+      // A client registered six days ago: two held days outlive it
+      vi.setSystemTime((at += 6 * 24 * 3600 * 1000))
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect((await browser.post('/join/hold', { ticket, seconds: String(2 * 24 * 3600) })).status).toBe(200)
+      vi.setSystemTime((at += 24 * 3600 * 1000 + 1000))
+      expect(await store.get('client', client_id)).toBeNull()
+      expect(await store.get('consent', ticket)).not.toBeNull()
+      expect(await (await browser.post('/join', { ticket, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+      const direct = await browser.post('/join/direct', { ticket, invite: 'garden-42' })
+      expect([direct.status, direct.headers.get('location'), await direct.text()]).toEqual([400, null, expect.stringContaining('Remove this connection in your app and add it again.')])
+    })
+
+    it('takes a hold of a minute to a week, in whole seconds', async () => {
+      const { oauth } = await joinApp(memoryOAuthStore())
+      for (const wrong of [0, 59, 1.5, Number.NaN, 7 * 24 * 3600 + 1]) await expect(oauth.holdTicket({} as Context, 'consent_x', wrong), String(wrong)).rejects.toThrow(/holdTicket: seconds/)
+    })
   })
 
   it('lets complete bind an invite’s grant to its space when the client named none, and its token works nowhere else', async () => {
