@@ -18,6 +18,8 @@ apps copy in and own. Read the repository's `AGENTS.md` and `docs/STANDARD.md` f
    (`test/workers/worker.ts`) imports; an entry part that runs on Workers is imported there by its folder.
 4. Hooks the app passes are told after the change and never fail the request (`tellApp`, `src/core/hooks.ts`).
 5. A migration step never changes once released: a change is a new step at the end.
+6. An answer that shows a secret once (a key, an invite code, an enrolment, a session) calls `showOnce(c, replay)`
+   (`src/core/guards.ts`), so Idempotency-Key never keeps it; its test replays the same key and finds no secret.
 
 ## 2. The README
 
