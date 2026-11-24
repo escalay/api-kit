@@ -39,7 +39,8 @@ In this order; stop at the first that fits.
 3. Agents signing in for a person: `oauth`, the owner approving on the kit's page. Someone else decides (an invite,
    an ask to join): the `approve` hook, `complete` with the space's `resource`, and `onGrant` / `onRevoke` to mirror
    who holds access (`src/kit/oauth/README.md`, and the standard's "Sharing" section).
-4. A sharing part (invites to a space, asks to join, the owner's approval) is not in the kit yet: build on step 3.
+4. The `sharing` part (invites to a space, asks to join, the owner's approval) is being built: until its README
+   says it wires into `createOAuth`, build on step 3.
 
 ## Parts beyond the core
 

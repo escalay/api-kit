@@ -729,6 +729,57 @@
       }
     },
     {
+      "name": "sharing",
+      "type": "registry:item",
+      "title": "Sharing",
+      "description": "Invites to a space, asks to join and the owner's approval, on the oauth part's hooks; so far its tables (`SHARING_MIGRATIONS`), `sharingRepo`, the named states of its rows and its secrets",
+      "registryDependencies": [
+        "escalay/api-kit/db",
+        "escalay/api-kit/mcp",
+        "escalay/api-kit/oauth",
+        "escalay/api-kit/pagination"
+      ],
+      "files": [
+        {
+          "path": "src/sharing/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/index.ts"
+        },
+        {
+          "path": "src/sharing/repo.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/repo.ts"
+        },
+        {
+          "path": "src/sharing/schema.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/schema.ts"
+        },
+        {
+          "path": "src/sharing/secrets.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/secrets.ts"
+        },
+        {
+          "path": "src/sharing/states.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/states.ts"
+        },
+        {
+          "path": "src/sharing/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "standard": [
+          7,
+          23
+        ]
+      }
+    },
+    {
       "name": "testing",
       "type": "registry:item",
       "title": "Testing",

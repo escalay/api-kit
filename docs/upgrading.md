@@ -492,6 +492,14 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 - `onSwitch` is guarded: a hook that throws is logged and never answered, so the switch stays made.
 
+## sharing
+
+### Unreleased (after 1.31.0)
+
+- A new part, not yet wired into anything: its tables (`SHARING_MIGRATIONS` step 1: `sharing_spaces`,
+  `sharing_invites`, `sharing_requests`, `sharing_members`), `sharingRepo`, the named states of its rows and its
+  secrets. Nothing to do in an app that doesn't add it.
+
 ## testing
 
 ### 1.31.0

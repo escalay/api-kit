@@ -9,6 +9,7 @@ import * as kit from '../../src/index.js'
 import '../../src/mcp/index.js'
 import '../../src/a2a/index.js'
 import '../../src/boards/index.js'
+import '../../src/sharing/index.js'
 import '../../src/vector-search/index.js'
 import { probeTelemetry } from './probe-telemetry.js'
 
