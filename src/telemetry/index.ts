@@ -34,7 +34,7 @@ export type TelemetryValue = string | boolean
 export type TelemetryReport = Record<string, TelemetryValue>
 /** The body the collector takes, and nothing else. */
 export type TelemetryBody = { schema: number; instance: string; version: string; report: TelemetryReport }
-/** What turns the report off from the environment: `DO_NOT_TRACK=1` or `TELEMETRY=off`. */
+/** What turns the report off from the environment: `DO_NOT_TRACK=1` or `TELEMETRY=off` (or `false`, `0`). */
 export type TelemetryEnv = { DO_NOT_TRACK?: string; TELEMETRY?: string }
 
 export type TelemetryConfig = {
