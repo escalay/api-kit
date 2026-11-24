@@ -24,7 +24,7 @@ the version in `kit.json` up.
 
 ## core
 
-### Unreleased (after 1.30.0)
+### 1.30.1
 
 - **Security:** `idempotency` kept a whole successful answer for 24 hours and replayed it, so an answer that showed a
   secret once (a key made with `POST /api/keys`, setup's enrolment, a session cookie) sat in the guard store, in
@@ -79,7 +79,7 @@ the version in `kit.json` up.
 
 ## db
 
-### Unreleased (after 1.30.0)
+### 1.30.1
 
 - `GUARD_MIGRATIONS` has a second step that deletes every stored idempotency answer (`kit_guards` rows of kind `key`
   with a value; the locks of requests still running and the rate windows stay), because through 1.30.0 an answer
@@ -241,7 +241,7 @@ Nothing to do in any version recorded here.
 
 ## mcp
 
-### Unreleased (after 1.30.0)
+### 1.30.1
 
 - `FORWARDED` adds `idempotency-key`: a tool's route gets the caller's key with the call's JSON-RPC id
   (`<key>:<id>`, so two calls in one batch never share it), and a retried `tools/call` runs the route once (through 1.30.0 a retry replayed the whole `/mcp` answer, a key made by a tool included). `mountMcp` never keeps
@@ -260,7 +260,7 @@ Nothing to do in any version recorded here.
 
 ## a2a
 
-### Unreleased (after 1.30.0)
+### 1.30.1
 
 - `mountA2A` never keeps its own answer and passes the caller's `Idempotency-Key` to the route a skill runs, as MCP
   does: a retried `SendMessage` runs the route once.
@@ -315,7 +315,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## keys
 
-### Unreleased (after 1.30.0)
+### 1.30.1
 
 - A made key is never kept by Idempotency-Key (core's `showOnce`): a create retried with the same key is a 409
   `shown_once` naming the key made and where it is, never the key again. The kit's client retries a lost answer
@@ -329,7 +329,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## people
 
-### Unreleased (after 1.30.0)
+### 1.30.1
 
 - `startSession` marks its answer shown once (core's `showOnce`): Idempotency-Key never keeps the session cookie, and
   a verify retried with the same key is a 409 `shown_once`. The verify routes document the 409.
@@ -344,7 +344,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## setup
 
-### Unreleased (after 1.30.0)
+### 1.30.1
 
 - The claim's enrolment is never kept by Idempotency-Key (core's `showOnce`): a claim or recovery retried with the same
   key is a 409 `shown_once` saying to rotate the code to get back in.
