@@ -124,7 +124,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   **passkey** (WebAuthn, `@simplewebauthn/server`); signing in with it sets an HttpOnly cookie (`__Host-session` on
   https, SameSite=Lax, 30 days) whose token is stored only as a SHA-256. `auth.session` checks it after keys and agent
   tokens and before Access; a write made with it must come from the same site, as with Access's cookie. Claiming
-  **fails closed** (no secret set: 503) and is limited (5 an hour per address, read as §9 says, 20 a day in all); a claimed deployment
+  **fails closed** (no secret set: 503) and is limited (5 an hour per address, read as §9 says; 20 wrong codes a day in all, so the right code is never locked out); a claimed deployment
   answers the same code with 409, and a **rotated** code opens recovery for an existing owner, once. **Members** come
   through Access: with `access.roleOf: roleOf(db)` an email that is neither listed nor of a listed domain gets 403
   (without `roleOf`, Access works as before). Roles: `owner` does everything; `member` everything but admin (the team,

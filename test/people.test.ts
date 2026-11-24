@@ -127,6 +127,14 @@ describe('claiming a deployment', () => {
     expect((await guesser.call('POST', '/api/setup/claim', { code: CODE, email: 'g@example.com' })).status).toBe(429)
   })
 
+  it('counts only wrong codes against the day\'s 20, so guesses from many addresses never lock out the right code', async () => {
+    const { browser } = await setup()
+    const claim = (address: string, code: string) => browser(address).call('POST', '/api/setup/claim', { code, email: 'owner@example.com' })
+    for (let guess = 0; guess < 20; guess++) expect((await claim(`198.51.100.${guess}`, `GUESS-${guess}`)).status).toBe(403)
+    expect((await claim('198.51.100.20', 'GUESS-20')).status).toBe(429)
+    expect((await claim('203.0.113.9', CODE)).status).toBe(200)
+  })
+
   it('the setup claim counts by the trusted address', async () => {
     const { browser } = await setup({ address: { header: 'x-forwarded-for' } })
     // A new cf-connecting-ip or a value put in front of x-forwarded-for each time: still one address
