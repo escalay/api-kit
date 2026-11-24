@@ -40,30 +40,64 @@ export type GuardStore = {
   release: (id: string) => Promise<void>
 }
 
-/** The guards' state in this process's memory: one Node instance. Old entries go once there are `maxEntries`. */
+const PRUNE_MS = 60_000
+
+/**
+ * The guards' state in this process's memory: one Node instance. What lapsed is dropped at most once a minute (by the
+ * time the guards pass, no timer), and each read checks its entry's own expiry. Past `maxEntries` rate windows, the one
+ * counted longest ago goes; past `maxEntries` idempotency keys, the oldest answers go, never a lock a request holds.
+ *
+ * @example
+ * createAgentApi({ …, guards: { store: memoryGuardStore({ maxEntries: 5000 }) } })
+ */
 export const memoryGuardStore = ({ maxEntries = 2000 }: { maxEntries?: number } = {}): GuardStore => {
-  const windows = new Map<string, { start: number; used: number }>()
+  // Both maps keep their oldest entry first: a window moves to the end when counted
+  const windows = new Map<string, { start: number; used: number; endsAt: number }>()
   const keys = new Map<string, { answer: StoredAnswer | null; expiresAt: number }>()
+  let prunedAt = -Infinity
   const prune = (now: number) => {
-    for (const [id, entry] of keys) if (entry.expiresAt <= now || keys.size > maxEntries) keys.delete(id)
+    if (now - prunedAt < PRUNE_MS) return
+    prunedAt = now
+    for (const [id, window] of windows) if (window.endsAt <= now) windows.delete(id)
+    for (const [id, entry] of keys) if (entry.expiresAt <= now) keys.delete(id)
+  }
+  const capWindows = () => {
+    for (const id of windows.keys()) {
+      if (windows.size <= maxEntries) return
+      windows.delete(id)
+    }
+  }
+  // A running lock stays: its request is still answering, and letting go would let a retry run it twice
+  const capKeys = () => {
+    for (const [id, entry] of keys) {
+      if (keys.size <= maxEntries) return
+      if (entry.answer) keys.delete(id)
+    }
   }
   return {
     count: async (id, windowMs, now) => {
+      prune(now)
       const current = windows.get(id)
-      const window = current && now - current.start < windowMs ? current : { start: now, used: 0 }
+      const window = current && now - current.start < windowMs ? current : { start: now, used: 0, endsAt: now + windowMs }
       window.used++
+      windows.delete(id)
       windows.set(id, window)
-      if (windows.size > maxEntries) for (const [old, entry] of windows) if (now - entry.start >= windowMs) windows.delete(old)
-      return { ...window }
+      capWindows()
+      return { start: window.start, used: window.used }
     },
     claim: async (id, lockMs, now) => {
       prune(now)
       const entry = keys.get(id)
-      if (entry) return entry.answer ?? 'running'
+      // A lapsed answer or lock no longer holds the key, pruned yet or not
+      if (entry && entry.expiresAt > now) return entry.answer ?? 'running'
       keys.set(id, { answer: null, expiresAt: now + lockMs })
+      capKeys()
       return null
     },
-    save: async (id, answer, expiresAt) => void keys.set(id, { answer, expiresAt }),
+    save: async (id, answer, expiresAt) => {
+      keys.set(id, { answer, expiresAt })
+      capKeys()
+    },
     release: async (id) => {
       if (keys.get(id)?.answer === null) keys.delete(id)
     },
