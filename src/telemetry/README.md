@@ -96,7 +96,7 @@ PATCH /api/telemetry   { enabled } (owner only, through the isOwner hook) → th
 
 | File | What |
 |---|---|
-| `schema.ts` | the `telemetry` table (one row: instance, since, enabled, last_sent_at, latest) and `TELEMETRY_MIGRATIONS` |
+| `schema.ts` | the `telemetry` table (`telemetryState`, one row: instance, since, enabled, last_sent_at, latest) and `TELEMETRY_MIGRATIONS` |
 | `repo.ts` | `telemetryRepo`: the row (made on the first run), the switch, the stamps |
 | `routes.ts` | `telemetryRoutes`: `GET` and `PATCH {path}` |
 | `tools.ts` | `telemetryTools`: `get_telemetry` |

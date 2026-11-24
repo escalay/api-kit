@@ -7,10 +7,14 @@ lists every release.
 ## Taking a new version
 
 ```bash
+npx @escalay/kit upgrading --dir src/kit      # this page's notes for your parts since kit.json's version
 npx @escalay/kit doctor --dir src/kit         # missing, edited, behind: one line each with its fix
 npx @escalay/kit diff --dir src/kit --patch   # your edits next to the kit's changes
 npx @escalay/kit update --dir src/kit         # never overwrites your edits without --force
 ```
+
+When `kit.json` records an older kit, `doctor` prints a `note` line naming `kit upgrading`, and `update` a line naming
+`kit upgrading --from <that version>`; neither changes the exit code or `doctor`'s count to fix.
 
 The app owns the copy, and nothing follows `main`: a version is taken on purpose. A file equal to the kit's counts as
 unchanged, whatever `kit.json` recorded. `update` keeps a file you edited; when the kit also changed that file since
@@ -19,6 +23,28 @@ the version `kit.json` records, it exits 1 and leaves `kit.json` at that version
 the version in `kit.json` up.
 
 ## core
+
+### 1.30.1
+
+- **Security:** `idempotency` kept a whole successful answer for 24 hours and replayed it, so an answer that showed a
+  secret once (a key made with `POST /api/keys`, setup's enrolment, a session cookie) sat in the guard store, in
+  memory or the `kit_guards` table, and a retry with the same `Idempotency-Key` got it again. A route now marks such
+  an answer with `showOnce(c, replay)`: the guard keeps only `replay`, and the retry is a 409 `shown_once` (a new
+  problem code) saying what was made. The keys, setup and people parts call it.
+- MCP and A2A never keep their own answer (`neverKeep`, wherever they are mounted) and pass the caller's
+  `Idempotency-Key` on to the route a tool runs (`FORWARDED`), which keeps its own answer: a retried tool call runs
+  once, and a key made by a tool is never answered twice. A relay of the app's own calls `neverKeep(c)` too.
+- `StoredAnswer` is now `ReplayedAnswer | ShownOnceAnswer`, each with `version: 2`. An answer without a version was
+  kept whole by 1.30.0 and is never replayed: its request runs again, so one an old instance writes during a rolling
+  deploy, after the migration below, is never answered either (it still sits in `kit_guards` until it lapses, within
+  the day). Any custom `GuardStore`: delete every answer it kept under 1.30.0 (one may hold a secret for a day), and
+  if it copies known fields, keep `version` and `shownOnce` too.
+- The answers kept under 1.30.0 are dropped for you: the database store's next start runs a new migration step that
+  deletes them (the db part, below), and the memory store goes with the restart. The cost is one day of replay
+  protection: a retry of a request made before the update runs again.
+- Rolling back to 1.30.0 within a day: it cannot read a `shown_once` answer this version kept, and a retry with that
+  key answers 500 until the row lapses (24 hours). Before rolling back, `delete from kit_guards where kind = 'key' and
+  value <> ''`.
 
 ### 1.30.0
 
@@ -53,11 +79,33 @@ the version in `kit.json` up.
 
 ## db
 
-Nothing to do in any version recorded here.
+### 1.30.1
+
+- `GUARD_MIGRATIONS` has a second step that deletes every stored idempotency answer (`kit_guards` rows of kind `key`
+  with a value; the locks of requests still running and the rate windows stay), because through 1.30.0 an answer
+  that showed a key once was kept whole for a day. On Node,
+  `dbGuardStore` runs it on the next start. On Workers, run `pnpm migrations` after `update`: it adds the step as a new
+  file in `migrations/` (`pnpm check` and CI fail until it is there), and the deploy applies it.
 
 ## oauth
 
-### Unreleased (after 1.30.0)
+### Unreleased (after 1.30.1)
+
+New: `SignInAsk.named` (the client chose its `resource`, so `complete` binds no other for it) and `SignInAsk.expiresAt`
+(the ticket's expiry, epoch seconds). What an app may see change:
+
+- **Only an http redirect to a loopback host is "this computer".** A custom scheme (`sample-app:`, `evil-app://`, a
+  scheme a browser registers to open any page) was read as an app on this computer; any app may claim one, so it is
+  now named as where the client returns, as a host is: the kit's consent page says it sends you back to
+  `sample-app:`, and `SignInAsk.onThisComputer` is false for it and for `https://localhost`. An
+  app's own page that trusted `onThisComputer` for an app's scheme lists that exact callback itself. Which redirects
+  a client may register does not change.
+- **A grant ended while `onGrant` ran gets no token.** With `onGrant` set, the kit reads the grant's and the client's
+  revoke markers again after it answers yes, in the code, device and claim branches. A grant ended meanwhile (a
+  retried exchange of the same code, `revokeGrant`, `revokeClient`) answers `invalid_grant` ("This sign-in was
+  revoked: start again.") where it used to get tokens that failed at once, and `onRevoke` hears it a second time,
+  after the row `onGrant` wrote, so the app ends that row too. An app without `onGrant` sees no change. A grant's
+  revoke marker now keeps its reason; one written by 1.30.0 reads as `revoked`.
 
 New, off unless the app calls it: `oauth.holdTicket(c, ticket, seconds)`, so an app that decides later (an ask to
 join) holds that one ticket for its wait while every other page keeps `ticketTtl`. Nothing changes for an app that
@@ -230,6 +278,13 @@ Nothing to do in any version recorded here.
 
 ## mcp
 
+### 1.30.1
+
+- `FORWARDED` adds `idempotency-key`: a tool's route gets the caller's key with the call's JSON-RPC id
+  (`<key>:<id>`, so two calls in one batch never share it), and a retried `tools/call` runs the route once (through 1.30.0 a retry replayed the whole `/mcp` answer, a key made by a tool included). `mountMcp` never keeps
+  its own answer, on any path. `pollRun`'s call made again once a run is done goes without the key, so it gets the
+  result, not the 202 kept for it.
+
 ### 1.30.0
 
 - `callWaiting` looks at a run right away. A tool still working past `waitMs` says which run to `GET` and where, and
@@ -241,6 +296,15 @@ Nothing to do in any version recorded here.
   name reads `authInfo.extra.name`; the grant is `authInfo.extra.grant`.
 
 ## a2a
+
+### 1.30.1
+
+- `mountA2A` never keeps its own answer and passes the caller's `Idempotency-Key` to the route a skill runs, as MCP
+  does: a retried `SendMessage` runs the route once.
+- A task whose route answered `Shown-Once: true` (core's `showOnce`: a new key) is kept without its artifacts: the
+  reply that finished the task (`SendMessage`, or the first `GetTask` of a slow one) shows the secret once, and later
+  `GetTask` and `ListTasks` say it was shown once. Through 1.30.0 the task
+  kept a made key for a day.
 
 ### 1.30.0
 
@@ -288,12 +352,24 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## keys
 
+### 1.30.1
+
+- A made key is never kept by Idempotency-Key (core's `showOnce`): a create retried with the same key is a 409
+  `shown_once` naming the key made and where it is, never the key again. The kit's client retries a lost answer
+  with the same key, so it now gets that 409: revoke the key it names and make another. The answers 1.30.0 kept are
+  dropped by a migration step (db).
+
 ### 1.30.0
 
 - `onKeyChange` is guarded: a hook that throws is logged and never answered, so a key made is still shown (once) with
   its 201.
 
 ## people
+
+### 1.30.1
+
+- `startSession` marks its answer shown once (core's `showOnce`): Idempotency-Key never keeps the session cookie, and
+  a verify retried with the same key is a 409 `shown_once`. The verify routes document the 409.
 
 ### 1.30.0
 
@@ -304,6 +380,11 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - A migration step indexes sessions by person; `registerPeople` applies it when the app starts.
 
 ## setup
+
+### 1.30.1
+
+- The claim's enrolment is never kept by Idempotency-Key (core's `showOnce`): a claim or recovery retried with the same
+  key is a 409 `shown_once` saying to rotate the code to get back in.
 
 ### 1.30.0
 
@@ -326,6 +407,12 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - `onSwitch` is guarded: a hook that throws is logged and never answered, so the switch stays made.
 
 ## testing
+
+### Unreleased (after 1.30.1)
+
+- `approveSignIn(app, query, { form: { action, fields } })` drives an app's own sign-in page (`approve`): it posts
+  the one `<form method="post">` whose `action` is `form.action`, with its hidden inputs and `fields`, and throws
+  when none or more than one matches. Without `form`, nothing changes.
 
 ### 1.29.0
 

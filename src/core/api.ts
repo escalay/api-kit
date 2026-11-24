@@ -87,7 +87,7 @@ const IDEMPOTENCY_HEADER = {
   name: 'Idempotency-Key',
   in: 'header',
   required: false,
-  description: 'Any unique string (a UUID): a retry with the same key and body gets the first answer instead of doing the work twice; the same key with another body is a 422. Kept 24 hours, and only a success: after a refusal or a server error, a retry runs again.',
+  description: 'Any unique string (a UUID): a retry with the same key and body gets the first answer instead of doing the work twice; the same key with another body is a 422. Kept 24 hours, and only a success: after a refusal or a server error, a retry runs again. An answer that showed a secret once (a new key) is never kept: its retry is a 409 `shown_once` saying what was made.',
   schema: { type: 'string', maxLength: 255 },
 }
 

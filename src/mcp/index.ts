@@ -22,6 +22,7 @@ import type { Context, Hono } from 'hono'
 import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, TOOLS_HASH_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
 import { attachSkills, instructionsWithSkills } from './skills.js'
 import { MODERN_PROTOCOL_VERSION, mountedOf, publicOriginOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN, type AgentBrand, type ServerIcon } from '../core/discovery.js'
+import { neverKeep } from '../core/guards.js'
 import { originOf, pathWith } from '../core/hal.js'
 
 type Query = Record<string, string | number | boolean | string[] | null | undefined>
@@ -136,6 +137,22 @@ const pathOf = (href: string) => {
 }
 
 /**
+ * The caller's auth for one JSON-RPC call: its Idempotency-Key gets the call's id, so the calls of one batch never
+ * share a key, and a retried call (the same id) runs its route once.
+ */
+const perCallAuth = (auth: AuthInfo | undefined, id: string | number): AuthInfo | undefined => {
+  const headers = (auth?.extra?.headers ?? {}) as Record<string, string>
+  const key = headers['idempotency-key']
+  return key && auth ? { ...auth, extra: { ...auth.extra, headers: { ...headers, 'idempotency-key': `${key}:${id}` } } } : auth
+}
+
+/** The caller's auth without its Idempotency-Key: a call made again after its run is done wants the result, not the 202 kept for that key. */
+const freshCallOf = (auth: AuthInfo | undefined): AuthInfo | undefined => {
+  const { 'idempotency-key': _key, ...headers } = (auth?.extra?.headers ?? {}) as Record<string, string>
+  return auth && { ...auth, extra: { ...auth.extra, headers } }
+}
+
+/**
  * Polls a slow call's run (its `Location`) until `waitMs` has passed, looking at least once. Done: the answer is the
  * run's `_links.result` when it names one, else the call made once more (a slow route caches its answer: the
  * standard's 202 rule); a call that answers 202 again started another run, which is pending in turn. Failed: the
@@ -151,7 +168,7 @@ export const pollRun = async (callApi: CallApi, call: ApiCall, location: string,
     const { status, _links } = ((await run.clone().json().catch(() => null)) ?? {}) as { status?: string; _links?: { result?: { href?: string } } }
     if (status === 'done') {
       const result = _links?.result?.href
-      return waitedOf(await callApi(result ? { path: pathOf(result) } : call, auth))
+      return waitedOf(await callApi(result ? { path: pathOf(result) } : call, freshCallOf(auth)))
     }
     if (status === 'failed') return { response: run, pending: null, location: null }
     if (Date.now() >= until) return { response: run, pending: location.split('/').pop()!, location }
@@ -249,7 +266,7 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
       tool.name,
       { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, ...hintsOf(tool) }, _meta: { ...(route ? { [ROUTE_META]: route } : {}), [CLI_META]: { name: cli.name, positional: cli.positional, examples: cli.examples }, ...listed } },
       async (args: Record<string, unknown>, ctx): Promise<CallToolResult> => {
-        const { response, pending, location } = await callWaiting(callApi, tool.call(args as never), ctx.http?.authInfo, waitMs)
+        const { response, pending, location } = await callWaiting(callApi, tool.call(args as never), perCallAuth(ctx.http?.authInfo, ctx.mcpReq.id), waitMs)
         const json = await response.json().catch(() => null)
         if (pending) {
           const text = `Still working: run ${pending}. GET ${location} until its status is done (the run is also in _meta["${PENDING_META}"]), then call ${tool.name} again with the same arguments (it answers at once when done).`
@@ -309,7 +326,8 @@ export const mountedMcp = (app: object) => {
   return { tools: (mcp?.tools ?? []) as unknown as McpTool[], resources: (mcp?.resources ?? []) as unknown as McpResource[] }
 }
 
-export const FORWARDED = ['authorization', 'cf-access-jwt-assertion'] as const
+/** The caller's headers a tool's route gets: who is calling, and the Idempotency-Key, so a retried call runs once. */
+export const FORWARDED = ['authorization', 'cf-access-jwt-assertion', 'idempotency-key'] as const
 
 /** Tools run the app's routes in-process with the caller's own credentials: no network hop, same auth decision. */
 export const inProcess = (app: { request: (input: string, init?: RequestInit) => Response | Promise<Response> }): CallApi => async (call, auth) => {
@@ -361,6 +379,8 @@ export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, all
   recordMounted(app, { mcp: { path, card, tools: factory.tools, resources: factory.resources } })
   for (const at of [`${path}/server-card`, WELL_KNOWN.serverCard]) app.get(at, (c: Context) => sendPublic(c, JSON.stringify(card(publicOriginOf(app, c)), null, 2), SERVER_CARD_TYPE))
   app.all(path, async (c: Context) => {
+    // A tool's route keeps its own answer under the same Idempotency-Key; this one, holding it, is never kept
+    neverKeep(c)
     const rejected = originValidationResponse(c.req.raw, allowedHostnames)
     if (rejected) return rejected
     const greeting = await modernInitialize(c, factory, brandOf())

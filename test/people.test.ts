@@ -25,6 +25,7 @@ import {
   type AddressTrust,
   type PeopleOptions,
   type SetupStep,
+  type StoredAnswer,
 } from '../src/index.js'
 import { lintOpenApi, softAuthenticator, toolRoutes, toolsRun } from '../src/testing/index.js'
 
@@ -39,6 +40,9 @@ const setup = async (options: { code?: string | undefined; steps?: SetupStep[]; 
   const db = await testDb()
   const keys = parseApiKeys(`owner-key:${hashApiKey(KEY)}`)
   const fixedKeys = [...keys.values()]
+  // Every answer the idempotency guard keeps, as it handed it to the store
+  const kept: StoredAnswer[] = []
+  const guards = memoryGuardStore()
   const app = createAgentApi({
     title: 'Sample',
     version: '1.0.0',
@@ -53,6 +57,7 @@ const setup = async (options: { code?: string | undefined; steps?: SetupStep[]; 
       access: { team: 'example', audience: 'aud', verify: async (token) => (token.startsWith('ok:') ? token.slice(3) : null), roleOf: roleOf(db) },
     },
     address: options.address,
+    guards: { store: { ...guards, save: (id, answer, expiresAt) => (kept.push(answer), guards.save(id, answer, expiresAt)) } },
   })
   const teamChanges: unknown[] = []
   const passkeyChanges: unknown[] = []
@@ -89,7 +94,7 @@ const setup = async (options: { code?: string | undefined; steps?: SetupStep[]; 
     const session = await owner.json('POST', '/api/session/passkeys/register/verify', { challengeId, enrolment, response: await authenticator.register(options, ORIGIN), name: 'Laptop' })
     return { owner, authenticator, session }
   }
-  return { app, db, browser, asKey, claimAsOwner, teamChanges, passkeyChanges, recoveries }
+  return { app, db, browser, asKey, claimAsOwner, teamChanges, passkeyChanges, recoveries, kept }
 }
 
 afterEach(() => vi.useRealTimers())
@@ -380,6 +385,48 @@ describe('passkeys and the session', () => {
     const answer = await stranger.call('POST', '/api/session/passkeys/login/verify', { challengeId, response: await (await softAuthenticator()).login(options, ORIGIN) })
     expect(answer.status).toBe(401)
     expect((await stranger.call('POST', '/api/session/passkeys/register/options', { enrolment: 'not-an-enrolment' })).status).toBe(401)
+  })
+})
+
+describe('Idempotency-Key on the routes that answer a secret once', () => {
+  it('never keeps an enrolment or a session to replay: the same key answers 409 shown_once', async () => {
+    const { browser, kept } = await setup()
+    const owner = browser()
+    const authenticator = await softAuthenticator()
+    const once = (key: string) => ({ 'idempotency-key': key })
+    const sessionTokenOf = (answer: Response) => answer.headers.get('set-cookie')?.split(';')[0]?.split('=')[1]
+
+    const claimed = await owner.call('POST', '/api/setup/claim', { code: CODE, email: 'owner@example.com' }, once('claim'))
+    const { enrolment } = await claimed.json()
+    const claimAgain = await owner.call('POST', '/api/setup/claim', { code: CODE, email: 'owner@example.com' }, once('claim'))
+    expect(claimAgain.status).toBe(409)
+    const claimProblem = await claimAgain.text()
+    expect(claimProblem).not.toContain(enrolment)
+    expect(JSON.parse(claimProblem)).toMatchObject({ code: 'shown_once', detail: expect.stringMatching(/SETUP_CODE/) })
+
+    const registering = await owner.json('POST', '/api/session/passkeys/register/options', { enrolment })
+    const registerBody = { challengeId: registering.challengeId, enrolment, response: await authenticator.register(registering.options, ORIGIN), name: 'Laptop' }
+    const registered = await owner.call('POST', '/api/session/passkeys/register/verify', registerBody, once('register'))
+    expect(registered.status).toBe(200)
+    const firstSession = sessionTokenOf(registered)
+    expect(firstSession).toBeTruthy()
+    const registerAgain = await owner.call('POST', '/api/session/passkeys/register/verify', registerBody, once('register'))
+    expect([registerAgain.status, registerAgain.headers.get('set-cookie')]).toEqual([409, null])
+    expect((await registerAgain.json()).code).toBe('shown_once')
+
+    const visitor = browser()
+    const login = await visitor.json('POST', '/api/session/passkeys/login/options')
+    const loginBody = { challengeId: login.challengeId, response: await authenticator.login(login.options, ORIGIN) }
+    const signedIn = await visitor.call('POST', '/api/session/passkeys/login/verify', loginBody, once('login'))
+    const secondSession = sessionTokenOf(signedIn)
+    expect(secondSession).toBeTruthy()
+    const loginAgain = await visitor.call('POST', '/api/session/passkeys/login/verify', loginBody, once('login'))
+    expect([loginAgain.status, loginAgain.headers.get('set-cookie')]).toEqual([409, null])
+    expect((await loginAgain.json()).code).toBe('shown_once')
+
+    // The guard kept that each was made, never the enrolment or a session
+    expect(kept).toEqual([0, 1, 2].map(() => ({ version: 2, bodyHash: expect.any(String), shownOnce: expect.any(String) })))
+    for (const secret of [enrolment, firstSession!, secondSession!]) expect(JSON.stringify(kept)).not.toContain(secret)
   })
 })
 

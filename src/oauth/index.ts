@@ -102,7 +102,8 @@ export type OAuthConfig = {
   /**
    * Hears the first token of every grant (a code, a device approval, a claim), after the kit's own checks: where an app
    * spends an invite or makes its own row for the grant. false withdraws it (`invalid_grant`, the code or device code
-   * spent, a claim's grant revoked). Never asked on refresh or jwt-bearer: judge later requests in `accepts`.
+   * spent, a claim's grant revoked). A grant ended while it ran (a replayed code, a revoke) gets no token either, and
+   * `onRevoke` hears it again after. Never asked on refresh or jwt-bearer: judge later requests in `accepts`.
    *
    * @example
    * onGrant: async (grant) => grant.kind !== 'code' || invites.spend(grant.data?.invite, grant.grant)
@@ -111,8 +112,8 @@ export type OAuthConfig = {
   /**
    * Hears every grant the kit ends, and why (`SignInRevoked`), after it has ended it: where an app drops the row it
    * made in `onGrant`. A grant that lapses (its refresh token unused for 30 days) is not told: the app ages its own
-   * rows. At least once: a grant ended again (a code sent a third time) is told again. A throw is logged, never
-   * answered, so it can't undo or fail a revoke.
+   * rows. At least once: a grant ended again (a code sent a third time), or while `onGrant` ran, is told again. A
+   * throw is logged, never answered, so it can't undo or fail a revoke.
    *
    * @example
    * onRevoke: async ({ grant, reason }) => grant && members.dropGrant(grant, reason)
@@ -238,6 +239,8 @@ const deviceUserCode = () => {
   const letters = Array.from({ length: 8 }, () => USER_CODE_ALPHABET[randomInt(USER_CODE_ALPHABET.length)]).join('')
   return `${letters.slice(0, 4)}-${letters.slice(4)}`
 }
+/** Why a grant's revoke marker says it ended; a marker from before it kept one reads as `revoked`. */
+const reasonOf = (marker: Record<string, unknown>): SignInRevoked['reason'] => (marker.reason === 'replayed' || marker.reason === 'withdrawn' ? marker.reason : 'revoked')
 /** A typed code as stored: case, dashes and spaces don't matter. */
 const userCodeKey = (typed: string) => sha(typed.toUpperCase().replace(/[^A-Z]/g, ''))
 
@@ -491,8 +494,20 @@ export const createOAuth = (config: OAuthConfig) => {
 
   /** Ends one approval at once (its access tokens fail `verify`, its refresh tokens are refused), then tells the app why. */
   const endGrant = async (grant: string, reason: SignInRevoked['reason'], client?: string) => {
-    await store.put('revoked-family', grant, {}, now() + REVOKED_TTL)
+    await store.put('revoked-family', grant, { reason }, now() + REVOKED_TTL)
     await tellRevoked({ grant, ...(client === undefined ? {} : { client }), reason })
+  }
+
+  /**
+   * Whether a grant ended while `onGrant` ran (a replayed code, `revokeGrant`, `revokeClient`): then `onRevoke` hears it
+   * again, since the app may have written its row after it first heard. Read after `onGrant` answers, before anything
+   * is issued, so no token comes from a dead grant and no row outlives it.
+   */
+  const endedDuringOnGrant = async ({ grant, client }: Grant) => {
+    const [grantMarker, clientMarker] = await Promise.all([store.get('revoked-family', grant), store.get('revoked-client', client)])
+    if (grantMarker) await tellRevoked({ grant, client, reason: reasonOf(grantMarker) })
+    else if (clientMarker) await tellRevoked({ client, reason: 'client_revoked' })
+    return Boolean(grantMarker || clientMarker)
   }
 
   /**
@@ -735,7 +750,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
   }
 
   type Consent = { params: Record<string, string>; nonce: string; arrival: SignInAsk['arrival']; expiresAt: number; owner?: string }
-  const askOf = (ticket: string, row: Consent, checked: Checked, audience: string): SignInAsk => {
+  /** `bound`: the ticket's audience, and the resource the client named and got (null when the server chose the root). */
+  const askOf = (ticket: string, row: Consent, checked: Checked, bound: { audience: string; resource: string | null }): SignInAsk => {
     const { params } = row
     const back = returnOf(params.redirect_uri!)
     return {
@@ -745,7 +761,9 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       redirectHost: back.host,
       onThisComputer: back.onThisComputer,
       scopes: checked.scopes,
-      resource: audience,
+      resource: bound.audience,
+      named: bound.resource !== null,
+      expiresAt: row.expiresAt,
       ...(params.state === undefined ? {} : { state: params.state }),
       arrival: row.arrival,
     }
@@ -847,7 +865,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     if (!('row' in found)) return null
     const checked = await authorizeParams(c, found.row.params)
     const bound = audienceFor(c, found.row.params.resource)
-    return 'error' in checked || 'refused' in bound ? null : askOf(ticket, found.row, checked, bound.audience)
+    return 'error' in checked || 'refused' in bound ? null : askOf(ticket, found.row, checked, bound)
   }
 
   /**
@@ -971,7 +989,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       }
       if (config.approve) {
         // Stored only once a page holds the ticket: a stranger turned away leaves no row behind
-        const own = await config.approve(c, askOf(ticket, row, checked, bound.audience))
+        const own = await config.approve(c, askOf(ticket, row, checked, bound))
         if (own) {
           await putUnused('consent', ticket, row, expiresAt)
           return bindTo(own)
@@ -1173,14 +1191,21 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const origin = issuerOf(c)
       /** More than one resource for a row bound to one, checked before any write; a row from before audiences ignores resource altogether. */
       const manyFor = async (row: Record<string, unknown>) => typeof row.audience === 'string' && (await manyResources(c))
-      /** The app's word on the first token of a grant; without `onGrant`, yes. */
-      const heard = async (kind: SignInGrant['kind'], issued: Grant, data?: unknown) =>
-        !config.onGrant ||
-        (await config.onGrant({ kind, grant: issued.grant, client: { id: issued.client, name: issued.name }, approver: issued.owner, scopes: issued.scopes, ...(issued.audience ? { resource: issued.audience } : {}), ...(data ? { data: data as Record<string, string> } : {}) }, c))
       /** onGrant said no: the grant ends before any token, and the app hears it did. */
       const withdrawn = async (issued: Grant) => {
         await endGrant(issued.grant, 'withdrawn', issued.client)
         return oauthError(c, 400, 'invalid_grant', 'This sign-in was withdrawn: start again.')
+      }
+      /**
+       * The app's word on the first token of a grant, null to go on: a refusal when `onGrant` says no (the grant
+       * withdrawn) or the grant ended while it ran (nothing issued, `onRevoke` told again). Without `onGrant`, null.
+       */
+      const refusedByApp = async (kind: SignInGrant['kind'], issued: Grant, data?: unknown) => {
+        if (!config.onGrant) return null
+        const yes = await config.onGrant({ kind, grant: issued.grant, client: { id: issued.client, name: issued.name }, approver: issued.owner, scopes: issued.scopes, ...(issued.audience ? { resource: issued.audience } : {}), ...(data ? { data: data as Record<string, string> } : {}) }, c)
+        if (!yes) return withdrawn(issued)
+        if (await endedDuringOnGrant(issued)) return oauthError(c, 400, 'invalid_grant', 'This sign-in was revoked: start again.')
+        return null
       }
       switch (body.grant_type) {
         case 'authorization_code': {
@@ -1206,7 +1231,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (await store.get('revoked-client', String(row.client))) return oauthError(c, 400, 'invalid_grant', 'This client was revoked: register again.')
           const issued = { client: String(row.client), name: String(row.name), owner: String(row.owner), scopes: row.scopes as string[], grant, ...boundOf(row) }
           // The code is spent either way: a refusal issues nothing
-          if (!(await heard('code', issued, row.data))) return withdrawn(issued)
+          const refused = await refusedByApp('code', issued, row.data)
+          if (refused) return refused
           await usedClient(issued.client)
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
         }
@@ -1281,7 +1307,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const issued = { client, name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant, ...boundOf(registration) }
           if (config.onGrant) {
             // Refused, the grant ends, so the agent's identity assertion buys nothing either; heard, jwt-bearer may follow
-            if (!(await heard('claim', issued))) return withdrawn(issued)
+            const refused = await refusedByApp('claim', issued)
+            if (refused) return refused
             await store.put('registration', client, { ...registration, collected: true }, now() + REGISTRATION_TTL)
           }
           const assertion = await sign({ sub: client, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
@@ -1313,7 +1340,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (decision?.status === 'denied') return oauthError(c, 400, 'access_denied', 'The owner said no.')
           if (decision?.status === 'approved') {
             const issued = { client: String(record.client), name: String(record.name), owner: String(decision.owner), scopes: record.scopes as string[], grant: newGrant(), ...boundOf(record) }
-            if (!(await heard('device', issued))) return withdrawn(issued)
+            const refused = await refusedByApp('device', issued)
+            if (refused) return refused
             await usedClient(issued.client)
             return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
           }

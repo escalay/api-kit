@@ -15,13 +15,17 @@ export type SignInAsk = {
   ticket: string
   client: { id: string; name: string; redirectUris: string[] }
   redirectUri: string
-  /** Where the client returns: the redirect's host, or an app's own scheme (`sample-app:`). */
+  /** Where the client returns: the redirect's host, or its scheme (`sample-app:`). */
   redirectHost: string
-  /** The redirect is on this machine: a loopback address or an app's own scheme. */
+  /** The redirect is on this machine: an http redirect to a loopback host. Never a custom scheme: any app may claim one. */
   onThisComputer: boolean
   scopes: string[]
   /** The audience the grant gets: the resource asked for when this server issues for it, else the root. */
   resource: string
+  /** The client named `resource` itself: `complete` keeps it, and refuses to bind another. */
+  named: boolean
+  /** When the ticket expires, in epoch seconds. */
+  expiresAt: number
   state?: string
   /** How the browser arrived at the first page: `Sec-Fetch-Site` and the `Referer`'s origin, when sent. */
   arrival: { site: string | null; referrerOrigin: string | null }
@@ -95,9 +99,17 @@ export const arrivalOf = (c: Context) => {
   return { site: c.req.header('sec-fetch-site') ?? null, referrerOrigin: origin === 'null' ? null : origin }
 }
 
-/** Where a redirect returns, as a person reads it: a host, or an app on this computer. @example returnOf('http://127.0.0.1:33418/cb') // { host: '127.0.0.1:33418', onThisComputer: true } */
+/**
+ * Where a redirect returns, as a person reads it: its host (its scheme for a custom one), and whether that is this
+ * computer: an http redirect to a loopback host, and nothing else. A custom scheme is whatever app claimed it, a browser
+ * that opens any page included, so it is named, never trusted.
+ *
+ * @example
+ * returnOf('http://127.0.0.1:33418/cb') // { host: '127.0.0.1:33418', onThisComputer: true }
+ * returnOf('sample-app://cb')           // { host: 'sample-app:', onThisComputer: false }
+ */
 export const returnOf = (redirectUri: string) => {
   const url = new URL(redirectUri)
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') return { host: url.protocol, onThisComputer: true }
-  return { host: url.host, onThisComputer: LOOPBACK.includes(url.hostname) }
+  const web = url.protocol === 'https:' || url.protocol === 'http:'
+  return { host: web ? url.host : url.protocol, onThisComputer: url.protocol === 'http:' && LOOPBACK.includes(url.hostname) }
 }

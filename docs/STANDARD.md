@@ -85,6 +85,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 | `forbidden` | 403 | A valid key that may not do this. |
 | `not_found` | 404 | No such route or id in this snapshot. |
 | `conflict` | 409 | Clashes with the current state. |
+| `shown_once` | 409 | A retry with the Idempotency-Key of a request whose answer showed a secret once; `detail` says what was made. |
 | `payload_too_large` | 413 | Over the documented size. |
 | `too_many_requests` | 429 | Wait `Retry-After` seconds. |
 | `spend_cap` | 429 | A paid operation's budget is spent; free ones still work. |
@@ -111,7 +112,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   hashes (`API_KEYS=laptop:<sha256>,ci:<sha256>`); the keys live in **your secret store, scoped to the app**,
   one secret per client (`API_KEY_LAPTOP`, …). Revoke = remove its line and redeploy.
 - **Keys an app makes itself (optional, `keys` module):** for a tool whose users hand out keys without a deploy,
-  `registerKeys` adds `/api/keys` (make, list, revoke; the key shown once, only its hash kept) and `/api/me` (who is
+  `registerKeys` adds `/api/keys` (make, list, revoke; the key shown once, only its hash kept, never kept by Idempotency-Key: §9) and `/api/me` (who is
   calling). `API_KEYS` keeps working beside them. Only a key from `API_KEYS` or a signed-in person may make or revoke
   keys: a key made through the API cannot make another, so a leaked one can't make itself a spare.
 - **People:** Cloudflare Access SSO in front of the web pages; the app also verifies `Cf-Access-Jwt-Assertion` against
@@ -186,12 +187,16 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   `<meta name="referrer" content="same-origin">` over the `no-referrer` header); `same-site` is refused, since a
   sibling host is same-site. The approval only narrows scopes, and sets the resource only where the client named none (an invite binds its space; checked as a client's resource would be, the client's own never changed). `onGrant` hears
   the first token of every grant (code, device, claim) after the kit's checks, once, and false withdraws it
-  (`invalid_grant`); an app that keeps its own client rows makes them in `onGrant`, drops them in `onRevoke`,
-  which hears every grant the kit ends (revoked, replayed, withdrawn, its client revoked; a throw there never fails the
-  revoke), and refuses a token whose grant has none. A grant that lapses (its refresh token unused for 30 days) is not
-  told, since nothing ends it: the app ages its own rows (a last-seen time written in `accepts`, a row with none for 30
-  days dropped with `revokeGrant`). The kit's own pages carry the app's brand (§22) and name the client by text only, never a `logo_uri`; the
-  consent page names the resource asked for and whether the client returns to a host or an app on this computer.
+  (`invalid_grant`); a grant ended while it ran (a replayed code, a revoke) gets no token either, and `onRevoke` hears
+  it again, so no row the app wrote outlives its grant; an app that keeps its own client rows makes them in `onGrant`,
+  drops them in `onRevoke`, which hears every grant the kit ends (revoked, replayed, withdrawn, its client revoked; a
+  throw there never fails the revoke), and refuses a token whose grant has none. A grant that lapses (its refresh token
+  unused for 30 days) is not told, since nothing ends it: the app ages its own rows (a last-seen time written in
+  `accepts`, a row with none for 30 days dropped with `revokeGrant`). The kit's own pages carry the app's brand (§22)
+  and name the client by text only, never a `logo_uri`; the consent page names the resource asked for and where the
+  client returns: a host, a custom scheme (named, never trusted: any app, a browser included, may claim one), or an app
+  on this computer, which is an http redirect to a loopback host and nothing else (`SignInAsk.onThisComputer` too). The
+  app's page hears whether the client named its resource (`named`), since `complete` binds no other for it.
 - **Audiences (RFC 8707, RFC 9728, MCP 2026-07-28):** every grant is bound to one resource, signed as the token's
   `aud`. It is the resource the client sent at the authorization request (or device authorization) when the server
   issues for it, else the **root** (the issuer's origin): a client that sends none, or (without `resources`) one the
@@ -267,6 +272,15 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   the header on each of them. Only a success is kept: a refusal (`401`, `403`, `404`, `408`, `409`, `422`, `429`, any
   `4xx`) or a server error changed nothing, so a retry with the same key runs again. The token endpoints (`/oauth/*`,
   `/agent/identity*`) are never kept; an app lists its own open routes that answer a secret in `skip`, so they never are.
+- **A secret shown once is never kept to replay.** A route whose answer shows one (a new API key, an enrolment, a
+  session cookie, an invite code) calls `showOnce(c, replay)`: the guard keeps only `replay`, never the body or a
+  header, and a retry with the same key and body is a `409 shown_once` whose detail says what was made, where to see
+  it, that the secret is never shown again, and what to do if it was lost. The answer carries `Shown-Once: true`, so
+  a relay keeps nothing of it either (an A2A task is kept without its artifact). Never a `400`: the kit's client sends a key
+  on every create, so creating keeps working. A relay (MCP, A2A, wherever mounted) never keeps its own answer
+  (`neverKeep`) and hands the caller's Idempotency-Key to the route its tool runs, which keeps its own: a retried tool
+  call runs once and never answers a secret twice. `skip` is for a route where a retry should run again (the secret
+  is new each time); `showOnce` for one that must not run twice.
 - Paid routes sit behind `rateLimit` per caller, with the `RateLimit-Policy` / `RateLimit` headers and a `429` with
   `Retry-After` past the limit, so a looping agent can't drain the budget. `rateLimit({ key })` counts per anything
   else instead (a pack, a grant); a `null` key leaves the call uncounted.
@@ -719,10 +733,11 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
   the browser may remember it for a short while (a sealed cookie that holds no code). The invite is spent with the
   grant's first token (`onGrant`), never at the click, so a second use is refused and junk cannot spend it.
 - **Known apps redeem in one click; any other app is warned and asks for the code.** The app keeps a list of
-  returns it knows (the exact callbacks of the agents it expects, and an app on this computer). For one of those, a
-  remembered invite is one click. For any other return, the page warns "This app returns to <host>" (the client's
-  name is its own claim, never verified; the return is what counts) and asks for the code from the invite, even when
-  the link is remembered. Nothing is approved without a click.
+  returns it knows (the exact callbacks of the agents it expects, and an app on this computer: an http loopback
+  redirect, never a custom scheme the app has not listed). For one of those, a remembered invite is one click. For any
+  other return, the page warns "This app returns to <host>" (the client's name is its own claim, never verified; the
+  return is what counts) and asks for the code from the invite, even when the link is remembered. Nothing is approved
+  without a click.
 - **The owner's approval makes a space-locked grant, never an owner token.** The owner, signed in, approves an app at
   a space in one click, after the same warning for an unknown return. Asking to join waits on the owner (the asker's
   page polls the app, then posts `complete` from the same browser: the ask's ticket held for its wait, `holdTicket`). The grant binds the space with
@@ -743,6 +758,7 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
   for a space that exists and one that does not; never a 403 that confirms it. Metadata is 404 only for a path
   `resources` refuses, and a wrong code is "not one of ours" whether or not the space is real. The code page is
   limited like the kit's own open endpoints.
-- **Tested as a browser does it.** The owner's approval through `approveSignIn` (`testing`); the app's own page with
-  the same ticket cookie and `Sec-Fetch-Site: same-origin`; then a space's token refused at another space, a spent
-  invite refused, a removed member's token refused, and the 404 the same for an unknown and a hidden space.
+- **Tested as a browser does it.** The owner's approval through `approveSignIn` (`testing`); the app's own page through
+  its `form` option (the same ticket cookie and `Sec-Fetch-Site: same-origin`); then a space's token refused at another
+  space, a spent invite refused, a removed member's token refused, and the 404 the same for an unknown and a hidden
+  space.

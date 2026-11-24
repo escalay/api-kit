@@ -17,12 +17,12 @@ The browser side, for the app's frontend (not the API): typed clients for the se
 
 | Part | Files | What |
 |---|---|---|
-| `search-client` | `search-client.ts` | `createSearchClient`, `createSearchController` (debounce, cancel, picture paste and drop) |
+| `search-client` | `search-client.ts` | `createSearchClient`, `createSearchController` (debounce, cancel, picture paste and drop), `pictureFrom` (the first picture in a paste or drop) and `listenForPictures` (both, on any target) |
 | `search-react` | `search-react.ts` | `useVectorSearch`, `usePictureInput`, `useSimilar` |
 | `vector-search-ui` | `vector-search-block.tsx` | an optional search block (shadcn `button` + `input`) |
-| `boards-client` | `boards-client.ts` + `../boards/refs.ts` | `createBoardsClient`: list, create, save, unsave, suggestions; `BoardsError` carries the problem |
+| `boards-client` | `boards-client.ts` + `../boards/refs.ts` | `createBoardsClient`: list, create, save, unsave, suggestions; `BoardsError` carries the problem; `boardRef`, `parseBoardRef`, `BOARD_REF` |
 | `boards-react` | `boards-react.ts` | `useBoards`, `useItemBoards` |
-| `switches-client` | `switches-client.ts` | `createFeaturesClient`: the features for the person signed in (`isOn`, refresh on focus, `switch` with `dryRun`, `onDisabled` and `watchFetch` for every 403 `feature_disabled`); `isFeatureDisabled`, `whyOff` |
+| `switches-client` | `switches-client.ts` | `createFeaturesClient`: the features for the person signed in (`isOn`, refresh on focus, `switch` with `dryRun`, `onDisabled` and `watchFetch` for every 403 `feature_disabled`); `FeaturesError` carries the problem; `isFeatureDisabled`, `whyOff` |
 | `switches-react` | `switches-react.tsx` | `FeaturesProvider`, `useFeature`, `<Feature>`, `useFeatures`, `useSwitchFeature`, `useFeatureDisabled`, `featureHooks<Key>()` |
 | `switches-ui` | `switches-block.tsx` | `FeatureSwitches` (the owner's panel) and `FeatureDisabledNotice` (shadcn `button` + `switch`) |
 

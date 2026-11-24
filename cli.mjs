@@ -10,6 +10,9 @@
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
  *   kit update [part…] [--dir src/kit] [--force]
+ *   kit upgrading [--dir src/kit] [--from <version>]
+ *                                             what changed for the parts in kit.json since its version (or --from), and
+ *                                             what to do: their notes from the kit's docs/upgrading.md, part by part
  *   kit doctor [--dir src/kit] [--adopt]      missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it)
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
  *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--yes]
@@ -215,6 +218,43 @@ const findingsOf = (lock) => {
     ...(lock.version !== VERSION && !behind.length && !kept.length ? [`behind   kit.json says kit ${lock.version}, this is ${VERSION} with the same files: \`kit update --dir ${dirArg}\` records it`] : []),
   ]
 }
+
+// ---- Upgrade notes: docs/upgrading.md, which the npm package ships ----
+
+/** Below zero when version `a` is older than `b`: `1.9.0` is older than `1.10.0`. */
+const compareVersions = (a, b) => {
+  const [x, y] = [a, b].map((version) => version.split('.').map(Number))
+  return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]
+}
+const isVersion = (text) => /^\d+\.\d+\.\d+$/.test(text)
+/** `### 1.30.0`, `### 1.29.0: approvals`, `### Unreleased (after 1.30.0)`. */
+const NOTE_HEADING = /^### (?:(\d+\.\d+\.\d+)|Unreleased \(after (\d+\.\d+\.\d+)\))(?:: .+)?$/
+
+/** The folder a part's notes are under: its README's (every browser part's is `browser`). */
+const notesFolderOf = (name) => REGISTRY[name].files.find((file) => file.endsWith('README.md')).split('/')[0]
+
+/** A part folder's notes in docs/upgrading.md newer than `since`, each its `###` heading and text; Unreleased is newer than the version it follows, an unknown heading always shown. */
+const notesSince = (markdown, folder, since) => {
+  const notes = []
+  let inSection = false
+  let fenced = false
+  for (const line of markdown.split('\n')) {
+    if (line.startsWith('```')) fenced = !fenced
+    if (!fenced && line.startsWith('## ')) {
+      inSection = line === `## ${folder}`
+      continue
+    }
+    if (!inSection) continue
+    if (!fenced && line.startsWith('### ')) {
+      const [, version, after] = NOTE_HEADING.exec(line) ?? []
+      notes.push({ newer: version ? compareVersions(version, since) > 0 : after ? compareVersions(after, since) >= 0 : true, lines: [line] })
+    } else notes.at(-1)?.lines.push(line)
+  }
+  return notes.filter(({ newer }) => newer).map(({ lines }) => lines.join('\n').trim())
+}
+
+/** What an app behind this kit runs to read what changed: printed by `doctor` and `update`. */
+const upgradingCommand = (since, withFrom) => `\`kit upgrading --dir ${dirArg}${withFrom ? ` --from ${since}` : ''}\``
 
 /** Writes kit.json for parts that were copied without one (the shadcn CLI): every part whose files are all on disk. */
 const adopt = () => {
@@ -1347,7 +1387,8 @@ const commands = {
     const brand = root ? brandFindings(root, lock.modules.includes('brand')) : { findings: [], notes: lock?.modules.includes('brand') ? [`note     brand: no package.json above ${dirArg}: \`--app <app>\` names the app whose brand/ to check`] : [] }
     const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
     const texts = lock ? appTexts() : []
-    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules)] : []), ...brand.notes, ...findings]) console.log(line)
+    const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
+    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules)] : []), ...brand.notes, ...behindNotes, ...findings]) console.log(line)
     console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
   },
@@ -1535,6 +1576,8 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     }
     // A kept file still holds the older kit's code, so kit.json keeps the older version until none is left
     writeLock(modules, hashes, lock.webDir, kept.length ? lock.version : VERSION)
+    // kit.json may now record this kit, so the command names the version the app came from
+    if (isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0) console.log(`What changed for these parts since kit ${lock.version}: ${upgradingCommand(lock.version, true)}`)
     if (kept.length) {
       console.log(`${kept.length} ${kept.length === 1 ? 'file' : 'files'} kept at kit ${lock.version}: ${kept.join(', ')}. ${keptFix()}`)
       console.log(`Dependencies: ${installCommand(modules)}`)
@@ -1542,6 +1585,18 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
       return
     }
     console.log(`kit.json → ${VERSION}. Dependencies: ${installCommand(modules)}`)
+  },
+
+  upgrading: () => {
+    const lock = readLock() ?? fail(`no kit.json in ${dirArg}; add modules first`)
+    const since = valueOf('--from') ?? lock.version
+    if (!isVersion(since)) fail(`--from is a version, like 1.29.0`)
+    const markdown = readFileSync(join(KIT, 'docs/upgrading.md'), 'utf8')
+    const folders = [...new Set(lock.modules.filter((name) => REGISTRY[name]).map(notesFolderOf))]
+    const sections = folders.map((folder) => [folder, notesSince(markdown, folder, since)]).filter(([, notes]) => notes.length)
+    if (!sections.length) return console.log(`No upgrade notes for ${folders.join(', ')} after kit ${since} (this is kit ${VERSION})`)
+    console.log(`Upgrade notes for ${folders.join(', ')} after kit ${since}, up to kit ${VERSION} (the kit's docs/upgrading.md):`)
+    for (const [folder, notes] of sections) console.log(`\n## ${folder}\n\n${notes.join('\n\n')}`)
   },
 }
 
