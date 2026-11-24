@@ -244,7 +244,20 @@ describe('an invite claim', () => {
     const memberId = await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-kept'), NOW)
     expect(await repo.endMember('sp_soups', memberId!, 'removed', NOW)).toBe('grant-kept')
     expect(await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-after'), NOW)).toBeNull()
+    // A revoke of an invite a member holds is recorded all the same, once; the member keeps its own row
+    expect(await repo.revokeInvite('sp_soups', inviteId, NOW)).toBe(true)
     expect(await repo.revokeInvite('sp_soups', inviteId, NOW)).toBe(false)
+    expect((await repo.inviteAt('sp_soups', inviteId))?.revokedAt).toBe(NOW.toISOString())
+  })
+
+  it('never opens a revoked invite again, even when the member holding it at the revoke is withdrawn', async () => {
+    const { repo, inviteId } = await opened()
+    await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-mid-exchange'), NOW)
+    expect(await repo.revokeInvite('sp_soups', inviteId, NOW)).toBe(true)
+    await repo.deleteMemberOfGrant('grant-mid-exchange')
+    const invite = (await repo.inviteAt('sp_soups', inviteId))!
+    expect(inviteStateOf(invite, invite.memberId ? { id: invite.memberId } : null, NOW)).toBe('revoked')
+    expect(await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-after'), NOW)).toBeNull()
   })
 
   it('refuses a code collision on create without throwing', async () => {
@@ -283,7 +296,21 @@ describe('an ask claim', () => {
     expect(claims.filter(Boolean)).toHaveLength(1)
     const ask = (await repo.requestAt('sp_soups', requestId))!
     expect(requestStateOf(ask, { id: ask.memberId! }, NOW)).toBe('joined')
+    // A refusal of an ask someone joined by is recorded all the same, once; the member keeps its own row
+    expect(await repo.refuseRequest('sp_soups', requestId, 'owner@example.test', NOW)).toBe(true)
     expect(await repo.refuseRequest('sp_soups', requestId, 'owner@example.test', NOW)).toBe(false)
+    const refused = (await repo.requestAt('sp_soups', requestId))!
+    expect([refused.state, requestStateOf(refused, { id: refused.memberId! }, NOW)]).toEqual(['refused', 'joined'])
+  })
+
+  it('never opens a refused ask again, even when the member holding it at the refusal is withdrawn', async () => {
+    const { repo, requestId } = await asked()
+    await approve(repo, requestId)
+    await repo.claimRequest(requestId, memberRow('sp_soups', NOW, 'grant-mid-exchange'), NOW)
+    expect(await repo.refuseRequest('sp_soups', requestId, 'owner@example.test', NOW)).toBe(true)
+    await repo.deleteMemberOfGrant('grant-mid-exchange')
+    expect(await repo.claimRequest(requestId, memberRow('sp_soups', NOW, 'grant-after'), NOW)).toBeNull()
+    expect(requestStateOf((await repo.requestAt('sp_soups', requestId))!, null, NOW)).toBe('refused')
   })
 
   it('makes nothing before the owner approves, after a refusal, or once the ticket lapsed', async () => {
@@ -299,11 +326,12 @@ describe('an ask claim', () => {
     expect(await approve(lapsed.repo, lapsed.requestId, at(NOW, DAY))).toBe(false)
   })
 
-  it('decides once: a decided ask is not approved again, and a lapsed one is not refused', async () => {
+  it('decides once: a decided ask is not approved again, and a refusal is recorded even once it lapsed', async () => {
     const { repo, requestId } = await asked()
     expect(await approve(repo, requestId)).toBe(true)
     expect(await approve(repo, requestId)).toBe(false)
-    expect(await repo.refuseRequest('sp_soups', requestId, 'owner@example.test', at(NOW, DAY))).toBe(false)
+    expect(await repo.refuseRequest('sp_soups', requestId, 'owner@example.test', at(NOW, DAY))).toBe(true)
+    expect(await approve(repo, requestId)).toBe(false)
   })
 
   it('takes one ask per ticket, and counts what waits at a space and from an address', async () => {
@@ -437,16 +465,17 @@ describe('members', () => {
 })
 
 describe('an agent’s invites', () => {
-  it('are revoked with its grant or its client, and the people who joined through them stay', async () => {
+  it('are revoked with its grant or its client, redeemed ones recorded too, and the people who joined through them stay', async () => {
     const repo = sharingRepo(await sharingDb())
     const agent = { madeByClient: 'client-agent', madeByGrant: 'grant-agent', invitedBy: 'agent:client-agent' }
     const joined = (await repo.addInvite(inviteRow('sp_soups', NOW, 'joined', agent)))!
     await repo.addInvite(inviteRow('sp_soups', NOW, 'open', agent))
     await repo.addInvite(inviteRow('sp_bakes', NOW, 'other-grant', { ...agent, madeByGrant: 'grant-later' }))
     await repo.claimInvite(joined, memberRow('sp_soups', NOW, 'grant-sam'), NOW)
-    expect(await repo.revokeInvitesMadeByGrant('grant-agent', NOW)).toBe(1)
+    expect(await repo.revokeInvitesMadeByGrant('grant-agent', NOW)).toBe(2)
     expect(await repo.revokeInvitesMadeByGrant('grant-agent', NOW)).toBe(0)
     expect(await repo.revokeInvitesMadeByClient('client-agent', NOW)).toBe(1)
+    expect((await repo.inviteAt('sp_soups', joined))?.revokedAt).toBe(NOW.toISOString())
     expect(memberStateOf((await repo.memberByGrant('grant-sam'))!, NOW)).toEqual({ state: 'active' })
   })
 })

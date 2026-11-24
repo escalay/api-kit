@@ -177,14 +177,17 @@ describe('invites', () => {
     expect(invite.link.startsWith('https://sample.example.test/sharing/join/')).toBe(true)
   })
 
-  it('is refused at 409 once redeemed, and its revoke changes nothing', async () => {
+  it('answers 409 once redeemed, and records the revoke all the same: its member keeps access', async () => {
     const { byKey, db } = await sharingApi()
     const invite = await makeInvite(byKey)
     const now = new Date()
     expect(await sharingRepo(db).claimInvite(invite.id, { grantId: 'grant-1', clientId: 'client-1', spaceId: 'sp_soups', label: 'Sam', appName: 'Sample', returnsTo: 'this computer', scope: 'read', lifetime: '30d', joinedAt: now.toISOString(), expiresAt: null, lastSeenAt: now.toISOString() }, now)).not.toBeNull()
     const refused = await byKey(`/api/spaces/soups/invites/${invite.id}`, { method: 'DELETE' })
     expect(refused.status).toBe(409)
-    expect((await invitesAt(byKey))[0]?.state).toBe('redeemed')
+    expect(((await refused.json()) as { detail: string }).detail).toMatch(/used already/)
+    expect((await invitesAt(byKey))[0]).toMatchObject({ state: 'redeemed', revokedAt: expect.any(String) })
+    expect((await sharingRepo(db).memberByGrant('grant-1'))?.endedAt).toBeNull()
+    expect((await byKey(`/api/spaces/soups/invites/${invite.id}`, { method: 'DELETE' })).status).toBe(409)
   })
 
   it('stop at 100 open at a space', async () => {

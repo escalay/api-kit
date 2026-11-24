@@ -101,7 +101,7 @@ The owner routes (`{path}` default `/api/spaces`) and their tools:
 | `POST {path}/{space}/invites` `{ label, scope = 'read', lifetime = '30d' }` | `createInvite` | `create_invite`, `invite create` | 201 with `link`, `code` and `message`, shown once, and `Location`; 400; 409 at 100 open, or `shown_once` on a retry |
 | `GET {path}/{space}/invites?limit&cursor` | `listInvites` | `list_invites`, `invite list` | 200, newest first, a page at a time (the tool's text gives the next cursor), never a link or code |
 | `GET {path}/{space}/invites/{id}` | `getInvite` | none: `list_invites` holds the same | 200, the card its `self` names; 404 |
-| `DELETE {path}/{space}/invites/{id}` | `revokeInvite` | `revoke_invite`, `invite revoke` | 204, again 204; 409 once used |
+| `DELETE {path}/{space}/invites/{id}` | `revokeInvite` | `revoke_invite`, `invite revoke` | 204, again 204; 409 once used (revoked all the same) |
 
 `sharingRepo(db)`, by table:
 
@@ -158,6 +158,7 @@ stateDiagram-v2
   open --> revoked: the owner revokes it, or Invite again is used again
   open --> expired: redeem_by passes
   redeemed --> open: the grant was withdrawn and its row deleted
+  redeemed --> revoked: withdrawn after a revoke
   redeemed --> [*]
   revoked --> [*]
   expired --> [*]: deleted 7 days later
@@ -236,6 +237,8 @@ stateDiagram-v2
   same way. No transaction: each holds on node:sqlite, libSQL and D1.
 - **An id never crosses spaces.** Every statement taking an id a route names also takes the space
   (`and space_id = ?`).
+- **A revoke is always recorded**, as is `refuseRequest`, whatever member holds the invite (who keeps access): the
+  claims need none, so a revoked invite or refused ask never opens again.
 - **Ending is not deleting.** An ended member's row stays until aging deletes it, so its invite never reopens.
 - **States are named only through `states.ts`**, one rule per function, and checked again in SQL by the once-only
   statements. The owner's list hides removed and replaced members and shows other ended ones as signed out.
@@ -255,7 +258,7 @@ stateDiagram-v2
 | 400 on `createInvite` | a label that is empty, over 80 or holds control, bidi or zero-width characters; an agent asking for `until_revoked` |
 | 409 on `createInvite` | 100 open invites at the space; or `shown_once`: a retry with the same Idempotency-Key (the invite was made) |
 | 409 on `updateSharing` | the app's `askToJoin` option is off |
-| 409 on `revokeInvite` | the invite was used already |
+| 409 on `revokeInvite` | the invite was used already: revoked all the same, its member keeps access |
 | a once-only statement answers null or false | it lost or found nothing: the row is spent, revoked, late, decided or another space's, the grant has a member, or the space holds 100 open invites (`addInvite`) |
 | 400 `invalid_grant` "withdrawn" | `onGrant` said no: a space grant not from the part's pages; an invite spent, revoked, late or another space's; more scope, or another approver; a sharing approval at the root |
 | 401 "works only at its own space" | a live space token at another space (or an old name), `/mcp`, an `/api` route `spaceOfPath` doesn't name, or a space `byId` misses |
@@ -266,7 +269,6 @@ stateDiagram-v2
 
 - 100 open invites per space; lists 50 a page by default, 100 at most.
 - An invite's code: 8 letters from 20 (about 34.6 bits), redeemable for a day.
-- Node and Workers, on any database `openDb` opens (node:sqlite, libSQL, D1).
 
 ## Tests
 

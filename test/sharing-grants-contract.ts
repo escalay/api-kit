@@ -167,7 +167,7 @@ export const sharingGrantsContract = (name: string, makeDb: () => Promise<Db>) =
       for (const one of ['revoked', 'replayed', 'withdrawn', 'bystander']) await repo.addOwnerMember(memberRow('sp_soups', now, grant(one)))
       await repo.addOwnerMember(memberRow('sp_soups', now, grant('client-a'), { clientId: client }))
       await repo.addOwnerMember(memberRow('sp_bakes', now, grant('client-b'), { clientId: client }))
-      // Invites an agent made: open ones end with its grant or client, a redeemed one stays redeemed
+      // Invites an agent made end with its grant or client, a redeemed one recorded too while its member stays
       const byAgent = (label: string, change: Parameters<typeof inviteRow>[3]) => repo.addInvite(inviteRow('sp_soups', now, `${label}-${run}`, change))
       const madeUnderRevoked = (await byAgent('agent-open', { madeByGrant: grant('revoked'), madeByClient: `agent-${run}` }))!
       const madeUnderWithdrawn = (await byAgent('agent-withdrawn', { madeByGrant: grant('withdrawn'), madeByClient: `agent-w-${run}` }))!
@@ -189,7 +189,8 @@ export const sharingGrantsContract = (name: string, makeDb: () => Promise<Db>) =
       await tell()
       const once = await rows()
       expect(once.members.map((row) => (row ? row.endedReason : 'deleted'))).toEqual(['revoked', 'replayed', 'deleted', null, 'client_revoked', 'client_revoked', null])
-      expect(once.invites.map(Boolean)).toEqual([true, false, true, false])
+      expect(once.invites.map(Boolean)).toEqual([true, false, true, true])
+      expect(once.members[6]).toEqual({ endedReason: null, endedAt: null })
       await tell()
       expect(await rows()).toEqual(once)
     })

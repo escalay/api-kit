@@ -52,6 +52,8 @@ export const sharingRepo = (db: Db) => {
   const redeemed = sql`exists (select 1 from ${sharingMembers} where ${sharingMembers.inviteId} = ${sharingInvites.id})`
   const joined = sql`exists (select 1 from ${sharingMembers} where ${sharingMembers.requestId} = ${sharingRequests.id})`
   const unrevokedOpen = and(isNull(sharingInvites.revokedAt), sql`not ${redeemed}`)
+  /** An invite whose revoke is not recorded yet; a revoke records it whatever member holds it, so it never opens again. */
+  const unrevoked = isNull(sharingInvites.revokedAt)
   /** A space's invites that are open: not redeemed, not revoked, still in time. */
   const openAt = (spaceId: string, now: string) => and(eq(sharingInvites.spaceId, spaceId), unrevokedOpen, sql`${sharingInvites.redeemBy} > ${now}`)
   const grantsOf = (rows: { grantId: string }[]) => rows.map((row) => row.grantId)
@@ -120,23 +122,23 @@ export const sharingRepo = (db: Db) => {
       const [row] = await db.select({ open: sql<number>`count(*)`.mapWith(Number) }).from(sharingInvites).where(openAt(spaceId, iso(now)))
       return row?.open ?? 0
     },
-    /** Revokes an invite of this space that no one redeemed; false when it is not there, redeemed or revoked already. */
+    /** Records the revoke of an invite of this space, whatever member holds it (that member keeps its own row); false when it is not there or revoked already. */
     revokeInvite: async (spaceId: string, id: string, now: Date) => {
-      const revoked = await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.id, id), eq(sharingInvites.spaceId, spaceId), unrevokedOpen)).returning({ id: sharingInvites.id })
+      const revoked = await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.id, id), eq(sharingInvites.spaceId, spaceId), unrevoked)).returning({ id: sharingInvites.id })
       return revoked.length > 0
     },
-    /** Invite again: revokes this space's unredeemed invites for the member, so only the newest works. */
+    /** Invite again: revokes this space's earlier invites for the member, so only the newest works; how many it recorded. */
     revokeInvitesReplacing: async (spaceId: string, memberId: string, now: Date) =>
-      (await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.replacesMemberId, memberId), eq(sharingInvites.spaceId, spaceId), unrevokedOpen)).returning({ id: sharingInvites.id })).length,
-    /** Revokes the unredeemed invites an agent made under a grant that ended. */
+      (await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.replacesMemberId, memberId), eq(sharingInvites.spaceId, spaceId), unrevoked)).returning({ id: sharingInvites.id })).length,
+    /** Revokes the invites an agent made under a grant that ended, redeemed ones on the record too; how many it recorded. */
     revokeInvitesMadeByGrant: async (grantId: string, now: Date) =>
-      (await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.madeByGrant, grantId), unrevokedOpen)).returning({ id: sharingInvites.id })).length,
-    /** Revokes the unredeemed invites an agent made under a client that ended. */
+      (await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.madeByGrant, grantId), unrevoked)).returning({ id: sharingInvites.id })).length,
+    /** Revokes the invites an agent made under a client that ended, redeemed ones on the record too; how many it recorded. */
     revokeInvitesMadeByClient: async (clientId: string, now: Date) =>
-      (await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.madeByClient, clientId), unrevokedOpen)).returning({ id: sharingInvites.id })).length,
-    /** Revokes every unredeemed invite of a deleted space. */
+      (await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.madeByClient, clientId), unrevoked)).returning({ id: sharingInvites.id })).length,
+    /** Revokes every invite of a deleted space; how many it recorded. */
     revokeInvitesOf: async (spaceId: string, now: Date) =>
-      (await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.spaceId, spaceId), unrevokedOpen)).returning({ id: sharingInvites.id })).length,
+      (await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.spaceId, spaceId), unrevoked)).returning({ id: sharingInvites.id })).length,
 
     // Asks to join
 
@@ -166,11 +168,14 @@ export const sharingRepo = (db: Db) => {
         .returning({ id: sharingRequests.id })
       return approved.length > 0
     },
-    /** Refuses an ask of this space, waiting or approved, still in time, no one joined by it; false otherwise. */
+    /**
+     * Records the refusal of an ask of this space, waiting or approved, whatever member joined by it (that member keeps
+     * its own row), so it never opens again; false when it is not there or refused already.
+     */
     refuseRequest: async (spaceId: string, id: string, decidedBy: string, now: Date) => {
       const refused = await db.update(sharingRequests)
         .set({ state: 'refused', decidedBy, decidedAt: iso(now) })
-        .where(and(eq(sharingRequests.id, id), eq(sharingRequests.spaceId, spaceId), inArray(sharingRequests.state, ['waiting', 'approved']), sql`${sharingRequests.expiresAt} > ${iso(now)}`, sql`not ${joined}`))
+        .where(and(eq(sharingRequests.id, id), eq(sharingRequests.spaceId, spaceId), inArray(sharingRequests.state, ['waiting', 'approved'])))
         .returning({ id: sharingRequests.id })
       return refused.length > 0
     },

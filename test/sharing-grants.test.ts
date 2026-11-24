@@ -63,6 +63,7 @@ describe('onGrant', () => {
     const revoked = await makeInvite()
     expect((await byKey(`/api/spaces/soups/invites/${revoked.id}`, { method: 'DELETE' })).status).toBe(204)
     expect((await join(revoked)).status).toBe(400)
+    expect(await inviteState(revoked.id)).toBe('revoked')
 
     const late = await makeInvite()
     await ageInvite(late.id, new Date(Date.now() - HOUR).toISOString())
@@ -246,15 +247,44 @@ describe('onGrant', () => {
     expect(new Set(revoked.map((one) => one.grant)).size).toBe(1)
   })
 
+  it('never reopens an invite revoked while its exchange runs, when that exchange then fails (owner and agent)', async () => {
+    let during: (() => Promise<unknown>) | null = null
+    // The part claims, then a hook chained after it runs `during` and throws, while armed: the kit withdraws the grant
+    const chained: Awaited<ReturnType<typeof grantsApp>> = await box({
+      oauth: { onGrant: async (grant, c) => {
+        const yes = await chained.sharing.oauth.onGrant(grant, c)
+        if (!during) return yes
+        await during()
+        throw new Error('the app’s store is down')
+      } },
+    })
+    const byOwner = await chained.makeInvite()
+    const root = (await chained.ownerSignsIn()).tokens.access_token
+    const byAgent = await chained.makeInvite('soups', { label: 'Ada', lifetime: '7d' }, chained.as(root))
+    during = async () => expect((await chained.byKey(`/api/spaces/soups/invites/${byOwner.id}`, { method: 'DELETE' })).status).toBe(409)
+    expect((await (await chained.signIn({ resource: SOUPS, decision: chained.inviteDecision(byOwner) })).exchange()).status).toBe(500)
+    during = () => chained.oauth.revokeGrant(grantOf(root))
+    expect((await (await chained.signIn({ resource: SOUPS, decision: chained.inviteDecision(byAgent) })).exchange()).status).toBe(500)
+
+    during = null
+    for (const invite of [byOwner, byAgent]) {
+      expect([invite.label, await chained.inviteState(invite.id), await chained.membersOfInvite(invite.id)]).toEqual([invite.label, 'revoked', []])
+      expect((await chained.join(invite)).status).toBe(400)
+    }
+  })
+
   it('races revokeInvite either way round to one outcome: joined and not revoked, or revoked and not joined', async () => {
     for (const order of ['exchange first', 'revoke first']) {
-      const { makeInvite, signIn, inviteDecision, byKey, inviteState, membersOfInvite } = await box()
+      const { makeInvite, signIn, inviteDecision, byKey, inviteState, membersOfInvite, repo } = await box()
+      const chainedRevokedAt = async (id: string) => (await repo.inviteAt('sp_soups', id))?.revokedAt
       const invite = await makeInvite()
       const { exchange } = await signIn({ resource: SOUPS, decision: inviteDecision(invite) })
       const revoke = () => byKey(`/api/spaces/soups/invites/${invite.id}`, { method: 'DELETE' })
       const [exchanged, revokedAnswer] = order === 'exchange first' ? await Promise.all([exchange(), revoke()]) : (await Promise.all([revoke(), exchange()])).reverse()
       const outcome = [exchanged!.status, revokedAnswer!.status, await inviteState(invite.id), (await membersOfInvite(invite.id)).length]
       expect([[200, 409, 'redeemed', 1], [400, 204, 'revoked', 0]]).toContainEqual(outcome)
+      // Either way the revoke is recorded, so the invite never opens again
+      expect((await chainedRevokedAt(invite.id))).toEqual(expect.any(String))
     }
   })
 })
@@ -375,20 +405,21 @@ describe('onRevoke', () => {
   })
 
   it('revokes an ended agent’s open invites, and the people who joined through them keep access', async () => {
-    const { ownerSignsIn, makeInvite, join, call, as, oauth, inviteState } = await box()
+    const { ownerSignsIn, makeInvite, join, call, as, oauth, inviteState, repo } = await box()
     const agent = (await ownerSignsIn()).tokens.access_token
     const joinedThrough = await makeInvite('soups', { label: 'Sam', lifetime: '7d' }, as(agent))
     const stillOpen = await makeInvite('soups', { label: 'Ada' }, as(agent))
     const member = (await join(joinedThrough)).tokens.access_token
     await oauth.revokeGrant(grantOf(agent))
     expect([await inviteState(stillOpen.id), await inviteState(joinedThrough.id)]).toEqual(['revoked', 'redeemed'])
+    expect((await repo.inviteAt('sp_soups', joinedThrough.id))?.revokedAt).toEqual(expect.any(String))
     expect((await join(stillOpen)).status).toBe(400)
     expect((await call('/s/soups/mcp', member)).status).toBe(200)
   })
 
   it('races an agent’s revoke against a redemption of its invite to one outcome, either way round', async () => {
     for (const order of ['exchange first', 'revoke first']) {
-      const { ownerSignsIn, makeInvite, signIn, inviteDecision, as, oauth, inviteState, membersOfInvite } = await box()
+      const { ownerSignsIn, makeInvite, signIn, inviteDecision, as, oauth, inviteState, membersOfInvite, repo } = await box()
       const agent = (await ownerSignsIn()).tokens.access_token
       const invite = await makeInvite('soups', { label: 'Sam', lifetime: '7d' }, as(agent))
       const { exchange } = await signIn({ resource: SOUPS, decision: inviteDecision(invite) })
@@ -396,6 +427,8 @@ describe('onRevoke', () => {
       const exchanged = order === 'exchange first' ? (await Promise.all([exchange(), revoke()]))[0] : (await Promise.all([revoke(), exchange()]))[1]
       const outcome = [exchanged.status, await inviteState(invite.id), (await membersOfInvite(invite.id)).length]
       expect([[200, 'redeemed', 1], [400, 'revoked', 0]]).toContainEqual(outcome)
+      // Either way the agent's invite is revoked on the record, so it never opens again
+      expect((await repo.inviteAt('sp_soups', invite.id))?.revokedAt).toEqual(expect.any(String))
     }
   })
 })

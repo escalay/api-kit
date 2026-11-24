@@ -189,16 +189,16 @@ export const sharingHandlers = (config: SharingConfig, bound: Bound, repo: Shari
     return c.json(cardOf(originOf(c), space, invite, new Date()), 200, NO_STORE)
   }
 
+  /** Records the revoke whatever holds the invite, so it never opens again; 409 when a member holds it, who keeps access. */
   const revokeInvite: RouteHandler<SharingRoutes['revokeInvite']> = async (c) => {
     const { space: name, id } = c.req.valid('param')
     const { space } = await sharingAt(c, name)
     const now = new Date()
-    if (await repo.revokeInvite(space.id, id, now)) return c.body(null, 204)
-    // Not revoked now: not at this space, used already, or revoked before
+    await repo.revokeInvite(space.id, id, now)
     const invite = await repo.inviteAt(space.id, id)
     if (!invite) throw noSuchInvite(space, id)
     if (inviteStateOf(invite, invite.memberId ? { id: invite.memberId } : null, now) === 'redeemed')
-      throw new ProblemError('conflict', { detail: `Invite ${id} was used already, so revoking it changes nothing.` })
+      throw new ProblemError('conflict', { detail: `Invite ${id} was used already: it is revoked and never works again, but the member who joined by it keeps access. Remove that member to end it.` })
     return c.body(null, 204)
   }
 

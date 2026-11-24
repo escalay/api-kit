@@ -743,7 +743,9 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
 - **Invites are single-use, with a link and a typed code.** An invite is for one space and one person, must be used
   within a day, and gives access for a set time or until revoked. Its link opens the app's own page (`approve`), and
   the browser may remember it for a short while (a sealed cookie that holds no code). The invite is spent with the
-  grant's first token (`onGrant`), never at the click, so a second use is refused and junk cannot spend it.
+  grant's first token (`onGrant`), never at the click, so a second use is refused and junk cannot spend it. A revoke
+  is recorded whatever holds the invite (a member who joined by it keeps access), so a revoked invite never opens
+  again, even when the grant that held it is withdrawn.
 - **Known apps redeem in one click; any other app is warned and asks for the code.** The app keeps a list of
   returns it knows (the exact callbacks of the agents it expects, and an app on this computer: an http loopback
   redirect, never a custom scheme the app has not listed). For one of those, a remembered invite is one click. For any
