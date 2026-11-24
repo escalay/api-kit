@@ -1,15 +1,15 @@
 /**
  * The sharing part's grants on any database: a recipe box whose shelves are spaces, wired with `sharing.oauth`, and the
  * checks that must hold wherever the tables live. `test/sharing-grants.test.ts` runs them on node:sqlite,
- * `test/workers/sharing.test.ts` on D1. The sign-in pages come later: a bare page here posts the decision a test gives
- * to `oauth.complete`, as the part's pages will.
+ * `test/workers/sharing.test.ts` on D1. A bare page here posts the decision a test gives to `oauth.complete`, as the
+ * part's pages do; `pages` serves the part's own sign-in pages instead.
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import { decodeJwt } from 'jose'
 import { describe, expect, it } from 'vitest'
 import { createAgentApi, createOAuth, dbOAuthStore, generateOAuthKey, hashApiKey, memoryOAuthStore, parseApiKeys, type Db, type OAuthConfig, type OAuthStore, type SignInDecision, type SignInRevoked } from '../src/index.js'
-import { createSharing, registerSharing, sharingInvites, sharingMembers, sharingRepo, type SharingOptions, type Space } from '../src/sharing/index.js'
+import { createSharing, registerSharing, sharingInvites, sharingMembers, sharingRepo, SHARING_OPEN_PATHS, type SharingOptions, type Space } from '../src/sharing/index.js'
 import { approveSignIn } from '../src/testing/index.js'
 import { DAY, HOUR, inviteRow, memberRow } from './sharing-rows.js'
 
@@ -36,10 +36,10 @@ export const grantOf = (token: string) => String(decodeJwt(token).grant)
 
 /**
  * A recipe box with two shelves (Soups, Bakes) as spaces, `sharing.oauth` spread into `createOAuth`, and a bare sign-in
- * page, under `publicOrigin` (the part needs one). The owner (the `x-test-owner` header) gets the kit's own consent page. `byNameDelay` slows `spaces.byName`, as a
+ * page (or with `pages` the part's own), under `publicOrigin` (the part needs one). The owner (the `x-test-owner` header) gets the kit's own consent page. `byNameDelay` slows `spaces.byName`, as a
  * slow lookup inside `onGrant` would be.
  */
-export const grantsApp = async (db: Db, { options = {}, oauth: oauthOptions = {}, byNameDelay = 0, publicOrigin = ORIGIN }: { options?: Partial<SharingOptions>; oauth?: Partial<OAuthConfig>; byNameDelay?: number; publicOrigin?: string } = {}) => {
+export const grantsApp = async (db: Db, { options = {}, oauth: oauthOptions = {}, byNameDelay = 0, publicOrigin = ORIGIN, pages = false }: { options?: Partial<SharingOptions>; oauth?: Partial<OAuthConfig>; byNameDelay?: number; publicOrigin?: string; pages?: boolean } = {}) => {
   // Each app its own shelves, so a test may rename or delete one
   const shelves: Space[] = [{ id: 'sp_soups', name: 'soups', title: 'Soups' }, { id: 'sp_bakes', name: 'bakes', title: 'Bakes' }]
   const spaces = {
@@ -52,7 +52,8 @@ export const grantsApp = async (db: Db, { options = {}, oauth: oauthOptions = {}
   const oauth = createOAuth({
     name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner, owners: [OWNER], publicOrigin,
     ...sharing.oauth,
-    approve: async (c, ask) => (c.req.header('x-test-owner') ? null : c.html(`<form method="post" action="/test/join"><input type="hidden" name="ticket" value="${ask.ticket}"></form>`)),
+    // The part's own pages with `pages`, else the bare page
+    approve: pages ? sharing.oauth.approve : async (c, ask) => (c.req.header('x-test-owner') ? null : c.html(`<form method="post" action="/test/join"><input type="hidden" name="ticket" value="${ask.ticket}"></form>`)),
     onRevoke: async (told) => {
       revoked.push(told)
       await sharing.oauth.onRevoke(told)
@@ -61,7 +62,7 @@ export const grantsApp = async (db: Db, { options = {}, oauth: oauthOptions = {}
   })
   const app = createAgentApi({
     title: 'Sample', version: '1.0.0', description: 'A recipe box.', tags: [],
-    auth: { realm: 'sample', keys: parseApiKeys(`owner:${hashApiKey(KEY)}`), open: ['/test/join'], relay: ['/mcp', '/a2a', sharing.relay] },
+    auth: { realm: 'sample', keys: parseApiKeys(`owner:${hashApiKey(KEY)}`), open: ['/test/join', ...SHARING_OPEN_PATHS], relay: ['/mcp', '/a2a', sharing.relay] },
     oauth,
   })
   app.post('/test/join', async (c) => {

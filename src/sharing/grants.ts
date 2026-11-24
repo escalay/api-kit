@@ -15,6 +15,7 @@
  */
 import type { Context } from 'hono'
 import type { Caller } from '../core/auth.js'
+import type { AgentBrand } from '../core/discovery.js'
 import { originOf } from '../core/hal.js'
 import type { OAuth, SignInAsk, SignInGrant, SignInRevoked, TokenCaller } from '../oauth/index.js'
 import type { SharingConfig, Space } from './index.js'
@@ -36,8 +37,8 @@ const NOT_READY = 'Sharing is not ready here yet (the app calls registerSharing 
 export type BoundOAuth = Pick<OAuth, 'publicOrigin' | 'mcpPath'>
 /** What the hooks judge by once bound: the root is the issuer's pinned origin, never a request's host. */
 export type Bound = { root: string; mcpPath: string }
-/** The server the hooks are bound to: null until `registerSharing` binds it, and the hooks refuse until then. */
-export type Binding = { bound: Bound | null }
+/** The server the hooks are bound to, and the app's brand for the pages: null until `registerSharing` binds it, and the hooks refuse until then. */
+export type Binding = { bound: Bound | null; brand?: AgentBrand }
 /** What every hook works from. */
 type Grants = { config: SharingConfig; repo: SharingRepo; binding: Binding }
 
@@ -97,8 +98,8 @@ export const spaceNameIn = (config: Pick<SharingConfig, 'resourcePath' | 'spaceN
 /** A resource's path: what follows its scheme and authority (empty for the origin). */
 const pathOf = (resource: string) => resource.replace(/^[a-z][a-z\d+.-]*:\/\/[^/]*/i, '')
 
-/** The space a grant's resource names on this origin, or null. */
-const spaceOfResource = (config: SharingConfig, resource: string, root: string) => (resource.startsWith(`${root}/`) ? spaceNameIn(config, resource.slice(root.length)) : null)
+/** The space a grant's (or a sign-in's) resource names on this origin, or null. */
+export const spaceOfResource = (config: SharingConfig, resource: string, root: string) => (resource.startsWith(`${root}/`) ? spaceNameIn(config, resource.slice(root.length)) : null)
 
 /** What a request is about: the space in its path at a space address, else the app's `spaceOfPath`. */
 const askedSpaceOf = (config: SharingConfig, path: string) => spaceNameIn(config, path, true) ?? config.spaceOfPath(path)

@@ -506,15 +506,20 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ### Unreleased (after 1.31.0)
 
-- A new part, its sign-in pages still to come: its tables (`SHARING_MIGRATIONS` step 1: `sharing_spaces`,
+- A new part, more of its sign-in pages still to come: its tables (`SHARING_MIGRATIONS` step 1: `sharing_spaces`,
   `sharing_invites`, `sharing_requests`, `sharing_members`), `sharingRepo`, the named states of its rows and its
   secrets; `createSharing` and `registerSharing` with the owner's routes under `/api/spaces/{space}` (the space's
   sharing and its invites: made with the link and code shown once, listed, read one at a time, revoked) and
-  `sharingTools`; and the oauth hooks, `sharing.oauth` (`onGrant`, `onRevoke`, `accepts`, `resources`,
+  `sharingTools`; and the oauth hooks, `sharing.oauth` (`approve`, `onGrant`, `onRevoke`, `accepts`, `resources`,
   `resourceOf`) to spread into `createOAuth`, with `handles`, `memberOf` and `bind` (`registerSharing` calls it).
   `spaces` takes `byId` beside `byName`, and the new option `spaceOfPath` names the space of an in-process `/api` call.
   It needs `createOAuth`'s `publicOrigin`: `registerSharing` throws without it. Nothing to do in an app that doesn't
   add it.
+- Signing in with an invite's code: `approve` shows the code page (`signInStepOf` picks it), and `registerSharing`
+  adds `POST /sharing/join`, which needs `SHARING_OPEN_PATHS` in `auth.open`. Typed codes are always limited
+  (`limits`, by default counted in the app's database: `createSharing` makes the guard table there, and `limits:
+  false` throws). The new option `knownReturns` names the apps the app expects. Behind Cloudflare Access, let
+  `sharingSignInPaths(sharing)` through.
 
 ## testing
 
