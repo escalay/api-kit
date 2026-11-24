@@ -52,7 +52,23 @@ If a check is absent from the tests, add it (`src/kit/testing/README.md`) before
 6. With `<APP>_URL` and `<APP>_API_KEY` set, the app's CLI (`sdk/cli/bin.ts`): `doctor` prints no `fail` and no drift,
    a missing id exits 3 with one line on stderr, and a destructive command without `--yes` exits 1.
 
-## 4. The agent test
+## 4. Who may sign in
+
+With the `oauth` part, a test per row in the app's tests. The owner approves through `approveSignIn(app, query,
+{ headers })` (`testing`): the kit's page, its ticket cookie, a same-origin POST. An app with an `approve` hook drives
+its own page the same way: `GET /oauth/authorize`, keep its `set-cookie`, post the page's `ticket` to the app's route
+with that cookie and `sec-fetch-site: same-origin`. Standard: §7 and §23.
+
+| Row | Passes when |
+|---|---|
+| Owner approval | `approveSignIn` answers 302 with a `code`; with `decision: 'deny'`, `access_denied`; without the owner signed in there is no consent page to approve |
+| Invite | the right code gets a token bound to the invite's space (`aud`); the same code again, a wrong code or an expired invite gets none |
+| Ask to join | nothing is granted until the owner decides; the grant names the asker, not the owner, and works at that space only |
+| Revoke | after `revokeGrant`, `revokeClient` or a removed member, the next call with the token answers 401, and `onRevoke` dropped the app's row |
+| Another space | a space's token at another space answers 401; a root token is given only to the owner's own sign-ins |
+| Leaks nothing | an unknown space and a space the caller may not see answer the same 404 with the same body; no 403 confirms it exists |
+
+## 5. The agent test
 
 Give a fresh agent only the base URL, a key and one real task. Ask it for a log of every place it stalled or guessed.
 Fix the API or the guide for each one, then run it again with a new agent. Done when the log is empty.
