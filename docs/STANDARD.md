@@ -162,7 +162,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   signed-in person again; **nothing is granted before a person approves** (an unclaimed registration has no scopes).
   Tokens: ES256 JWTs for an hour (`OAUTH_SIGNING_KEY`, a private JWK in your secret store), checked against a revocation list
   on every request. Refresh tokens (30 days, MCP clients and claimed agents alike) rotate on each use and are kept only as
-  hashes; a used one sent again revokes every refresh token of that sign-in, and so does revoking any of them. **An
+  hashes, a row for the newest token of each sign-in only (an earlier one is known by its MAC and its family's
+  generation); a used one sent again revokes every refresh token of that sign-in, and so does revoking any of them. **An
   OAuth caller is known by its client_id and its grant (one approval, every token of one sign-in), never by the name it
   registered; the name is for display.** Rate limits, idempotency, MCP and A2A task ownership key on them, and revoking a grant ends its
   access tokens at once (`revokeGrant`), and a claimed agent's identity assertion with them; `revokeClient` also drops the registration and refuses a code, device approval or claim token not yet collected, and a claim token collected after its grant was revoked is refused too (the revoke markers outlive anything issued behind them, so nothing may be issued into a revoked grant or client). A code, a refresh token, a device code and a claim token are
@@ -176,16 +177,19 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   an `approve` hook, `/oauth/authorize` may bypass Access: the app's page decides (an invite, an ask to join), and the
   grant follows only a same-origin POST from the browser that opened it (`complete`), once; nothing is granted without
   a click, and a stored approval never stands in for one. Each ticket is bound to its browser by an HttpOnly,
-  SameSite=Lax nonce cookie (`__Host-oauth_ticket` on https, 10 minutes, renewed and reused by a second sign-in), and
+  SameSite=Lax nonce cookie (`__Host-oauth_ticket` on https, living as long as the ticket: `ticketTtl`, 10 minutes by default, so an app that decides later, an ask to join, keeps it waiting up to a week; renewed and reused by a second sign-in), and
   answered once: posted again from that browser it is a page saying it went through, from another "expired". With
   `approve` set, `/oauth/authorize` never redirects before a person acts: every error is a page. Every approval POST
   (`complete`, the kit's consent, claim and device pages) needs `Sec-Fetch-Site: same-origin`, or with none an
   `Origin` equal to the issuer's (never `null`, so every page whose form posts there, the kit's and the app's, sets
   `<meta name="referrer" content="same-origin">` over the `no-referrer` header); `same-site` is refused, since a
-  sibling host is same-site. The approval only narrows scopes, never sets the resource (the ticket's). `onGrant` hears
+  sibling host is same-site. The approval only narrows scopes, and sets the resource only where the client named none (an invite binds its space; checked as a client's resource would be, the client's own never changed). `onGrant` hears
   the first token of every grant (code, device, claim) after the kit's checks, once, and false withdraws it
-  (`invalid_grant`); an app that keeps its own client rows makes them in `onGrant` and refuses a token whose grant has
-  none. The kit's own pages carry the app's brand (§22) and name the client by text only, never a `logo_uri`; the
+  (`invalid_grant`); an app that keeps its own client rows makes them in `onGrant`, drops them in `onRevoke`,
+  which hears every grant the kit ends (revoked, replayed, withdrawn, its client revoked; a throw there never fails the
+  revoke), and refuses a token whose grant has none. A grant that lapses (its refresh token unused for 30 days) is not
+  told, since nothing ends it: the app ages its own rows (a last-seen time written in `accepts`, a row with none for 30
+  days dropped with `revokeGrant`). The kit's own pages carry the app's brand (§22) and name the client by text only, never a `logo_uri`; the
   consent page names the resource asked for and whether the client returns to a host or an app on this computer.
 - **Audiences (RFC 8707, RFC 9728, MCP 2026-07-28):** every grant is bound to one resource, signed as the token's
   `aud`. It is the resource the client sent at the authorization request (or device authorization) when the server
@@ -225,9 +229,10 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   discovery documents keep the request's origin and an hour's public caching, as before. What is never cached publicly
   (HAL links, OpenAPI, the guide) keeps the request's origin either way.
   A registration no sign-in has used lives a week (its first code exchanged or device token collected gives it a
-  year), and unused registrations and open consent tickets are capped (10 000 each by default; past it the oldest
-  goes), so rows written without auth stay bounded; the database store prunes expired rows on a write, at most once a
-  minute. `limits` counts per address, read as §9 says: a named source counts IPv6 by its /64, while the default
+  year), and every kind of row written without auth is capped (registrations, client or agent, and claim tokens; open
+  consent tickets, claim attempts and device codes; 10 000 of each by default; past it the oldest unused goes, never a
+  client a live consent ticket waits on), so rows written without auth stay bounded; the database store prunes
+  expired rows on a write, at most once a minute, through an index on their expiry. `limits` counts per address, read as §9 says: a named source counts IPv6 by its /64, while the default
   `'headers'` read takes the address as sent, so a Workers app passes `address: { header: 'cf-connecting-ip' }`.
   Registration, `/agent/identity` and `/agent/identity/claim` (each call writes a claim attempt) 20 an hour
   together, device authorization 20 an hour, the sign-in page 60 a minute, token-endpoint misses 30 a minute,

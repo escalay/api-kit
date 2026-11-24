@@ -12,8 +12,9 @@
  *   `/oauth/device_authorization` for a code like `BDKM-QXTW`, the owner types it at `/oauth/device`, and the device
  *   polls the token endpoint.
  * Access tokens are ES256 JWTs (one hour) signed with the app's key and checked against a revocation list on every
- * request; refresh tokens (30 days, rotated on each use; a used one sent again revokes every refresh token of that
- * sign-in), codes and registrations live in the app's store as hashes. Nothing is granted before a person approves: an
+ * request. Refresh tokens last 30 days and rotate on each use; a used one sent again revokes every refresh token of
+ * that sign-in. An earlier refresh token is known by its MAC and its family's generation, even once its row is gone.
+ * Codes and registrations live in the app's store as hashes. Nothing is granted before a person approves: an
  * unclaimed registration can't get a token.
  * A caller is known by its client (the client_id) and its grant (one approval: every token from one sign-in, rotated
  * or not, shares it), never by the name it registered, which is for display. Revoking a grant ends its access tokens
@@ -23,9 +24,10 @@
  * this server issues for it, else the root (the issuer's origin). It never changes on refresh, and a grant from before
  * audiences never gains one. `accepts` judges whether a token's audience fits a request.
  * The endpoints anyone may call stay bounded: `publicOrigin` fixes the one origin every document, token and check
- * names; a registration no sign-in has used lives a week and unused ones are capped, as are open consent tickets; and
- * `limits` counts registrations and claims, device authorizations, sign-in pages and token misses per address. Rules
- * after cloudflare/workers-oauth-provider (MIT): a registration's life starts again when it is first used.
+ * names; a registration no sign-in has used lives a week; every kind of row anyone may write is capped (a client a
+ * live consent ticket holds stays); and `limits` counts registrations and claims, device authorizations, sign-in
+ * pages and token misses per address. Rules after cloudflare/workers-oauth-provider (MIT): a registration's life
+ * starts again when it is first used.
  *
  * @example
  * const oauth = createOAuth({ name: 'Cookbook', signingKey: env.OAUTH_SIGNING_KEY, store, owner: (c) => ownerOf(c) })
@@ -40,10 +42,10 @@ import { mountedOf, type AgentBrand } from '../core/discovery.js'
 import { addressOf, type AddressTrust, type GuardStore } from '../core/guards.js'
 import { originOf } from '../core/hal.js'
 import { problemResponse } from '../core/problem.js'
-import { arrivalOf, LOOPBACK, nonceOf, returnOf, sameOrigin, ticketCookie, type SignInAsk, type SignInDecision, type SignInGrant } from './approval.js'
+import { arrivalOf, LOOPBACK, nonceOf, returnOf, sameOrigin, ticketCookie, type SignInAsk, type SignInDecision, type SignInGrant, type SignInRevoked } from './approval.js'
 import type { OAuthStore } from './store.js'
 
-export type { SignInAsk, SignInDecision, SignInGrant } from './approval.js'
+export type { SignInAsk, SignInDecision, SignInGrant, SignInRevoked } from './approval.js'
 export { OAUTH_MIGRATIONS, oauthKeys } from './schema.js'
 export { dbOAuthStore, memoryOAuthStore, type OAuthStore } from './store.js'
 
@@ -106,6 +108,16 @@ export type OAuthConfig = {
    * onGrant: async (grant) => grant.kind !== 'code' || invites.spend(grant.data?.invite, grant.grant)
    */
   onGrant?: (grant: SignInGrant, c: Context) => Promise<boolean>
+  /**
+   * Hears every grant the kit ends, and why (`SignInRevoked`), after it has ended it: where an app drops the row it
+   * made in `onGrant`. A grant that lapses (its refresh token unused for 30 days) is not told: the app ages its own
+   * rows. At least once: a grant ended again (a code sent a third time) is told again. A throw is logged, never
+   * answered, so it can't undo or fail a revoke.
+   *
+   * @example
+   * onRevoke: async ({ grant, reason }) => grant && members.dropGrant(grant, reason)
+   */
+  onRevoke?: (revoked: SignInRevoked) => void | Promise<void>
   /** The brand on the kit's own pages; default the app's (`createAgentApi({ brand })`). */
   brand?: AgentBrand
   /** Emails allowed to claim an agent registration; empty means whoever `owner` lets in. */
@@ -129,10 +141,25 @@ export type OAuthConfig = {
    * limits: { store: await dbGuardStore(db), address: { header: 'cf-connecting-ip' } }
    */
   limits?: { store: GuardStore; address?: AddressTrust } | false
-  /** Registrations no sign-in has used yet, kept at most (a whole number, default 10 000): past it a new one evicts the oldest. */
+  /**
+   * Registrations no sign-in has used yet (clients, agent registrations, their claim tokens), kept at most of each (a
+   * whole number, default 10 000): past it a new one evicts the oldest. Never a client a live consent ticket holds.
+   */
   maxUnusedClients?: number
-  /** Consent tickets stored and not yet answered, kept at most (a whole number, default 10 000): past it a new one evicts the oldest. */
+  /**
+   * Codes waiting for a person (consent tickets, claim attempts, device codes and their user codes), kept at most of
+   * each (a whole number, default 10 000): past it a new one evicts the oldest, a ticket an app is still deciding too.
+   */
   maxUnusedTickets?: number
+  /**
+   * Seconds a consent ticket lives, and its browser's nonce cookie: whole, from 60 to a week (default 600). Longer for
+   * an app that decides later (an ask to join the owner answers in hours): its page waits, then posts `complete`. It
+   * never renews its client: one whose unused client lapses first can no longer be approved.
+   *
+   * @example
+   * ticketTtl: 24 * 3600   // the owner has a day to answer an ask to join
+   */
+  ticketTtl?: number
   /** Extra fields for the authorization server metadata, e.g. `poppy_domains`. */
   metadata?: Record<string, unknown>
   /**
@@ -277,12 +304,37 @@ export const createOAuth = (config: OAuthConfig) => {
     const max = config[cap]
     if (max !== undefined && !(Number.isSafeInteger(max) && max >= 0)) throw new Error(`createOAuth: ${cap} must be a whole number of rows, 0 or more, not ${max}.`)
   }
+  const ticketTtl = config.ticketTtl ?? CODE_TTL
+  // Never past a week, an unused client's whole life: a ticket can't be approved once its client lapsed
+  if (!(Number.isSafeInteger(ticketTtl) && ticketTtl >= 60 && ticketTtl <= UNUSED_CLIENT_TTL)) throw new Error(`createOAuth: ticketTtl must be whole seconds from 60 to a week (604800), not ${config.ticketTtl}.`)
+  // Once, at start: the app's own page answers anyone at /oauth/authorize, outside Access
+  if (config.approve && (!config.limits || publicOrigin === undefined))
+    console.warn('createOAuth: approve lets anyone open /oauth/authorize, but limits or publicOrigin is not set: pass both, or the open endpoints are unbounded per address and their documents follow a forwarded host (oauth README, Open endpoints).')
   /** The issuer's origin: `publicOrigin`, else the request's own. */
   const issuerOf = (c: Context) => publicOrigin ?? originOf(c)
   const jwk = JSON.parse(config.signingKey) as JWK
-  // A secret of its own, from the signing key: successors are derived, so a retry gets the same one and none is stored
-  const successorSecret = createHash('sha256').update(`api-kit refresh successor\0${jwk.d ?? config.signingKey}`).digest()
-  const successorOf = (refresh: string) => `rt_${createHmac('sha256', successorSecret).update(refresh).digest('base64url')}`
+  // A secret of its own, from the signing key: a refresh token ends in a MAC of its family, generation and nonce, so
+  // the server knows an earlier token of a family it keeps no row for, and no one can make one without the key
+  const refreshSecret = createHash('sha256').update(`api-kit refresh token\0${jwk.d ?? config.signingKey}`).digest()
+  const macOf = (text: string) => createHmac('sha256', refreshSecret).update(text).digest('base64url')
+  /** A refresh token: its family, generation and nonce, and their MAC. */
+  const refreshTokenOf = (family: string, generation: number, nonce: string) => `rt_${family}.${generation}.${nonce}.${macOf(`${family}.${generation}.${nonce}`)}`
+  /**
+   * The next generation's token: its nonce a MAC of the token before it, so a retry in the grace gets the one the first
+   * answer held, and none can be made without a real token.
+   */
+  const successorOf = (refresh: string, family: string, generation: number) => refreshTokenOf(family, generation, macOf(`successor\0${refresh}`))
+  /** The family and generation a refresh token carries under a valid MAC; null for one from before generations, or a made-up one. */
+  const generationOf = (refresh: string) => {
+    const [, family, generation, nonce, mac] = /^rt_([\w-]+)\.(\d+)\.([\w-]+)\.([\w-]+)$/.exec(refresh) ?? []
+    if (!family || !generation || !nonce || !mac || !same(mac, macOf(`${family}.${generation}.${nonce}`))) return null
+    return { family, generation: Number(generation) }
+  }
+  // 1.29.0 named a successor `rt_` and an HMAC of the token before it, under a secret of its own: a retry this version
+  // answers finds the successor 1.29.0 gave first by that name
+  const successorSecretOf1290 = createHash('sha256').update(`api-kit refresh successor\0${jwk.d ?? config.signingKey}`).digest()
+  /** The successor 1.29.0 gave a refresh token. */
+  const successorOf1290 = (refresh: string) => `rt_${createHmac('sha256', successorSecretOf1290).update(refresh).digest('base64url')}`
   const reuseGrace = config.reuseGraceSeconds ?? 0
   const ready = (async () => {
     const privateKey = await importJWK(jwk, 'ES256')
@@ -305,10 +357,49 @@ export const createOAuth = (config: OAuthConfig) => {
     return { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL, scope: grant.scopes.join(' ') }
   }
 
-  /** A refresh token in its grant's family: every token rotated from one sign-in shares it, so a replay can revoke them all. */
-  const refreshFor = async ({ grant, ...rest }: Grant, refresh = token('rt')) => {
+  /** A refresh token in its grant's family: every token rotated from one sign-in shares it, so a replay can revoke them all. The first has a random nonce. */
+  const refreshFor = async ({ grant, ...rest }: Grant, refresh = refreshTokenOf(grant, 0, newNonce())) => {
     await store.put('refresh', sha(refresh), { ...rest, family: grant, used: false }, now() + REFRESH_TTL)
     return refresh
+  }
+
+  /** A family's row when it has moved past this generation: a later token was issued, so this one was used. */
+  const movedPast = async ({ family, generation }: { family: string; generation: number }) => {
+    const row = await store.get('refresh-family', family)
+    return row && Number(row.generation) > generation ? row : null
+  }
+
+  /** How far a family has rotated: its row's generation, 0 when it has none. */
+  const generationOfFamily = async (family: string) => Number((await store.get('refresh-family', family))?.generation ?? 0)
+
+  /**
+   * Whether a token used at `usedAt` may still be retried: `reuseGraceSeconds` set and not yet over. Strict, like the
+   * store's expiry, so a row kept for the grace and the grace end at the same second.
+   */
+  const withinGrace = (usedAt: number) => reuseGrace > 0 && usedAt > 0 && now() - usedAt < reuseGrace
+
+  /**
+   * The successor the first answer to a used refresh token gave: 1.29.0's when 1.29.0 answered (its successor has a
+   * row), else this version's, at the generation the used row names or `nextGeneration`.
+   */
+  const firstSuccessorOf = async (refresh: string, used: Record<string, unknown>, family: string, nextGeneration: number) => {
+    const from1290 = successorOf1290(refresh)
+    if (await store.get('refresh', sha(from1290))) return from1290
+    return successorOf(refresh, family, Number(used.successorGeneration ?? nextGeneration))
+  }
+
+  /**
+   * What a retry of a used refresh token gets: the successor the first answer gave, while the grace lasts and that
+   * successor is unused; null when the token came back as a replay. `nextGeneration` is the token's own next one, or,
+   * for a token from before generations, the one it would get now: what a first answer still writing it gave.
+   */
+  const retriedSuccessor = async (refresh: string, family: string, nextGeneration: number) => {
+    // Read again: the first answer writes its successor's generation on this row after marking it used
+    const used = await store.get('refresh', sha(refresh))
+    if (!used || !withinGrace(Number(used.usedAt ?? 0))) return null
+    const successor = await firstSuccessorOf(refresh, used, family, nextGeneration)
+    // No row yet is a first answer still writing it, so only a used successor ends the retry
+    return (await store.get('refresh', sha(successor)))?.used ? null : successor
   }
 
   /** The store's own `markUsed`, or a read then a write: safe only one request at a time. */
@@ -330,12 +421,30 @@ export const createOAuth = (config: OAuthConfig) => {
     return value
   }
 
+  const maxClients = config.maxUnusedClients ?? MAX_UNUSED
+  const maxTickets = config.maxUnusedTickets ?? MAX_UNUSED
   /**
-   * Writes a row that waits to be used (a registration, a ticket), evicting the oldest unused past `max` first, so the
-   * table stays bounded whoever writes. Before the write: rows written in the same second tie, and the new one never goes.
+   * Every kind of row anyone may write without auth, and its cap: registrations under one, codes waiting for a person
+   * under the other. `heldBy`: the kind whose live rows hold one of these (`holds`), so it is never evicted under them.
    */
-  const putUnused = async (kind: string, id: string, value: Record<string, unknown>, expiresAt: number, max = MAX_UNUSED) => {
-    await store.trim?.(kind, Math.max(0, max - 1))
+  const CAPS = {
+    client: { max: maxClients, heldBy: 'consent' },
+    registration: { max: maxClients },
+    'claim-token': { max: maxClients, heldBy: 'registration' },
+    consent: { max: maxTickets },
+    'claim-attempt': { max: maxTickets },
+    device: { max: maxTickets },
+    'device-user': { max: maxTickets },
+  } satisfies Record<string, { max: number; heldBy?: string }>
+
+  /**
+   * Writes a row that waits to be used, evicting the oldest unused of its kind past its cap first, so the table stays
+   * bounded whoever writes. A client a live consent ticket `holds` is never evicted. Before the write: rows written in
+   * the same second tie, and the new one never goes.
+   */
+  const putUnused = async (kind: keyof typeof CAPS, id: string, value: Record<string, unknown>, expiresAt: number) => {
+    const cap: { max: number; heldBy?: string } = CAPS[kind]
+    await store.trim?.(kind, Math.max(0, cap.max - 1), cap.heldBy)
     await store.put(kind, id, { ...value, used: false }, expiresAt)
   }
 
@@ -351,8 +460,28 @@ export const createOAuth = (config: OAuthConfig) => {
     return counted.used > limit ? Math.max(1, Math.ceil((counted.start + window * 1000 - at) / 1000)) : null
   }
 
-  /** Ends one approval at once: its access tokens fail `verify`, its refresh tokens are refused. */
-  const revokeGrant = (grant: string) => store.put('revoked-family', grant, {}, now() + REVOKED_TTL)
+  /** Tells the app a grant ended; a throw is logged, never answered: the grant has ended either way. */
+  const tellRevoked = async (revoked: SignInRevoked) => {
+    try {
+      await config.onRevoke?.(revoked)
+    } catch (error) {
+      console.error(`onRevoke failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /** Ends one approval at once (its access tokens fail `verify`, its refresh tokens are refused), then tells the app why. */
+  const endGrant = async (grant: string, reason: SignInRevoked['reason'], client?: string) => {
+    await store.put('revoked-family', grant, {}, now() + REVOKED_TTL)
+    await tellRevoked({ grant, ...(client === undefined ? {} : { client }), reason })
+  }
+
+  /**
+   * Ends one approval at once: its access tokens fail `verify`, its refresh tokens are refused; `onRevoke` hears it.
+   *
+   * @example
+   * await oauth.revokeGrant(caller.grant)
+   */
+  const revokeGrant = (grant: string) => endGrant(grant, 'revoked')
 
   /** The app this server was mounted on, for its brand. */
   let mounted: object | undefined
@@ -391,6 +520,19 @@ input{background:var(--bg);color:var(--fg);letter-spacing:.3em;width:9ch;text-al
     if (resource && issues(root, resource)) return { audience: resource, resource }
     if (config.resources) return { refused: resource ? `This server issues no tokens for ${resource}.` : 'resource must be an absolute http(s) URL with no user, query, fragment or dot segments.' }
     return { audience: root, resource: null }
+  }
+
+  /**
+   * The audience an approval gives: the ticket's, or the app's choice when the client named no resource it was issued
+   * (`decision.resource`), checked as a resource the client asks for. A client that named its resource keeps it.
+   */
+  const approvedAudience = (c: Context, asked: string | undefined, decided: string | undefined) => {
+    const bound = audienceFor(c, asked)
+    if ('refused' in bound || decided === undefined) return bound
+    const resource = canonical(decided)
+    if (!resource || !issues(rootOf(c), resource)) return { refused: `This server issues no tokens for ${decided}.` }
+    if (bound.resource !== null && bound.resource !== resource) return { refused: `The client asked for ${bound.resource}, not ${resource}.` }
+    return { audience: resource, resource: bound.resource }
   }
 
   /** A stored row's audience, or nothing for a row from before audiences: it never gains one. */
@@ -621,8 +763,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if (typeof decision.approver !== 'string' || !decision.approver.trim()) return cantApprove(c, 'An approval needs an approver: the person it is for.')
       const checked = await authorizeParams(c, params)
       if ('error' in checked) return cantApprove(c, checked.error!)
-      // Resolved again from the ticket's own request: the audience is the ticket's, never chosen here
-      const bound = audienceFor(c, params.resource)
+      // Resolved again from the ticket's own request: the ticket's audience, or the app's where the client named none
+      const bound = approvedAudience(c, params.resource, decision.resource)
       if ('refused' in bound) return cantApprove(c, `${bound.refused} (invalid_target)`)
       // Only the app's own list is checked: without one, the request's scopes go through as they did before approvals, even none
       const scopes = decision.scopes ?? checked.scopes
@@ -674,11 +816,12 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
 
   /**
    * Answers a ticket from the app's own page: the grant follows only a same-origin POST from the browser that opened it,
-   * once. `approver` becomes the token's `sub`, `scopes` may only narrow, `data` reaches `onGrant`; the resource is the
-   * ticket's. Returns the 302 to the client (`code`, `state`, `iss`, or `access_denied`), or a 400/403 page.
+   * once. `approver` becomes the token's `sub`, `scopes` may only narrow, `data` reaches `onGrant`; `resource` binds the
+   * grant to one this server issues for when the client named none (an invite's space), else the ticket's stays.
+   * Returns the 302 to the client (`code`, `state`, `iss`, or `access_denied`), or a 400/403 page.
    *
    * @example
-   * return oauth.complete(c, ask.ticket, { approver: 'owner@example.test', scopes: ['read'], data: { invite } })
+   * return oauth.complete(c, ask.ticket, { approver: 'owner@example.test', scopes: ['read'], data: { invite }, resource: `${oauth.rootOf(c)}/s/alpha/mcp` })
    */
   const complete = (c: Context, ticket: string, decision: SignInDecision) => answer(c, ticket, decision)
 
@@ -742,7 +885,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const clientId = token('client')
       const issuedAt = now()
       // Unused until a sign-in collects its first token: a week's life, and a place under the cap
-      await putUnused('client', clientId, { name, redirectUris: uris }, issuedAt + UNUSED_CLIENT_TTL, config.maxUnusedClients)
+      await putUnused('client', clientId, { name, redirectUris: uris }, issuedAt + UNUSED_CLIENT_TTL)
       const grantTypes = [...(uris.length ? ['authorization_code'] : []), 'refresh_token', ...(device ? [DEVICE_GRANT] : [])]
       return c.json({ client_id: clientId, client_id_issued_at: issuedAt, client_name: name, redirect_uris: uris, grant_types: grantTypes, response_types: uris.length ? ['code'] : [], token_endpoint_auth_method: 'none' }, 201, { 'cache-control': 'no-store' })
     })
@@ -766,26 +909,27 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       // One nonce binds every ticket this browser opens: reused while it lives, its life renewed
       const nonce = nonceOf(c, issuerOf(c)) ?? newNonce()
       const ticket = token('consent')
-      const expiresAt = now() + CODE_TTL
-      const row = { params, nonce: sha(nonce), arrival: arrivalOf(c), expiresAt }
+      const expiresAt = now() + ticketTtl
+      // It holds its client while it lives: a flood of registrations never evicts a client a person is about to approve
+      const row = { params, nonce: sha(nonce), arrival: arrivalOf(c), expiresAt, holds: params.client_id }
       const bindTo = (page: Response) => {
         const bound = new Response(page.body, page)
-        bound.headers.append('set-cookie', ticketCookie(c, nonce, CODE_TTL, issuerOf(c)))
+        bound.headers.append('set-cookie', ticketCookie(c, nonce, ticketTtl, issuerOf(c)))
         return bound
       }
       if (config.approve) {
         // Stored only once a page holds the ticket: a stranger turned away leaves no row behind
         const own = await config.approve(c, askOf(ticket, row, checked, bound.audience))
         if (own) {
-          await putUnused('consent', ticket, row, expiresAt, config.maxUnusedTickets)
+          await putUnused('consent', ticket, row, expiresAt)
           return bindTo(own)
         }
         const person = await config.owner(c)
         if (!person) return signInFirst(c)
-        await putUnused('consent', ticket, { ...row, owner: person }, expiresAt, config.maxUnusedTickets)
+        await putUnused('consent', ticket, { ...row, owner: person }, expiresAt)
         return bindTo(consentPage(c, ticket, checked, person, bound.audience, params.redirect_uri!))
       }
-      await putUnused('consent', ticket, { ...row, owner }, expiresAt, config.maxUnusedTickets)
+      await putUnused('consent', ticket, { ...row, owner }, expiresAt)
       return bindTo(consentPage(c, ticket, checked, owner!, bound.audience, params.redirect_uri!))
     })
 
@@ -810,8 +954,9 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const expires = now() + REGISTRATION_TTL
       const name = typeof body.client_name === 'string' && body.client_name.trim() ? body.client_name.trim().slice(0, 80) : `Agent ${registrationId.slice(4, 10)}`
       // Its grant from the start, so approvals racing for it can't write two; it names no resource, so it gets the root
-      await store.put('registration', registrationId, { name, type: body.type, claimed: false, email: body.login_hint ?? null, family: newGrant(), audience: rootOf(c), resource: null }, expires)
-      await store.put('claim-token', sha(claimToken), { registration: registrationId }, expires)
+      // It holds its claim token: an agent its owner approved can always collect
+      await putUnused('registration', registrationId, { name, type: body.type, claimed: false, email: body.login_hint ?? null, family: newGrant(), audience: rootOf(c), resource: null, holds: sha(claimToken) }, expires)
+      await putUnused('claim-token', sha(claimToken), { registration: registrationId }, expires)
       const assertion = await sign({ sub: registrationId, typ: 'agent_identity' }, REGISTRATION_TTL, origin)
       const base = { registration_id: registrationId, registration_type: body.type, claim_url: `${origin}/agent/identity/claim`, claim_token: claimToken, claim_token_expires: new Date(expires * 1000).toISOString(), post_claim_scopes: [...SCOPES] }
       if (body.type === 'anonymous') return c.json({ ...base, identity_assertion: assertion, assertion_expires: new Date(expires * 1000).toISOString(), pre_claim_scopes: [] }, 200, { 'cache-control': 'no-store' })
@@ -821,7 +966,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     const startClaim = async (origin: string, registrationId: string, email: string) => {
       const userCode = String(randomInt(0, 1_000_000)).padStart(6, '0')
       const attempt = token('cla')
-      await store.put('claim-attempt', sha(attempt), { registration: registrationId, email: email.toLowerCase(), code: sha(userCode), tries: 0 }, now() + CLAIM_TTL)
+      await putUnused('claim-attempt', sha(attempt), { registration: registrationId, email: email.toLowerCase(), code: sha(userCode), tries: 0 }, now() + CLAIM_TTL)
       return { user_code: userCode, expires_in: CLAIM_TTL, verification_uri: `${origin}/oauth/claim?claim_attempt_token=${attempt}`, interval: 5 }
     }
 
@@ -875,7 +1020,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if (registration.claimed) return c.html(page(c, 'Already approved', `<h1>Already approved</h1><p>${escape(String(registration.name))} was approved already; this code is spent. You can close this page.</p>`), 409)
       // One grant for the claim: its claim, refresh and jwt-bearer tokens all carry it (made at registration; older rows get one here)
       // The audience came with the grant at registration: one registered before audiences stays without
-      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: registration.family ?? newGrant() }, now() + REGISTRATION_TTL)
+      // Claimed, it is in use: no cap evicts it while its agent's tokens need it
+      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: registration.family ?? newGrant(), used: true }, now() + REGISTRATION_TTL)
       return c.html(page(c, 'Approved', `<h1>Approved</h1><p>${escape(String(registration.name))} can now use ${escape(config.name)}. You can close this page.</p>`))
     })
 
@@ -895,8 +1041,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       while (await store.get('device-user', userCodeKey(userCode))) userCode = deviceUserCode()
       const expiresAt = now() + DEVICE_TTL
       // Kept a window past its expiry, so a late poll hears expired_token rather than an unknown code
-      await store.put('device', sha(deviceCode), { client: body.client_id!, name: String(client.name), scopes, ...bound, expiresAt, interval: DEVICE_INTERVAL, polledAt: 0 }, expiresAt + DEVICE_TTL)
-      await store.put('device-user', userCodeKey(userCode), { device: sha(deviceCode) }, expiresAt)
+      await putUnused('device', sha(deviceCode), { client: body.client_id!, name: String(client.name), scopes, ...bound, expiresAt, interval: DEVICE_INTERVAL, polledAt: 0 }, expiresAt + DEVICE_TTL)
+      await putUnused('device-user', userCodeKey(userCode), { device: sha(deviceCode) }, expiresAt)
       return c.json(
         { device_code: deviceCode, user_code: userCode, verification_uri: `${origin}/oauth/device`, verification_uri_complete: `${origin}/oauth/device?user_code=${userCode}`, expires_in: DEVICE_TTL, interval: DEVICE_INTERVAL },
         200,
@@ -979,7 +1125,11 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const heard = async (kind: SignInGrant['kind'], issued: Grant, data?: unknown) =>
         !config.onGrant ||
         (await config.onGrant({ kind, grant: issued.grant, client: { id: issued.client, name: issued.name }, approver: issued.owner, scopes: issued.scopes, ...(issued.audience ? { resource: issued.audience } : {}), ...(data ? { data: data as Record<string, string> } : {}) }, c))
-      const withdrawn = () => oauthError(c, 400, 'invalid_grant', 'This sign-in was withdrawn: start again.')
+      /** onGrant said no: the grant ends before any token, and the app hears it did. */
+      const withdrawn = async (issued: Grant) => {
+        await endGrant(issued.grant, 'withdrawn', issued.client)
+        return oauthError(c, 400, 'invalid_grant', 'This sign-in was withdrawn: start again.')
+      }
       switch (body.grant_type) {
         case 'authorization_code': {
           const key = sha(body.code ?? '')
@@ -996,7 +1146,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           // Used once, even by a failed exchange, and kept until it expires: a second valid request for it ends the
           // grant the first one got, since either could be the thief (OAuth 2.1 §4.1.3); a wrong verifier ends nothing
           if (!(await markUsed('code', key))) {
-            if (verified && sameRequest) await revokeGrant(grant)
+            if (verified && sameRequest) await endGrant(grant, 'replayed', String(row.client))
             return oauthError(c, 400, 'invalid_grant', 'This code is used, expired or unknown.')
           }
           if (!sameRequest) return oauthError(c, 400, 'invalid_grant', 'client_id or redirect_uri differ from the authorization request.')
@@ -1004,15 +1154,27 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (await store.get('revoked-client', String(row.client))) return oauthError(c, 400, 'invalid_grant', 'This client was revoked: register again.')
           const issued = { client: String(row.client), name: String(row.name), owner: String(row.owner), scopes: row.scopes as string[], grant, ...boundOf(row) }
           // The code is spent either way: a refusal issues nothing
-          if (!(await heard('code', issued, row.data))) return withdrawn()
+          if (!(await heard('code', issued, row.data))) return withdrawn(issued)
           await usedClient(issued.client)
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
         }
         case 'refresh_token': {
           const refresh = body.refresh_token ?? ''
           const key = sha(refresh)
+          // Its family and generation, read from the token itself; null for a token from before generations (1.29.0's,
+          // kept only by its row) or a made-up one
+          const place = generationOf(refresh)
           const held = refresh ? await store.get('refresh', key) : null
-          if (!held) return oauthError(c, 400, 'invalid_grant', 'This refresh token is expired, revoked or unknown: authorize again.')
+          const alreadyUsed = () => oauthError(c, 400, 'invalid_grant', 'This refresh token was already used, so every refresh token from this sign-in is revoked: authorize again.')
+          if (!held) {
+            // No row: a token with a generation, of a family that has moved past it, is a replay
+            const family = place && (await movedPast(place))
+            if (family) {
+              await endGrant(place.family, 'replayed', String(family.client))
+              return alreadyUsed()
+            }
+            return oauthError(c, 400, 'invalid_grant', 'This refresh token is expired, revoked or unknown: authorize again.')
+          }
           // A refresh keeps its grant's audience and can't retarget it; a row from before audiences stays without one
           if (await manyFor(held)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
           if (otherTarget(held, body.resource)) return oauthError(c, 400, 'invalid_target', 'resource differs from the one this sign-in was granted for.')
@@ -1020,17 +1182,31 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const grant = String(held.family ?? key)
           if ((await store.get('revoked-family', grant)) || (await store.get('revoked-client', String(held.client)))) return oauthError(c, 400, 'invalid_grant', 'This refresh token is revoked: authorize again.')
           const issued = { client: String(held.client), name: String(held.name), owner: String(held.owner), scopes: held.scopes as string[], grant, ...boundOf(held) }
-          const successor = successorOf(refresh)
-          // Kept as used, not deleted, so a replay is recognised for as long as the newest token of its family lives
-          if (!(await markUsed('refresh', key, now() + REFRESH_TTL))) {
-            // A retry inside the window gets the successor the first answer held, while it is unused: never a second branch
-            const usedAt = Number((await store.get('refresh', key))?.usedAt ?? 0)
-            if (reuseGrace > 0 && usedAt && now() - usedAt <= reuseGrace && !(await store.get('refresh', sha(successor)))?.used)
-              return c.json({ ...(await issue(origin, issued)), refresh_token: successor }, 200, { 'cache-control': 'no-store' })
-            await revokeGrant(grant)
-            return oauthError(c, 400, 'invalid_grant', 'This refresh token was already used, so every refresh token from this sign-in is revoked: authorize again.')
+          const fromBeforeGenerations = place === null
+          // A token from before generations has none of its own (1.29.0 may have made it after this code rotated the
+          // family): it follows the family's newest, so an earlier token of the family still reads as a replay
+          const nextGeneration = (place?.generation ?? (await generationOfFamily(grant))) + 1
+          // Marked used, not deleted, so a retry in the grace can read when; a token from before generations is known
+          // as used by this row alone, so it keeps it 30 days
+          const marked = await markUsed('refresh', key, now() + REFRESH_TTL)
+          if (!marked) {
+            // A retry inside the window gets the successor the first answer held: never a second branch
+            const retried = await retriedSuccessor(refresh, grant, nextGeneration)
+            if (retried) return c.json({ ...(await issue(origin, issued)), refresh_token: retried }, 200, { 'cache-control': 'no-store' })
+            await endGrant(grant, 'replayed', issued.client)
+            return alreadyUsed()
           }
-          return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued, successor) }, 200, { 'cache-control': 'no-store' })
+          const successor = successorOf(refresh, grant, nextGeneration)
+          // Before the family moves on: a retry of a token from before generations finds its successor's generation
+          // here, not from the family, which this answer is about to move
+          if (fromBeforeGenerations) await store.put('refresh', key, { ...marked, successorGeneration: nextGeneration }, now() + REFRESH_TTL)
+          const access = await issue(origin, issued)
+          // The family moves on before its new token exists: from here an earlier token is a replay, row or not
+          await store.put('refresh-family', grant, { generation: nextGeneration, client: issued.client }, now() + REFRESH_TTL)
+          await refreshFor(issued, successor)
+          // A token with a generation is known by its family from now on: its row stays only while a retry may read it
+          if (!fromBeforeGenerations) await store.put('refresh', key, marked, now() + reuseGrace)
+          return c.json({ ...access, refresh_token: successor }, 200, { 'cache-control': 'no-store' })
         }
         case CLAIM_GRANT: {
           const held = body.claim_token ? await store.get('claim-token', sha(body.claim_token)) : null
@@ -1053,10 +1229,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const issued = { client, name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant, ...boundOf(registration) }
           if (config.onGrant) {
             // Refused, the grant ends, so the agent's identity assertion buys nothing either; heard, jwt-bearer may follow
-            if (!(await heard('claim', issued))) {
-              await revokeGrant(grant)
-              return withdrawn()
-            }
+            if (!(await heard('claim', issued))) return withdrawn(issued)
             await store.put('registration', client, { ...registration, collected: true }, now() + REGISTRATION_TTL)
           }
           const assertion = await sign({ sub: client, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
@@ -1088,7 +1261,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (decision?.status === 'denied') return oauthError(c, 400, 'access_denied', 'The owner said no.')
           if (decision?.status === 'approved') {
             const issued = { client: String(record.client), name: String(record.name), owner: String(decision.owner), scopes: record.scopes as string[], grant: newGrant(), ...boundOf(record) }
-            if (!(await heard('device', issued))) return withdrawn()
+            if (!(await heard('device', issued))) return withdrawn(issued)
             await usedClient(issued.client)
             return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
           }
@@ -1119,15 +1292,26 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       }
     })
 
+    /**
+     * The sign-in a refresh token belongs to: by its row, or, for an earlier token with a generation that keeps no row,
+     * by its MAC and its family's row. null for anything else.
+     */
+    const signInOf = async (refresh: string, row: Record<string, unknown> | null) => {
+      if (row) return { family: String(row.family ?? sha(refresh)), client: String(row.client) }
+      const place = generationOf(refresh)
+      if (!place) return null
+      const family = await store.get('refresh-family', place.family)
+      return { family: place.family, ...(typeof family?.client === 'string' ? { client: family.client } : {}) }
+    }
+
     // RFC 7009: always 200, whatever the token was
     app.post('/oauth/revoke', async (c) => {
       const body = await bodyOf(c)
       const value = body.token ?? ''
       const refresh = await store.get('refresh', sha(value))
-      if (refresh) {
-        await revokeGrant(String(refresh.family ?? sha(value)))
-        await store.delete('refresh', sha(value))
-      }
+      const signIn = await signInOf(value, refresh)
+      if (signIn) await endGrant(signIn.family, 'revoked', signIn.client)
+      if (refresh) await store.delete('refresh', sha(value))
       const { publicKey } = await ready
       const { payload } = await jwtVerify(value, publicKey, { issuer: issuerOf(c), algorithms: ['ES256'] }).catch(() => ({ payload: null }))
       if (typeof payload?.jti === 'string') await store.delete('access', payload.jti)
@@ -1137,12 +1321,16 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
 
   /**
    * Revokes every token a client or agent registration holds and drops the registration (the owner's kill switch): a
-   * revoked client registers again and gets a new id.
+   * revoked client registers again and gets a new id. `onRevoke` hears it once, naming the client and no grant.
+   *
+   * @example
+   * await oauth.revokeClient(caller.client)
    */
   const revokeClient = async (clientId: string) => {
     await store.put('revoked-client', clientId, {}, now() + REVOKED_TTL)
     await store.delete('client', clientId)
     await store.delete('registration', clientId)
+    await tellRevoked({ client: clientId, reason: 'client_revoked' })
   }
 
   return { mount, verify, resourceMetadataFor, resourceOf, rootOf, issuerOf, mcpPath, revokeGrant, revokeClient, ticketOf, answeredOf, complete, authorizationServer, protectedResource, authMd }

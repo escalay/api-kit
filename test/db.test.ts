@@ -33,7 +33,7 @@ insert into oauth values ('client', 'c1', '{"name":"Claude"}', ${later()});`)
     const board = await (await app.request('/api/boards/b1', { headers: { authorization: 'Bearer k' } })).json()
     expect(board).toMatchObject({ id: 'b1', name: 'Saved', items: 1, _embedded: { items: [{ ref: 'logo:fox', note: 'the tail' }] } })
     expect(await store.get('client', 'c1')).toEqual({ name: 'Claude' })
-    expect(await db.all(sql`select feature, step from kit_migrations order by feature`)).toEqual([['boards', 1], ['oauth', 1]])
+    expect(await db.all(sql`select feature, step from kit_migrations order by feature`)).toEqual([['boards', 1], ['oauth', 1], ['oauth', 2]])
   })
 
   it('opens a file, memory or an open database, and names what it can’t open', async () => {

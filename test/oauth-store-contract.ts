@@ -1,7 +1,7 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { decodeJwt } from 'jose'
-import { describe, expect, it } from 'vitest'
-import { createAgentApi, createOAuth, generateOAuthKey, parseApiKeys, type OAuthConfig, type OAuthStore } from '../src/index.js'
+import { describe, expect, it, vi } from 'vitest'
+import { createAgentApi, createOAuth, generateOAuthKey, parseApiKeys, type OAuthConfig, type OAuthStore, type SignInRevoked } from '../src/index.js'
 import { approveSignIn } from '../src/testing/index.js'
 
 /**
@@ -15,6 +15,14 @@ const ORIGIN = 'http://localhost'
 const REDIRECT = 'http://localhost:7777/cb'
 const now = () => Math.floor(Date.now() / 1000)
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
+/** The successor 1.29.0 gave a refresh token: `rt_` and an HMAC of the token under a secret from the signing key, as v1.29.0 wrote it. */
+const successorIn1290 = (signingKey: string, refresh: string) => {
+  const { d } = JSON.parse(signingKey) as { d?: string }
+  const secret = createHash('sha256').update(`api-kit refresh successor\0${d ?? signingKey}`).digest()
+  return `rt_${createHmac('sha256', secret).update(refresh).digest('base64url')}`
+}
+/** A typed device code as the server keys it. */
+const userCodeKey = (typed: string) => sha(typed.toUpperCase().replace(/[^A-Z]/g, ''))
 
 export const form = (fields: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(fields).toString() })
 const json = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -162,6 +170,93 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect(await live()).toEqual(['used', 'before'])
     })
 
+    it('never trims a row that a live row of the holding kind names, and trims it once that row is gone', async () => {
+      const store = await make()
+      const kind = `capped-${crypto.randomUUID()}`
+      const holder = `${kind}-holder`
+      for (const id of ['old', 'mid', 'new']) await store.put(kind, id, { used: false }, now() + 600)
+      await store.put(holder, 'ticket', { holds: 'old', used: false }, now() + 600)
+      await store.put(holder, 'lapsed', { holds: 'mid', used: false }, now() - 1)
+      await store.trim!(kind, 1, holder)
+      expect(await Promise.all(['old', 'mid', 'new'].map(async (id) => Boolean(await store.get(kind, id))))).toEqual([true, false, true])
+      await store.delete(holder, 'ticket')
+      await store.trim!(kind, 1, holder)
+      expect(await store.get(kind, 'old')).toBeNull()
+    })
+
+    it('caps every row an unauthenticated caller writes: agent registrations, claim tokens and attempts, device codes', async () => {
+      const store = await make()
+      const { app } = await oauthApp(store, { maxUnusedClients: 2, maxUnusedTickets: 2 })
+      const agents = []
+      for (let n = 0; n < 3; n++) agents.push(await (await app.request('/agent/identity', json({ type: 'anonymous', client_name: `Agent ${n}` }))).json())
+      const kept = async (kind: string, ids: string[]) => Promise.all(ids.map(async (id) => Boolean(await store.get(kind, id))))
+      expect(await kept('registration', agents.map((agent) => agent.registration_id))).toEqual([false, true, true])
+      expect(await kept('claim-token', agents.map((agent) => sha(agent.claim_token)))).toEqual([false, true, true])
+
+      const attempts = []
+      for (let n = 0; n < 3; n++) attempts.push((await (await app.request('/agent/identity/claim', json({ claim_token: agents[2].claim_token, email: OWNER }))).json()).claim_attempt)
+      expect((await typeClaim(app, attempts[0])).status).toBe(410)
+      expect((await typeClaim(app, attempts[2])).status).toBe(200)
+
+      const device = 'urn:ietf:params:oauth:grant-type:device_code'
+      const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+      const codes = []
+      for (let n = 0; n < 3; n++) codes.push(await (await app.request('/oauth/device_authorization', form({ client_id }))).json())
+      const poll = (code: { device_code: string }) => app.request('/oauth/token', form({ grant_type: device, device_code: code.device_code, client_id }))
+      expect((await (await poll(codes[0])).json()).error).toBe('invalid_grant')
+      expect((await (await poll(codes[2])).json()).error).toBe('authorization_pending')
+      expect(await kept('device-user', codes.map((code) => userCodeKey(code.user_code)))).toEqual([false, true, true])
+    })
+
+    it('never evicts a claimed agent’s registration, so its identity assertion keeps working through a flood', async () => {
+      const { app } = await oauthApp(await make(), { maxUnusedClients: 1 })
+      const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+      expect((await typeClaim(app, registration.claim)).status).toBe(200)
+      const flood = async () => {
+        for (let n = 0; n < 3; n++) await app.request('/agent/identity', json({ type: 'anonymous' }))
+      }
+      await flood()
+      const collected = await (await claimPoll(app, registration.claim_token)).json()
+      expect(collected.access_token).toBeTruthy()
+      await flood()
+      expect((await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: collected.identity_assertion }))).status).toBe(200)
+    })
+
+    it('never lets a registration flood evict a client whose invite page is open, and evicts it once the ticket lapses', async () => {
+      const store = await make()
+      const { app } = await joinApp(store, { maxUnusedClients: 1 })
+      const invited = await registered(app)
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(invited)}`)).text())
+      for (let n = 0; n < 3; n++) await registered(app)
+      expect(await store.get('client', invited)).not.toBeNull()
+      expect((await browser.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+
+      // A ticket that lapsed holds nothing: the next registration evicts its client
+      const waiting = await registered(app)
+      const lapsing = ticketIn(await (await browserOf(app).request(`/oauth/authorize?${authorizeQuery(waiting)}`)).text())
+      await store.put('consent', lapsing, (await store.get('consent', lapsing))!, now() - 1)
+      await registered(app)
+      expect(await store.get('client', waiting)).toBeNull()
+    })
+
+    it('lets a flood of newer tickets evict a waiting ticket, and then its client: the ticket cap protects no ticket', async () => {
+      const store = await make()
+      const { app } = await joinApp(store, { maxUnusedClients: 3, maxUnusedTickets: 3 })
+      const invited = await registered(app)
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(invited)}`)).text())
+      // Registrations alone never evict it: its ticket holds it
+      for (let n = 0; n < 10; n++) await registered(app)
+      expect(await store.get('client', invited)).not.toBeNull()
+      // maxUnusedTickets newer tickets: the waiting one is the oldest and goes, and its client is held no more
+      for (let n = 0; n < 3; n++) await browserOf(app).request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)
+      expect(await store.get('consent', ticket)).toBeNull()
+      await registered(app)
+      expect(await store.get('client', invited)).toBeNull()
+      expect(await (await browser.post('/join', { ticket, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+    })
+
     // workers-oauth-provider #420; better-auth GHSA-7w99-5wm4-3g79; OAuth 2.1 §4.1.3
     it('gives one token for two exchanges of a code at once, and the second valid one revokes what the first got', async () => {
       const { app } = await oauthApp(await make())
@@ -268,6 +363,26 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect((await (await refreshWith(app, first.refresh_token)).json()).error).toBe('invalid_grant')
     })
 
+    it('with reuseGraceSeconds 30, gives a retry the same successor 29 seconds after the first answer, and ends the sign-in at 30', async () => {
+      const store = await make()
+      const { app } = await oauthApp(store, { reuseGraceSeconds: 30 })
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      try {
+        // A 1.29.0 token: its used row is kept 30 days, so the window alone decides
+        const legacy = `rt_${randomBytes(24).toString('base64url')}`
+        await store.put('refresh', sha(legacy), { client: 'client_old', name: 'Old', owner: OWNER, scopes: ['read'], family: `g-${crypto.randomUUID()}`, used: false }, now() + 3600)
+        const first = await (await refreshWith(app, legacy)).json()
+        vi.setSystemTime((at += 29 * 1000))
+        expect((await (await refreshWith(app, legacy)).json()).refresh_token).toBe(first.refresh_token)
+        vi.setSystemTime((at += 1000))
+        expect(await (await refreshWith(app, legacy)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+        expect((await callerWith(app, first.access_token)).status).toBe(401)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('with reuseGraceSeconds, ends the sign-in when the successor was already used', async () => {
       const { app } = await oauthApp(await make(), { reuseGraceSeconds: 30 })
       const { tokens } = await signedIn(app)
@@ -275,6 +390,143 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       const second = await (await refreshWith(app, first.refresh_token)).json()
       expect((await (await refreshWith(app, tokens.refresh_token)).json()).error).toBe('invalid_grant')
       expect((await callerWith(app, second.access_token)).status).toBe(401)
+    })
+
+    it('keeps a row for the newest refresh token only, and any earlier one sent again still ends the sign-in', async () => {
+      const store = await make()
+      const { app } = await oauthApp(store)
+      const { tokens } = await signedIn(app)
+      const chain = [tokens.refresh_token]
+      let latest = tokens
+      for (let n = 0; n < 4; n++) {
+        latest = await (await refreshWith(app, chain.at(-1)!)).json()
+        chain.push(latest.refresh_token)
+      }
+      expect(chain.every((one) => one.startsWith('rt_'))).toBe(true)
+      expect(await Promise.all(chain.map(async (one) => Boolean(await store.get('refresh', sha(one)))))).toEqual([false, false, false, false, true])
+      // The generation before last comes back: stolen, or a client that kept it
+      expect(await (await refreshWith(app, chain[2]!)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+      expect((await callerWith(app, latest.access_token)).status).toBe(401)
+      expect((await (await refreshWith(app, chain[4]!)).json()).error).toBe('invalid_grant')
+    })
+
+    it('ends nothing for a made-up refresh token that names a live sign-in', async () => {
+      const { app } = await oauthApp(await make())
+      const { tokens } = await signedIn(app)
+      const rotated = await (await refreshWith(app, tokens.refresh_token)).json()
+      const { caller } = await (await callerWith(app, rotated.access_token)).json()
+      // The grant is no secret: every access token carries it
+      const [, nonce, mac] = tokens.refresh_token.split('.')
+      for (const forged of [`rt_${caller.grant}.0.${'A'.repeat(32)}.${'B'.repeat(43)}`, `rt_${caller.grant}.0.${nonce}.${mac}x`, `rt_${caller.grant}.0.${'A'.repeat(43)}`, `rt_${caller.grant}.0`]) {
+        expect((await (await refreshWith(app, forged)).json()).error_description, forged).not.toContain('already used')
+        await app.request('/oauth/revoke', form({ token: forged }))
+      }
+      expect((await callerWith(app, rotated.access_token)).status).toBe(200)
+      expect((await refreshWith(app, rotated.refresh_token)).status).toBe(200)
+    })
+
+    it('ends the sign-in when an earlier refresh token is revoked, though no row is kept for it', async () => {
+      const { app } = await oauthApp(await make())
+      const { tokens } = await signedIn(app)
+      const rotated = await (await refreshWith(app, tokens.refresh_token)).json()
+      expect((await app.request('/oauth/revoke', form({ token: tokens.refresh_token }))).status).toBe(200)
+      expect((await callerWith(app, rotated.access_token)).status).toBe(401)
+      expect((await (await refreshWith(app, rotated.refresh_token)).json()).error).toBe('invalid_grant')
+    })
+
+    it('rotates a 1.29.0 refresh token after the update, and still knows it and the one before it when they come back', async () => {
+      const store = await make()
+      const { app } = await oauthApp(store)
+      const family = `g-${crypto.randomUUID()}`
+      const row = { client: 'client_old', name: 'Old', owner: OWNER, scopes: ['read'], family, audience: ORIGIN, resource: null }
+      // What 1.29.0 left: the token before, used and kept, and the newest, unused
+      const [before, newest] = [`rt_${randomBytes(24).toString('base64url')}`, `rt_${randomBytes(24).toString('base64url')}`]
+      const place = async () => {
+        await store.put('refresh', sha(before), { ...row, used: true, usedAt: now() - 3600 }, now() + 3600)
+        await store.put('refresh', sha(newest), { ...row, used: false }, now() + 3600)
+      }
+      await place()
+      const rotated = await (await refreshWith(app, newest)).json()
+      expect(rotated).toMatchObject({ scope: 'read', refresh_token: expect.stringMatching(/^rt_/) })
+      expect((await refreshWith(app, rotated.refresh_token)).status).toBe(200)
+      expect(await (await refreshWith(app, newest)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+      expect((await callerWith(app, rotated.access_token)).status).toBe(401)
+
+      // The token before the newest, from a second sign-in in the same state
+      const { app: again } = await oauthApp(store)
+      row.family = `g-${crypto.randomUUID()}`
+      const [earlier, current] = [`rt_${randomBytes(24).toString('base64url')}`, `rt_${randomBytes(24).toString('base64url')}`]
+      await store.put('refresh', sha(earlier), { ...row, used: true, usedAt: now() - 3600 }, now() + 3600)
+      await store.put('refresh', sha(current), { ...row, used: false }, now() + 3600)
+      const next = await (await refreshWith(again, current)).json()
+      expect(await (await refreshWith(again, earlier)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+      expect((await (await refreshWith(again, next.refresh_token)).json()).error).toBe('invalid_grant')
+    })
+
+    /** A sign-in rotated to generation 4 whose newest token 1.29.0 then refreshed (a rollback): the successor 1.29.0 names, in the same family. */
+    const rolledBack = async (store: OAuthStore, options: Partial<OAuthConfig> = {}) => {
+      const signingKey = await generateOAuthKey()
+      const { app } = await oauthApp(store, { signingKey, ...options })
+      const { tokens } = await signedIn(app)
+      const chain = [tokens.refresh_token]
+      for (let n = 0; n < 4; n++) chain.push((await (await refreshWith(app, chain.at(-1)!)).json()).refresh_token)
+      const newest = (await store.get('refresh', sha(chain[4]!)))!
+      const successor = successorIn1290(signingKey, chain[4]!)
+      await store.put('refresh', sha(chain[4]!), { ...newest, used: true, usedAt: now() }, now() + 3600)
+      await store.put('refresh', sha(successor), { ...newest, used: false }, now() + 3600)
+      return { app, store, signingKey, chain, successor }
+    }
+
+    it('keeps a family’s generation when a 1.29.0 successor is refreshed after a rollback, so an earlier token still ends it', async () => {
+      const { app, chain, successor } = await rolledBack(await make())
+      const rotated = await (await refreshWith(app, successor)).json()
+      expect(rotated).toMatchObject({ refresh_token: expect.stringMatching(/^rt_/) })
+      expect(await (await refreshWith(app, chain[2]!)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+      expect((await callerWith(app, rotated.access_token)).status).toBe(401)
+      expect((await (await refreshWith(app, rotated.refresh_token)).json()).error).toBe('invalid_grant')
+    })
+
+    it('with reuseGraceSeconds, gives a 1.29.0 successor sent again in the window the same successor after a rollback', async () => {
+      const { app, successor } = await rolledBack(await make(), { reuseGraceSeconds: 30 })
+      const first = await (await refreshWith(app, successor)).json()
+      const again = await (await refreshWith(app, successor)).json()
+      expect(again.refresh_token).toBe(first.refresh_token)
+      expect((await refreshWith(app, again.refresh_token)).status).toBe(200)
+    })
+
+    it('with reuseGraceSeconds, ends the sign-in when a 1.29.0 successor comes back after its own successor was used', async () => {
+      const { app, successor } = await rolledBack(await make(), { reuseGraceSeconds: 30 })
+      const first = await (await refreshWith(app, successor)).json()
+      const second = await (await refreshWith(app, first.refresh_token)).json()
+      expect(await (await refreshWith(app, successor)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+      expect((await callerWith(app, second.access_token)).status).toBe(401)
+    })
+
+    it('with reuseGraceSeconds, gives a token 1.29.0 answered first, sent again in the window, the successor 1.29.0 gave', async () => {
+      const { app, store, signingKey, chain, successor } = await rolledBack(await make(), { reuseGraceSeconds: 30 })
+      const again = await (await refreshWith(app, chain[4]!)).json()
+      expect(again.refresh_token).toBe(successor)
+      expect((await refreshWith(app, again.refresh_token)).status).toBe(200)
+
+      // A 1.29.0 token, 1.29.0 answering first: the same
+      const row = { client: 'client_old', name: 'Old', owner: OWNER, scopes: ['read'], family: `g-${crypto.randomUUID()}` }
+      const legacy = `rt_${randomBytes(24).toString('base64url')}`
+      const legacySuccessor = successorIn1290(signingKey, legacy)
+      await store.put('refresh', sha(legacy), { ...row, used: true, usedAt: now() }, now() + 3600)
+      await store.put('refresh', sha(legacySuccessor), { ...row, used: false }, now() + 3600)
+      const retried = await (await refreshWith(app, legacy)).json()
+      expect(retried.refresh_token).toBe(legacySuccessor)
+      expect((await refreshWith(app, retried.refresh_token)).status).toBe(200)
+    })
+
+    it('with reuseGraceSeconds, ends the sign-in when a token 1.29.0 answered first comes back in the window after that successor was used', async () => {
+      const told: SignInRevoked[] = []
+      const { app, chain, successor } = await rolledBack(await make(), { reuseGraceSeconds: 30, onRevoke: async (revoked) => void told.push(revoked) })
+      const rotated = await (await refreshWith(app, successor)).json()
+      expect(await (await refreshWith(app, chain[4]!)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+      expect((await callerWith(app, rotated.access_token)).status).toBe(401)
+      expect((await (await refreshWith(app, rotated.refresh_token)).json()).error).toBe('invalid_grant')
+      expect(told).toEqual([expect.objectContaining({ reason: 'replayed' })])
     })
 
     // workers-oauth-provider #428

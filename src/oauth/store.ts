@@ -1,5 +1,5 @@
 /** Where the OAuth server keeps what it issued: in memory for tests, or in the app's database. */
-import { and, desc, eq, gt, lte, notInArray, sql } from 'drizzle-orm'
+import { and, count, desc, eq, gt, lte, notInArray, sql } from 'drizzle-orm'
 import type { KeyValueStore } from '../core/kv.js'
 import { migrate, type Db } from '../db/index.js'
 import { OAUTH_MIGRATIONS, oauthKeys } from './schema.js'
@@ -23,9 +23,11 @@ export type OAuthStore = KeyValueStore & {
   /**
    * Keeps the `keep` newest unused rows of a kind (`used: false`, newest by expiry, then by write) and deletes the rest:
    * what caps unused registrations and open consent tickets. A row with no `used` key (from before) is never trimmed. A
-   * store without it is not capped.
+   * kind with no more rows than `keep`, used or not, is left without reading a row. With `heldBy`, a row whose id a live
+   * row of that kind names as `holds` is never trimmed either: a client a consent ticket waits on. A store without it
+   * is not capped.
    */
-  trim?: (kind: string, keep: number) => Promise<void>
+  trim?: (kind: string, keep: number, heldBy?: string) => Promise<void>
 }
 
 /** A store in memory, for tests and single-process scripts. */
@@ -52,11 +54,12 @@ export const memoryOAuthStore = (): OAuthStore => {
       rows.set(`${kind}:${id}`, { value, expiresAt: Math.max(row.expiresAt, keepUntil) })
       return value
     },
-    trim: async (kind, keep) => {
+    trim: async (kind, keep, heldBy) => {
+      const held = new Set([...rows].filter(([key, row]) => heldBy && key.startsWith(`${heldBy}:`) && row.expiresAt > now() && row.value.holds !== undefined).map(([, row]) => `${kind}:${row.value.holds}`))
       // The map keeps write order: among rows that expire together, the later one is the newer
       const unused = [...rows].map(([key, row], order) => ({ key, row, order })).filter(({ key, row }) => key.startsWith(`${kind}:`) && row.value.used === false)
       unused.sort((a, b) => b.row.expiresAt - a.row.expiresAt || b.order - a.order)
-      for (const { key } of unused.slice(keep)) rows.delete(key)
+      for (const { key } of unused.slice(keep)) if (!held.has(key)) rows.delete(key)
     },
   }
 }
@@ -103,11 +106,17 @@ export const dbOAuthStore = async (db: Db): Promise<OAuthStore> => {
         .returning({ value: oauthKeys.value })
       return row ? JSON.parse(row.value) : null
     },
-    trim: async (kind, keep) => {
+    trim: async (kind, keep, heldBy) => {
+      // Counted by the key alone, no JSON read: a kind within its cap, unused or not, has nothing to trim
+      const [{ rows } = { rows: 0 }] = await db.select({ rows: count() }).from(oauthKeys).where(eq(oauthKeys.kind, kind))
+      if (rows <= keep) return
       // Strictly false: a row with no `used` key is from before, and NULL = 0 is never true
       const unused = and(eq(oauthKeys.kind, kind), sql`json_extract(${oauthKeys.value}, '$.used') = 0`)
       const kept = db.select({ id: oauthKeys.id }).from(oauthKeys).where(unused).orderBy(desc(oauthKeys.expiresAt), sql`rowid desc`).limit(keep)
-      await db.delete(oauthKeys).where(and(unused, notInArray(oauthKeys.id, kept)))
+      // Never a NULL in the list: `not in` a list holding NULL is never true, so nothing would be trimmed
+      const holds = sql`json_extract(${oauthKeys.value}, '$.holds')`
+      const held = db.select({ id: holds }).from(oauthKeys).where(and(eq(oauthKeys.kind, heldBy ?? ''), gt(oauthKeys.expiresAt, now()), sql`${holds} is not null`))
+      await db.delete(oauthKeys).where(and(unused, notInArray(oauthKeys.id, kept), heldBy ? notInArray(oauthKeys.id, held) : undefined))
     },
   }
 }

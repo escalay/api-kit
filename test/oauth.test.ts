@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { SignJWT, decodeJwt, importJWK } from 'jose'
 import { count, eq } from 'drizzle-orm'
 import type { Context } from 'hono'
-import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryGuardStore, memoryOAuthStore, memoryStore, oauthKeys, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, serveGuide, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
+import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryGuardStore, memoryOAuthStore, memoryStore, OAUTH_MIGRATIONS, oauthKeys, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, serveGuide, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
 import { ASSETS, cookbookApi } from './brand-fixture.js'
 import { approveSignIn } from '../src/testing/index.js'
 import { approvedCode, audOf, authorizeQuery, browserOf, callerWith, formWithTwoResources, joinApp, oauthApp, oauthStoreContract, refreshWith, registered, signedIn, ticketIn, typeClaim } from './oauth-store-contract.js'
@@ -505,6 +505,102 @@ describe('OAuth callers: the client and the grant, not the name', () => {
     for (const one of [granted, refreshed, bearing]) expect((await callerWith(app, one.access_token)).status).toBe(401)
     expect((await (await refreshWith(app, refreshed.refresh_token)).json()).error).toBe('invalid_grant')
     expect((await (await bearer(app, granted.identity_assertion)).json()).error).toBe('invalid_grant')
+  })
+
+  it('tells onRevoke every way a grant ends: revoked, replayed, withdrawn, its client revoked', async () => {
+    const told: unknown[] = []
+    const { app, oauth } = await oauthApp(memoryOAuthStore(), {
+      onRevoke: async (revoked) => void told.push(revoked),
+      onGrant: async (grant) => grant.kind !== 'claim',
+    })
+    const grantOf = async (accessToken: string) => (await callerOf(app, accessToken)).grant as string
+    const heard = () => told.splice(0)
+
+    const byApi = await signedIn(app)
+    const apiGrant = await grantOf(byApi.tokens.access_token)
+    await oauth.revokeGrant(apiGrant)
+    expect(heard()).toEqual([{ grant: apiGrant, reason: 'revoked' }])
+
+    const byEndpoint = await signedIn(app)
+    const endpointGrant = await grantOf(byEndpoint.tokens.access_token)
+    await app.request('/oauth/revoke', form({ token: byEndpoint.tokens.refresh_token }))
+    expect(heard()).toEqual([{ grant: endpointGrant, client: byEndpoint.client_id, reason: 'revoked' }])
+
+    // A refresh token sent again, its row kept or gone
+    for (const replay of [0, 1]) {
+      const replayed = await signedIn(app)
+      const replayedGrant = await grantOf(replayed.tokens.access_token)
+      const rotated = await (await refreshWith(app, replayed.tokens.refresh_token)).json()
+      if (replay) await refreshWith(app, rotated.refresh_token)
+      await refreshWith(app, replay ? rotated.refresh_token : replayed.tokens.refresh_token)
+      expect(heard()).toEqual([{ grant: replayedGrant, client: replayed.client_id, reason: 'replayed' }])
+    }
+
+    const code = await approvedCode(app)
+    const first = await (await code.exchange()).json()
+    const codeGrant = await grantOf(first.access_token)
+    await code.exchange()
+    expect(heard()).toEqual([{ grant: codeGrant, client: code.client_id, reason: 'replayed' }])
+
+    // onGrant said no to a claim: its grant ends before any token
+    const { registration } = await claimed(app)
+    expect(heard()).toEqual([{ grant: expect.any(String), client: registration.registration_id, reason: 'withdrawn' }])
+
+    await oauth.revokeClient(code.client_id)
+    expect(heard()).toEqual([{ client: code.client_id, reason: 'client_revoked' }])
+  })
+
+  it('tells onRevoke of a code or device grant onGrant withdraws, and of an earlier refresh token revoked with no row', async () => {
+    const told: unknown[] = []
+    const { app } = await oauthApp(memoryOAuthStore(), { onRevoke: async (revoked) => void told.push(revoked), onGrant: async () => false })
+    const code = await approvedCode(app)
+    expect((await (await code.exchange()).json()).error_description).toContain('withdrawn')
+    expect(told.splice(0)).toEqual([{ grant: expect.any(String), client: code.client_id, reason: 'withdrawn' }])
+
+    const device = 'urn:ietf:params:oauth:grant-type:device_code'
+    const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+    const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+    await app.request('/oauth/device', { ...form({ user_code, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+    expect((await (await app.request('/oauth/token', form({ grant_type: device, device_code, client_id }))).json()).error_description).toContain('withdrawn')
+    expect(told.splice(0)).toEqual([{ grant: expect.any(String), client: client_id, reason: 'withdrawn' }])
+
+    const { app: plain } = await oauthApp(memoryOAuthStore(), { onRevoke: async (revoked) => void told.push(revoked) })
+    const signed = await signedIn(plain)
+    const grant = (await callerOf(plain, signed.tokens.access_token)).grant
+    await refreshWith(plain, signed.tokens.refresh_token)
+    await plain.request('/oauth/revoke', form({ token: signed.tokens.refresh_token }))
+    expect(told.splice(0)).toEqual([{ grant, client: signed.client_id, reason: 'revoked' }])
+  })
+
+  it('with the starter’s 30 seconds of grace, drops a used refresh row after it and still ends the sign-in when the token comes back', async () => {
+    let at = Date.now()
+    vi.useFakeTimers({ toFake: ['Date'], now: at })
+    const store = memoryOAuthStore()
+    const { app } = await oauthApp(store, { reuseGraceSeconds: 30 })
+    const { tokens } = await signedIn(app)
+    const rotated = await (await refreshWith(app, tokens.refresh_token)).json()
+    // Inside the grace, a retry gets the same successor
+    expect((await (await refreshWith(app, tokens.refresh_token)).json()).refresh_token).toBe(rotated.refresh_token)
+    vi.setSystemTime((at += 31 * 1000))
+    expect(await store.get('refresh', createHash('sha256').update(tokens.refresh_token).digest('hex'))).toBeNull()
+    expect(await (await refreshWith(app, tokens.refresh_token)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+    expect((await (await refreshWith(app, rotated.refresh_token)).json()).error).toBe('invalid_grant')
+    expect((await callerWith(app, rotated.access_token)).status).toBe(401)
+    vi.useRealTimers()
+  })
+
+  it('revokes, and answers as ever, when onRevoke throws', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { app, oauth } = await oauthApp(memoryOAuthStore(), { onRevoke: async () => { throw new Error('the log is down') } })
+    const { tokens } = await signedIn(app)
+    expect((await app.request('/oauth/revoke', form({ token: tokens.refresh_token }))).status).toBe(200)
+    expect((await callerWith(app, tokens.access_token)).status).toBe(401)
+    const other = await signedIn(app)
+    await refreshWith(app, other.tokens.refresh_token)
+    expect((await (await refreshWith(app, other.tokens.refresh_token)).json()).error).toBe('invalid_grant')
+    await expect(oauth.revokeClient(other.client_id)).resolves.toBeUndefined()
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining('onRevoke failed: the log is down'))
+    errors.mockRestore()
   })
 
   it('uses a claimed registration’s id as the grant when it was claimed before grants', async () => {
@@ -1216,6 +1312,143 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     expect(new URL((await browser.post('/oauth/authorize', { ticket: ticketIn(await secondPage.text()), decision: 'allow' })).headers.get('location')!).searchParams.get('state')).toBe('two')
   })
 
+  it('lets an app decide a sign-in later: the ticket lives ticketTtl, and the asker’s browser completes it once decided', async () => {
+    let at = Date.now()
+    vi.useFakeTimers({ toFake: ['Date'], now: at })
+    // The app's own table: each waiting ask, and who approved it once the owner decided
+    const decisions = new Map<string, { approver?: string }>()
+    const { app, oauth } = await oauthApp(memoryOAuthStore(), {
+      ticketTtl: 24 * 3600,
+      approve: async (c, ask) => (decisions.set(ask.ticket, {}), c.html(`<p>Waiting for the owner.</p><form method="post" action="/join/finish"><input type="hidden" name="ticket" value="${ask.ticket}"></form>`)),
+    }, { open: ['/join/status', '/join/finish'] })
+    // The waiting page polls the status, then submits its form from the asker's browser once the owner decided
+    app.get('/join/status', (c) => c.json({ decided: Boolean(decisions.get(c.req.query('ticket') ?? '')?.approver) }))
+    app.post('/join/finish', async (c) => {
+      const ticket = String((await c.req.parseBody()).ticket ?? '')
+      const approver = decisions.get(ticket)?.approver
+      return approver ? oauth.complete(c, ticket, { approver }) : c.html('<p>Still waiting for the owner.</p>', 409)
+    })
+    const client_id = await registered(app)
+    const browser = browserOf(app)
+    const page = await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+    expect(cookieOf(page)).toContain('Max-Age=86400')
+    const ticket = ticketIn(await page.text())
+    expect(await (await browser.request(`/join/status?ticket=${ticket}`)).json()).toEqual({ decided: false })
+    expect((await browser.post('/join/finish', { ticket })).status).toBe(409)
+    // The owner decides three hours later
+    vi.setSystemTime((at += 3 * 3600 * 1000))
+    decisions.set(ticket, { approver: OWNER })
+    expect(await (await browser.request(`/join/status?ticket=${ticket}`)).json()).toEqual({ decided: true })
+    const done = await browser.post('/join/finish', { ticket })
+    expect(new URL(done.headers.get('location')!).searchParams.get('code')).toBeTruthy()
+    expect((await exchangeAt(app, done.headers.get('location'), client_id)).status).toBe(200)
+
+    // Past its life, a decision comes too late
+    const late = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+    vi.setSystemTime((at += 24 * 3600 * 1000 + 1000))
+    decisions.set(late, { approver: OWNER })
+    const expired = await browser.post('/join/finish', { ticket: late })
+    expect([expired.status, expired.headers.get('location'), await expired.text()]).toEqual([400, null, expect.stringContaining('This approval expired')])
+
+    // Without ticketTtl, ten minutes as before
+    const { app: plain } = await joinApp(memoryOAuthStore())
+    const owner = browserOf(plain)
+    const opened = await owner.request(`/oauth/authorize?${authorizeQuery(await registered(plain))}`)
+    expect(cookieOf(opened)).toContain('Max-Age=600')
+    const short = ticketIn(await opened.text())
+    vi.setSystemTime((at += 601 * 1000))
+    expect(await (await owner.post('/join', { ticket: short, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+  })
+
+  it('refuses a ticket decided after its unused client lapsed, though the ticket still lives', async () => {
+    let at = Date.now()
+    vi.useFakeTimers({ toFake: ['Date'], now: at })
+    const store = memoryOAuthStore()
+    const { app } = await joinApp(store, { ticketTtl: 2 * 24 * 3600 })
+    const client_id = await registered(app)
+    // A client registered six days ago opens a ticket of two days: the client lapses on its seventh
+    vi.setSystemTime((at += 6 * 24 * 3600 * 1000))
+    const browser = browserOf(app)
+    const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+    vi.setSystemTime((at += 24 * 3600 * 1000 + 1000))
+    expect(await store.get('client', client_id)).toBeNull()
+    expect(await store.get('consent', ticket)).not.toBeNull()
+    // ticketOf answers null; complete answers the page that says to add the connection again
+    const late = await browser.post('/join', { ticket, invite: 'garden-42' })
+    expect([late.status, late.headers.get('location'), await late.text()]).toEqual([400, null, expect.stringContaining('This sign-in expired')])
+    const direct = await browser.post('/join/direct', { ticket, invite: 'garden-42' })
+    expect([direct.status, direct.headers.get('location'), await direct.text()]).toEqual([400, null, expect.stringContaining('Remove this connection in your app and add it again.')])
+  })
+
+  it('lets complete bind an invite’s grant to its space when the client named none, and its token works nowhere else', async () => {
+    const ALPHA = `${ORIGIN}/s/alpha/mcp`
+    const BETA = `${ORIGIN}/s/beta/mcp`
+    const resourceOf = (c: Context) => `${originOf(c)}${/^\/s\/[a-z]+\/mcp/.exec(c.req.path)?.[0] ?? ''}`
+    const { app, oauth } = await oauthApp(memoryOAuthStore(), {
+      resources: (path) => /^\/s\/[a-z]+\/mcp$/.test(path),
+      resourceOf,
+      approve: async (c, ask) => c.html(`<form method="post" action="/join"><input type="hidden" name="ticket" value="${ask.ticket}"></form>`),
+    }, { open: ['/join'] })
+    app.post('/s/:name/mcp', (c) => c.json({ ok: true }))
+    // The invite names its space: the grant is bound to it, whatever the client asked
+    app.post('/join', async (c) => {
+      const body = await c.req.parseBody()
+      return oauth.complete(c, String(body.ticket), { approver: OWNER, resource: String(body.resource) })
+    })
+    const client_id = await registered(app)
+    const browser = browserOf(app)
+    const open = async (extra: Record<string, string> = {}) => ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id, extra)}`)).text())
+    const mcpAt = (path: string, token: string) => app.request(path, { method: 'POST', headers: { authorization: `Bearer ${token}` } })
+
+    const ticket = await open()
+    const joined = await browser.post('/join', { ticket, resource: ALPHA })
+    const tokens = await (await exchangeAt(app, joined.headers.get('location'), client_id)).json()
+    expect(audOf(tokens.access_token)).toBe(ALPHA)
+    expect((await mcpAt('/s/alpha/mcp', tokens.access_token)).status).toBe(200)
+    expect((await mcpAt('/s/beta/mcp', tokens.access_token)).status).toBe(401)
+    // The app chose the audience, so a resource the client sends on refresh is not held against it, and it stays
+    const rotated = await (await refreshWith(app, tokens.refresh_token, ORIGIN)).json()
+    expect(audOf(rotated.access_token)).toBe(ALPHA)
+
+    // A resource the server does not issue for is a page, and the ticket stays live
+    const kept = await open()
+    for (const wrong of [`${ORIGIN}/s/alpha/files`, 'https://elsewhere.example.test/s/alpha/mcp', 'not a url']) {
+      const refused = await browser.post('/join', { ticket: kept, resource: wrong })
+      expect([refused.status, refused.headers.get('location'), await refused.text()], wrong).toEqual([400, null, expect.stringContaining('invalid_target')])
+    }
+    expect((await browser.post('/join', { ticket: kept, resource: ALPHA })).headers.get('location')).toContain('code=')
+
+    // A client that named its resource keeps it: the same one is fine, another is refused
+    const asked = await open({ resource: BETA })
+    expect(await (await browser.post('/join', { ticket: asked, resource: ALPHA })).text()).toContain('invalid_target')
+    const same = await browser.post('/join', { ticket: asked, resource: `${BETA}/` })
+    expect(audOf((await (await exchangeAt(app, same.headers.get('location'), client_id, { resource: BETA })).json()).access_token)).toBe(BETA)
+  })
+
+  it('warns once at start when approve opens the sign-in page without limits or publicOrigin', async () => {
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const keyed = { name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null }
+    const approve = async () => null
+    const limits = { store: memoryGuardStore() }
+    for (const config of [{ approve }, { approve, limits }, { approve, publicOrigin: 'https://sample.example.test' }]) {
+      warned.mockClear()
+      createOAuth({ ...keyed, ...config })
+      expect(warned, JSON.stringify(Object.keys(config))).toHaveBeenCalledTimes(1)
+      expect(warned).toHaveBeenCalledWith(expect.stringContaining('createOAuth: approve'))
+    }
+    warned.mockClear()
+    createOAuth({ ...keyed, approve, limits, publicOrigin: 'https://sample.example.test' })
+    createOAuth(keyed)
+    expect(warned).not.toHaveBeenCalled()
+    warned.mockRestore()
+  })
+
+  it('takes a ticket life of a minute to a week, in whole seconds', async () => {
+    const keyed = { name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null }
+    for (const wrong of [0, 59, 1.5, Number.NaN, 7 * 24 * 3600 + 1]) expect(() => createOAuth({ ...keyed, ticketTtl: wrong }), String(wrong)).toThrow(/ticketTtl/)
+    for (const right of [60, 7 * 24 * 3600]) expect(() => createOAuth({ ...keyed, ticketTtl: right })).not.toThrow()
+  })
+
   it('refuses a claim or device approval posted with no Sec-Fetch-Site and no matching Origin', async () => {
     const { app } = await oauthApp(memoryOAuthStore())
     const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
@@ -1702,5 +1935,31 @@ describe('OAuth store in the database', () => {
     expect(await restarted.get('code', 'old')).toBeNull()
     expect(await restarted.get('client', 'c2')).toBeNull()
     expect(new DatabaseSync(file).prepare('select count(*) as n from oauth').get()).toEqual({ n: 1 })
+  })
+
+  it('indexes expiry, also in a database 1.29.0 made, whose rows still read', async () => {
+    const file = join(await mkdtemp(join(tmpdir(), 'oauth-')), 'state.sqlite')
+    const before = new DatabaseSync(file)
+    before.exec("create table kit_migrations (feature text not null, step integer not null, applied_at text not null, primary key (feature, step)); insert into kit_migrations values ('oauth', 1, '2026-11-23')")
+    before.exec(OAUTH_MIGRATIONS[0])
+    before.prepare('insert into oauth values (?, ?, ?, ?)').run('client', 'client_before', JSON.stringify({ name: 'Before', redirectUris: [] }), Math.floor(Date.now() / 1000) + 3600)
+    const store = await dbOAuthStore(await openDb(`file:${file}`))
+    expect(await store.get('client', 'client_before')).toEqual({ name: 'Before', redirectUris: [] })
+    const plan = new DatabaseSync(file).prepare('explain query plan delete from oauth where expires_at <= ?').all(0)
+    expect(JSON.stringify(plan)).toContain('oauth_expires_at')
+  })
+
+  it('reads no row’s JSON to trim a kind that is within its cap', async () => {
+    const sqlite = new DatabaseSync(':memory:')
+    const asked: string[] = []
+    const watched = { exec: (query: string) => sqlite.exec(query), prepare: (query: string) => (asked.push(query), sqlite.prepare(query)) }
+    const store = await dbOAuthStore(await openDb(watched as unknown as DatabaseSync))
+    for (const id of ['a', 'b']) await store.put('client', id, { used: false }, Math.floor(Date.now() / 1000) + 600)
+    asked.length = 0
+    await store.trim!('client', 5)
+    expect(asked.filter((query) => query.includes('json_extract'))).toEqual([])
+    await store.trim!('client', 1)
+    expect(asked.filter((query) => query.includes('json_extract')).length).toBeGreaterThan(0)
+    expect(await store.get('client', 'a')).toBeNull()
   })
 })

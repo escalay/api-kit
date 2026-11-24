@@ -11,10 +11,30 @@ Needs: `core`, `db`.
 import { accessOwner, createAgentApi, createOAuth, dbOAuthStore, generateOAuthKey } from './kit/index.js'
 
 const oauth = env.OAUTH_SIGNING_KEY
-  ? createOAuth({ name: 'Notes', signingKey: env.OAUTH_SIGNING_KEY, store: await dbOAuthStore(db), owner: access ? accessOwner(access) : async () => null })
+  ? createOAuth({
+      name: 'Notes',
+      signingKey: env.OAUTH_SIGNING_KEY,
+      store: await dbOAuthStore(db),
+      owner: access ? accessOwner(access) : async () => null,
+      reuseGraceSeconds: 30,                               // two tabs or a retried refresh never sign anyone out
+    })
   : undefined
 const app = createAgentApi({ …, oauth })                   // mounts /oauth/*, the metadata, and accepts its tokens
 ```
+
+`owner` is who may approve on the kit's pages. Behind Access, `accessOwner(access)`. An app with the `people` part asks
+its session, or a deploy signed in by passkey alone can never approve a sign-in (`kit doctor` notes it when the file
+that calls `createOAuth` never calls `personOf`; comments don't count). An app behind
+Access as well asks `accessOwner(access)` when this answers null:
+
+```ts
+owner: async (c) => {
+  const person = await personOf(c, db)
+  return person?.role === 'owner' ? person.email : null
+},
+```
+
+The starter (`npm create escalay`) sets `reuseGraceSeconds: 30` and says this beside its `owner`.
 
 ## Device authorization (RFC 8628)
 
@@ -31,6 +51,12 @@ POST /oauth/token                 grant_type=urn:ietf:params:oauth:grant-type:de
 Nothing to wire: `mount` adds it, and the metadata names `device_authorization_endpoint`.
 
 ## Audiences (RFC 8707)
+
+> **The default `accepts` takes a root token at every space.** A client that sends no `resource` gets the root, and a
+> root token works everywhere on the origin, every space included. An app that signs people in by invite binds each
+> grant to the invite's space: `oauth.complete(c, ticket, { approver, resource: <the space's resource> })`. Its token
+> then works at that space only, even when the client asked for nothing. An app that wants a space to take only its
+> own tokens also refuses the root there in its own `accepts` (below).
 
 Every grant is bound to one resource, signed as its tokens' `aud` and on the caller as `resource`:
 
@@ -133,18 +159,39 @@ every first token in `onGrant`:
   `Referer`'s origin, each null when not sent).
 - The app's page posts the ticket to the app's own route, which reads it with `oauth.ticketOf(c, ticket)` (null when
   expired, answered, or opened in another browser; then `oauth.answeredOf(c, ticket)` says `approved`, `denied` or
-  `answered` for a ticket this browser spent already, so the route can say "Already approved") and answers with `oauth.complete(c, ticket, decision)`:
-  `{ approver, scopes?, data? }` or `'deny'`. `approver` becomes the token's `sub` (`caller.owner`), `scopes` may only
-  narrow what was asked (a wider or empty list is a 400 page), `data` goes on the code and reaches `onGrant`. The
-  resource is the ticket's; `complete` never sets one. It returns the 302 to the client (`code`, `state`, `iss`, or
-  `access_denied`) or a 400/403 page. A blank `approver` is a 400 page, and the ticket stays live.
+  `answered` for a ticket this browser spent already, so the route can say "Already approved") and answers with
+  `oauth.complete(c, ticket, decision)`: `{ approver, scopes?, data?, resource? }` or `'deny'`. `approver` becomes the token's
+  `sub` (`caller.owner`), `scopes` may only narrow what was asked (a wider or empty list is a 400 page), `data` goes
+  on the code and reaches `onGrant`. `resource` binds the grant to a resource this server issues for (an invite's
+  space), checked as a client's would be (`resources`, the issuer's origin, the canonical form) when the client named
+  none; a client that named one keeps it, the same one again is fine, and any other, or one not issued for, is a 400
+  page (`invalid_target`) with the ticket still live. The audience the app chose is the server's choice: a `resource`
+  the client sends later at the token endpoint is not held against it, and refresh keeps it. Without `resource`, the
+  ticket's audience. It returns the 302 to the client (`code`, `state`, `iss`, or `access_denied`) or a 400/403 page.
+  A blank `approver` is a 400 page, and the ticket stays live.
 - `onGrant(grant, c)` hears the first token of every grant: `kind` (`code`, `device` or `claim`), `grant`, `client`
   (`id`, `name`), `approver`, `scopes`, `resource` (absent on a grant from before audiences) and `data`. It runs after
   the kit's own checks (client, redirect and verifier for a code; the owner's answer for a device; the collected claim
   token for a claim), once per grant however many polls race. false withdraws it: `invalid_grant` ("This sign-in was
-  withdrawn: start again"), the code or device code spent, a claim's grant revoked. It is not asked on refresh or
-  jwt-bearer: judge later requests in `accepts`. An app that keeps its own rows per grant makes them here and refuses
-  a token whose grant has none.
+  withdrawn: start again"), the code or device code spent, the grant ended (`onRevoke` hears `withdrawn`). It is not
+  asked on refresh or jwt-bearer: judge later requests in `accepts`. An app that keeps its own rows per grant makes
+  them here and refuses a token whose grant has none.
+- `onRevoke(revoked)` hears every grant the kit ends, after it has ended it: `grant`, `client` and `reason`. A grant
+  that lapses (its refresh token unused for 30 days) is not told: nothing ends it, its tokens just expire.
+  `revoked`: `revokeGrant` (no `client`: the kit keeps no grant-to-client index) or a refresh token at `/oauth/revoke`.
+  `replayed`: a used code or refresh token sent again, its row kept or not. `withdrawn`: `onGrant` said no.
+  `client_revoked`: `revokeClient`, naming the client and no grant, since it ends every grant of the client. Revoking
+  an access token alone ends no grant and is not told. It is told at least once: a grant ended again (a code sent a
+  third time) is told again, so the app's handler is idempotent. A throw is logged (`onRevoke failed: …`), never
+  answered: the revoke has happened and the request answers as it would have.
+
+**Mirror grants with `onGrant` and `onRevoke`.** An app that lists who holds access (a space's members, their agents)
+makes its row when `onGrant` says yes and drops it when `onRevoke` names its grant, or every grant of a client on
+`client_revoked`. Its `accepts` refuses a token whose grant has no row, so a row the app dropped stops the token on its
+next request, whatever the kit's markers say. A lapsed grant is never named, so the app ages its own rows: `accepts`
+writes the row's last-seen time (every request with the grant's tokens passes there), and a row with none for 30 days
+is dropped with `revokeGrant(grant)`. A grant that refreshed but made no request in those 30 days is ended that way
+too, so its client signs in again rather than holding tokens no row backs.
 
 An app that approves by an invite typed on its own page (`test/oauth.test.ts` runs it as written):
 
@@ -181,17 +228,18 @@ app.post('/join', async (c) => {
   same-origin POST, by the browser that opened the ticket, once. A stored approval never stands in for one: the same
   client and approver signing in again see the page again.
 - **The ticket is bound to the browser.** Every `GET /oauth/authorize` that stores a ticket sets an HttpOnly,
-  SameSite=Lax nonce cookie, `__Host-oauth_ticket` on https (`oauth_ticket` on http; on https only the `__Host-` name is
-  read), Path `/`, Max-Age 600. A live one is reused and its Max-Age renewed, so a second sign-in in the same browser
-  neither breaks the first nor shortens the second. The ticket keeps only the nonce's SHA-256.
+  SameSite=Lax nonce cookie, `__Host-oauth_ticket` on https (`oauth_ticket` on http; on https only the `__Host-` name
+  is read), Path `/`, Max-Age `ticketTtl` (600 by default). A live one is reused and its Max-Age renewed, so a second
+  sign-in in the same browser neither breaks the first nor shortens the second. The ticket keeps only the nonce's
+  SHA-256.
 - **Same-origin, not same-site.** `complete`, the kit's consent POST, `/oauth/claim` and `/oauth/device` take a POST
   only with `Sec-Fetch-Site: same-origin`, or, with no such header, an `Origin` equal to the issuer's. A missing
   header with no matching `Origin` is refused (403), and so is `same-site`: a sibling host is same-site. `Origin: null`
   never matches; the kit's pages set their referrer policy to `same-origin` so a browser sends the real one.
-- **A ticket is answered once.** It is marked used and kept, its nonce hash and the answer only, until its 10 minutes
-  end. Posted again from the browser that answered it (a double click, a tab brought back), it is a page that says the
-  sign-in went through ("Already approved") or was refused, with no code and no redirect; from another browser it is
-  "This approval expired".
+- **A ticket is answered once.** It is marked used and kept, its nonce hash and the answer only, until its life
+  (`ticketTtl`) ends. Posted again from the browser that answered it (a double click, a tab brought back), it is a
+  page that says the sign-in went through ("Already approved") or was refused, with no code and no redirect; from
+  another browser it is "This approval expired".
 - **With `approve` set, `/oauth/authorize` never redirects before a person acts:** every error (an unknown client, a
   wrong redirect, `response_type`, PKCE, the resource) is a 400 page with no link. Without it, today's order holds:
   the owner first, then a `response_type` or PKCE error goes back to the client's redirect.
@@ -199,10 +247,10 @@ app.post('/join', async (c) => {
 - `/oauth/claim` and `/oauth/device` stay the owner's (`owner`, `owners`); `approve` is for `/oauth/authorize` only.
 - In Access, `/oauth/authorize` may bypass the sign-in once the app passes `approve`: the app's page decides. Keep it
   gated otherwise. A ticket is stored only when a page holds it: the app's, or the kit's shown to the owner. A visit
-  `approve` sends to the owner's sign-in stores nothing; one the app's page answers stores a 10-minute row, as an open
-  `/oauth/register` stores a client. An app whose sign-in is reachable outside Access passes `publicOrigin` and
-  `limits` (below): `oauth.mount` runs inside `createAgentApi`, before any middleware the app adds, so the app can't
-  limit these endpoints itself.
+  `approve` sends to the owner's sign-in stores nothing; one the app's page answers stores a row for `ticketTtl` (10
+  minutes by default), as an open `/oauth/register` stores a client. An app whose sign-in is reachable outside Access
+  passes `publicOrigin` and `limits` (below): `oauth.mount` runs inside `createAgentApi`, before any middleware the
+  app adds, so the app can't limit these endpoints itself.
 - With `onGrant` set, a claimed agent's identity assertion (jwt-bearer) works only once its claim was collected and
   heard, so an anonymous agent can't skip `onGrant` with the assertion it got at registration.
 - Every page the kit shows (consent, device, claim, errors) carries the app's brand when it has one
@@ -212,6 +260,32 @@ app.post('/join', async (c) => {
   returns: a host, or "an app on this computer" for a loopback or app-scheme redirect.
 - Rules after cloudflare/workers-oauth-provider (the browser-bound, single-use consent ticket; never redirect before
   the redirect is checked) and oidc-provider (the grant is saved before the code exists), both MIT.
+
+### Deciding later (`ticketTtl`)
+
+An ask to join waits for the owner, who may answer in hours. A ticket lives `ticketTtl` seconds (default 600, whole,
+from 60 to a week; `createOAuth` throws otherwise), and so does the nonce cookie that binds it to the asker's browser:
+
+1. `approve` records the ask in the app's own table (`ask.ticket`, the client, who is asking) and answers a waiting
+   page holding the ticket in a form, as any approval page does.
+2. The owner decides on the app's own screen, later; the app writes the decision against the ticket.
+3. The waiting page polls an app route for the decision (a GET with the ticket), and once there is one it submits its
+   form: a same-origin POST from the browser that opened the ticket, which the app answers with
+   `oauth.complete(c, ticket, decision)`, and the browser follows the 302 back to the client.
+
+Nothing else changes: `complete` still needs the browser that opened the ticket, a same-origin POST, once. A fetch
+that follows the 302 itself would not take the browser back to the client, so the page submits the form. A decision
+made after the ticket's life finds it expired (the page says to start again from the app). `test/oauth.test.ts` runs
+this pattern. Two ways a waiting ask ends before its life does:
+
+- **Its client lapses.** A ticket does not renew its client's life: a registration no sign-in has used lapses a week
+  after it was made, so a ticket opened by a client older than a week minus `ticketTtl` outlives it. A decision after
+  that is refused (`ticketOf` answers null; `complete` answers the page that says to add the connection again), and the
+  asker starts again from their app.
+- **Newer tickets evict it.** A waiting ticket is capped like any other (`maxUnusedTickets`): once that many newer
+  tickets are open, the oldest goes, and its client is no longer held. With `approve`, anyone can open one at
+  `/oauth/authorize`, so an app that decides later passes `limits` (it slows a flood per address, it doesn't stop one
+  from many addresses) and a `maxUnusedTickets` well above the asks it expects to have waiting at once.
 
 In tests, `approveSignIn(app, query, { headers })` from the `testing` part approves on the kit's page the way a
 browser does: it opens the page, keeps its ticket cookie, and posts same-origin.
@@ -257,16 +331,38 @@ const oauth = createOAuth({
   after the lapse is refused, but a code approved in the last minutes of the week can still be exchanged after it (a
   code lives 10 minutes), and the lapsed client is not made again: that sign-in's tokens and refresh tokens work,
   while a new sign-in with that client_id meets the "add it again" page.
-- **Unused registrations are capped** (`maxUnusedClients`, default 10 000): past it, a new registration evicts the
-  oldest unused one, so the table stays bounded whatever the addresses. A used client, or one from before, is never
-  evicted. **Open consent tickets are capped the same way** (`maxUnusedTickets`, default 10 000): an answered ticket
-  takes no place. The cap needs the store's `trim` (`dbOAuthStore` and `memoryOAuthStore` have it); a store without it
-  is not capped. Both caps are whole numbers, 0 or more (`createOAuth` throws otherwise). The cap is soft under
-  concurrency: each write trims before it inserts, so requests that arrive together can all pass the trim and leave
-  the table over the cap by as many as were in flight, until the next write trims it back. Each capped write runs one
-  trim over its kind's unused rows; with `limits` off, nothing slows a flood of them, so an app whose sign-in is
-  reachable outside Access also passes `limits`.
-- **`dbOAuthStore` prunes expired rows** on a write, at most once a minute, besides when it is made.
+- **Every row anyone may write without auth is capped**, so the table stays bounded whatever the addresses: past its
+  cap, a new row evicts the oldest unused row of its kind (`maxUnusedClients` and `maxUnusedTickets`, default 10 000
+  each, whole numbers, 0 or more; `createOAuth` throws otherwise).
+
+| Kind | Written by | Cap |
+|---|---|---|
+| `client` | `POST /oauth/register` | `maxUnusedClients` |
+| `registration`, `claim-token` | `POST /agent/identity` | `maxUnusedClients`, each |
+| `consent` | `GET /oauth/authorize`, when a page holds the ticket | `maxUnusedTickets` |
+| `claim-attempt` | `POST /agent/identity` (`service_auth`), `POST /agent/identity/claim` | `maxUnusedTickets` |
+| `device`, `device-user` | `POST /oauth/device_authorization` | `maxUnusedTickets`, each |
+
+  Never evicted: a used client (a sign-in collected its first token), a claimed registration, a client a live
+  consent ticket holds (a page is waiting on a person: an invite, an ask to join), the claim token of a live
+  registration, an answered ticket, and a row from before the caps (no `used` flag). The waiting ticket itself is not
+  protected: `maxUnusedTickets` newer tickets evict it, and its client with it on a later registration (Deciding
+  later). So the unused rows are at most
+  `maxUnusedClients` clients plus one per open ticket, `maxUnusedClients` registrations and as many claim tokens, and
+  `maxUnusedTickets` of each of the four waiting kinds; the rest follow an approval (claimed registrations, tokens,
+  refresh rows) or a signed-in person (device answers and tries). An approved device not yet collected (one poll,
+  seconds) and a claim code not yet typed can be evicted by a flood: the device or agent starts again. The cap needs
+  the store's `trim` (`dbOAuthStore` and `memoryOAuthStore` have it, with its `heldBy`); a store without it is not
+  capped. The cap is soft under concurrency: each write trims before it inserts, so requests that arrive together can
+  all pass the trim and leave the table over the cap by as many as were in flight, until the next write trims it
+  back. Each capped write first counts its kind by key (the primary key, no JSON read), and only a kind over its cap is
+  scanned; with `limits` off nothing slows a flood, so an app whose sign-in is reachable outside Access also passes
+  `limits`.
+- **`dbOAuthStore` prunes expired rows** on a write, at most once a minute, besides when it is made, through an index
+  on `expires_at` (`OAUTH_MIGRATIONS` step 2).
+- **`createOAuth` warns once at start** (`console.warn`) when `approve` is set without both `limits` and
+  `publicOrigin` (`limits: false` counts as not set), and `kit doctor` notes the same from the app's code, comments
+  left out.
 - **`limits`** (default `false`: none) counts per address, read by `addressOf` from `address` (default the app's
   `createAgentApi({ address })`). A named source counts a global IPv6 address by its /64; with none named, the
   `'headers'` read takes the address as sent, each IPv6 address on its own. Past a limit: 429 with `Retry-After` (JSON
@@ -315,10 +411,53 @@ the revoke. The claim grant reads both markers after it takes the claim token, s
 counts. Both markers (`revokeGrant`'s and `revokeClient`'s) are kept 30 days and 20 minutes, longer than a refresh
 token issued from a code or device approval collected at the last moment.
 
-`createOAuth({ …, reuseGraceSeconds: 30 })`: a used refresh token sent again inside the window (a client that lost the
-answer and retried) gets the same successor, an HMAC of the used token under a secret derived from the signing key, so
-none is stored. Never a second branch: once that successor is used, or the window has passed, it is reuse. The default
-is 0: any replay revokes the grant. The successor is written by the first request, after it marks the used token: if
+### Refresh tokens: rotation, replay and the rows it leaves
+
+A refresh token is `rt_<grant>.<generation>.<nonce>.<MAC>`: the MAC is an HMAC of the other three under a secret
+derived from the signing key. The first token's nonce is random; each successor's is an HMAC of the token before it,
+so a retry gets the same successor and no token can be made from the key and a grant id alone (every access token
+carries its grant). Each refresh marks the token used, moves the grant's one `refresh-family` row to the next
+generation, and writes that generation's token row; the used token's row stays only for `reuseGraceSeconds` (0, the
+default: it goes at once). So a sign-in keeps two rows however often it refreshes, its newest token's and its
+family's, where 1.29.0 kept every used token 30 days (about 720 a month for a client refreshing hourly).
+
+Replay detection is unchanged:
+
+- A used token sent again while its row is kept is reuse, as before.
+- One whose row is gone is still known: its MAC shows this server made it, and its family has moved past its
+  generation, so it was used. Sending it ends the grant ("already used"), and so does revoking it at `/oauth/revoke`.
+- A made-up token that names a grant (every access token carries its grant) has no valid MAC and ends nothing.
+- A token issued by 1.29.0 (`rt_` and 32 random characters, or 43 for one it rotated) carries no family. Its first
+  refresh after the update marks it used and keeps its row 30 days, as before, and gives a token one generation past
+  its family's newest (generation 1 for a family with no row). So after a rollback shorter than 30 days, when 1.29.0
+  refreshed a token of a family this version had moved to generation 4, the family goes on at 5 and every earlier
+  token still ends it. It and the used 1.29.0 tokens before it are still known by their rows; its row also keeps the
+  generation its successor got, so a retry in the grace gets that same successor.
+- A family's row lapses 30 days after this version last rotated it, and 1.29.0 never writes it. So when 1.29.0 alone
+  rotates a sign-in for 30 days or more (a longer rollback), the family has no row when this version comes back, and
+  its next refresh starts it again at generation 1: this version's tokens from before the rollback, at generation 1 or
+  later, are then only unknown, no longer replays. That is the memory 1.29.0 had: it kept a used token's row 30 days,
+  and one used longer ago was unknown to it too.
+- A retry in the grace of a token 1.29.0 answered first (1.29.0 still serving during an update, or after a rollback)
+  gets the successor 1.29.0 gave: 1.29.0 named it `rt_` and an HMAC of the token under a secret from the signing key,
+  so this version names it the same way and finds its row. Once that successor is used, the retry is reuse and ends
+  the grant, as any other.
+- The reverse does not hold: while 1.29.0 answers (an instance not yet updated, or a rollback), it knows nothing of
+  this version's tokens. It keeps no family row and names successors its own way, so an earlier token of this
+  version reads as unknown there, and a retry or replay inside the grace of a token this version answered gets new
+  tokens from it (a retried one gets a successor no row backs, which then fails). Replay detection for those tokens
+  resumes once this version answers them again. Finish an update quickly, and keep rollbacks short.
+
+Revocation reads stay uncached: `verify` reads the issued row and the markers on every request, so a revoke stops a
+client on its next request. Rotating the signing key also changes the MAC, so earlier tokens of the old key are no
+longer recognised as replays: they are only unknown.
+
+**Refresh storms** happen when one client refreshes the same token twice at once: two tabs sharing a sign-in, a CLI and
+its background job, or a refresh retried after a dropped answer. With the default 0, the second refresh is reuse and
+ends the sign-in, so the person signs in again. `createOAuth({ …, reuseGraceSeconds: 30 })` (the starter sets it)
+gives a used refresh token sent again inside the window (less than `reuseGraceSeconds` after the first answer) the
+same successor: the next generation's token, which is the same each time it is made, so none is stored for it. It
+never makes a second branch: once that successor is used, or the window has passed, it is reuse. The successor is written by the first request, after it marks the used token. If
 that request dies in between, a retry in the window gets a successor no row backs, and its next refresh is
 `invalid_grant` (with 0 the retry would have revoked the grant instead). The retry never writes the row itself, since
 a write there could reset a successor already used.
@@ -326,9 +465,9 @@ a write there could reset a successor already used.
 | File | What |
 |---|---|
 | `index.ts` | `createOAuth` (the server; `revokeClient` is the owner's kill switch; `rootOf`, `resourceOf` and `mcpPath` as it reads them; `ticketOf`, `answeredOf` and `complete` for the app's own sign-in page), `generateOAuthKey` (a new signing key) |
-| `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`; the ticket cookie and the same-origin rule |
+| `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`, `SignInRevoked`; the ticket cookie and the same-origin rule |
 | `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take`, `markUsed` and `trim`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start, then on a write at most once a minute), `memoryOAuthStore` |
-| `schema.ts` | the `oauth` table and `OAUTH_MIGRATIONS` |
+| `schema.ts` | the `oauth` table, its `expires_at` index, and `OAUTH_MIGRATIONS` |
 
 ## Rules
 
@@ -337,9 +476,9 @@ a write there could reset a successor already used.
 - `owner` decides who may approve on the kit's pages: behind Cloudflare Access, `accessOwner(access)` (the signed-in
   email). `approve` lets the app decide at `/oauth/authorize` instead (above).
 - Refresh tokens last 30 days and rotate on each use; MCP clients and claimed agents both get one. Only their hashes
-  are kept. A used token sent again revokes its grant (every refresh token of that sign-in, and its access tokens at
-  once), as does revoking any one of them. Two refreshes of one token at once rotate once: the second is that replay,
-  unless `reuseGraceSeconds` covers it.
+  are kept, and only the newest token's row (above). A used token sent again revokes its grant (every refresh token of
+  that sign-in, and its access tokens at once), as does revoking any one of them. Two refreshes of one token at once
+  rotate once: the second is that replay, unless `reuseGraceSeconds` covers it.
 - A code is used once, even by a failed exchange, and kept until its 10 minutes end. Sent again with the right client
   and verifier, it revokes the grant the first exchange got (OAuth 2.1 §4.1.3); with a wrong verifier it revokes
   nothing. The trade: someone who sees the code in the redirect (a log, a Referer, a shared history) and sends it
@@ -463,3 +602,28 @@ the store's `trim`. Defaults that change when an app takes this version:
 - `dbOAuthStore` prunes expired rows while it runs, at most once a minute.
 
 Nothing else changes until the app passes `publicOrigin` or `limits`.
+
+## Upgrading to sharing
+
+New, off unless set: `ticketTtl` (default 600, as before), `complete`'s `resource`, `onRevoke`. Defaults that change
+when an app takes this version:
+
+- **Every row anyone may write without auth is capped** (before, only registrations and consent tickets): agent
+  registrations and their claim tokens under `maxUnusedClients`, claim attempts and device codes under
+  `maxUnusedTickets`. A client a live consent ticket holds is no longer evicted by the client cap. A store of the app's
+  own with a `trim` gets a third argument, `heldBy`, which it may ignore (it then evicts a held client as before).
+- **`OAUTH_MIGRATIONS` has a step 2**, an index on `expires_at`: `dbOAuthStore` applies it when made; a Workers app
+  runs `pnpm migrations` (`scripts/migrations.ts`) to write its D1 file. It is `create index if not exists`, so a
+  database `migrate()` already brought up takes the file cleanly.
+- An app that passes `approve` without both `limits` and `publicOrigin` logs one warning at start; `kit doctor` notes
+  it, and notes an app with the `people` part whose `owner` never asks `personOf`.
+- The starter sets `reuseGraceSeconds: 30` (an app made before keeps its own `createOAuth` call; the kit's default stays
+  0).
+- A code or device grant `onGrant` withdraws now gets a revoke marker too, as a withdrawn claim did: nothing was
+  issued for it, so nothing else changes.
+- **A refresh leaves no used row behind** (before, each kept 30 days): refresh tokens issued from now on name their
+  grant and generation, and a grant keeps one `refresh-family` row. Replays are found as before, 1.29.0 tokens
+  included. An app's own test that reads a used refresh row by its hash finds none once the grace has passed. With
+  `reuseGraceSeconds` set, a retry that lands across the update (the first refresh answered by 1.29.0, the retry by
+  this version) gets the successor 1.29.0 gave, which goes on working; once that successor is used, the retry ends
+  the grant, as any replay does.

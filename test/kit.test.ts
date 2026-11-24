@@ -551,6 +551,48 @@ describe('the copy-in CLI', () => {
     expect(cli(app, 'doctor').stdout).toBe(`src/kit matches kit ${KIT_VERSION}: core\n`)
   })
 
+  it('doctor notes an app whose own sign-in page opens OAuth without limits or publicOrigin, and a passkey app whose owner never asks personOf', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'core', 'oauth')
+    const approving = "const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, approve: async (c, ask) => c.html(page(ask)) })\n"
+    await writeFile(join(app, 'src/app.ts'), approving)
+    const open = "note     createOAuth has approve, so its sign-in page answers anyone, but no limits or publicOrigin: pass both (oauth README, Open endpoints; STANDARD §7)"
+    const noted = cli(app, 'doctor')
+    expect(noted.status).toBe(0)
+    expect(noted.stdout).toContain(open)
+    await writeFile(join(app, 'src/app.ts'), approving.replace('approve:', "limits: { store: guards }, approve:"))
+    expect(cli(app, 'doctor').stdout).toContain(open)
+    await writeFile(join(app, 'src/app.ts'), approving.replace('approve:', "limits: { store: guards }, publicOrigin: env.PUBLIC_ORIGIN, approve:"))
+    expect(cli(app, 'doctor').stdout).not.toContain('createOAuth has approve')
+    // limits: false is no limits, as createOAuth reads it; a URL in the call is code, not a comment
+    await writeFile(join(app, 'src/app.ts'), approving.replace('approve:', "limits: false, publicOrigin: 'https://sample.example.test', approve:"))
+    expect(cli(app, 'doctor').stdout).toContain(open)
+    // Options only in a comment are not passed
+    await writeFile(join(app, 'src/app.ts'), `// pass limits: { store: guards }, publicOrigin: env.PUBLIC_ORIGIN\n/* or limits: guards, publicOrigin, */\n${approving}`)
+    expect(cli(app, 'doctor').stdout).toContain(open)
+    // The owner of a deploy signed in by passkey: only personOf knows them
+    cli(app, 'add', 'people')
+    await writeFile(join(app, 'src/app.ts'), "const oauth = createOAuth({ name: 'Sample', signingKey, store, owner: access ? accessOwner(access) : async () => null })\n")
+    const passkeys = "note     the app has the people part, but no createOAuth owner asks personOf: a deploy signed in by passkey alone can never approve a sign-in (oauth README)"
+    expect(cli(app, 'doctor').stdout).toContain(passkeys)
+    await writeFile(join(app, 'src/app.ts'), "const oauth = createOAuth({ name: 'Sample', signingKey, store, owner: async (c) => (await personOf(c, db))?.email ?? null })\n")
+    expect(cli(app, 'doctor').stdout).not.toContain('people part')
+    // The starter's own lines: its comment suggests personOf, its owner does not ask it
+    const starter = await readFile(join(import.meta.dirname, '..', 'templates/app/src/app.ts'), 'utf8')
+    const starterOwner = starter.slice(starter.indexOf('  // Who may approve a sign-in'), starter.indexOf('  const app = createAgentApi('))
+    expect(starterOwner).toContain('personOf(c, db)')
+    await writeFile(join(app, 'src/app.ts'), starterOwner)
+    expect(cli(app, 'doctor').stdout).toContain(passkeys)
+    // Its suggestion taken: the owner asks personOf
+    const suggested = /\/\/ (async \(c\) => .*personOf.*)\n/.exec(starterOwner)![1]!
+    await writeFile(join(app, 'src/app.ts'), starterOwner.replace('access ? accessOwner(access) : async () => null', suggested))
+    expect(cli(app, 'doctor').stdout).not.toContain('people part')
+    // personOf asked in another file (a route of the app's) says nothing of the server's owner
+    await writeFile(join(app, 'src/app.ts'), starterOwner)
+    await writeFile(join(app, 'src/rooms.ts'), 'export const roomsOf = async (c, db) => (await personOf(c, db))?.rooms ?? []\n')
+    expect(cli(app, 'doctor').stdout).toContain(passkeys)
+  })
+
   it('doctor notes a Node app with no address source wherever its kit sits under src', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     cli(app, 'add', 'core', '--dir', 'src/lib/kit')
@@ -760,19 +802,21 @@ describe('the copy-in CLI', () => {
       expect(JSON.parse(await readFile(join(app, 'skills.sh.json'), 'utf8'))).toEqual({ paths: ['./guide/skills'] })
       expect(await readFile(join(app, 'guide/skills/demo-api/SKILL.md'), 'utf8')).toMatch(/^---\nname: demo-api\ndescription: Use when a task needs Demo API\./)
       expect(await readFile(join(app, 'src/guide.gen.ts'), 'utf8')).toContain('"skills/demo-api/references/find-your-way.md"')
+      // Two tabs or a retried refresh never sign a person out of the starter
+      expect(await readFile(join(app, 'src/app.ts'), 'utf8')).toContain('reuseGraceSeconds: 30')
       // Both runtimes by default: Node's server.ts and container, and Workers' worker.ts, wrangler.jsonc and D1 files
       for (const path of ['src/server.ts', 'Dockerfile', 'src/worker.ts', 'wrangler.jsonc', 'scripts/migrations.ts', 'src/guide.gen.ts', '.dev.vars.example']) expect(existsSync(join(app, path)), path).toBe(true)
       expect(JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).scripts).toMatchObject({ dev: 'tsx watch src/server.ts', 'dev:worker': 'wrangler dev', deploy: expect.stringContaining('wrangler d1 migrations apply DB --remote') })
       const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
       expect(migrations.status, migrations.stderr).toBe(0)
-      expect((await readdir(join(app, 'migrations'))).sort()).toEqual(['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_guards_1.sql', '0003_switches_1.sql', '0004_notes_1.sql', '0005_reading-lists_1.sql'])
+      expect((await readdir(join(app, 'migrations'))).sort()).toEqual(['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_oauth_2.sql', '0003_guards_1.sql', '0004_switches_1.sql', '0005_notes_1.sql', '0006_reading-lists_1.sql'])
       expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).stdout).toContain('current')
       // A database `migrate()` already brought up (local dev) takes the files without a duplicate record
       const { DatabaseSync } = await import('node:sqlite')
       const sqlite = new DatabaseSync(':memory:')
       await migrate(await openDb(sqlite), 'oauth', OAUTH_MIGRATIONS)
-      for (const file of ['0000_kit_migrations.sql', '0001_oauth_1.sql']) sqlite.exec(await readFile(join(app, 'migrations', file), 'utf8'))
-      expect(sqlite.prepare("select count(*) as n from kit_migrations where feature = 'oauth'").get()).toEqual({ n: 1 })
+      for (const file of ['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_oauth_2.sql']) sqlite.exec(await readFile(join(app, 'migrations', file), 'utf8'))
+      expect(sqlite.prepare("select count(*) as n from kit_migrations where feature = 'oauth'").get()).toEqual({ n: 2 })
       for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
         const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
         expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)

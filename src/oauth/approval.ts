@@ -27,8 +27,11 @@ export type SignInAsk = {
   arrival: { site: string | null; referrerOrigin: string | null }
 }
 
-/** The app's answer to a ticket: who approves (the token's `sub`), narrower scopes, data for `onGrant`; or `'deny'`. */
-export type SignInDecision = { approver: string; scopes?: string[]; data?: Record<string, string> } | 'deny'
+/**
+ * The app's answer to a ticket: who approves (the token's `sub`), narrower scopes, data for `onGrant`, and the
+ * audience when the client named none (`resource`: an invite binds its space); or `'deny'`.
+ */
+export type SignInDecision = { approver: string; scopes?: string[]; data?: Record<string, string>; resource?: string } | 'deny'
 
 /** What `onGrant` hears before the first token of a grant. `resource` is absent on a grant from before audiences. */
 export type SignInGrant = {
@@ -40,6 +43,14 @@ export type SignInGrant = {
   resource?: string
   data?: Record<string, string>
 }
+
+/**
+ * What `onRevoke` hears for every grant the kit ends: `revoked` (`revokeGrant`, or a refresh token at `/oauth/revoke`),
+ * `replayed` (a used code or refresh token sent again), `withdrawn` (`onGrant` said no), `client_revoked`
+ * (`revokeClient`: every grant of the client, none named). `client` is absent where the kit does not know it
+ * (`revokeGrant`). A grant that lapses (its refresh token unused for 30 days) is not told: nothing ends it.
+ */
+export type SignInRevoked = { grant?: string; client?: string; reason: 'revoked' | 'replayed' | 'withdrawn' | 'client_revoked' }
 
 /** Host names that are this machine: an http redirect may use only these. @example LOOPBACK.includes(url.hostname) */
 export const LOOPBACK = ['localhost', '127.0.0.1', '[::1]']
