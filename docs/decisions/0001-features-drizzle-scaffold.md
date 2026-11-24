@@ -1,6 +1,6 @@
 # 0001 Feature folders, Drizzle for write state, a scaffolder
 
-Status: accepted · Released: v0.10.0 (toolsRun, refs, --web-dir), v0.11.0 (db, Drizzle, oauth part), v1.0.0 (folders, init, feature)
+Status: accepted (since v0.10.0)
 
 ## Context
 

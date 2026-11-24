@@ -1,6 +1,6 @@
 # 0003 The command line: every app's MCP tools as a CLI, for agents first and people too
 
-Status: accepted, 13 November 2026. What building it changed is folded in below.
+Status: accepted (since v1.14.0). What building it changed is folded in below.
 
 ## Context
 

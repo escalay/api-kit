@@ -26,6 +26,21 @@ describe('AGENTS.md', () => {
     expect(partPaths).toEqual([])
     expect(agents.split('\n').find((line) => line.startsWith('| `src/<part>/` |'))).toContain('](docs/PARTS.md)')
   })
+
+  it('gives every decision record one line', () => {
+    for (const file of readdirSync(join(root, 'docs/decisions'))) {
+      const lines = agents.split('\n').filter((line) => line.includes(`](docs/decisions/${file})`))
+      expect(lines, file).toHaveLength(1)
+    }
+  })
+})
+
+describe('decision records', () => {
+  it.each(readdirSync(join(root, 'docs/decisions')))('%s says its status and the version it shipped in, no hand list', (file) => {
+    const text = read(`docs/decisions/${file}`)
+    expect(text).toMatch(/^Status: [a-z]+ \(since v\d+\.\d+\.\d+\)/m)
+    expect(text).not.toContain('Released:')
+  })
 })
 
 describe.each(folders)('src/%s/README.md is said once', (folder) => {

@@ -1,6 +1,6 @@
 # 0002 One kit, two runtimes: Node and Cloudflare Workers
 
-Status: accepted · Released: v1.2.0 (imports and runs on workerd; D1 migrations; workers test project), v1.3.0 (guard state in the database), v1.4.0 (guide from a module), v1.5.0 (`init --runtime`), v1.5.1 (scaffold fixes), v1.5.2 (D1 migration files replay over a `migrate()`-made database)
+Status: accepted (since v1.2.0)
 
 ## Context
 

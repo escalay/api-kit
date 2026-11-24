@@ -95,3 +95,12 @@ for a look at the kit on Workers by hand)
 - A rule lives in `docs/STANDARD.md` and the code that enforces it, never only in one of them.
 - Every export has a JSDoc with an example; every rule has a test in `test/`.
 - Keep app-specific things (schemas, routes, guides) in the apps.
+
+## Decisions
+
+Why the kit is built as it is, one line each; a new record takes the next number in `docs/decisions/` and a line here.
+What shipped when is in the changelog.
+
+- [0001](docs/decisions/0001-features-drizzle-scaffold.md): feature folders, Drizzle for write state, a scaffolder
+- [0002](docs/decisions/0002-node-and-workers.md): one kit, two runtimes, Node and Cloudflare Workers
+- [0003](docs/decisions/0003-the-command-line.md): every app's MCP tools as a command line, for agents first and people too
