@@ -66,6 +66,13 @@ describe('docs/upgrading.md', () => {
     expect(noteHeadingProblems(notes('1.2.0', 'Unreleased (after 1.2.0)'), '1.2.0')).toEqual(['core: "Unreleased (after 1.2.0)" comes after 1.2.0; Unreleased goes first'])
     expect(noteHeadingProblems(notes('v1.2.0', 'Unreleased'), '1.2.0')).toEqual(['core: "v1.2.0" is neither a version nor Unreleased (after 1.2.0)', 'core: "Unreleased" is neither a version nor Unreleased (after 1.2.0)'])
   })
+
+  // The headings pass only beside the version bump, which only release-please's branch has before the merge
+  it.each(['AGENTS.md', 'skills/api-kit-part/SKILL.md'])('%s renames them on release-please’s branch', (path) => {
+    const text = read(path).replace(/\s*\n\s*/g, ' ')
+    expect(text).toContain("release-please's own branch")
+    expect(text).not.toContain('in a docs pull request of its own')
+  })
 })
 
 /** The values an app can import from the parts a README covers: each entry part's entry file, else what `index.ts` re-exports (types aside). */

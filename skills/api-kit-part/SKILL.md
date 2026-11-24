@@ -93,7 +93,8 @@ A browser part is one file in `src/browser/`, with `meta: { "entry": true, "web"
   changed default) gets an entry under `### Unreleased (after <manifest version>)` (the version in
   `.release-please-manifest.json`; `### Unreleased (after 1.30.0): <topic>` when the part has several) at the top of
   the part's section of `docs/upgrading.md`, and says so in the part's README. Before the release pull request
-  merges, the heading becomes the version it releases (`### 1.31.0`); `test/readmes.test.mjs` fails on any other
+  merges, the heading becomes the version it releases (`### 1.31.0`), in a commit on release-please's own branch (the
+  test passes only beside the version bump); `test/readmes.test.mjs` fails on any other
   form, on headings out of order, and on an Unreleased heading left behind a release. Existing apps keep working:
   new behaviour is an option with today's default.
 
