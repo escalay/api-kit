@@ -323,7 +323,7 @@ fact, steps with checkable done-when criteria.
 - **`skills/<name>/SKILL.md`** + `references/*.md`: a skill folder (frontmatter `name`, `description`) with one
   playbook per task: when to use, steps with exact calls, done-when, judgement rules, output, cost. Served over HTTP,
   as MCP prompts, and through the MCP Skills extension (`guideSkills` gives the factory both). It installs with
-  `npx skills add <the deployment's address>` (through the discovery index, §14) or `npx skills add <owner>/<repo>`.
+  `npx skills add <the deployment's address> -y` (through the discovery index, §14) or `npx skills add <owner>/<repo> -y`.
 - **Three kinds of skill, three places.** A *product skill* is for agents using the product: one folder,
   `guide/skills/<product>/`, served and installable, and free of `{{placeholders}}` when it should also install from
   the repository, because that copy is read as it is. A *developer skill* is for agents changing the repository:

@@ -1534,6 +1534,15 @@ describe('the skills', () => {
   const KIT_COMMANDS = kitSays('no-such-command').match(/Commands: (.+)/)![1]!.split(', ')
   const PRESETS = kitSays('init', 'no-such-app', '--preset', 'no-such-preset').match(/--preset is one of (.+)/)![1]!.split(', ')
 
+  it('gives every `npx skills add` it names `-y`: without it the installer stops to ask, which an agent never answers', async () => {
+    const markdownUnder = async (dir: string) => (await readdir(join(kitDir, dir), { recursive: true })).filter((path) => path.endsWith('.md')).map((path) => join(dir, path))
+    const files = ['README.md', 'AGENTS.md', 'docs/STANDARD.md', ...(await markdownUnder('skills')), ...(await markdownUnder('templates'))]
+    const commands = (await Promise.all(files.map(async (file) => [...(await readFile(join(kitDir, file), 'utf8')).matchAll(/`(npx skills add [^`]*)`/g)].map(([, command]) => `${file}: ${command}`)))).flat()
+    expect(commands.length).toBeGreaterThan(5)
+    // `--list` only lists, so it never asks
+    expect(commands.filter((line) => !/ (-y|--list)\b/.test(line))).toEqual([])
+  })
+
   it('each has a name, says when to use it, stays short and names the command that checks its rule', async () => {
     // Every folder in skills/ is a skill: skillTexts reads each one's SKILL.md, so a folder without one fails here
     const skills = await skillTexts()

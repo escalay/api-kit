@@ -17,9 +17,9 @@ REQUIRED, in this order:
 
 | Kind | For | Lives in | How it reaches an agent |
 |---|---|---|---|
-| Product skill | agents **using** the product | `guide/skills/<product>/` | served at `/skills/*`, offered over MCP as skills and prompts, installed with `npx skills add <the deployment's address>` or `npx skills add <owner>/<repo>` |
+| Product skill | agents **using** the product | `guide/skills/<product>/` | served at `/skills/*`, offered over MCP as skills and prompts, installed with `npx skills add <the deployment's address> -y` or `npx skills add <owner>/<repo> -y` |
 | Developer skill | agents **changing** the repository | `.agents/skills/<product>-<job>/` (`.claude/skills` links there) | found by coding agents in the repository; never served |
-| Kit skill | any product on the kit | the kit's `skills/` | `npx skills add escalay/api-kit` |
+| Kit skill | any product on the kit | the kit's `skills/` | `npx skills add escalay/api-kit -y` |
 
 A product has **one** product skill folder, named after it: a `SKILL.md` that routes, and one playbook per job in
 `references/<job>.md`. Each playbook is also one MCP prompt. `guideSkills` and `serveGuide` in `src/app.ts` do the
@@ -64,7 +64,7 @@ serving; you only write the files and run `pnpm guide`.
 - Name it `<product>-<job>`. Scripts it needs are committed under `scripts/`, never left in a scratch folder.
 - It must not be offered with the product: keep it out of `guide/`, and put `metadata:` with `internal: true` in its
   frontmatter. The installer looks in `.agents/skills/` first, so an unmarked developer skill is what
-  `npx skills add <owner>/<repo>` offers, in place of the product's.
+  `npx skills add <owner>/<repo> -y` offers, in place of the product's.
 
 ## One bad playbook, one good one
 
