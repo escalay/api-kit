@@ -98,7 +98,12 @@ export const spaceNameIn = (config: Pick<SharingConfig, 'resourcePath' | 'spaceN
 /** A resource's path: what follows its scheme and authority (empty for the origin). */
 const pathOf = (resource: string) => resource.replace(/^[a-z][a-z\d+.-]*:\/\/[^/]*/i, '')
 
-/** The space a grant's (or a sign-in's) resource names on this origin, or null. */
+/**
+ * The space a grant's (or a sign-in's) resource names on this origin, or null.
+ *
+ * @example
+ * spaceOfResource(config, 'https://sample.example.test/s/soups/mcp', 'https://sample.example.test')   // 'soups'
+ */
 export const spaceOfResource = (config: SharingConfig, resource: string, root: string) => (resource.startsWith(`${root}/`) ? spaceNameIn(config, resource.slice(root.length)) : null)
 
 /** What a request is about: the space in its path at a space address, else the app's `spaceOfPath`. */

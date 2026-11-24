@@ -14,7 +14,7 @@ import type { SignInAsk } from '../oauth/index.js'
 import { appNameOf } from './grants.js'
 
 /** The line on every page that approves: the grant goes to whichever account the app has in this browser. */
-export const ACCOUNT_LINE = 'This connects the app signed in in this browser.'
+const ACCOUNT_LINE = 'This connects the app signed in in this browser.'
 const NOT_OURS = 'That code is not one of ours: check it against your invite.'
 const START_AGAIN = 'start again from your app.'
 
@@ -72,7 +72,12 @@ const returnLine = (back: Return) => {
 /** What the code page shows of a sign-in. */
 type Asking = Pick<SignInAsk, 'ticket' | 'client' | 'redirectUri'>
 
-/** The pages, for one app: its brand and origin. */
+/**
+ * The pages, for one app: its brand and origin.
+ *
+ * @example
+ * sharingPages({ brand, origin: bound.root }).tooMany(c, 30)   // the 429 page, Retry-After: 30
+ */
 export const sharingPages = (view: PageView) => {
   /** Where an invite's code is typed; `note` says why it is shown again. */
   const code = (c: Context, ask: Asking, back: Return, note?: string) =>

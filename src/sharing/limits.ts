@@ -18,13 +18,19 @@ const PER_ADDRESS = { limit: 10, windowMs: MINUTE }
 /** Typed codes at one space (or at no space, for a client that named none): 60 in 10 minutes. */
 const PER_SPACE = { limit: 60, windowMs: 10 * MINUTE }
 /** Wrong codes one sign-in may type; the last ends it. */
-export const WRONG_CODES_PER_TICKET = 5
+const WRONG_CODES_PER_TICKET = 5
 /** Longer than any ticket lives (a held one, a week at most), so a ticket's count never starts over. */
 const TICKET_WINDOW_MS = 8 * 24 * 60 * MINUTE
 
 /** Where the limits count, and how the caller's address is read (default: as the app reads it). */
 export type SharingLimits = { store: GuardStore; address?: AddressTrust }
 
+/**
+ * The typed code's counters over a guard store: `retryAfter` before a lookup, `lastTry` on a wrong code.
+ *
+ * @example
+ * const limits = codeLimitsOf({ store: await dbGuardStore(db) })
+ */
 export const codeLimitsOf = ({ store, address }: SharingLimits) => {
   /** Counts one call against a window; the seconds until it ends when past its limit, else null. */
   const overBy = async (id: string, { limit, windowMs }: { limit: number; windowMs: number }) => {
