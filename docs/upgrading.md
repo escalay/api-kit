@@ -20,6 +20,11 @@ the version in `kit.json` up.
 
 ## core
 
+### Unreleased (after 1.30.0)
+
+- `core/cli.ts` gains `CallAt` (a tool call's mount parameters, the mcp part's) and `PLACEHOLDER_AT`, which `routeOf`,
+  `pathKeysOf` and the guide pass a call. Nothing to change in the app.
+
 ### 1.30.0
 
 - `tellApp` (what the parts' hooks go through: a hook that throws is logged, never answered) lives in
@@ -208,6 +213,17 @@ Nothing to do in any version recorded here.
   rendered once per origin instead of on every request.
 
 ## mcp
+
+### Unreleased (after 1.30.0)
+
+- `mountMcp` takes a path with parameters (`/s/:space/mcp`): each tool's `call` and resource's `read` get them as a
+  second argument, `at.params`, decoded (also in `authInfo.extra.params`). A tool with one argument works as before,
+  and a mount without parameters passes `{ params: {} }`. A `call` or `read` that took a second parameter of its own
+  now receives `at` there.
+- `routeOf`, the guide and `cliGaps` run a call with each mount parameter as `{name}`; a tool that ignores the
+  second argument reads the same route as before.
+- A mount with parameters is left out of `mountedMcp`, the guide, the AI Catalog and the well-known Server Card, so
+  they keep describing `/mcp`. Nothing to change in an app with one mount.
 
 ### 1.30.0
 

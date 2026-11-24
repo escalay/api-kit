@@ -17,6 +17,23 @@ export type CliExample = { run: string; about: string }
  */
 export type CliSpec = string | { name: string; examples?: CliExample[]; positional?: string[] }
 
+/**
+ * Where a tool's or resource's call is made: the MCP mount path's parameters, decoded (`{ space: 'soups/x' }` at
+ * `/s/soups%2Fx/mcp` for a mount at `/s/:space/mcp`), `{}` at a mount without any. A2A and `toolsRun` pass none.
+ *
+ * @example
+ * call: (_, at) => ({ path: `/api/shelves/${encodeURIComponent(at?.params.space ?? '')}/recipes` })
+ */
+export type CallAt = { params: Record<string, string> }
+
+/**
+ * Each mount parameter as its `{name}` (any key of `params`): what the route readers pass a call.
+ *
+ * @example
+ * listRecipes.call({}, PLACEHOLDER_AT).path // → '/api/shelves/%7Bspace%7D/recipes'
+ */
+export const PLACEHOLDER_AT: CallAt = { params: new Proxy({}, { get: (_, key) => (typeof key === 'string' ? `{${key}}` : undefined) }) }
+
 /** A command as published: `named` is false when the name came from the route rule, not from the tool. */
 export type CliCommand = { name: string; positional: string[]; examples: CliExample[]; named: boolean }
 
@@ -91,11 +108,11 @@ export const fallbackCliName = (route: string | undefined, toolName: string) => 
 }
 
 /** What the CLI needs of an MCP tool (`McpTool` has it). */
-export type CliTool = { name: string; route?: string; cli?: CliSpec; input: { shape: Record<string, unknown> }; call: (args: never) => { method?: string; path: string } }
+export type CliTool = { name: string; route?: string; cli?: CliSpec; input: { shape: Record<string, unknown> }; call: (args: never, at?: CallAt) => { method?: string; path: string } }
 
 /**
- * A tool's route as `METHOD /path/{param}`: its own `route`, or `call` run with each argument as its `{name}`. Undefined
- * when neither works (a call that reads its arguments' values).
+ * A tool's route as `METHOD /path/{param}`: its own `route`, or `call` run with each argument and mount parameter as its
+ * `{name}`. Undefined when neither works (a call that reads its arguments' values).
  *
  * @example
  * routeOf(mcpTool({ name: 'get_recipe', input: z.object({ id: z.string() }), call: ({ id }) => ({ path: `/api/v1/recipes/${id}` }), … }))
@@ -105,7 +122,7 @@ export const routeOf = (tool: Pick<CliTool, 'route' | 'input' | 'call'>): string
   if (tool.route) return tool.route
   try {
     const placeholders = Object.fromEntries(Object.keys(tool.input.shape).map((key) => [key, `{${key}}`]))
-    const call = tool.call(placeholders as never)
+    const call = tool.call(placeholders as never, PLACEHOLDER_AT)
     return `${call.method ?? 'GET'} ${decodeURIComponent(call.path)}`
   } catch {
     return undefined
@@ -151,7 +168,7 @@ export const toolCli = ({ name, cli, route, keys, inPath }: { name: string; cli?
 export const pathKeysOf = (tool: Pick<CliTool, 'input' | 'call'>): string[] | undefined => {
   const keys = Object.keys(tool.input.shape)
   try {
-    const path = decodeURIComponent(tool.call(Object.fromEntries(keys.map((key) => [key, `{${key}}`])) as never).path)
+    const path = decodeURIComponent(tool.call(Object.fromEntries(keys.map((key) => [key, `{${key}}`])) as never, PLACEHOLDER_AT).path)
     return keys.filter((key) => path.includes(`{${key}}`)).sort((a, b) => path.indexOf(`{${a}}`) - path.indexOf(`{${b}}`))
   } catch {
     return undefined
