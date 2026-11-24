@@ -11,10 +11,29 @@ Needs: `core`, `db`.
 import { accessOwner, createAgentApi, createOAuth, dbOAuthStore, generateOAuthKey } from './kit/index.js'
 
 const oauth = env.OAUTH_SIGNING_KEY
-  ? createOAuth({ name: 'Notes', signingKey: env.OAUTH_SIGNING_KEY, store: await dbOAuthStore(db), owner: access ? accessOwner(access) : async () => null })
+  ? createOAuth({
+      name: 'Notes',
+      signingKey: env.OAUTH_SIGNING_KEY,
+      store: await dbOAuthStore(db),
+      owner: access ? accessOwner(access) : async () => null,
+      reuseGraceSeconds: 30,                               // two tabs or a retried refresh never sign anyone out
+    })
   : undefined
 const app = createAgentApi({ …, oauth })                   // mounts /oauth/*, the metadata, and accepts its tokens
 ```
+
+`owner` is who may approve on the kit's pages. Behind Access, `accessOwner(access)`. An app with the `people` part asks
+its session, or a deploy signed in by passkey alone can never approve a sign-in (`kit doctor` notes it). An app behind
+Access as well asks `accessOwner(access)` when this answers null:
+
+```ts
+owner: async (c) => {
+  const person = await personOf(c, db)
+  return person?.role === 'owner' ? person.email : null
+},
+```
+
+The starter (`npm create escalay`) sets `reuseGraceSeconds: 30` and says this beside its `owner`.
 
 ## Device authorization (RFC 8628)
 
@@ -323,6 +342,8 @@ const oauth = createOAuth({
   `limits`.
 - **`dbOAuthStore` prunes expired rows** on a write, at most once a minute, besides when it is made, through an index
   on `expires_at` (`OAUTH_MIGRATIONS` step 2).
+- **`createOAuth` warns once at start** (`console.warn`) when `approve` is set without both `limits` and
+  `publicOrigin`, and `kit doctor` notes the same from the app's source.
 - **`limits`** (default `false`: none) counts per address, read by `addressOf` from `address` (default the app's
   `createAgentApi({ address })`). A named source counts a global IPv6 address by its /64; with none named, the
   `'headers'` read takes the address as sent, each IPv6 address on its own. Past a limit: 429 with `Retry-After` (JSON
@@ -555,6 +576,10 @@ New, off unless set: `ticketTtl` (default 600, as before), `complete`'s `resourc
 - **`OAUTH_MIGRATIONS` has a step 2**, an index on `expires_at`: `dbOAuthStore` applies it when made; a Workers app
   runs `pnpm migrations` (`scripts/migrations.ts`) to write its D1 file. It is `create index if not exists`, so a
   database `migrate()` already brought up takes the file cleanly.
+- An app that passes `approve` without both `limits` and `publicOrigin` logs one warning at start; `kit doctor` notes
+  it, and notes an app with the `people` part whose `owner` never asks `personOf`.
+- The starter sets `reuseGraceSeconds: 30` (an app made before keeps its own `createOAuth` call; the kit's default stays
+  0).
 - A code or device grant `onGrant` withdraws now gets a revoke marker too, as a withdrawn claim did: nothing was
   issued for it, so nothing else changes.
 - **A refresh leaves no used row behind** (before, each kept 30 days): refresh tokens issued from now on name their

@@ -551,6 +551,28 @@ describe('the copy-in CLI', () => {
     expect(cli(app, 'doctor').stdout).toBe(`src/kit matches kit ${KIT_VERSION}: core\n`)
   })
 
+  it('doctor notes an app whose own sign-in page opens OAuth without limits or publicOrigin, and a passkey app whose owner never asks personOf', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'core', 'oauth')
+    const approving = "const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, approve: async (c, ask) => c.html(page(ask)) })\n"
+    await writeFile(join(app, 'src/app.ts'), approving)
+    const open = "note     createOAuth has approve, so its sign-in page answers anyone, but no limits or publicOrigin: pass both (oauth README, Open endpoints; STANDARD §7)"
+    const noted = cli(app, 'doctor')
+    expect(noted.status).toBe(0)
+    expect(noted.stdout).toContain(open)
+    await writeFile(join(app, 'src/app.ts'), approving.replace('approve:', "limits: { store: guards }, approve:"))
+    expect(cli(app, 'doctor').stdout).toContain(open)
+    await writeFile(join(app, 'src/app.ts'), approving.replace('approve:', "limits: { store: guards }, publicOrigin: env.PUBLIC_ORIGIN, approve:"))
+    expect(cli(app, 'doctor').stdout).not.toContain('createOAuth has approve')
+    // The owner of a deploy signed in by passkey: only personOf knows them
+    cli(app, 'add', 'people')
+    await writeFile(join(app, 'src/app.ts'), "const oauth = createOAuth({ name: 'Sample', signingKey, store, owner: access ? accessOwner(access) : async () => null })\n")
+    const passkeys = "note     the app has the people part, but no createOAuth owner asks personOf: a deploy signed in by passkey alone can never approve a sign-in (oauth README)"
+    expect(cli(app, 'doctor').stdout).toContain(passkeys)
+    await writeFile(join(app, 'src/app.ts'), "const oauth = createOAuth({ name: 'Sample', signingKey, store, owner: async (c) => (await personOf(c, db))?.email ?? null })\n")
+    expect(cli(app, 'doctor').stdout).not.toContain('people part')
+  })
+
   it('doctor notes a Node app with no address source wherever its kit sits under src', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     cli(app, 'add', 'core', '--dir', 'src/lib/kit')
@@ -760,6 +782,8 @@ describe('the copy-in CLI', () => {
       expect(JSON.parse(await readFile(join(app, 'skills.sh.json'), 'utf8'))).toEqual({ paths: ['./guide/skills'] })
       expect(await readFile(join(app, 'guide/skills/demo-api/SKILL.md'), 'utf8')).toMatch(/^---\nname: demo-api\ndescription: Use when a task needs Demo API\./)
       expect(await readFile(join(app, 'src/guide.gen.ts'), 'utf8')).toContain('"skills/demo-api/references/find-your-way.md"')
+      // Two tabs or a retried refresh never sign a person out of the starter
+      expect(await readFile(join(app, 'src/app.ts'), 'utf8')).toContain('reuseGraceSeconds: 30')
       // Both runtimes by default: Node's server.ts and container, and Workers' worker.ts, wrangler.jsonc and D1 files
       for (const path of ['src/server.ts', 'Dockerfile', 'src/worker.ts', 'wrangler.jsonc', 'scripts/migrations.ts', 'src/guide.gen.ts', '.dev.vars.example']) expect(existsSync(join(app, path)), path).toBe(true)
       expect(JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).scripts).toMatchObject({ dev: 'tsx watch src/server.ts', 'dev:worker': 'wrangler dev', deploy: expect.stringContaining('wrangler d1 migrations apply DB --remote') })

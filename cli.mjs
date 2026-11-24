@@ -466,10 +466,10 @@ console.log(JSON.stringify(cliGaps({ tools, resources, jobs: ${jobs} })))
   return (gaps ?? []).map((gap) => `cli      ${gap}`)
 }
 
-/** The text of each `createAgentApi(…)` call in a file, to its closing parenthesis. */
-const agentApiCalls = (text) =>
-  [...text.matchAll(/\bcreateAgentApi\(/g)].map(({ index }) => {
-    const open = index + 'createAgentApi'.length
+/** The text of each `name(…)` call in a file (`createAgentApi`, `createOAuth`), to its closing parenthesis. */
+const callsOf = (text, name) =>
+  [...text.matchAll(new RegExp(`\\b${name}\\(`, 'g'))].map(({ index }) => {
+    const open = index + name.length
     let depth = 0
     for (let at = open; at < text.length; at++) {
       if (text[at] === '(') depth++
@@ -478,25 +478,45 @@ const agentApiCalls = (text) =>
     return text.slice(open)
   })
 
+/** An option a call names, as `key:` or shorthand (`key,`, `key }`). */
+const namesOption = (call, key) => new RegExp(`\\b${key}\\s*[:,}]`).test(call)
+
 /**
- * A hint, not a finding: an app served on Node whose code names no `address` counts anonymous callers by headers as
- * sent. Reads the app's own files under the nearest `src/` above the kit folder inside the app, else `./src` (the kit
- * folder left out).
+ * The app's own source files: under the nearest `src/` above the kit folder inside the app, else `./src` (the kit
+ * folder left out). Never above the app (the folder kit runs in): a `src` there holds other projects.
  */
-const addressNotes = () => {
+const appTexts = () => {
   const root = process.cwd()
-  // Never above the app (the folder kit runs in): a `src` there holds other projects
   const srcAbove = (path) => (relative(root, path).startsWith('..') ? undefined : basename(path) === 'src' ? path : path === root ? undefined : srcAbove(dirname(path)))
   const src = srcAbove(dirname(dir)) ?? join(root, 'src')
   if (!existsSync(src)) return []
-  const texts = readdirSync(src, { recursive: true, withFileTypes: true })
+  return readdirSync(src, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile() && /\.(m?ts|m?js|tsx)$/.test(entry.name))
     .map((entry) => join(entry.parentPath, entry.name))
     .filter((path) => relative(dir, path).startsWith('..') && !path.includes('node_modules'))
     .map((path) => readFileSync(path, 'utf8'))
+}
+
+/** A hint, not a finding: an app served on Node whose code names no `address` counts anonymous callers by headers as sent. */
+const addressNotes = (texts) => {
   const onNode = texts.some((text) => text.includes('@hono/node-server'))
-  const named = texts.some((text) => agentApiCalls(text).some((call) => /\baddress\s*[:,}]/.test(call)))
+  const named = texts.some((text) => callsOf(text, 'createAgentApi').some((call) => namesOption(call, 'address')))
   return onNode && !named ? ["note     the app runs on Node (@hono/node-server) and names no source for the caller's address, so anonymous callers are counted by cf-connecting-ip or x-forwarded-for as sent: set createAgentApi({ address }) to the header your proxy writes, or 'socket' with nothing in front (STANDARD §9)"] : []
+}
+
+/**
+ * Hints, not findings, on the app's OAuth server: an `approve` that opens the sign-in page to anyone without `limits`
+ * and `publicOrigin` (what `createOAuth` warns of at start), and an app with the people part whose `owner` never asks
+ * `personOf`, so a passkey owner can't approve.
+ */
+const oauthNotes = (texts, modules) => {
+  const calls = texts.flatMap((text) => callsOf(text, 'createOAuth'))
+  const open = calls.some((call) => namesOption(call, 'approve') && !(namesOption(call, 'limits') && namesOption(call, 'publicOrigin')))
+  const ownerless = modules.includes('people') && calls.length > 0 && !texts.some((text) => text.includes('personOf'))
+  return [
+    ...(open ? ['note     createOAuth has approve, so its sign-in page answers anyone, but no limits or publicOrigin: pass both (oauth README, Open endpoints; STANDARD §7)'] : []),
+    ...(ownerless ? ['note     the app has the people part, but no createOAuth owner asks personOf: a deploy signed in by passkey alone can never approve a sign-in (oauth README)'] : []),
+  ]
 }
 
 // ---- The brand ----
@@ -1317,7 +1337,8 @@ const commands = {
     const root = lock ? appRootOf() : null
     const brand = root ? brandFindings(root, lock.modules.includes('brand')) : { findings: [], notes: lock?.modules.includes('brand') ? [`note     brand: no package.json above ${dirArg}: \`--app <app>\` names the app whose brand/ to check`] : [] }
     const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
-    for (const line of [...(lock ? addressNotes() : []), ...brand.notes, ...findings]) console.log(line)
+    const texts = lock ? appTexts() : []
+    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules)] : []), ...brand.notes, ...findings]) console.log(line)
     console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
   },

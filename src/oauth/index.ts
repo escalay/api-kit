@@ -297,6 +297,9 @@ export const createOAuth = (config: OAuthConfig) => {
   const ticketTtl = config.ticketTtl ?? CODE_TTL
   // Never past a week: an unused client lapses then, and its ticket can no longer be answered
   if (!(Number.isSafeInteger(ticketTtl) && ticketTtl >= 60 && ticketTtl <= UNUSED_CLIENT_TTL)) throw new Error(`createOAuth: ticketTtl must be whole seconds from 60 to a week (604800), not ${config.ticketTtl}.`)
+  // Once, at start: the app's own page answers anyone at /oauth/authorize, outside Access
+  if (config.approve && (!config.limits || publicOrigin === undefined))
+    console.warn('createOAuth: approve lets anyone open /oauth/authorize, but limits or publicOrigin is not set: pass both, or the open endpoints are unbounded per address and their documents follow a forwarded host (oauth README, Open endpoints).')
   /** The issuer's origin: `publicOrigin`, else the request's own. */
   const issuerOf = (c: Context) => publicOrigin ?? originOf(c)
   const jwk = JSON.parse(config.signingKey) as JWK

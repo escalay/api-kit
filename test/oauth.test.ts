@@ -1366,6 +1366,24 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     expect(audOf((await (await exchangeAt(app, same.headers.get('location'), client_id, { resource: BETA })).json()).access_token)).toBe(BETA)
   })
 
+  it('warns once at start when approve opens the sign-in page without limits or publicOrigin', async () => {
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const keyed = { name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null }
+    const approve = async () => null
+    const limits = { store: memoryGuardStore() }
+    for (const config of [{ approve }, { approve, limits }, { approve, publicOrigin: 'https://sample.example.test' }]) {
+      warned.mockClear()
+      createOAuth({ ...keyed, ...config })
+      expect(warned, JSON.stringify(Object.keys(config))).toHaveBeenCalledTimes(1)
+      expect(warned).toHaveBeenCalledWith(expect.stringContaining('createOAuth: approve'))
+    }
+    warned.mockClear()
+    createOAuth({ ...keyed, approve, limits, publicOrigin: 'https://sample.example.test' })
+    createOAuth(keyed)
+    expect(warned).not.toHaveBeenCalled()
+    warned.mockRestore()
+  })
+
   it('takes a ticket life of a minute to a week, in whole seconds', async () => {
     const keyed = { name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null }
     for (const wrong of [0, 59, 1.5, Number.NaN, 7 * 24 * 3600 + 1]) expect(() => createOAuth({ ...keyed, ticketTtl: wrong }), String(wrong)).toThrow(/ticketTtl/)
