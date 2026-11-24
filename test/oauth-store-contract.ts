@@ -319,7 +319,9 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       const { app } = await joinApp(store, { maxUnusedClients: 3, maxUnusedTickets: 3 })
       const invited = await registered(app)
       const browser = browserOf(app)
-      const ticket = await heldTicket(app, browser, invited)
+      // Held a minute, less than a page's ten: by expiry it is the oldest, so only the hold keeps it
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(invited)}`)).text())
+      expect((await browser.post('/join/hold', { ticket, seconds: '60' })).status).toBe(200)
       for (let n = 0; n < 10; n++) await browserOf(app).request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)
       expect(await store.get('consent', ticket)).toMatchObject({ held: true })
       expect(await store.get('client', invited)).not.toBeNull()

@@ -1549,6 +1549,17 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
       expect([direct.status, direct.headers.get('location'), await direct.text()]).toEqual([400, null, expect.stringContaining('Remove this connection in your app and add it again.')])
     })
 
+    it('holds on a store without hold, one request at a time', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      const { app } = await joinApp(memoryStore())
+      const browser = browserOf(app)
+      const ticket = await heldTicket(app, browser, await registered(app))
+      vi.setSystemTime((at += 3600 * 1000))
+      expect((await browser.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      expect((await browser.post('/join/hold', { ticket })).status).toBe(400)
+    })
+
     it('takes a hold of a minute to a week, in whole seconds', async () => {
       const { oauth } = await joinApp(memoryOAuthStore())
       for (const wrong of [0, 59, 1.5, Number.NaN, 7 * 24 * 3600 + 1]) await expect(oauth.holdTicket({} as Context, 'consent_x', wrong), String(wrong)).rejects.toThrow(/holdTicket: seconds/)

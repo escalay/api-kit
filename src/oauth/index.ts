@@ -744,8 +744,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
   }
 
   /** The ticket as this browser holds it: live and its own, spent here already, another browser's, or gone (expired, unknown, from before tickets were bound). */
-  type Held = { gone: true } | { answered: unknown } | { foreign: true } | { row: Consent }
-  const consentOf = async (c: Context, ticket: string): Promise<Held> => {
+  type TicketInBrowser = { gone: true } | { answered: unknown } | { foreign: true } | { row: Consent }
+  const consentOf = async (c: Context, ticket: string): Promise<TicketInBrowser> => {
     const row = ticket ? await store.get('consent', ticket) : null
     if (!row || typeof row.nonce !== 'string') return { gone: true }
     const nonce = nonceOf(c, issuerOf(c))
