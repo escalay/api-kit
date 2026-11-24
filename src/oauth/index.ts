@@ -829,7 +829,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     const expiresAt = now() + seconds
     // Conditional: a hold racing `complete` never reopens a spent ticket
     if (!(await hold('consent', ticket, expiresAt))) return null
-    // Conditional too: two holds in this browser at once keep the longer, and each cookie carries it
+    // Conditional too: two holds in this browser at once leave the longer on the row
     const heldUntil = await extend('held-nonce', sha(nonce), expiresAt)
     return { expiresAt, cookie: ticketCookie(c, nonce, cookieLife(heldUntil), issuerOf(c)) }
   }

@@ -1570,7 +1570,11 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
       vi.useFakeTimers({ toFake: ['Date'], now: at })
       const { app } = await joinApp(memoryStore())
       const browser = browserOf(app)
-      const ticket = await heldTicket(app, browser, await registered(app))
+      const client_id = await registered(app)
+      const ticket = await heldTicket(app, browser, client_id)
+      // A shorter hold after it in this browser keeps the day
+      const short = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect(maxAgeOf(await browser.post('/join/hold', { ticket: short, seconds: '60' }))).toBe(24 * 3600)
       vi.setSystemTime((at += 3600 * 1000))
       expect((await browser.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
       expect((await browser.post('/join/hold', { ticket })).status).toBe(400)

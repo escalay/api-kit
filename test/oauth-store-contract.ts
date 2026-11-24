@@ -345,24 +345,28 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect(await store.get('consent', ticket)).toMatchObject({ used: true, answer: 'approved' })
     })
 
-    it('keeps the longest of two holds one browser sends at once: both cookies, and the next sign-in, keep the week', async () => {
-      const store = await make()
+    it('keeps the longest of two holds one browser sends at once, in either order: the next sign-in keeps the week', async () => {
       const week = 7 * 24 * 3600
       const maxAgeOf = (answer: Response) => Number(/Max-Age=(\d+)/.exec(answer.headers.getSetCookie().join(';'))?.[1])
-      let arrived = 0
-      let release = () => {}
-      const together = new Promise<void>((resolve) => (release = resolve))
-      // Both holds pass the ticket's own write together, then record the browser's held life at the same moment
-      const { app } = await joinApp({ ...store, hold: async (...args) => (++arrived === 2 && release(), await together, store.hold!(...args)) })
-      const client_id = await registered(app)
-      const browser = browserOf(app)
-      const open = async () => ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
-      const [long, short] = [await open(), await open()]
-      const answers = await Promise.all([browser.post('/join/hold', { ticket: long, seconds: String(week) }), browser.post('/join/hold', { ticket: short, seconds: '60' })])
-      expect(answers.map((answer) => answer.status)).toEqual([200, 200])
-      for (const answer of answers) expect(maxAgeOf(answer)).toBeGreaterThan(week - 10)
-      expect(maxAgeOf(await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`))).toBeGreaterThan(week - 10)
-      expect((await browser.post('/join', { ticket: long, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      for (const longFirst of [true, false]) {
+        const store = await make()
+        let arrived = 0
+        let release = () => {}
+        const together = new Promise<void>((resolve) => (release = resolve))
+        // Both holds pass the ticket's own write together, then record the browser's held life at the same moment
+        const { app } = await joinApp({ ...store, hold: async (...args) => (++arrived === 2 && release(), await together, store.hold!(...args)) })
+        const client_id = await registered(app)
+        const browser = browserOf(app)
+        const open = async () => ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+        const [long, short] = [await open(), await open()]
+        const holdLong = () => browser.post('/join/hold', { ticket: long, seconds: String(week) })
+        const holdShort = () => browser.post('/join/hold', { ticket: short, seconds: '60' })
+        const [longAnswer, shortAnswer] = longFirst ? await Promise.all([holdLong(), holdShort()]) : (await Promise.all([holdShort(), holdLong()])).reverse()
+        expect([longAnswer!.status, shortAnswer!.status]).toEqual([200, 200])
+        expect(maxAgeOf(longAnswer!)).toBeGreaterThan(week - 10)
+        expect(maxAgeOf(await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)), `long first: ${longFirst}`).toBeGreaterThan(week - 10)
+        expect((await browser.post('/join', { ticket: long, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      }
     })
 
     it('extends a row to the longest life written, never shorter, and ignores one that expired', async () => {
