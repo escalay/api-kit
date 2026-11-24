@@ -22,11 +22,13 @@ apps copy in and own. Read the repository's `AGENTS.md` and `docs/STANDARD.md` f
 
 ## 2. The README
 
-`src/<part>/README.md` ships with the part, so it changes with the code in the same pull request. Its headings, in
-this order: what it is (one paragraph) · **Use it when / Don't use it when** · **Add it** ·
-**Wire it** (the copy-paste block) · **Options** (name, type, default, what it does) · **Flows** (a Mermaid diagram
-for any flow of more than two steps) · **Failure modes** · **Limits** (Node only, Workers, one writer, ceilings) ·
-**Tests** · **Upgrading** (a link to `docs/upgrading.md`; history never inline). Every option and hook is in it.
+`src/<part>/README.md` ships with the part, so it changes with the code in the same pull request. Its shape is
+`README_SHAPE` in `scripts/parts.mjs`, checked by `test/readmes.test.mjs`: what it is (one paragraph), then
+**Use it when** · **Don't use it when** · **Add it** · **Wire it** (the copy-paste block) · **Options** (option,
+type, default, what it does) · **Exports** · **Flows** (a Mermaid diagram for any flow of more than two steps) ·
+**Rules** (with the `Standard:` line, equal to the registry's `meta.standard`) · **Failure modes** · **Limits**
+(Node only, Workers, one writer, ceilings) · **Tests** · **Upgrading** (a link to its section of
+`docs/upgrading.md`; history never inline). Every option and hook is in it.
 
 ## 3. The registry item
 
@@ -52,6 +54,8 @@ One `registry:item` per part in `registry.json`; `kit add`, `kit list` and the s
 - Other parts go in `registryDependencies` as `escalay/api-kit/<part>`; a shadcn component by its bare name.
 - `meta.entry: true` when the app imports the part's own folder (`./kit/reminders/index.js`) rather than
   `./kit/index.js`. A part that is repo setup, not code, is a root item (`meta.root`), like `npm-release`.
+- `meta.standard`: the STANDARD sections the part implements (`docs/PARTS.md` and the README's `Standard:` line read
+  it); a browser layer adds `meta.layerOf`, the server part it sits on.
 
 ## 4. Browser layers
 
@@ -79,8 +83,9 @@ A browser part is one file in `src/browser/`, with `meta: { "entry": true, "web"
 - **New apps.** Does every new app need it? Then it joins `APP_MODULES` in `cli.mjs` (`WEB_APP_MODULES` for the
   `app` preset's browser), the generator test's `kit.json` modules, and the starter's wiring in `templates/app`.
   Most parts do not: an app adds them with `kit add`.
-- **The map.** `docs/PARTS.md` is generated from `registry.json`: generate it again after changing a part's
-  registry item. The `api-kit-build` skill names every part by goal: add the new one there
+- **The map.** `docs/PARTS.md` is generated from `registry.json`: run `pnpm parts` after changing a part's
+  registry item (`test/parts.test.mjs` fails while it is stale), and give the part a row in its goal table in
+  `scripts/parts.mjs` when it serves a new goal. The `api-kit-build` skill names every part by goal: add the new one there
   (a test checks every part is named in some skill), and the `AGENTS.md` layout table gets its row.
 - **The release note.** The pull request's title is the line in the release notes: `feat(reminders): …` for a new
   part or option, `fix(<part>): …` for a fix. A change an app must act on (a new migration step, a renamed export, a
