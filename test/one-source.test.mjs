@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { README_SHAPE } from '../scripts/parts.mjs'
 
 // One source per fact: each fact the docs give lives in one place, and the other places link to it
 const root = join(import.meta.dirname, '..')
@@ -69,5 +70,29 @@ describe('what `update` does with your edits', () => {
 
   it.each(copies)('%s links it', (path) => {
     expect(read(path)).toContain('upgrading.md#taking-a-new-version')
+  })
+})
+
+describe('the README shape', () => {
+  /** The shape's sections, as a sentence names them: `Use it when` → `use`, `Wire it` → `wire`. */
+  const sections = README_SHAPE.map(([heading]) => heading.toLowerCase().replace(/ it( when)?$/, ''))
+  /** A paragraph naming most of the shape's sections is a copy of it. */
+  const copiesShape = (text) =>
+    text
+      .replaceAll('’', "'")
+      .split(/\n\s*\n/)
+      .some((paragraph) => sections.filter((section) => new RegExp(`(^|[^\\w'])${section}\\b`, 'i').test(paragraph.replaceAll('*', ''))).length >= 8)
+
+  it('is listed in docs/PARTS.md, from README_SHAPE', () => {
+    expect(copiesShape(read('docs/PARTS.md'))).toBe(true)
+  })
+
+  it.each(['README.md', 'AGENTS.md', ...skills])('%s points at README_SHAPE rather than copy it', (path) => {
+    expect(copiesShape(read(path))).toBe(false)
+  })
+
+  it.each(['AGENTS.md', 'skills/api-kit-part/SKILL.md'])('%s names where it lives', (path) => {
+    expect(read(path)).toContain('README_SHAPE')
+    expect(read(path)).toContain('docs/PARTS.md')
   })
 })

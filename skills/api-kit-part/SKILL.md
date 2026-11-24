@@ -23,12 +23,9 @@ apps copy in and own. Read the repository's `AGENTS.md` and `docs/STANDARD.md` f
 ## 2. The README
 
 `src/<part>/README.md` ships with the part, so it changes with the code in the same pull request. Its shape is
-`README_SHAPE` in `scripts/parts.mjs`, checked by `test/readmes.test.mjs`: what it is (one paragraph), then
-**Use it when** · **Don't use it when** · **Add it** · **Wire it** (the copy-paste block) · **Options** (option,
-type, default, what it does) · **Exports** · **Flows** (a Mermaid diagram for any flow of more than two steps) ·
-**Rules** (with the `Standard:` line, equal to the registry's `meta.standard`) · **Failure modes** · **Limits**
-(Node only, Workers, one writer, ceilings) · **Tests** · **Upgrading** (a link to its section of
-`docs/upgrading.md`; history never inline). Every option and hook is in it.
+`README_SHAPE` in `scripts/parts.mjs` (listed in `docs/PARTS.md`, Every README has one shape), checked by
+`test/readmes.test.mjs`. The `Standard:` line under its rules equals the registry's `meta.standard`, history stays in
+`docs/upgrading.md`, and every option and hook is in it.
 
 ## 3. The registry item
 

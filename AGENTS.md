@@ -89,10 +89,10 @@ for a look at the kit on Workers by hand)
 
 ## Rules
 
-- Every part's folder has a `README.md` in one shape (`README_SHAPE` in `scripts/parts.mjs`, checked by
-  `test/readmes.test.mjs`: use and don't use, add, wire, options, exports, flows, rules with the STANDARD line,
-  failure modes, limits, tests, upgrading). It ships with the part, so change it with the code; a part without one is
-  unfinished. History goes in `docs/upgrading.md`, never in the README.
+- Every part's folder has a `README.md` in one shape: `README_SHAPE` in `scripts/parts.mjs`, listed in
+  [docs/PARTS.md](docs/PARTS.md#every-readme-has-one-shape) and checked by `test/readmes.test.mjs`. It ships with the
+  part, so change it with the code; a part without one is unfinished. History goes in `docs/upgrading.md`, never in
+  the README.
 
 - A rule lives in `docs/STANDARD.md` and the code that enforces it, never only in one of them.
 - Every export has a JSDoc with an example; every rule has a test in `test/`.
