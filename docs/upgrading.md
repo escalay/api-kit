@@ -1,13 +1,13 @@
 # Upgrading
 
 What changes for an app when it takes a newer kit, part by part, newest first. Each part's README says what the part
-does now; this page says what changed between versions and what to do about it. The [changelog](../CHANGELOG.md)
+does now; this page says what changed between versions and what to do about it. The [changelog](https://github.com/escalay/api-kit/blob/main/CHANGELOG.md)
 lists every release.
 
 ## Taking a new version
 
 ```bash
-npx @escalay/kit upgrading --dir src/kit      # this page's notes for your parts since kit.json's version
+npx @escalay/kit upgrading --dir src/kit      # this page's notes for your parts since kit.json's version, up to the kit's
 npx @escalay/kit doctor --dir src/kit         # missing, edited, behind: one line each with its fix
 npx @escalay/kit diff --dir src/kit --patch   # your edits next to the kit's changes
 npx @escalay/kit update --dir src/kit         # never overwrites your edits without --force

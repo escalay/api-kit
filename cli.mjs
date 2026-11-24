@@ -11,8 +11,8 @@
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
  *   kit update [part…] [--dir src/kit] [--force]
  *   kit upgrading [--dir src/kit] [--from <version>]
- *                                             what changed for the parts in kit.json since its version (or --from), and
- *                                             what to do: their notes from the kit's docs/upgrading.md, part by part
+ *                                             what changed for the parts in kit.json since its version (or --from), up to
+ *                                             this kit, and what to do: their notes from the kit's docs/upgrading.md, part by part
  *   kit doctor [--dir src/kit] [--adopt]      missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it)
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
  *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--yes]
@@ -233,7 +233,10 @@ const NOTE_HEADING = /^### (?:(\d+\.\d+\.\d+)|Unreleased \(after (\d+\.\d+\.\d+)
 /** The folder a part's notes are under: its README's (every browser part's is `browser`). */
 const notesFolderOf = (name) => REGISTRY[name].files.find((file) => file.endsWith('README.md')).split('/')[0]
 
-/** A part folder's notes in docs/upgrading.md newer than `since`, each its `###` heading and text; Unreleased is newer than the version it follows, an unknown heading always shown. */
+/**
+ * A part folder's notes in docs/upgrading.md newer than `since` and no newer than this kit, each its `###` heading and
+ * text; Unreleased is newer than the version it follows, an unknown heading always shown.
+ */
 const notesSince = (markdown, folder, since) => {
   const notes = []
   let inSection = false
@@ -247,7 +250,8 @@ const notesSince = (markdown, folder, since) => {
     if (!inSection) continue
     if (!fenced && line.startsWith('### ')) {
       const [, version, after] = NOTE_HEADING.exec(line) ?? []
-      notes.push({ newer: version ? compareVersions(version, since) > 0 : after ? compareVersions(after, since) >= 0 : true, lines: [line] })
+      const newer = version ? compareVersions(version, since) > 0 && compareVersions(version, VERSION) <= 0 : after ? compareVersions(after, since) >= 0 && compareVersions(after, VERSION) <= 0 : true
+      notes.push({ newer, lines: [line] })
     } else notes.at(-1)?.lines.push(line)
   }
   return notes.filter(({ newer }) => newer).map(({ lines }) => lines.join('\n').trim())
