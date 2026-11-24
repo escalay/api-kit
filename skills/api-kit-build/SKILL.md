@@ -82,7 +82,7 @@ Add one with `npx @escalay/kit add <part> --dir src/kit --install` (browser part
 4. `npx @escalay/kit update`: writes what the kit changed and keeps every file you edited. When it exits 1, the
    kit's [Taking a new version](https://github.com/escalay/api-kit/blob/main/docs/upgrading.md#taking-a-new-version)
    says what to do.
-5. Done when `doctor` exits 0, or lists only the edits you mean to keep, and `pnpm test` passes.
+5. Record each edit you mean to keep with `doctor --keep <file>`. Done when `doctor` exits 0 and `pnpm test` passes.
 
 ## Shipping
 

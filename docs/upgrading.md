@@ -19,7 +19,10 @@ When `kit.json` records an older kit, `doctor` prints a `note` line naming `kit 
 The app owns the copy, and nothing follows `main`: a version is taken on purpose. A file equal to the kit's counts as
 unchanged, whatever `kit.json` recorded. `update` keeps a file you edited; when the kit also changed that file since
 the version `kit.json` records, it exits 1 and leaves `kit.json` at that version, so `doctor` still names the file:
-`update --force` takes the kit's, then make your edits again. Read the sections below for every part the app has, from
+`update --force` takes the kit's, then make your edits again. An edit the team keeps is recorded with
+`doctor --keep <file>` (`kept` in `kit.json`, the file's hash): `doctor` then notes it instead of failing, until the
+file changes again, the kit changes it too, or `update --force` takes the kit's. `add` and `update` print `pnpm add`
+only for what `package.json` lacks. Read the sections below for every part the app has, from
 the version in `kit.json` up.
 
 ## core

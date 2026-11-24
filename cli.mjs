@@ -14,7 +14,9 @@
  *   kit upgrading [--dir src/kit] [--from <version>]
  *                                             what changed for the parts in kit.json since its version (or --from), up to
  *                                             this kit, and what to do: their notes from the kit's docs/upgrading.md, part by part
- *   kit doctor [--dir src/kit] [--adopt]      missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it)
+ *   kit doctor [--dir src/kit] [--adopt] [--keep <file…>]
+ *                                             missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it);
+ *                                             --keep records those edited files as kept in kit.json: a note while they stay so
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
  *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--yes]
  *                                             a new app: features/, the kit in src/kit, tests; Node (server.ts, a
@@ -169,17 +171,41 @@ const readLock = () => {
   const keyFor = (key) => (flat[key] ? `${WEB}${flat[key]}` : key.startsWith('web/') && WEB_FILES.has(key.slice(4)) ? WEB + key.slice(4) : key)
   return { ...lock, files: Object.fromEntries(Object.entries(lock.files).map(([key, hash]) => [keyFor(key), flat[key] ? null : hash]).filter(([, hash]) => hash !== null)) }
 }
-const writeLock = (modules, hashes, webDir, version = VERSION) =>
-  writeFileSync(lockPath, JSON.stringify({ $comment: 'Written by @escalay/kit; hashes are of the files as the kit last wrote them.', source: SOURCE, version, modules, ...(webDir ? { webDir } : {}), files: Object.fromEntries(Object.entries(hashes).sort()) }, null, 2) + '\n')
+/** `kept` is the edits `doctor --keep` recorded: each file's hash as it was kept. */
+const writeLock = (modules, hashes, webDir, version = VERSION, kept = {}) =>
+  writeFileSync(lockPath, JSON.stringify({ $comment: 'Written by @escalay/kit; hashes are of the files as the kit last wrote them.', source: SOURCE, version, modules, ...(webDir ? { webDir } : {}), files: Object.fromEntries(Object.entries(hashes).sort()), ...(Object.keys(kept).length ? { kept: Object.fromEntries(Object.entries(kept).sort()) } : {}) }, null, 2) + '\n')
+
+const localHash = (key, webDir) => (existsSync(pathOf(key, webDir)) ? sha(readFileSync(pathOf(key, webDir), 'utf8')) : null)
+/** The kept edits still on disk as they were kept: one taken from the kit, or changed since, is no longer kept. */
+const keptOf = (lock) => Object.fromEntries(Object.entries(lock?.kept ?? {}).filter(([file, hash]) => localHash(file, lock.webDir) === hash))
 
 const dependenciesOf = (modules) => Object.assign({}, ...modules.map((name) => REGISTRY[name].dependencies ?? {}))
+
+/** A declared spec (`^4.13.20`, `4.14.0`) whose lowest version a range (`^4.13.18`) takes; another range is met only by itself. */
+const meetsRange = (spec, range) => {
+  if (spec === range) return true
+  const version = spec?.replace(/^[\^~]/, '')
+  if (!range.startsWith('^') || !isVersion(version ?? '')) return false
+  const [floor, [major, minor]] = [range.slice(1), version.split('.').map(Number)]
+  const [floorMajor, floorMinor] = floor.split('.').map(Number)
+  return major === floorMajor && (major > 0 || minor === floorMinor) && compareVersions(version, floor) >= 0
+}
+
+/** The parts' dependencies the app's package.json lacks, or declares at a version their range doesn't take. */
+const missingDependencies = (modules) => {
+  const manifestPath = join(appRootOf() ?? dir, 'package.json')
+  const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) : {}
+  const declared = { ...manifest.dependencies, ...manifest.devDependencies }
+  return Object.entries(dependenciesOf(modules)).filter(([name, range]) => !meetsRange(declared[name], range))
+}
+
 const installCommand = (modules) => {
-  const deps = Object.entries(dependenciesOf(modules)).map(([name, range]) => `${name}@${range}`)
-  return deps.length ? `pnpm add ${deps.join(' ')}` : 'none'
+  const deps = missingDependencies(modules).map(([name, range]) => `${name}@${range}`)
+  return deps.length ? `pnpm add ${deps.join(' ')}` : Object.keys(dependenciesOf(modules)).length ? 'package.json has them' : 'none'
 }
 
 const install = (modules) => {
-  if (installCommand(modules) === 'none') return
+  if (!installCommand(modules).startsWith('pnpm add')) return
   const result = spawnSync('pnpm', installCommand(modules).split(' ').slice(1), { stdio: 'inherit', cwd: process.cwd() })
   if (result.status !== 0) fail('pnpm add failed; run it yourself: ' + installCommand(modules))
 }
@@ -205,9 +231,16 @@ const keptFix = () => `\`kit diff --dir ${dirArg} --patch\` shows both; \`kit up
 /** The part a recorded file came with (`index.ts` is the kit's own). */
 const partOf = (key, modules) => modules.find((name) => REGISTRY[name].files.includes(sourceOf(key))) ?? 'kit'
 
+/** The edits kit.json records as kept, still as they were: notes, never findings, until the kit changes the file too. */
+const keptEditsOf = (lock) => {
+  const kept = keptOf(lock)
+  return statusOf(lock, expectedFiles(lock.modules, lock.webDir)).filter(({ file, state }) => state === 'you edited' && kept[file] !== undefined).map(({ file }) => file)
+}
+
 /** One line per thing wrong with the copy, each saying how to fix it. */
 const findingsOf = (lock) => {
-  const statuses = statusOf(lock, expectedFiles(lock.modules, lock.webDir))
+  const keptEdits = keptEditsOf(lock)
+  const statuses = statusOf(lock, expectedFiles(lock.modules, lock.webDir)).filter(({ file }) => !keptEdits.includes(file))
   const behind = [...new Set(statuses.filter(({ state }) => ['kit changed', 'new in kit', 'dropped by kit'].includes(state)).map(({ file }) => partOf(file, lock.modules)))]
   const kept = statuses.filter(({ state }) => state === 'both changed')
   return [
@@ -218,6 +251,15 @@ const findingsOf = (lock) => {
     ...behind.map((part) => `behind   ${part} was copied from kit ${lock.version} and kit ${VERSION} changed it: \`kit diff --dir ${dirArg} --patch\`, then \`kit update --dir ${dirArg}\``),
     ...(lock.version !== VERSION && !behind.length && !kept.length ? [`behind   kit.json says kit ${lock.version}, this is ${VERSION} with the same files: \`kit update --dir ${dirArg}\` records it`] : []),
   ]
+}
+
+/** `doctor --keep <file…>`: records each edited file's hash as kept, so doctor counts it no more while it stays so. */
+const keepEdits = (lock) => {
+  if (!names.length) fail(`name the edited files to keep, as doctor names them: \`kit doctor --dir ${dirArg} --keep core/guards.ts\``)
+  const edited = statusOf(lock, expectedFiles(lock.modules, lock.webDir)).filter(({ state }) => state === 'you edited').map(({ file }) => file)
+  for (const file of names) if (!edited.includes(file)) fail(`${file} is not an edit doctor can keep (only "edited … yours to keep" lines): ${edited.join(', ') || 'none here'}`)
+  writeLock(lock.modules, lock.files, lock.webDir, lock.version, { ...keptOf(lock), ...Object.fromEntries(names.map((file) => [file, localHash(file, lock.webDir)])) })
+  console.log(`Kept ${names.join(', ')} in kit.json: doctor notes ${names.length === 1 ? 'it' : 'them'} until ${names.length === 1 ? 'it changes' : 'they change'} or the kit changes ${names.length === 1 ? 'it' : 'them'} too`)
 }
 
 // ---- Upgrade notes: docs/upgrading.md, which the npm package ships ----
@@ -1289,7 +1331,7 @@ const commands = {
       writeFileSync(path, text)
       hashes[file] = sha(text)
     }
-    writeLock(modules, hashes, webDir)
+    writeLock(modules, hashes, webDir, VERSION, keptOf(lock))
     console.log(`Copied ${modules.join(', ')} (kit ${VERSION}) into ${relative(process.cwd(), dir) || '.'}`)
     if (skipped.length) console.log(`Kept your version of ${skipped.join(', ')} (it differs from the kit); --force overwrites`)
     const root = names.includes('brand') ? appRootOf() : null
@@ -1402,14 +1444,18 @@ const commands = {
 
   doctor: () => {
     if (flags.has('--adopt') && !existsSync(lockPath)) adopt()
+    if (flags.has('--keep')) keepEdits(readLock() ?? fail(`no kit.json in ${dirArg}; add modules first`))
     const lock = readLock()
     const root = lock ? appRootOf() : null
     const brand = root ? brandFindings(root, lock.modules.includes('brand')) : { findings: [], notes: lock?.modules.includes('brand') ? [`note     brand: no package.json above ${dirArg}: \`--app <app>\` names the app whose brand/ to check`] : [] }
     const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
     const texts = lock ? appTexts() : []
     const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
-    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules)] : []), ...brand.notes, ...behindNotes, ...findings]) console.log(line)
-    console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}: ${lock.modules.join(', ')}`)
+    const kept = lock ? keptEditsOf(lock) : []
+    const keptLines = kept.map((file) => `kept     ${file}: an edit kit.json records as kept; \`kit diff --dir ${dirArg} --patch\` shows it`)
+    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules)] : []), ...brand.notes, ...behindNotes, ...keptLines, ...findings]) console.log(line)
+    const withKept = kept.length ? `, with ${kept.length} kept ${kept.length === 1 ? 'edit' : 'edits'}` : ''
+    console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
   },
 
@@ -1595,7 +1641,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
       console.log(`  updated       ${file}`)
     }
     // A kept file still holds the older kit's code, so kit.json keeps the older version until none is left
-    writeLock(modules, hashes, lock.webDir, kept.length ? lock.version : VERSION)
+    writeLock(modules, hashes, lock.webDir, kept.length ? lock.version : VERSION, keptOf(lock))
     // kit.json may now record this kit, so the command names the version the app came from
     if (isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0) console.log(`What changed for these parts since kit ${lock.version}: ${upgradingCommand(lock.version, true)}`)
     if (kept.length) {

@@ -495,6 +495,43 @@ describe('the copy-in CLI', () => {
     expect(cli(app, 'doctor').stdout).toContain(`behind   kit.json says kit 0.0.1, this is ${KIT_VERSION} with the same files`)
   })
 
+  it('doctor --keep records an edit the team keeps: exit 0 while the file stays as kept, an edit again once it changes', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'pagination')
+    await writeFile(join(app, 'src/kit/core/hal.ts'), '// ours\n')
+    expect(cli(app, 'doctor').status).toBe(1)
+    expect(cli(app, 'doctor', '--keep', 'core/kv.ts').stderr).toContain('core/kv.ts is not an edit')
+    const kept = cli(app, 'doctor', '--keep', 'core/hal.ts')
+    expect(kept.status, kept.stdout).toBe(0)
+    expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).kept).toEqual({ 'core/hal.ts': hashOfText('// ours\n') })
+    const again = cli(app, 'doctor')
+    expect([again.status, again.stdout.trim().split('\n')]).toEqual([0, ["kept     core/hal.ts: an edit kit.json records as kept; `kit diff --dir src/kit --patch` shows it", `src/kit matches kit ${KIT_VERSION}, with 1 kept edit: core, pagination`]])
+    // add and update carry the record
+    cli(app, 'add', 'db')
+    cli(app, 'update')
+    expect(cli(app, 'doctor').status).toBe(0)
+    await writeFile(join(app, 'src/kit/core/hal.ts'), '// ours, changed\n')
+    expect(cli(app, 'doctor').stdout).toContain('edited   core/hal.ts')
+    expect(cli(app, 'doctor').status).toBe(1)
+    // Taking the kit's file drops the record
+    cli(app, 'update', '--force')
+    expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).kept).toBeUndefined()
+  })
+
+  it('prints no pnpm add for what package.json already has', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    await writeFile(join(app, 'package.json'), JSON.stringify({ name: 'app', dependencies: { hono: '^4.13.18' } }))
+    const added = cli(app, 'add', 'core')
+    expect(added.stdout).toContain('Dependencies: pnpm add @hono/zod-openapi@')
+    expect(added.stdout).not.toContain('hono@^4')
+    const manifest = JSON.parse(await readFile(join(app, 'package.json'), 'utf8'))
+    const ranges = Object.fromEntries((added.stdout.match(/pnpm add (.+)/)![1]!.split(' ')).map((spec) => [spec.slice(0, spec.lastIndexOf('@')), spec.slice(spec.lastIndexOf('@') + 1)]))
+    await writeFile(join(app, 'package.json'), JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, ...ranges } }))
+    const updated = cli(app, 'update')
+    expect(updated.stdout).not.toContain('pnpm add')
+    expect(updated.stdout).toContain('Dependencies: package.json has them')
+  })
+
   it('a file equal to the kit’s is unchanged even when kit.json recorded another hash', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     cli(app, 'add', 'core', '--dir', 'kit')
