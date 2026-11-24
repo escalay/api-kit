@@ -5,9 +5,20 @@ import { LIFETIMES, SCOPES } from './schema.js'
 
 type InviteCard = { id: string; label: string; scope: string; lifetime: string; state: string; redeemBy: string }
 type SharingCard = { space: string; title: string; askToJoin: string; askToJoinOffered: boolean; openInvites: number }
+type InvitePage = { _embedded: { invites: InviteCard[] }; _links: { next?: { href: string } | null } }
 
 const ON_WORD = 'Use it only when the user asks.'
 const inviteLine = (invite: InviteCard) => `${invite.label} · ${invite.state} · ${invite.scope}, ${invite.lifetime} · redeem by ${invite.redeemBy} · id ${invite.id}`
+/** The line that says a page has more after it, with the cursor that continues; none on the last page. */
+const moreLine = (page: InvitePage) => {
+  const cursor = page._links.next ? new URL(page._links.next.href).searchParams.get('cursor') : null
+  return cursor ? [`More invites: call list_invites again with cursor ${cursor}`] : []
+}
+/** A page of invites as the agent reads it: a line each, then whether more follow. */
+const invitesText = (page: InvitePage) => {
+  const lines = page._embedded.invites.map(inviteLine)
+  return lines.length ? [...lines, ...moreLine(page)].join('\n') : 'No invites yet. create_invite makes one.'
+}
 const sharingLine = (json: SharingCard) =>
   `${json.title} (${json.space}): asking to join ${json.askToJoinOffered ? json.askToJoin : 'not offered by this app'}; ${json.openInvites} open invite${json.openInvites === 1 ? '' : 's'}.`
 
@@ -61,12 +72,12 @@ export const sharingTools = ({ path = '/api/spaces', noun = 'space' }: { path?: 
     mcpTool({
       name: 'list_invites',
       title: `A ${noun}’s invites`,
-      description: `The invites to a ${noun}, newest first, each open, redeemed, revoked or expired. Never their links or codes. ${ON_WORD}`,
+      description: `The invites to a ${noun}, newest first, each open, redeemed, revoked or expired, a page at a time: the answer ends with the cursor for the next page while there is more. Never their links or codes. ${ON_WORD}`,
       input: z.object({ space, limit: z.number().int().min(1).max(100).optional().describe('At most this many (default 50).'), cursor: z.string().optional().describe('Where to continue, from the last answer.') }),
       annotations: { readOnlyHint: true, openWorldHint: false },
       cli: { name: 'invite list', examples: [{ run: 'invite list soups', about: 'Every invite to soups' }] },
       call: ({ space, limit, cursor }) => ({ path: `${at(space)}/invites`, query: { limit, cursor } }),
-      summarize: (json: { _embedded: { invites: InviteCard[] } }) => json._embedded.invites.map(inviteLine).join('\n') || 'No invites yet. create_invite makes one.',
+      summarize: (page: InvitePage) => invitesText(page),
     }),
     mcpTool({
       name: 'revoke_invite',

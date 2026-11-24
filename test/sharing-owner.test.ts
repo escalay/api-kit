@@ -1,7 +1,7 @@
 /** The sharing part's owner side: who may share, the space's settings, and invites made, listed and revoked. */
 import { eq } from 'drizzle-orm'
 import { describe, expect, it, vi } from 'vitest'
-import { createAgentApi, createOAuth, dbGuardStore, generateOAuthKey, hashApiKey, kitGuards, memoryGuardStore, memoryOAuthStore, parseApiKeys, testDb, type Caller, type Db, type GuardStore, type StoredAnswer } from '../src/index.js'
+import { createAgentApi, createOAuth, dbGuardStore, generateOAuthKey, hashApiKey, kitGuards, memoryGuardStore, memoryOAuthStore, parseApiKeys, pathWith, testDb, type Caller, type Db, type GuardStore, type StoredAnswer } from '../src/index.js'
 import { inProcess, mcpServerFactory, mountMcp } from '../src/mcp/index.js'
 import { createSharing, newInviteCode, registerSharing, sharerOf, sharingRepo, sharingTools, SHARING_TAG, type SharingOptions } from '../src/sharing/index.js'
 import { cliGaps, lintOpenApi, toolRoutes, toolsRun } from '../src/testing/index.js'
@@ -423,6 +423,22 @@ describe('the owner routes and tools', () => {
       revoke_invite: { space: 'soups', id: open.id },
     }
     expect(await toolsRun(sharingTools(), app, args, { headers: { authorization: `Bearer ${KEY}` } })).toEqual([])
+  })
+
+  it('list_invites says in its text when more invites exist, with the cursor that continues, and nothing more on the last page', async () => {
+    const { byKey } = await sharingApi()
+    const older = await makeInvite(byKey, 'soups', { label: 'Sam' })
+    const newer = await makeInvite(byKey, 'soups', { label: 'Ada' })
+    const listInvites = sharingTools().find((tool) => tool.name === 'list_invites')!
+    const textOf = async (input: { space: string; limit: number; cursor?: string }) => {
+      const { path, query } = listInvites.call(input)
+      return listInvites.summarize!(await (await byKey(pathWith(path, query as Parameters<typeof pathWith>[1]))).json(), input)
+    }
+    const first = await textOf({ space: 'soups', limit: 1 })
+    const cursor = /cursor (\S+)/.exec(first)?.[1]
+    expect(first.split('\n')).toEqual([expect.stringContaining(newer.id), `More invites: call list_invites again with cursor ${cursor}`])
+    const last = await textOf({ space: 'soups', limit: 1, cursor })
+    expect(last.split('\n')).toEqual([expect.stringContaining(older.id)])
   })
 
   it('say they act only on the user’s word, and create_invite never sends the message', () => {
