@@ -381,6 +381,11 @@ describe('accepts', () => {
     probe.get('*', async (c) => c.json({ judged: await sharing.oauth.accepts(caller, c), resource: sharing.oauth.resourceOf(c) }))
     const judged = await (await probe.request('/mcp', { headers: { 'x-forwarded-host': 'localhost/s/soups' } })).json()
     expect(judged).toEqual({ judged: ONLY_ITS_SPACE, resource: `${ORIGIN}/mcp` })
+    // A bare forged host, which the request's origin takes: a token for its MCP is still no root token
+    const forgedRoot = new Hono()
+    forgedRoot.get('*', async (c) => c.json({ judged: await sharing.oauth.accepts({ ...caller, resource: 'http://forged.example.test/mcp' }, c), resource: sharing.oauth.resourceOf(c) }))
+    const bare = await (await forgedRoot.request('/mcp', { headers: { 'x-forwarded-host': 'forged.example.test' } })).json()
+    expect(bare).toEqual({ judged: ONLY_ITS_SPACE, resource: `${ORIGIN}/mcp` })
   })
 
   it('names the day an access ended', async () => {
