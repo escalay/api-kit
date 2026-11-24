@@ -10,6 +10,7 @@ import { linksOf, originOf } from '../core/hal.js'
 import { ProblemError } from '../core/problem.js'
 import type { OAuth } from '../oauth/index.js'
 import { decodeCursor, pageOf } from '../pagination/index.js'
+import { isRootAudience } from './grants.js'
 import type { SharingConfig, Space } from './index.js'
 import type { InviteWithMember, NewInvite, SharingRepo } from './repo.js'
 import type { SharingRoutes } from './routes.js'
@@ -28,9 +29,6 @@ export type Sharer = { kind: 'owner'; by: string } | { kind: 'key'; by: string }
 
 /** What `sharerOf` decides by: the owner `owner(c)` named (null when none), the deployment's keys, the root resource and the root MCP path. */
 export type SharerFacts = { owner: string | null; fixedKeys: string[]; root: string; mcpPath: string }
-
-/** A token for the whole app: no audience (before audiences), the root, or the root's MCP. */
-const isRootAudience = (resource: string | undefined, root: string, mcpPath: string) => !resource || resource === root || resource === root + mcpPath
 
 /** A signed-in person shares only when the app calls them the owner, and never as a team member. */
 const personSharer = (caller: Extract<Caller, { kind: 'person' }>, owner: string | null): Sharer | null => {

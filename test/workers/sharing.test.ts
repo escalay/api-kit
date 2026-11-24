@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { migrate, testDb } from '../../src/index.js'
 import { codeHashOf, MAX_OPEN_INVITES, newInviteCode, sharingKeys, sharingRepo, SHARING_MIGRATIONS } from '../../src/sharing/index.js'
+import { sharingGrantsContract } from '../sharing-grants-contract.js'
 import { at, DAY, inviteRow, memberRow, requestRow } from '../sharing-rows.js'
 
 const NOW = new Date('2026-03-12T09:00:00.000Z')
@@ -52,3 +53,6 @@ describe('the sharing tables on D1', () => {
     expect(codeHashOf(keys, code.toLowerCase())).toBe(codeHashOf(keys, code))
   })
 })
+
+// The grants, accepts and onRevoke (by grant and by client) on D1
+sharingGrantsContract('D1', sharingDb)

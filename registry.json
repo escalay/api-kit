@@ -732,7 +732,7 @@
       "name": "sharing",
       "type": "registry:item",
       "title": "Sharing",
-      "description": "Invites to a space, asks to join and the owner's approval, on the oauth part's hooks; so far its tables (`SHARING_MIGRATIONS`), `sharingRepo`, the named states of its rows, its secrets, and the owner's routes and MCP tools for a space's settings and its invites",
+      "description": "Invites to a space, asks to join and the owner's approval, on the oauth part's hooks; so far its tables (`SHARING_MIGRATIONS`), `sharingRepo`, the named states of its rows, its secrets, the owner's routes and MCP tools for a space's settings and its invites, and the oauth hooks that make members and hold a space's token to its space (`sharing.oauth`)",
       "registryDependencies": [
         "escalay/api-kit/db",
         "escalay/api-kit/mcp",
@@ -740,6 +740,11 @@
         "escalay/api-kit/pagination"
       ],
       "files": [
+        {
+          "path": "src/sharing/grants.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/grants.ts"
+        },
         {
           "path": "src/sharing/handlers.ts",
           "type": "registry:file",

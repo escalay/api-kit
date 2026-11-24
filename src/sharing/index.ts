@@ -2,18 +2,20 @@
  * Sharing: invites to a space, asks to join and the owner's approval, on the oauth part's hooks (`approve`,
  * `complete`, `onGrant`, `onRevoke`, `accepts`). A **space** is the part of an app that is shared (a shelf, a board, a
  * project); a **member** is one grant into one space. So far the part holds its tables (`SHARING_MIGRATIONS`), the
- * only queries (`sharingRepo`), the named states of its rows (`states.ts`), its secrets (`secrets.ts`), and the
- * owner's routes and tools for a space's settings and its invites:
+ * only queries (`sharingRepo`), the named states of its rows (`states.ts`), its secrets (`secrets.ts`), the oauth hooks
+ * that make members and hold a space's token to its space (`sharing.oauth`, `grants.ts`), and the owner's routes and
+ * tools for a space's settings and its invites:
  *   GET    {path}/{space}/sharing         how the space is shared
  *   PATCH  {path}/{space}/sharing         switch Ask to join
  *   POST   {path}/{space}/invites         a new invite → 201, its link and code shown this once
  *   GET    {path}/{space}/invites         the space's invites, newest first, a page at a time
  *   GET    {path}/{space}/invites/{id}    one invite and its state, never its link or code
  *   DELETE {path}/{space}/invites/{id}    revoke an invite no one has used
- * The sign-in pages and the hooks come next (its README says what is there).
+ * The sign-in pages come next (its README says what is there).
  *
  * @example
- * const sharing = await createSharing({ db, secret: env.SHARING_SECRET, spaces, owner, fixedKeys: [...parseApiKeys(env.API_KEYS).values()] })
+ * const sharing = await createSharing({ db, secret: env.SHARING_SECRET, spaces, owner, spaceOfPath, fixedKeys: [...parseApiKeys(env.API_KEYS).values()] })
+ * const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, ...sharing.oauth })
  * const app = createAgentApi({ …, tags: [...FEATURE_TAGS, SHARING_TAG], auth: { …, relay: ['/mcp', '/a2a', sharing.relay] }, guards: { …, skip: sharing.neverKept }, oauth })
  * await registerSharing(app, sharing, { oauth })
  * mcpServerFactory({ tools: [...FEATURE_TOOLS, ...sharingTools({ noun: 'shelf' })], … })
@@ -21,13 +23,15 @@
 import type { OpenAPIHono } from '@hono/zod-openapi'
 import type { Context } from 'hono'
 import { migrate, type Db } from '../db/index.js'
-import type { OAuth } from '../oauth/index.js'
+import type { OAuth, OAuthConfig, SignInAsk } from '../oauth/index.js'
+import { acceptsFor, handlesFor, memberOfFor, onGrantFor, onRevokeFor, resourceOfFor, resourcesFor, type Binding, type BoundOAuth, type MemberView } from './grants.js'
 import { sharingHandlers } from './handlers.js'
 import { sharingRepo } from './repo.js'
 import { sharingRoutes } from './routes.js'
 import { SHARING_MIGRATIONS } from './schema.js'
 import { sharingKeys, type SharingKeys } from './secrets.js'
 
+export { appNameOf, isRootAudience, ONLY_ITS_SPACE, spaceNameIn, type Binding, type BoundOAuth, type MemberView } from './grants.js'
 export { sharerOf, type Sharer, type SharerFacts } from './handlers.js'
 export { sharingRepo, type InviteRow, type InviteWithMember, type MemberRow, type NewInvite, type NewMember, type NewRequest, type PageAt, type RequestRow, type RequestWithMember, type SharingRepo, type SpaceRow } from './repo.js'
 export { PLAIN_TEXT, sharingRoutes, type SharingRoutes } from './routes.js'
@@ -46,8 +50,14 @@ export type SharingOptions = {
   db: Db
   /** 32+ random bytes from the app's secret store, used only here. Rotating it voids open invites; members keep working. */
   secret: string
-  /** The app's spaces by the name in their address; null when there is none. */
-  spaces: { byName: (name: string) => Promise<Space | null> }
+  /** The app's spaces by the name in their address and by id; null when there is none. Ids are never reused. */
+  spaces: { byName: (name: string) => Promise<Space | null>; byId: (id: string) => Promise<Space | null> }
+  /**
+   * The space an `/api` request is about, from its path alone: an MCP tool calls `/api` in-process, where the space's
+   * address is gone. A pure function of the path, never a header a client can set. Default: none, so a space token
+   * reaches no `/api` route.
+   */
+  spaceOfPath?: (path: string) => string | null
   /** The signed-in owner's email, or null: the same function the app gives `createOAuth`. */
   owner: (c: Context) => Promise<string | null>
   /** Names of keys from `API_KEYS` that may share. Default none. */
@@ -74,6 +84,18 @@ export type Sharing = {
   /** Paths whose answers Idempotency-Key never keeps (`guards.skip`): the sign-in pages answer with codes in redirects. */
   neverKept: string[]
   config: SharingConfig
+  /**
+   * The oauth hooks, to spread into `createOAuth`: `onGrant` makes members, `onRevoke` ends them, `accepts` holds a
+   * space token to its space, `resources` and `resourceOf` describe the space addresses. An app with hooks of its own
+   * chains them (its README, Wire it).
+   */
+  oauth: Required<Pick<OAuthConfig, 'onGrant' | 'onRevoke' | 'accepts' | 'resources' | 'resourceOf'>>
+  /** Ties the hooks to the app's OAuth server; `registerSharing` calls it. Before it, `onGrant` says no and `accepts` takes only a token with no audience. */
+  bind: (oauth: BoundOAuth) => void
+  /** Whether a sign-in is the part's to judge: its audience a space, the root or the root's MCP. */
+  handles: (ask: Pick<SignInAsk, 'resource'>) => boolean
+  /** The member behind a request's space token while it lives, with its space; null for anyone else. */
+  memberOf: (c: Context) => Promise<MemberView | null>
 }
 
 const SPACE = '{space}'
@@ -93,7 +115,7 @@ const spaceAddressOf = (resourcePath: string) => {
  * Give its `relay` to `auth.relay`, its `neverKept` to `guards.skip`, and it to `registerSharing`.
  *
  * @example
- * const sharing = await createSharing({ db, secret: env.SHARING_SECRET, spaces: { byName: (name) => shelves.byName(name) }, owner, askToJoin: true })
+ * const sharing = await createSharing({ db, secret: env.SHARING_SECRET, spaces: { byName: (name) => shelves.byName(name), byId: (id) => shelves.byId(id) }, owner, askToJoin: true })
  */
 export const createSharing = async (options: SharingOptions): Promise<Sharing> => {
   const { secret, resourcePath = '/s/{space}/mcp', ...rest } = options
@@ -107,13 +129,28 @@ export const createSharing = async (options: SharingOptions): Promise<Sharing> =
     path: options.path ?? '/api/spaces',
     askToJoin: options.askToJoin ?? false,
     tag: options.tag ?? SHARING_TAG.name,
+    spaceOfPath: options.spaceOfPath ?? (() => null),
   }
-  return { relay, mcpPath, neverKept: ['/sharing/*'], config }
+  const binding: Binding = { oauth: null }
+  const grants = { config, repo: sharingRepo(config.db), binding }
+  return {
+    relay,
+    mcpPath,
+    neverKept: ['/sharing/*'],
+    config,
+    oauth: { onGrant: onGrantFor(grants), onRevoke: onRevokeFor(grants), accepts: acceptsFor(grants), resources: resourcesFor(grants), resourceOf: resourceOfFor(grants) },
+    bind: (oauth) => {
+      binding.oauth = oauth
+    },
+    handles: handlesFor(grants),
+    memberOf: memberOfFor(grants),
+  }
 }
 
 /**
- * Registers the owner's sharing routes on the app, after migrating the sharing tables. Call it after `createAgentApi`,
- * with the app's `createOAuth` server: its root and MCP path say which agents may share, and its issuer names links.
+ * Registers the owner's sharing routes on the app, after migrating the sharing tables and binding the hooks to the
+ * app's `createOAuth` server (`bind`). Call it after `createAgentApi`, before serving: its root and MCP path say which
+ * agents may share and which tokens are root tokens, and its issuer names links.
  *
  * @example
  * await registerSharing(app, sharing, { oauth })
@@ -121,6 +158,7 @@ export const createSharing = async (options: SharingOptions): Promise<Sharing> =
 export const registerSharing = async (app: OpenAPIHono, sharing: Sharing, { oauth }: { oauth: Pick<OAuth, 'rootOf' | 'issuerOf' | 'mcpPath'> }) => {
   const { config } = sharing
   await migrate(config.db, 'sharing', SHARING_MIGRATIONS)
+  sharing.bind(oauth)
   const routes = sharingRoutes({ path: config.path, tag: config.tag })
   const handle = sharingHandlers(config, oauth, sharingRepo(config.db))
   app.openapi(routes.get, handle.get)

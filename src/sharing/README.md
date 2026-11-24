@@ -1,6 +1,6 @@
 # sharing
 
-Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), asks to join, and the owner's approval, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite, by ask or by the owner's approval. The part is being built in steps; so far it holds its tables, the only queries over them, the named states of its rows, its secrets, and the owner's routes and MCP tools for a space's settings and its invites. Nothing redeems an invite yet: the link it answers points at the sign-in pages still to come, and nothing is wired into `createOAuth`. Until this README says it is, an app that needs people to join builds that on oauth's `approve`, `complete` with `resource`, `holdTicket`, `onGrant` and `onRevoke`, keeping `docs/STANDARD.md` §23.
+Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), asks to join, and the owner's approval, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite, by ask or by the owner's approval. Built in steps; so far: its tables and queries, the named states of its rows, its secrets, the owner's routes and tools for a space's settings and invites, and the oauth hooks (`sharing.oauth`) that make members and hold a space's token to its space. The sign-in pages (`approve`, where an invite's link points) come next; until then an app's own page completes the ticket as they will (Flows), keeping `docs/STANDARD.md` §23.
 
 ## Use it when
 
@@ -30,11 +30,13 @@ const sharing = await createSharing({
   db,
   // 32+ random bytes, its own entry in the app's secret store: never the OAuth signing key
   secret: env.SHARING_SECRET,
-  spaces: { byName: (name) => shelves.byName(name) },   // → { id, name, title } or null; ids never reused
+  spaces: { byName: (name) => shelves.byName(name), byId: (id) => shelves.byId(id) },   // → { id, name, title } or null; ids never reused
+  spaceOfPath: (path) => /^\/api\/shelves\/([^/]+)(\/|$)/.exec(path)?.[1] ?? null,       // the space an in-process /api call is about
   owner,                                                // the same function the app gives createOAuth
   fixedKeys: [...parseApiKeys(env.API_KEYS).values()],
   askToJoin: true,
 })
+const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, publicOrigin, limits, ...sharing.oauth })
 const app = createAgentApi({
   …,
   tags: [...FEATURE_TAGS, SHARING_TAG],
@@ -42,8 +44,18 @@ const app = createAgentApi({
   guards: { …, skip: sharing.neverKept },
   oauth,
 })
-await registerSharing(app, sharing, { oauth })   // migrates, then the owner routes
+await registerSharing(app, sharing, { oauth })   // migrates, binds the hooks to oauth, then the owner routes
 mcpServerFactory({ tools: [...FEATURE_TOOLS, ...sharingTools({ noun: 'shelf' })], … })   // the owner's MCP only
+```
+
+An app with hooks of its own chains them, its veto first so a refusal never spends an invite (the other way round,
+the kit withdraws the grant and `onRevoke` deletes the claim's row).
+
+```ts
+onGrant: async (grant, c) => (await mine.onGrant(grant, c)) && (await sharing.oauth.onGrant(grant, c)),
+onRevoke: async (revoked) => { await sharing.oauth.onRevoke(revoked); await mine.onRevoke(revoked) },
+accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(caller, c); return judged === true ? mine.accepts(caller, c) : judged },
+resources: (path) => sharing.oauth.resources(path) || mine.resources(path),
 ```
 
 ## Options
@@ -54,7 +66,8 @@ mcpServerFactory({ tools: [...FEATURE_TOOLS, ...sharingTools({ noun: 'shelf' })]
 |---|---|---|---|
 | `db` | `Db` | required | the app's database (`openDb`), the same one as its OAuth state; `registerSharing` migrates `SHARING_MIGRATIONS` into it |
 | `secret` | string | required | the app's sharing secret, 32 bytes or more; four keys are derived from it (HKDF-SHA256: `sharing-link`, `sharing-code`, `sharing-cookie`, `sharing-address`). Rotating it voids open invites; members keep working |
-| `spaces` | `{ byName(name) }` | required | the app's space by the name in its address: `{ id, name, title }` (`Space`), or null. Ids are never reused |
+| `spaces` | `{ byName(name), byId(id) }` | required | the app's space by the name in its address, and by id: `{ id, name, title }` (`Space`), or null. Ids are never reused: a member keeps its space by id |
+| `spaceOfPath` | `(path) => string \| null` | none | the space an `/api` request is about, from its path alone (an MCP tool's in-process call has lost the space's address); never a header. Without it a space token reaches no `/api` route |
 | `owner` | `(c) => Promise<string \| null>` | required | the signed-in owner's email, or null: the same function the app gives `createOAuth` |
 | `fixedKeys` | string[] | `[]` | names of keys from `API_KEYS` that may share |
 | `resourcePath` | string | `'/s/{space}/mcp'` | the space's MCP address: one whole `{space}` segment with a segment after it; `relay` and `mcpPath` come from it |
@@ -63,14 +76,16 @@ mcpServerFactory({ tools: [...FEATURE_TOOLS, ...sharingTools({ noun: 'shelf' })]
 | `askToJoin` | boolean | `false` | whether asking to join exists at all; each space still switches it on |
 | `tag` | string | `'Sharing'` | the routes' OpenAPI tag (`SHARING_TAG` declares it) |
 
-`registerSharing(app, sharing, { oauth })` takes the app's `createOAuth` server: its root and MCP path say which agents
-may share, and its issuer (`publicOrigin`) names invite links.
+`registerSharing(app, sharing, { oauth })` takes the app's `createOAuth` server and binds the hooks to it (`bind`): its
+root and MCP path say which agents may share and which tokens are root tokens, and its issuer (`publicOrigin`) names
+invite links.
 
 ## Exports
 
 | File | What |
 |---|---|
-| `index.ts` | `createSharing` (the options checked: `relay`, `mcpPath`, `neverKept`, `config`), `registerSharing`, `SHARING_TAG`, and re-exports the files below |
+| `index.ts` | `createSharing` (the options checked: `relay`, `mcpPath`, `neverKept`, `config`; the hooks `oauth`; `bind`, `handles`, `memberOf`), `registerSharing`, `SHARING_TAG`, and re-exports the files below |
+| `grants.ts` | the hooks (Rules); `appNameOf`, `isRootAudience`, `spaceNameIn`, `ONLY_ITS_SPACE`, `MemberView` |
 | `routes.ts` | `sharingRoutes`: the owner routes as OpenAPI contracts (below); `PLAIN_TEXT`, the label rule (no control, bidi or zero-width characters) |
 | `handlers.ts` | the handlers; `sharerOf`, who may share (`Sharer`) |
 | `tools.ts` | `sharingTools`: the MCP tools for the owner routes |
@@ -121,6 +136,23 @@ sequenceDiagram
   R-->>O: 201 link, code, message (shown once, no-store)
 ```
 
+An invite is spent at the token exchange, never at the click. Until the sign-in pages come, the app's page completes
+the ticket as they will: `{ approver: 'invite:<id>', scopes: <asked ∩ the invite's>, resource: <the space's address>,
+data: { sharing: 'invite', invite, returnsTo } }`; the owner's, `approver: 'owner:<email>'`, `data: { sharing:
+'owner', space: <its id>, lifetime, returnsTo }`.
+
+```mermaid
+sequenceDiagram
+  participant K as /oauth/token
+  participant G as onGrant
+  participant D as sharing_members
+  K->>G: the grant (resource, scopes, approver, data)
+  G->>G: a code at a space byName finds, its approver and scopes within the invite (else withdrawn)
+  G->>D: claimInvite, one statement (null: spent, revoked, late, another space: withdrawn)
+  K->>K: ended meanwhile (a replayed code)? nothing issued, onRevoke told again
+  K-->>G: later requests: accepts, by the member's grant and its space byId
+```
+
 An invite (`inviteStateOf`). Redeemed is not a column: a member row holding its `invite_id` is.
 
 ```mermaid
@@ -163,9 +195,31 @@ stateDiagram-v2
 
 ## Rules
 
-- **Who may share** (`sharerOf`): the owner signed in (`owner(c)` answers; never a team `member`), a key named in
-  `fixedKeys`, or an agent whose token is for the whole app (no audience, the root, or the root's MCP) from a known
-  grant. A key made through the API, a space's own token and anyone else may not.
+- **Which tokens the part judges** (`onGrant`, `accepts`):
+
+  | Token | `onGrant` | `accepts` |
+  |---|---|---|
+  | no audience, the root, the root's MCP (`isRootAudience`) | yes, untouched; no if a sharing page made it | everywhere |
+  | a space, from the part's pages (`data.sharing`) | the claim writes the member, or no | its member's space only, while it lives |
+  | a space any other way (a device grant, the kit's page) | no: withdrawn | refused: no member |
+
+- **A member is its row.** `accepts` finds it by the token's grant, its space by `byId`, and compares that space's
+  name now with the one the request is about (its path at a space address, else `spaceOfPath`). A renamed space keeps
+  its members; its old name opens nothing to them, even once another space takes it. Anything out of place gets one
+  sentence (`ONLY_ITS_SPACE`), whether or not the asked space exists. A row past its lifetime or unused for 30 days is
+  refused (that request is not a use); a use is noted at most once an hour.
+- **A grant never holds more than was given:** an invite's approver `invite:<id>` and scopes within the invite's; the
+  owner's `owner:<email>` (never the bare email: never the owner's token), the resource's space id, a lifetime the part
+  has. A sharing approval never makes a root grant.
+- **`onRevoke` mirrors the kit**: `withdrawn` deletes the grant's row (its invite opens again), `client_revoked` ends
+  the client's rows, any other reason the grant's. Then, unless withdrawn, the open invites an agent made under that
+  grant or client are revoked; people who joined through them keep access. Told twice, nothing moves.
+- **Before `bind`** (`registerSharing`), `onGrant` says no and `accepts` takes only a token with no audience.
+- **`resources` is a pure check of the path** (`spaceNameIn`): cased, encoded and dotted names are no space.
+  `handles(ask)`: whether a sign-in is the part's (a space, the root or its MCP). A client's name is its own claim,
+  kept after `appNameOf` (no control, bidi or zero-width character, 80 at most).
+- **Who may share** (`sharerOf`): the owner signed in (never a team `member`), a key in `fixedKeys`, or an agent with
+  a root token (`isRootAudience`) from a known grant. A key made through the API, a space's token and anyone else may not.
 - **Nothing says whether a space exists.** Anyone who may not share, a name `spaceName` refuses (cased, dotted,
   encoded) and a space `byName` doesn't find all get the same 404 with the same body. An invite id from another space
   is the same 404 as a made-up one.
@@ -179,19 +233,15 @@ stateDiagram-v2
   whatever the request's host header says.
 - **Never through A2A.** `sharingTools` go to the owner's MCP only: a delegating agent must not mint invites. Each
   tool acts only on the user's word, and `create_invite` returns the message to send, never sends it.
-- **The claim is the insert.** `claimInvite` and `claimRequest` are one `insert … select … where` each: the member is
-  written only while the invite is of the member's space, unrevoked, in time and unredeemed (the ask: approved, in
-  time, unused). `invite_id`, `request_id` and `grant_id` are unique, so a racing second claim writes nothing and
-  answers null, never throws. So is the cap: `addInvite` writes only while the space holds fewer than 100 open
-  invites, so invites made at once never pass it. No statement uses a transaction: each holds on node:sqlite, libSQL
-  and D1.
+- **The claim is the insert.** `claimInvite` and `claimRequest` are one `insert … select … where` each (the invite of
+  the member's space, unrevoked, in time, unredeemed; the ask approved, in time, unused); `invite_id`, `request_id` and
+  `grant_id` are unique, so a racing second claim answers null, never throws. `addInvite` holds the 100-open cap the
+  same way. No transaction: each holds on node:sqlite, libSQL and D1.
 - **An id never crosses spaces.** Every statement taking an id a route names also takes the space
   (`and space_id = ?`).
-- **Ending is not deleting.** A removed, replaced or revoked member's row stays (ended, with its reason) until aging
-  deletes it, so its invite never reopens; only a withdrawn grant's row is deleted (`deleteMemberOfGrant`).
-- **States are named only through `states.ts`**, one rule per function; the repo's once-only statements check the
-  same rules in SQL. A live row past its lifetime or unseen for 30 days is ended (fail closed); the owner's list hides
-  removed and replaced members and shows other ended ones as signed out.
+- **Ending is not deleting.** An ended member's row stays until aging deletes it, so its invite never reopens.
+- **States are named only through `states.ts`**, one rule per function, and checked again in SQL by the once-only
+  statements. The owner's list hides removed and replaced members and shows other ended ones as signed out.
 - **No secret at rest.** The link token and the typed code are kept only as HMACs under their own derived keys, the
   asker's address only as an HMAC, the consent ticket only as a SHA-256.
 - The migration's SQL holds no comment and no quote: a step is split on `;` outside quotes.
@@ -208,10 +258,10 @@ stateDiagram-v2
 | 409 on `createInvite` | 100 open invites at the space; or `shown_once`: a retry with the same Idempotency-Key (the invite was made) |
 | 409 on `updateSharing` | the app's `askToJoin` option is off |
 | 409 on `revokeInvite` | the invite was used already |
-| `addInvite` answers null | the space holds 100 open invites (`createInvite` answers 409), or its link or code hash is taken: `createInvite` makes new ones, then fails after 3 |
-| `claimInvite` answers null | the invite is spent, revoked, past `redeem_by`, of another space, or the grant already has a member |
-| `claimRequest` answers null | the ask is not approved, lapsed, of another space, or already joined |
-| `approveRequest` or `refuseRequest` answers false | the ask is decided, joined, lapsed, or of another space |
+| a once-only statement answers null or false | it lost or found nothing: the row is spent, revoked, late, decided or another space's, the grant has a member, or the space holds 100 open invites (`addInvite`; a taken code gets new ones, 3 tries) |
+| 400 `invalid_grant` "withdrawn" | `onGrant` said no: a space grant not from the part's pages; an invite spent, revoked, late or another space's; more scope, or another approver; a sharing approval at the root |
+| 401 "works only at its own space" | a space token at another space (or an old name), `/mcp`, an `/api` route `spaceOfPath` doesn't name, or a space `byId` misses |
+| 401 "ended on …", "lapsed", "not ready" | the member's lifetime passed; 30 days unused; a token with an audience before `bind` |
 
 ## Limits
 
@@ -224,12 +274,14 @@ stateDiagram-v2
 
 - `test/sharing.test.ts`: the migration's tables and indexes, every named state as a table, the secrets, both claims
   and the 100-open cap under a race, an id from one space at another for every by-id statement, and no table holding a secret.
-- `test/sharing-owner.test.ts`: who may share as a table; invites made, listed, paged, read by their `self` and revoked; the same 404 at
-  every route for strangers, missing, cased and encoded names, and another space's id; the cap with invites made at
-  once; agents' lifetimes and makers;
-  an Idempotency-Key retry (memory and database guards, and through MCP) keeping no link or code; `lintOpenApi`,
-  `toolRoutes`, `toolsRun`, `cliGaps`.
-- `test/workers/sharing.test.ts`: the migration, both claims and the cap on D1, the keys inside workerd.
+- `test/sharing-owner.test.ts`: who may share; invites made, listed, paged, read and revoked; the same 404 everywhere
+  (strangers, missing, cased, encoded names, another space's id); the cap at once; agents' lifetimes and makers; an
+  Idempotency-Key retry keeping no link or code (memory and database guards, MCP); `lintOpenApi`, `toolRoutes`,
+  `toolsRun`, `cliGaps`.
+- `test/sharing-grants.test.ts`: the addresses (probe T6); `onGrant` (once, in time, at its space; grants around the
+  part; no root grant; no more than given; the owner's; probe T7; `race.mts`; races); `accepts`; `onRevoke`;
+  `memberOf`; before `bind`. Its contract (`test/sharing-grants-contract.ts`) runs on node:sqlite and D1.
+- `test/workers/sharing.test.ts`: the migration, both claims, the cap and the grants contract on D1, the keys in workerd.
 
 ## Upgrading
 

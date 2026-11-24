@@ -23,7 +23,7 @@ const SPACES = [
   { id: 'sp_soups', name: 'soups', title: 'Soups' },
   { id: 'sp_bakes', name: 'bakes', title: 'Bakes' },
 ]
-const spaces = { byName: async (name: string) => SPACES.find((space) => space.name === name) ?? null }
+const spaces = { byName: async (name: string) => SPACES.find((space) => space.name === name) ?? null, byId: async (id: string) => SPACES.find((space) => space.id === id) ?? null }
 /** The single sign-on, as the tests stand in for it: the kit's consent page by header, the API by Access's assertion. */
 const owner = async (c: { req: { header: (name: string) => string | undefined } }) => c.req.header('x-test-owner') ?? (c.req.header('cf-access-jwt-assertion') === 'owner-token' ? OWNER : null)
 const PEOPLE: Record<string, string> = { 'owner-token': OWNER, 'ada-token': 'ada@example.test' }
