@@ -18,7 +18,7 @@
  * standouts(meaning, await embedder.query('a fox made of triangles'), { limit: 24 })
  */
 import { createHash } from 'node:crypto'
-import { appendFile, readFile } from 'node:fs/promises'
+import { appendFile, open, readFile, truncate, unlink } from 'node:fs/promises'
 
 export const EMBEDDING_MODEL = 'google/gemini-embedding-2'
 export const DIMENSIONS = 768
@@ -155,10 +155,75 @@ export type Embedder = ReturnType<typeof createEmbedder>
 
 // ---- Ledgers: one JSONL per space, append-only, the last line per key wins ----
 
-/** A space's ledger by key; a missing file is an empty ledger. @example const ledger = await readLedger('vectors/look.jsonl') */
+/** A ledger's lines by key, and its torn last line (a crash mid-append) when it has one: its number and byte offset. */
+type ParsedLedger = { ledger: Map<string, LedgerLine>; torn: { line: number; at: number } | null }
+
+/**
+ * Reads a ledger's text. A last line that isn't JSON is torn (a write cut short) and left out; any other line that
+ * isn't JSON is damage, never made by appending, so it throws with its number.
+ */
+const parseLedger = (file: string, text: string): ParsedLedger => {
+  const lines = text.split('\n')
+  // The last line with anything on it (a whole ledger ends with a newline, so an empty line follows)
+  const last = lines.length - 1 - [...lines].reverse().findIndex(Boolean)
+  const ledger = new Map<string, LedgerLine>()
+  let at = 0
+  for (const [index, line] of lines.entries()) {
+    if (line) {
+      try {
+        const parsed = JSON.parse(line) as LedgerLine
+        ledger.set(parsed.key, parsed)
+      } catch {
+        if (index < last) throw new Error(`${file}: line ${index + 1} is not a ledger line. Appending never makes one, so the file was damaged: restore it from its copy.`)
+        return { ledger, torn: { line: index + 1, at } }
+      }
+    }
+    at += Buffer.byteLength(line) + 1
+  }
+  return { ledger, torn: null }
+}
+
+const tornWarning = (file: string, torn: { line: number }) => `${file}: line ${torn.line} is torn (a write cut short) and left out; the next embedMissing drops it and embeds its item again.`
+
+/**
+ * A space's ledger by key; a missing file is an empty ledger. A torn last line is left out with a warning.
+ * @example const ledger = await readLedger('vectors/look.jsonl')
+ */
 export const readLedger = async (file: string): Promise<Map<string, LedgerLine>> => {
-  const text = await readFile(file, 'utf8').catch(() => '')
-  return new Map(text.split('\n').filter(Boolean).map((line) => JSON.parse(line) as LedgerLine).map((line) => [line.key, line]))
+  const { ledger, torn } = parseLedger(file, await readFile(file, 'utf8').catch(() => ''))
+  if (torn) console.warn(tornWarning(file, torn))
+  return ledger
+}
+
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM: it runs, as another user
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/**
+ * Takes `<file>.lock` (made only if missing, holding this process's id) so one writer appends to a ledger at a time;
+ * a lock whose process is gone is taken over. Returns its release.
+ */
+const lockLedger = async (file: string): Promise<() => Promise<void>> => {
+  const lock = `${file}.lock`
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const handle = await open(lock, 'wx')
+      await handle.writeFile(String(process.pid))
+      await handle.close()
+      return () => unlink(lock).catch(() => {})
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      const holder = Number(await readFile(lock, 'utf8').catch(() => ''))
+      if (attempt > 1 || (holder && isAlive(holder))) throw new Error(`${file} is being written by process ${holder || 'unknown'} (${lock}): run one embedMissing per ledger at a time. If none runs, delete ${lock}.`)
+      await unlink(lock).catch(() => {})
+    }
+  }
 }
 
 /** Adds lines to a ledger; never rewrites it. @example await appendLedger(file, [{ key, hash, vector: encodeVector(v) }]) */
@@ -179,12 +244,30 @@ export type EmbedRun = { embedded: number; fresh: number; failed: string[]; toke
  * nothing paid for is lost. Starts no new batch once `budget` (USD, as OpenRouter reports it) is spent, and stops on a
  * `SpendCapError`; a rerun picks up where it stopped. `limit` embeds at most that many (a pilot). An item whose input
  * can't be made (a picture that won't render) is skipped and named in `failed`; the rest of its batch still goes.
+ * One run writes a ledger at a time (`<file>.lock`; a second throws), and it first drops a torn last line.
  *
  * @example
  * await embedMissing({ file: 'vectors/look.jsonl', items: notes.map((l) => ({ key: l.id, content: l.svg, input: async () => ({ image: await imageDataUrl(l.png) }) })), embed: (inputs) => embedRequest(key, inputs), batchSize: 32, budget: 2, limit: 200 })
  */
-export const embedMissing = async ({ file, items, embed, batchSize = 100, concurrency = 4, budget = Infinity, limit = Infinity, log = () => {} }: { file: string; items: LedgerItem[]; embed: (inputs: EmbeddingInput[]) => Promise<Embedded>; batchSize?: number; concurrency?: number; budget?: number; limit?: number; log?: (message: string) => void }): Promise<EmbedRun> => {
-  const ledger = await readLedger(file)
+export const embedMissing = async (options: EmbedMissingOptions): Promise<EmbedRun> => {
+  const release = await lockLedger(options.file)
+  try {
+    return await embedLocked(options)
+  } finally {
+    await release()
+  }
+}
+
+type EmbedMissingOptions = { file: string; items: LedgerItem[]; embed: (inputs: EmbeddingInput[]) => Promise<Embedded>; batchSize?: number; concurrency?: number; budget?: number; limit?: number; log?: (message: string) => void }
+
+/** embedMissing's work, once it holds the ledger's lock. */
+const embedLocked = async ({ file, items, embed, batchSize = 100, concurrency = 4, budget = Infinity, limit = Infinity, log = () => {} }: EmbedMissingOptions): Promise<EmbedRun> => {
+  const { ledger, torn } = parseLedger(file, await readFile(file, 'utf8').catch(() => ''))
+  // Appending after a torn line would glue the next line to it: drop it, and its item is embedded again
+  if (torn) {
+    console.warn(tornWarning(file, torn))
+    await truncate(file, torn.at)
+  }
   const outdated = items.map((item) => ({ item, hash: hashOf(item.content) })).filter(({ item, hash }) => ledger.get(item.key)?.hash !== hash)
   const stale = outdated.slice(0, limit)
   const run: EmbedRun = { embedded: 0, fresh: items.length - outdated.length, failed: [], tokens: 0, cost: 0 }
