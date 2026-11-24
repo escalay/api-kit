@@ -511,10 +511,12 @@ The owner's own collections of a catalog's items (`boards.ts`, `boards-client.ts
   (`refs.ts`, shipped with both `boards` and `boards-client`), never by hand. Boards live in the app's database (`db`) next to
   its OAuth state.
 - `GET /api/boards` (`?item=<ref>`: where it is saved), `POST` (201 + `Location`), `GET|PATCH|DELETE /api/boards/{id}`,
-  `PUT|DELETE /api/boards/{id}/items/{ref}` (idempotent; a note per item), and `/suggestions` when the app can say
+  `PUT|DELETE /api/boards/{id}/items/{ref}` (idempotent, also when two arrive together; a note per item: left out
+  keeps it, `null` clears it), and `/suggestions` when the app can say
   what is alike (e.g. the centroid of the board's look vectors). Writes need `write`.
+- Boards are single-owner: every caller with `read` sees every board. Per-person boards are the app's own feature.
 - Agents get `list_boards`, `create_board`, `get_board`, `save_to_board`, `remove_from_board` (and
-  `board_suggestions`). Browsers use the headless client and hooks; the UI is the app's.
+  `board_suggestions`); `boardTools({ refExample })` shows them the app's ref. Browsers use the headless client and hooks; the UI is the app's.
 
 ## 18. Usage reports
 
