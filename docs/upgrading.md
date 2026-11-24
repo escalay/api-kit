@@ -13,6 +13,9 @@ npx @escalay/kit diff --dir src/kit --patch   # your edits next to the kit's cha
 npx @escalay/kit update --dir src/kit         # never overwrites your edits without --force
 ```
 
+When `kit.json` records an older kit, `doctor` prints a `note` line naming `kit upgrading`, and `update` a line naming
+`kit upgrading --from <that version>`; neither changes the exit code or `doctor`'s count to fix.
+
 The app owns the copy, and nothing follows `main`: a version is taken on purpose. `update` keeps a file you edited;
 when the kit also changed that file since the version `kit.json` records, it exits 1 and leaves `kit.json` at that
 version, so `doctor` still names the file: `update --force` takes the kit's, then make your edits again. Read the

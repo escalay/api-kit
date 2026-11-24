@@ -110,6 +110,10 @@ describe('kit upgrading', () => {
     const doctor = cli(app, 'doctor')
     const note = 'note     kit.json says kit 1.29.0: `kit upgrading --dir src/kit` prints what changed for its parts since, and what to do'
     expect(doctor.stdout.split('\n')).toContain(note)
+    // The note is not a finding, as docs/upgrading.md says: the one to fix is the `behind` line doctor printed before
+    expect(doctor.stdout.split('\n').filter((line) => /^\w+ {2,}/.test(line)).map((line) => line.split(' ')[0])).toEqual(['note', 'behind'])
+    expect([doctor.status, doctor.stdout.split('\n').at(-2)]).toEqual([1, '1 to fix in src/kit'])
+    expect(UPGRADING).toContain('neither changes the exit code or `doctor`\'s count to fix')
     expect(runPrinted(app, note).stdout).toContain('### 1.30.0')
     const updated = cli(app, 'update')
     expect(updated.status).toBe(0)
