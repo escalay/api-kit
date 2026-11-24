@@ -117,23 +117,43 @@ export const problemText = (json: any, status: number) =>
 export const problemOf = (json: any, status: number): Record<string, unknown> & { status: number } =>
   json && typeof json === 'object' && 'title' in json ? { ...json, status: typeof json.status === 'number' ? json.status : status } : { type: 'about:blank', title: `HTTP ${status}`, status }
 
+/** How a slow call stands: its answer, or (`pending`, the run's id, and `location`, its path) a run still working. */
+export type Waited = { response: Response; pending: string | null; location: string | null }
+
+const POLL_MS = 3000
+
 /**
- * A slow route answers 202 with a run in `Location`: the tool polls it (up to `waitMs`), then asks again for the
- * cached result, so a client sees one answer. Past the wait it says which run to check.
+ * Polls a slow call's run (its `Location`) until `waitMs` has passed, looking at least once. Done: the call is made
+ * once more for its cached answer (the standard's 202 contract). Failed: the run's answer. Else the run is pending.
+ * It never makes the call again while the run works, so a call with side effects is never repeated.
+ *
+ * @example
+ * const { response, location } = await pollRun(callApi, tool.call(args), stored.location, auth, 0)
  */
-export const callWaiting = async (callApi: CallApi, call: ApiCall, auth: AuthInfo | undefined, waitMs: number) => {
-  let response = await callApi(call, auth)
-  const location = response.headers.get('location')
-  if (response.status !== 202 || !location) return { response, pending: null }
+export const pollRun = async (callApi: CallApi, call: ApiCall, location: string, auth: AuthInfo | undefined, waitMs: number): Promise<Waited> => {
   const until = Date.now() + waitMs
-  while (Date.now() < until) {
-    await new Promise((resolve) => setTimeout(resolve, 3000))
-    const run = (await (await callApi({ path: location }, auth)).json().catch(() => null)) as { status?: string } | null
-    if (run?.status === 'done') return { response: await callApi(call, auth), pending: null }
-    if (run?.status === 'failed') return { response: await callApi({ path: location }, auth), pending: null }
+  for (;;) {
+    const run = await callApi({ path: location }, auth)
+    const { status } = ((await run.clone().json().catch(() => null)) ?? {}) as { status?: string }
+    if (status === 'done') return { response: await callApi(call, auth), pending: null, location: null }
+    if (status === 'failed') return { response: run, pending: null, location: null }
+    if (Date.now() >= until) return { response: run, pending: location.split('/').pop()!, location }
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS))
   }
-  response = await callApi({ path: location }, auth)
-  return { response, pending: location.split('/').pop()! }
+}
+
+/**
+ * Makes a call; a slow route answers 202 with a run in `Location`, which `pollRun` polls (up to `waitMs`), so a client
+ * sees one answer. Past the wait it says which run to check, and where.
+ *
+ * @example
+ * const { response, pending, location } = await callWaiting(callApi, tool.call(args), auth, 60_000)
+ */
+export const callWaiting = async (callApi: CallApi, call: ApiCall, auth: AuthInfo | undefined, waitMs: number): Promise<Waited> => {
+  const response = await callApi(call, auth)
+  const location = response.headers.get('location')
+  if (response.status !== 202 || !location) return { response, pending: null, location: null }
+  return pollRun(callApi, call, location, auth, waitMs)
 }
 
 /**

@@ -355,7 +355,8 @@ fact, steps with checkable done-when criteria.
   as security schemes, one skill per chosen tool) and JSON-RPC `SendMessage`, `GetTask`, `ListTasks`, `CancelTask`.
   A message's text fills the skill's main argument (a `data` part may give all of them; `metadata.skill` picks the
   skill, else the first); the task's artifact is the tool's summary (text) plus the route's JSON (data). A slow route
-  leaves the task `TASK_STATE_WORKING` until `GetTask` finds it done. Tasks are kept a day, visible only to their
+  leaves the task `TASK_STATE_WORKING` until `GetTask`, polling the run (never calling the tool again while it works),
+  finds it done; a canceled task stays canceled. Tasks are kept a day, visible only to their
   caller. Requests must send `A2A-Version: 1.0` (absent means 0.3: `-32009`); streaming, push and the extended card
   answer the spec's errors and the card says they are off. Pick the one-call workflows as skills, not every tool.
 

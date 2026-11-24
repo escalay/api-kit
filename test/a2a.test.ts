@@ -19,7 +19,9 @@ const sampleApi = async ({ slow = false } = {}) => {
     if (slow && runs === 1) return c.json({ status: 'running' }, 202, { location: '/api/v1/runs/r1' })
     return c.json({ query: c.req.query('q'), products: [{ name: 'Splitwise' }] })
   })
-  app.get('/api/v1/runs/r1', (c) => c.json({ status: 'running' }))
+  // Running at its first look, done after: GetTask finds it done by polling it
+  let looks = 0
+  app.get('/api/v1/runs/r1', (c) => c.json({ status: (looks += 1) > 1 ? 'done' : 'running' }))
   app.get('/api/v1/broken', (c) => c.json({ status: 404, code: 'not_found', title: 'Not found', detail: 'No such idea.' }, 404))
   const tools = [
     mcpTool({ name: 'explore_idea', title: 'Who already does an idea', description: 'Products for an idea.', input: z.object({ idea: z.string().min(2), limit: z.number().int().default(8) }), call: ({ idea, limit }) => ({ path: '/api/v1/ideas', query: { q: idea, limit } }), summarize: (json) => `"${json.query}": ${json.products.map((product: { name: string }) => product.name).join(', ')}` }),
@@ -27,6 +29,43 @@ const sampleApi = async ({ slow = false } = {}) => {
   ]
   mountA2A(app, { info: { name: 'Sample', description: 'Two tools.', version: '1.0.0' }, skills: [{ tool: tools[0]!, text: 'idea', tags: ['research'], examples: ['split a bill'] }, { tool: tools[1]!, text: 'q', tags: ['test'] }], callApi: inProcess(app), store, oauth: true, waitMs: 0 })
   return { app, store }
+}
+
+/**
+ * An app whose one tool is not idempotent: each call that finds no finished order starts a new run (202), so calling
+ * it again while the run works would place a second order. A finished run's order answers the call at once.
+ */
+const ordersApi = async ({ waitMs = 0 } = {}) => {
+  const store = memoryOAuthStore()
+  const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`agent:${hashApiKey(KEY)}`) } })
+  const runs: { status: 'running' | 'done' }[] = []
+  const seen = { calls: 0, looks: 0 }
+  let slowLook: Promise<void> | null = null
+  app.post('/api/v1/orders', (c) => {
+    seen.calls += 1
+    const done = runs.findIndex((run) => run.status === 'done')
+    if (done >= 0) return c.json({ order: done + 1 })
+    runs.push({ status: 'running' })
+    return c.json({ status: 'running' }, 202, { location: `/api/v1/runs/${runs.length}` })
+  })
+  app.get('/api/v1/runs/:n', async (c) => {
+    seen.looks += 1
+    await slowLook
+    return c.json({ status: runs[Number(c.req.param('n')) - 1]!.status })
+  })
+  const tool = mcpTool({ name: 'place_order', title: 'Place an order', description: 'Orders one thing.', input: z.object({ item: z.string() }), call: ({ item }) => ({ method: 'POST', path: '/api/v1/orders', body: { item } }), summarize: (json) => `order ${json.order}` })
+  mountA2A(app, { info: { name: 'Sample', description: 'One tool.', version: '1.0.0' }, skills: [{ tool, text: 'item', tags: ['orders'] }], callApi: inProcess(app), store, waitMs })
+  const call = async (method: string, params: unknown) => (await (await app.request('/a2a', rpc(method, params))).json()).result
+  /** Holds every look at a run until the returned function is called. */
+  const holdLooks = () => {
+    let release = () => {}
+    slowLook = new Promise((resolve) => (release = resolve))
+    return () => {
+      slowLook = null
+      release()
+    }
+  }
+  return { app, store, runs, seen, call, holdLooks }
 }
 
 const rpc = (method: string, params: unknown, { key = KEY, version = '1.0' as string | null } = {}) => ({
@@ -95,6 +134,55 @@ describe('A2A', () => {
     const task = (await (await app.request('/a2a', rpc('SendMessage', send('split a bill')))).json()).result.task
     expect(task.status.state).toBe('TASK_STATE_WORKING')
     expect((await (await app.request('/a2a', rpc('GetTask', { id: task.id }))).json()).result.status.state).toBe('TASK_STATE_COMPLETED')
+  })
+
+  it('polls a slow call\'s run on GetTask and never calls a tool with side effects again while it works', async () => {
+    const { runs, seen, call } = await ordersApi()
+    const task = (await call('SendMessage', send('a lamp'))).task
+    expect(task.status.state).toBe('TASK_STATE_WORKING')
+    expect((await call('GetTask', { id: task.id })).status.state).toBe('TASK_STATE_WORKING')
+    expect((await call('GetTask', { id: task.id })).status.state).toBe('TASK_STATE_WORKING')
+    expect({ calls: seen.calls, runs: runs.length }).toEqual({ calls: 1, runs: 1 })
+    runs[0]!.status = 'done'
+    const done = await call('GetTask', { id: task.id })
+    expect(done.status.state).toBe('TASK_STATE_COMPLETED')
+    expect(done.artifacts[0].parts[0].text).toBe('order 1')
+    // One more call reads the finished order; no second order was placed
+    expect({ calls: seen.calls, runs: runs.length }).toEqual({ calls: 2, runs: 1 })
+  })
+
+  it('finishes a run that ends inside the wait with one more call, not a new run', async () => {
+    const { runs, seen, call, holdLooks } = await ordersApi({ waitMs: 10_000 })
+    const release = holdLooks()
+    const sent = call('SendMessage', send('a lamp'))
+    while (!seen.looks) await new Promise((resolve) => setTimeout(resolve, 1))
+    runs[0]!.status = 'done'
+    release()
+    expect((await sent).task.status.state).toBe('TASK_STATE_COMPLETED')
+    expect({ calls: seen.calls, runs: runs.length }).toEqual({ calls: 2, runs: 1 })
+  })
+
+  it('keeps a canceled task canceled when a GetTask in flight finds its run done', async () => {
+    const { runs, seen, call, holdLooks } = await ordersApi()
+    const task = (await call('SendMessage', send('a lamp'))).task
+    const release = holdLooks()
+    const looksBefore = seen.looks
+    const looking = call('GetTask', { id: task.id })
+    while (seen.looks === looksBefore) await new Promise((resolve) => setTimeout(resolve, 1))
+    expect((await call('CancelTask', { id: task.id })).status.state).toBe('TASK_STATE_CANCELED')
+    runs[0]!.status = 'done'
+    release()
+    expect((await looking).status.state).toBe('TASK_STATE_CANCELED')
+    expect((await call('GetTask', { id: task.id })).status.state).toBe('TASK_STATE_CANCELED')
+  })
+
+  it('still finishes a working task stored by 1.29.0, which kept no run, by calling its tool again', async () => {
+    const { app, store } = await sampleApi()
+    const task = { id: 'task-old', contextId: 'ctx-old', status: { state: 'TASK_STATE_WORKING', timestamp: '2026-11-20T10:00:00.000Z' }, metadata: { skill: 'explore_idea' } }
+    await store.put('a2a-task', task.id, { owner: 'key:agent', task, skill: 'explore_idea', args: { idea: 'split a bill', limit: 8 }, created: Date.now() }, Math.floor(Date.now() / 1000) + 3600)
+    const done = (await (await app.request('/a2a', rpc('GetTask', { id: task.id }))).json()).result
+    expect(done.status.state).toBe('TASK_STATE_COMPLETED')
+    expect(done.artifacts[0].parts[0].text).toBe('"split a bill": Splitwise')
   })
 
   it('speaks JSON-RPC errors for versions, methods and what it does not do', async () => {
