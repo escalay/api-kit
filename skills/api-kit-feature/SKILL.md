@@ -1,6 +1,6 @@
 ---
 name: api-kit-feature
-description: Use when adding a feature (a resource with routes, data and MCP tools) to an API built on the Escalay api-kit, or reshaping existing routes into the kit's feature folder. Covers schema, repo, routes, handlers, tools and the feature's test.
+description: Use when adding a feature (a resource with routes, data and MCP tools) to an API built on the Escalay api-kit, making a feature one the owner can switch off, or reshaping existing routes into the kit's feature folder. Covers kit feature (and --switch), schema, repo, routes, handlers, tools, the feature switch and the feature's test.
 ---
 
 # Add a feature the kit's way
@@ -12,6 +12,11 @@ A feature is one folder, `src/features/<name>/`, with one shape. The kit's `boar
 
 1. `npx @escalay/kit feature <plural-name>` in the app (`reading-lists`, kebab-case, plural).
    It makes the folder and lists the feature in `src/features/index.ts`. Done when `pnpm test` still passes.
+   A feature the app can work without (sending, webhooks, a report) takes `--switch`: it is also listed in
+   `src/features/catalog.ts` (write there what switching it off stops) and named in its `index.ts` (`switch`), so
+   `src/app.ts` registers it through `gated`: every route it adds answers `403 feature_disabled` while the owner has
+   it off, and its tools say which switch they belong to. Background work asks `isOn` (`src/kit/switches/README.md`).
+   Never a switch for what the app cannot run without (sign-in, its main data).
 2. Fill in the files, in this order:
 
 | File | Holds | Rule |
