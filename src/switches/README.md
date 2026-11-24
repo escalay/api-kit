@@ -121,7 +121,8 @@ A 403 for a switched-off feature:
   leaves the app passes `fresh: true`.
 - `PATCH` answers 409 when `FEATURES_OFF` locks the feature, when no provider can be written, or when a provider
   before the writable one decides it for that scope ("managed in posthog: change it there").
-- Every switch the API makes goes to `onSwitch`: log it as an event.
+- Every switch the API makes goes to `onSwitch`: log it as an event. It is told once the switch is stored, and a hook
+  that throws is logged, never answered: the switch stays made.
 - What a feature waits on outside the switches (a setting turned off, a missing binding) is the app's `unavailable`
   hook: `switches({ …, unavailable: async (context) => ({ extract: 'Model calls are off, so no fields are read.' }) })`.
   The list says it for a feature that is on (and for the features that need it) and the tool's line reads "on, but

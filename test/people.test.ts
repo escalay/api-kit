@@ -221,6 +221,23 @@ describe('recovering with a session still open, and hooks that fail', () => {
     expect(claimed).toMatchObject({ mode: 'recover', enrolment: expect.any(String) })
     expect(made).toMatchObject({ status: 200, body: { signedIn: true, passkeys: 2 } })
   })
+
+  it('changes the team when the app\'s hook throws, and logs the throw', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const db = await testDb()
+      const keys = parseApiKeys(`owner-key:${hashApiKey(KEY)}`)
+      const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [PEOPLE_TAG], auth: { realm: 'sample', keys, open: [...PEOPLE_OPEN_PATHS] } })
+      await registerPeople(app, { db, rpName: 'Sample', fixedKeys: [...keys.values()], onTeamChange: () => { throw new Error('the log is down') } })
+      const asKey = (path: string, method: string, body?: unknown) => app.request(`${ORIGIN}${path}`, { method, headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) })
+      expect((await asKey('/api/team', 'POST', { email: 'ana@example.com' })).status).toBe(201)
+      const [ana] = (await (await asKey('/api/team', 'GET')).json()).people
+      expect((await asKey(`/api/team/people/${ana.id}`, 'PATCH', { role: 'owner' })).status).toBe(200)
+      expect(logged.mock.calls.map(([line]) => line)).toEqual(['onTeamChange failed: the log is down', 'onTeamChange failed: the log is down'])
+    } finally {
+      logged.mockRestore()
+    }
+  })
 })
 
 describe('passkeys and the session', () => {

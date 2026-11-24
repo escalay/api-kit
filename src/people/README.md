@@ -71,6 +71,7 @@ CI: claim → `register(options, origin)` → verify → `login(options, origin)
 - `onTeamChange` hears each change to the team (`{ who, from, to, by, notify }`: an email or `@domain`, the role before and
   after, null when off the team; `notify`, for a person just added, is false when the caller asked that they not be told);
   an unchanged role or a domain already listed is not a change. Log it with the app's events, and send any invite from it.
+  It is told once the change is made, and a hook that throws is logged, never answered: the change stays made.
 - `onPasskeyChange` hears each passkey added or removed (`{ action, who, id, name, by, via }`: `who` is the email it
   belongs to, `name` the device and browser it was made in unless its person named it, `via`, for one added, how its
   maker got in: `session`, or an enrolment from `claim` or `recovery`). It is told once the passkey and the session

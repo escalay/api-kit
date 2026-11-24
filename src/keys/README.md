@@ -29,4 +29,6 @@ await registerKeys(app, { db, fixedKeys, keyPrefix: 'pb' })
   another, and neither can an OAuth token, so a token's expiry still bounds what an approved agent can do.
 - A key is shown once, in the answer that makes it. Names are unique, and a deployment key's name is taken.
 - `onKeyChange` hears each key made or deleted (`{ id, name, action, by }`, never the value): log it with the app's events.
+  It is told once the key is stored or gone, and a hook that throws is logged, never answered: a made key is still shown
+  (once) with its 201.
 - Standard: `docs/STANDARD.md` §7 (auth).

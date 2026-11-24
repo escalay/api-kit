@@ -33,13 +33,13 @@ const CATALOG = defineFeatures({
 })
 
 /** A sample app: one route per feature, each added through `gated`, and the switches' own routes. */
-const setup = async ({ providers, off }: { providers?: (db: Awaited<ReturnType<typeof testDb>>) => FlagProvider[]; off?: string[] } = {}) => {
+const setup = async ({ providers, off, onSwitch }: { providers?: (db: Awaited<ReturnType<typeof testDb>>) => FlagProvider[]; off?: string[]; onSwitch?: () => void } = {}) => {
   const db = await testDb()
   const flags = switches({ catalog: CATALOG, providers: providers?.(db) ?? [databaseProvider(db)], off })
   const keys = parseApiKeys(`owner:${hashApiKey(OWNER)},laptop:${hashApiKey(LAPTOP)},ci:${hashApiKey(CI)}`)
   const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [SWITCHES_TAG, { name: 'Work', description: 'The features.' }], auth: { realm: 'sample', keys } })
   const switched: unknown[] = []
-  await flags.register(app, { isOwner: (c) => (c.get('caller' as never) as { name?: string }).name === 'owner', onSwitch: (change) => void switched.push(change) })
+  await flags.register(app, { isOwner: (c) => (c.get('caller' as never) as { name?: string }).name === 'owner', onSwitch: onSwitch ?? ((change) => void switched.push(change)) })
   for (const key of flags.keys as (keyof typeof CATALOG)[]) {
     const route = createRoute({
       method: 'post',
@@ -111,6 +111,18 @@ describe('switches', () => {
     await flags.set({ key: 'webhooks', on: false, by: 'owner' })
     expect((await call()).status).toBe(403)
     expect(counted).toBe(1)
+  })
+
+  it('switches even when the app\'s hook throws, and logs the throw', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { flip, flags } = await setup({ onSwitch: () => { throw new Error('the log is down') } })
+      expect((await flip('webhooks', { on: false })).status).toBe(200)
+      expect(await flags.isOn('webhooks')).toBe(false)
+      expect(logged.mock.calls.map(([line]) => line)).toEqual(['onSwitch failed: the log is down'])
+    } finally {
+      logged.mockRestore()
+    }
   })
 
   it('lets only the owner switch', async () => {

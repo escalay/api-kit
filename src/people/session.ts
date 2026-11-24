@@ -84,20 +84,8 @@ export const enrolmentPurposeOf = (row: { challenge: string }): EnrolmentPurpose
 /** What `setup` is told when a recovery's enrolment made its passkey: whose, and which passkey. */
 export type RecoveryListener = (done: { who: string; passkey: { id: string; name: string } }, c: Context) => void | Promise<void>
 
-/**
- * tellApp calls one of the app's hooks after the change it reports is made; a throw is logged, never answered, so
- * a failing log can't undo a passkey or spend a recovery for nothing.
- *
- * @example
- * await tellApp('onRecovery', () => onRecovery?.({ stage: 'started', who }, c))
- */
-export const tellApp = async (hook: string, call: () => void | Promise<void>) => {
-  try {
-    await call()
-  } catch (error) {
-    console.error(`${hook} failed: ${error instanceof Error ? error.message : String(error)}`)
-  }
-}
+/** Moved to core, so every part's hooks are told the same way; still exported here for older imports. */
+export { tellApp } from '../core/hooks.js'
 
 /** Per app, the setup part's listener for a finished recovery: `registerSetup` sets it, the people routes call it. */
 export const recoveryListeners = new WeakMap<object, RecoveryListener>()

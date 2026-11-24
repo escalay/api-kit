@@ -3,6 +3,7 @@ import type { RouteHandler } from '@hono/zod-openapi'
 import type { Context } from 'hono'
 import { mintApiKey, type Caller } from '../core/auth.js'
 import { linksOf, originOf } from '../core/hal.js'
+import { tellApp } from '../core/hooks.js'
 import { newId } from '../core/ids.js'
 import { ProblemError } from '../core/problem.js'
 import type { KeysRepo } from './repo.js'
@@ -58,7 +59,8 @@ export const keyHandlers = (repo: KeysRepo, { path, mePath, fixedKeys, keyPrefix
     const { key, hash } = mintApiKey(keyPrefix)
     const row: KeyRow = { id: newId('key'), name, hash, start: key.slice(0, keyPrefix.length + 5), createdAt: new Date().toISOString(), createdBy, lastUsedAt: null }
     await repo.create(row)
-    await onKeyChange?.({ id: row.id, name, action: 'created', by: createdBy }, c)
+    // The key is stored and shown once: a hook that throws must not hide it behind a 500
+    await tellApp('onKeyChange', () => onKeyChange?.({ id: row.id, name, action: 'created', by: createdBy }, c))
     return c.json({ ...cardOf(originOf(c), row), key }, 201, { location: `${path}/${row.id}`, ...NO_STORE })
   }
   const remove: RouteHandler<KeyRoutes['remove']> = async (c) => {
@@ -67,7 +69,7 @@ export const keyHandlers = (repo: KeysRepo, { path, mePath, fixedKeys, keyPrefix
     const row = await repo.get(id)
     if (!row) throw missing(id)
     await repo.remove(id)
-    await onKeyChange?.({ id, name: row.name, action: 'deleted', by }, c)
+    await tellApp('onKeyChange', () => onKeyChange?.({ id, name: row.name, action: 'deleted', by }, c))
     return c.body(null, 204)
   }
   return { list, get, me, create, remove }
