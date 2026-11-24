@@ -48,7 +48,7 @@ await registerKeys(app, { db, fixedKeys, keyPrefix: 'pb', onKeyChange: (change, 
 
 | File | What |
 |---|---|
-| `schema.ts` | the `api_keys` table and `KEYS_MIGRATIONS` |
+| `schema.ts` | the `api_keys` table (`apiKeys`) and `KEYS_MIGRATIONS` |
 | `repo.ts` | `keysRepo`: list, get, make, revoke, and `nameOf(hash)`, which notes a use at most once an hour |
 | `routes.ts` | `keyRoutes`: `GET/POST {path}`, `GET/DELETE {path}/{id}`, `GET {mePath}`; `keySchemaOf` |
 | `handlers.ts` | `keyHandlers`, and `holderOf`: who may make or revoke keys |

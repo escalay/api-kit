@@ -67,7 +67,7 @@ check: async () => ((await flags.isOn('sending')) ? checkSending() : { ok: false
 
 | File | What |
 |---|---|
-| `schema.ts` | `setup_state` (one row once claimed: when, by whom, the hash of the code used) and `SETUP_MIGRATIONS` |
+| `schema.ts` | `setup_state` (`setupState`: one row once claimed: when, by whom, the hash of the code used) and `SETUP_MIGRATIONS` |
 | `routes.ts` | `setupRoutes`: status, claim, checklist |
 | `index.ts` | `registerSetup`, `SetupStep`, `Recovery`, `SETUP_TAG`, `SETUP_OPEN_PATHS` |
 

@@ -28,7 +28,8 @@ apps copy in and own. Read the repository's `AGENTS.md` and `docs/STANDARD.md` f
 type, default, what it does) · **Exports** · **Flows** (a Mermaid diagram for any flow of more than two steps) ·
 **Rules** (with the `Standard:` line, equal to the registry's `meta.standard`) · **Failure modes** · **Limits**
 (Node only, Workers, one writer, ceilings) · **Tests** · **Upgrading** (a link to its section of
-`docs/upgrading.md`; history never inline). Every option and hook is in it.
+`docs/upgrading.md`; history never inline). Every option and hook is in it, and every value the part exports
+(the test fails on one it never names).
 
 ## 3. The registry item
 

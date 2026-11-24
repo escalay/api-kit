@@ -77,7 +77,7 @@ The generated placeholders:
 | File | What |
 |---|---|
 | `guide.ts` | `serveGuide` (from `dir`, or `files` on Workers), `guideFiles(dir)`, `guideModuleSource(files)` (the text `kit guide` writes; an app's test compares its `guide.gen.ts` to it), `fillTemplate`, `fullOrder`, `MARKDOWN` |
-| `reference.ts` | the generated parts above (`generatedVars`, `endpointsMarkdown`, `endpointsByTag`, `toolsMarkdown`, `cliMarkdown`, `resourcesMarkdown`, `playbooksMarkdown`, `unblockMarkdown`), `brandVars`, `GENERATED_ROOTS` |
+| `reference.ts` | the generated parts above (`generatedVars`, `endpointsMarkdown`, `endpointsByTag`, `toolsMarkdown`, `cliMarkdown`, `resourcesMarkdown`, `playbooksMarkdown`, `unblockMarkdown`), `brandVars`, `GENERATED_ROOTS`; the pieces they are made of: `operationLine` (one operation's line), `returnsOf` (its success body's top fields), `toolRoute` (the operation a tool calls), `playbookSummary` (a playbook's title and first paragraph), `firstSentence` |
 
 ## Flows
 

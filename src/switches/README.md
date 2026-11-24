@@ -128,7 +128,7 @@ switches({ catalog, providers, license: licenseOf({ key: env.LICENSE_KEY, public
 |---|---|
 | `catalog.ts` | `defineFeatures` (checks the catalog at boot), `needsInOrder`, `dependentsOf`, `keyOf` (old names too), `parseFeatureList` |
 | `providers.ts` | `FlagProvider` (OpenFeature-shaped: a targeting key, a value, a reason), `contextOf` (the caller as a context), `contextOfScope`, `isScope`, `memoryProvider`, `fromSdk` |
-| `schema.ts` | the `feature_switches` table (key, scope, on, changed_by, changed_at) and `SWITCH_MIGRATIONS` |
+| `schema.ts` | the `feature_switches` table (`featureSwitches`: key, scope, on, changed_by, changed_at) and `SWITCH_MIGRATIONS` |
 | `repo.ts` | `switchesRepo`, `databaseProvider` (the table as a provider, read whole and kept 5 s) |
 | `routes.ts` | `switchRoutes`: `GET {path}`, `GET` and `PATCH {path}/{key}` |
 | `tools.ts` | `switchTools`: `list_features`, `switch_feature` |

@@ -46,6 +46,26 @@ describe('docs/PARTS.md, the map of the parts', () => {
   })
 })
 
+/** Every STANDARD section a text points at (`§7`, both ends of `§1–3`), leaving other documents' `§3.3` alone. */
+const standardRefs = (text) => [...text.matchAll(/§(\d+)(?:–(\d+))?(?![.\d])/g)].flatMap(([, from, to]) => (to ? [from, to] : [from]).map(Number))
+const outOfRange = (text, count) => standardRefs(text).filter((number) => number < 1 || number > count)
+
+describe('docs/STANDARD.md’s section numbers', () => {
+  it('run 1, 2, 3… with none missing or repeated, so a §N never moves', () => {
+    expect(sections).toEqual(sections.map((_, index) => index + 1))
+  })
+
+  it('bound every §N in the skills, cli.mjs, README.md and the app template', () => {
+    const skills = readdirSync(join(root, 'skills')).map((name) => `skills/${name}/SKILL.md`)
+    for (const path of [...skills, 'cli.mjs', 'README.md', 'templates/app/AGENTS.md']) expect(outOfRange(read(path), sections.length), path).toEqual([])
+  })
+
+  it('catch a reference past the last section, at either end of a range', () => {
+    expect(standardRefs('§7 and §1–3, RFC 9728 §3.3')).toEqual([7, 1, 3])
+    expect(outOfRange('§7, §24 and §1–30', 23)).toEqual([24, 30])
+  })
+})
+
 describe('the root README', () => {
   it('names every part in its parts table and links docs/PARTS.md', () => {
     const readme = read('README.md')

@@ -56,8 +56,8 @@ const db = await testDb()                                               // tests
 
 | File | What |
 |---|---|
-| `index.ts` | `openDb`, `migrate`, `testDb`, `Db` |
-| `guards.ts` | `dbGuardStore`, its `kit_guards` table and `GUARD_MIGRATIONS` |
+| `index.ts` | `openDb`, `migrate`, `testDb`, `Db`; `nodeSqlite(sqlite)`, the Drizzle database `openDb` makes from a `DatabaseSync` |
+| `guards.ts` | `dbGuardStore`, its `kit_guards` table (`kitGuards`) and `GUARD_MIGRATIONS` |
 
 ## Flows
 

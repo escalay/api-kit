@@ -69,7 +69,7 @@ GET    /api/team · POST · PATCH|DELETE …/people/{id} · DELETE …/domains/{
 
 | File | What |
 |---|---|
-| `schema.ts` | `people`, `team_domains`, `passkeys`, `sessions` (indexed by person), `webauthn_challenges`, and `PEOPLE_MIGRATIONS` |
+| `schema.ts` | `people`, `team_domains` (`teamDomains`), `passkeys`, `sessions` (indexed by person), `webauthn_challenges`, and `PEOPLE_MIGRATIONS` |
 | `repo.ts` | `peopleRepo`: the only queries (people, domains, passkeys, sessions, challenges, `sweep`) |
 | `session.ts` | `startSession`, `endSession`, `personOf`, `sessionOf` (for `auth.session`), `roleOf` (for `access.roleOf`), `isAdmin`, `startEnrolment` (with its purpose: `claim` or `recovery`), `SESSION_DAYS` |
 | `routes.ts` | `peopleRoutes`: the session, the passkey ceremonies, your passkeys, the team; `PersonSchema` |

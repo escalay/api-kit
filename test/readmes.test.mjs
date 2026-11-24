@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { README_SHAPE, sectionsOf } from '../scripts/parts.mjs'
 
@@ -68,6 +68,18 @@ describe('docs/upgrading.md', () => {
   })
 })
 
+/** The values an app can import from the parts a README covers: each entry part's entry file, else what `index.ts` re-exports (types aside). */
+const exportedBy = async (readme) => {
+  const names = new Set()
+  for (const item of registry.items.filter((one) => one.files.some((file) => file.path === readme))) {
+    const code = item.files.map((file) => file.path).filter((path) => /\.tsx?$/.test(path) && dirname(path) === dirname(readme))
+    const index = code.find((path) => path.endsWith('/index.ts'))
+    const entries = item.meta?.entry ? [index ?? code[0]] : index ? [index] : code
+    for (const entry of entries) for (const name of Object.keys(await import(join(root, entry)))) names.add(name)
+  }
+  return [...names]
+}
+
 describe.each(folders)('src/%s/README.md has the one README shape', (folder) => {
   const text = read(`src/${folder}/README.md`)
   const sections = sectionsIn(text)
@@ -111,6 +123,11 @@ describe.each(folders)('src/%s/README.md has the one README shape', (folder) => 
   it('names the STANDARD sections the registry gives its parts', () => {
     const numbers = [...new Set(items.flatMap((item) => item.meta.standard))].sort((a, b) => a - b)
     expect(sections.get('Rules')).toContain(`Standard: \`docs/STANDARD.md\` ${sectionsOf(numbers)}`)
+  })
+
+  it('names every value its parts export', async () => {
+    const unnamed = (await exportedBy(`src/${folder}/README.md`)).filter((name) => !new RegExp(`(?<![\\w$])${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(text))
+    expect(unnamed, 'add each to Exports').toEqual([])
   })
 
   it('says something under Limits and Tests', () => {
