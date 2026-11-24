@@ -242,6 +242,12 @@ export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, stor
  */
 export type RateLimitOptions = { policy: string; limit: number; windowSeconds: number; store?: GuardStore; address?: AddressTrust; key?: (c: Context) => string | null }
 
+/**
+ * At most `limit` calls per `windowSeconds` per caller on the routes it guards (the rules are at the top of this file).
+ *
+ * @example
+ * app.use('/api/v1/products/:id/gaps', rateLimit({ policy: 'paid', limit: 120, windowSeconds: 3600, store: await dbGuardStore(db) }))
+ */
 export const rateLimit = ({ policy, limit, windowSeconds, store = memoryGuardStore(), address, key }: RateLimitOptions): MiddlewareHandler =>
   async (c, next) => {
     const who = key ? key(c) : callerOf(c, address)
