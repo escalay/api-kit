@@ -146,15 +146,27 @@ every first token in `onGrant`:
   (`resources`, the issuer's origin, the canonical form) when the client named none; a client that named one keeps
   it, the same one again is fine, and any other, or one not issued for, is a 400 page (`invalid_target`) with the
   ticket still live. The audience the app chose is the server's choice: a `resource` the client sends later at the
-  token endpoint is not held against it, and refresh keeps it. Without `resource`, the ticket's audience. It returns the 302 to the client (`code`, `state`, `iss`, or
-  `access_denied`) or a 400/403 page. A blank `approver` is a 400 page, and the ticket stays live.
+  token endpoint is not held against it, and refresh keeps it. Without `resource`, the ticket's audience. It returns
+  the 302 to the client (`code`, `state`, `iss`, or `access_denied`) or a 400/403 page. A blank `approver` is a 400 page, and the ticket stays live.
 - `onGrant(grant, c)` hears the first token of every grant: `kind` (`code`, `device` or `claim`), `grant`, `client`
   (`id`, `name`), `approver`, `scopes`, `resource` (absent on a grant from before audiences) and `data`. It runs after
   the kit's own checks (client, redirect and verifier for a code; the owner's answer for a device; the collected claim
   token for a claim), once per grant however many polls race. false withdraws it: `invalid_grant` ("This sign-in was
-  withdrawn: start again"), the code or device code spent, a claim's grant revoked. It is not asked on refresh or
-  jwt-bearer: judge later requests in `accepts`. An app that keeps its own rows per grant makes them here and refuses
-  a token whose grant has none.
+  withdrawn: start again"), the code or device code spent, the grant ended (`onRevoke` hears `withdrawn`). It is not
+  asked on refresh or jwt-bearer: judge later requests in `accepts`. An app that keeps its own rows per grant makes
+  them here and refuses a token whose grant has none.
+- `onRevoke(revoked)` hears every grant that ends, after the kit has ended it: `grant`, `client` and `reason`.
+  `revoked`: `revokeGrant` (no `client`: the kit keeps no grant-to-client index) or a refresh token at `/oauth/revoke`.
+  `replayed`: a used code or refresh token sent again, its row kept or not. `withdrawn`: `onGrant` said no.
+  `client_revoked`: `revokeClient`, naming the client and no grant, since it ends every grant of the client. Revoking
+  an access token alone ends no grant and is not told. It is told at least once: a grant ended again (a code sent a
+  third time) is told again, so the app's handler is idempotent. A throw is logged (`onRevoke failed: …`), never
+  answered: the revoke has happened and the request answers as it would have.
+
+**Mirror grants with `onGrant` and `onRevoke`.** An app that lists who holds access (a space's members, their agents)
+makes its row when `onGrant` says yes and drops it when `onRevoke` names its grant, or every grant of a client on
+`client_revoked`. Its `accepts` refuses a token whose grant has no row, so a row the app dropped stops the token on its
+next request, whatever the kit's markers say.
 
 An app that approves by an invite typed on its own page (`test/oauth.test.ts` runs it as written):
 
@@ -394,7 +406,7 @@ a write there could reset a successor already used.
 | File | What |
 |---|---|
 | `index.ts` | `createOAuth` (the server; `revokeClient` is the owner's kill switch; `rootOf`, `resourceOf` and `mcpPath` as it reads them; `ticketOf`, `answeredOf` and `complete` for the app's own sign-in page), `generateOAuthKey` (a new signing key) |
-| `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`; the ticket cookie and the same-origin rule |
+| `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`, `SignInRevoked`; the ticket cookie and the same-origin rule |
 | `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take`, `markUsed` and `trim`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start, then on a write at most once a minute), `memoryOAuthStore` |
 | `schema.ts` | the `oauth` table, its `expires_at` index, and `OAUTH_MIGRATIONS` |
 
@@ -534,7 +546,7 @@ Nothing else changes until the app passes `publicOrigin` or `limits`.
 
 ## Upgrading to sharing
 
-New, off unless set: `ticketTtl` (default 600, as before), `complete`'s `resource`. Defaults that change when an app takes this version:
+New, off unless set: `ticketTtl` (default 600, as before), `complete`'s `resource`, `onRevoke`. Defaults that change when an app takes this version:
 
 - **Every row anyone may write without auth is capped** (before, only registrations and consent tickets): agent
   registrations and their claim tokens under `maxUnusedClients`, claim attempts and device codes under
@@ -543,6 +555,8 @@ New, off unless set: `ticketTtl` (default 600, as before), `complete`'s `resourc
 - **`OAUTH_MIGRATIONS` has a step 2**, an index on `expires_at`: `dbOAuthStore` applies it when made; a Workers app
   runs `pnpm migrations` (`scripts/migrations.ts`) to write its D1 file. It is `create index if not exists`, so a
   database `migrate()` already brought up takes the file cleanly.
+- A code or device grant `onGrant` withdraws now gets a revoke marker too, as a withdrawn claim did: nothing was
+  issued for it, so nothing else changes.
 - **A refresh leaves no used row behind** (before, each kept 30 days): refresh tokens issued from now on name their
   grant and generation, and a grant keeps one `refresh-family` row. Replays are found as before, 1.29.0 tokens
   included. An app's own test that reads a used refresh row by its hash finds none once the grace has passed. With `reuseGraceSeconds` set, a retry

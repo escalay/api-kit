@@ -40,10 +40,10 @@ import { mountedOf, type AgentBrand } from '../core/discovery.js'
 import { addressOf, type AddressTrust, type GuardStore } from '../core/guards.js'
 import { originOf } from '../core/hal.js'
 import { problemResponse } from '../core/problem.js'
-import { arrivalOf, LOOPBACK, nonceOf, returnOf, sameOrigin, ticketCookie, type SignInAsk, type SignInDecision, type SignInGrant } from './approval.js'
+import { arrivalOf, LOOPBACK, nonceOf, returnOf, sameOrigin, ticketCookie, type SignInAsk, type SignInDecision, type SignInGrant, type SignInRevoked } from './approval.js'
 import type { OAuthStore } from './store.js'
 
-export type { SignInAsk, SignInDecision, SignInGrant } from './approval.js'
+export type { SignInAsk, SignInDecision, SignInGrant, SignInRevoked } from './approval.js'
 export { OAUTH_MIGRATIONS, oauthKeys } from './schema.js'
 export { dbOAuthStore, memoryOAuthStore, type OAuthStore } from './store.js'
 
@@ -106,6 +106,15 @@ export type OAuthConfig = {
    * onGrant: async (grant) => grant.kind !== 'code' || invites.spend(grant.data?.invite, grant.grant)
    */
   onGrant?: (grant: SignInGrant, c: Context) => Promise<boolean>
+  /**
+   * Hears every grant that ends, and why (`SignInRevoked`), after the kit has ended it: where an app drops the row it
+   * made in `onGrant`. At least once: a grant ended again (a code sent a third time) is told again. A throw is logged,
+   * never answered, so it can't undo or fail a revoke.
+   *
+   * @example
+   * onRevoke: async ({ grant, reason }) => grant && members.dropGrant(grant, reason)
+   */
+  onRevoke?: (revoked: SignInRevoked) => void | Promise<void>
   /** The brand on the kit's own pages; default the app's (`createAgentApi({ brand })`). */
   brand?: AgentBrand
   /** Emails allowed to claim an agent registration; empty means whoever `owner` lets in. */
@@ -332,8 +341,11 @@ export const createOAuth = (config: OAuthConfig) => {
     return refresh
   }
 
-  /** Whether a family has moved past this generation: a later token was issued, so this one was used. */
-  const isBehind = async ({ family, generation }: { family: string; generation: number }) => Number((await store.get('refresh-family', family))?.generation ?? -1) > generation
+  /** A family's row when it has moved past this generation: a later token was issued, so this one was used. */
+  const movedPast = async ({ family, generation }: { family: string; generation: number }) => {
+    const row = await store.get('refresh-family', family)
+    return row && Number(row.generation) > generation ? row : null
+  }
 
   /** The store's own `markUsed`, or a read then a write: safe only one request at a time. */
   const markUsed = (kind: string, id: string, keepUntil?: number) =>
@@ -393,8 +405,28 @@ export const createOAuth = (config: OAuthConfig) => {
     return counted.used > limit ? Math.max(1, Math.ceil((counted.start + window * 1000 - at) / 1000)) : null
   }
 
-  /** Ends one approval at once: its access tokens fail `verify`, its refresh tokens are refused. */
-  const revokeGrant = (grant: string) => store.put('revoked-family', grant, {}, now() + REVOKED_TTL)
+  /** Tells the app a grant ended; a throw is logged, never answered: the grant has ended either way. */
+  const tellRevoked = async (revoked: SignInRevoked) => {
+    try {
+      await config.onRevoke?.(revoked)
+    } catch (error) {
+      console.error(`onRevoke failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /** Ends one approval at once (its access tokens fail `verify`, its refresh tokens are refused), then tells the app why. */
+  const endGrant = async (grant: string, reason: SignInRevoked['reason'], client?: string) => {
+    await store.put('revoked-family', grant, {}, now() + REVOKED_TTL)
+    await tellRevoked({ grant, ...(client === undefined ? {} : { client }), reason })
+  }
+
+  /**
+   * Ends one approval at once: its access tokens fail `verify`, its refresh tokens are refused; `onRevoke` hears it.
+   *
+   * @example
+   * await oauth.revokeGrant(caller.grant)
+   */
+  const revokeGrant = (grant: string) => endGrant(grant, 'revoked')
 
   /** The app this server was mounted on, for its brand. */
   let mounted: object | undefined
@@ -1038,7 +1070,11 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const heard = async (kind: SignInGrant['kind'], issued: Grant, data?: unknown) =>
         !config.onGrant ||
         (await config.onGrant({ kind, grant: issued.grant, client: { id: issued.client, name: issued.name }, approver: issued.owner, scopes: issued.scopes, ...(issued.audience ? { resource: issued.audience } : {}), ...(data ? { data: data as Record<string, string> } : {}) }, c))
-      const withdrawn = () => oauthError(c, 400, 'invalid_grant', 'This sign-in was withdrawn: start again.')
+      /** onGrant said no: the grant ends before any token, and the app hears it did. */
+      const withdrawn = async (issued: Grant) => {
+        await endGrant(issued.grant, 'withdrawn', issued.client)
+        return oauthError(c, 400, 'invalid_grant', 'This sign-in was withdrawn: start again.')
+      }
       switch (body.grant_type) {
         case 'authorization_code': {
           const key = sha(body.code ?? '')
@@ -1055,7 +1091,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           // Used once, even by a failed exchange, and kept until it expires: a second valid request for it ends the
           // grant the first one got, since either could be the thief (OAuth 2.1 §4.1.3); a wrong verifier ends nothing
           if (!(await markUsed('code', key))) {
-            if (verified && sameRequest) await revokeGrant(grant)
+            if (verified && sameRequest) await endGrant(grant, 'replayed', String(row.client))
             return oauthError(c, 400, 'invalid_grant', 'This code is used, expired or unknown.')
           }
           if (!sameRequest) return oauthError(c, 400, 'invalid_grant', 'client_id or redirect_uri differ from the authorization request.')
@@ -1063,7 +1099,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (await store.get('revoked-client', String(row.client))) return oauthError(c, 400, 'invalid_grant', 'This client was revoked: register again.')
           const issued = { client: String(row.client), name: String(row.name), owner: String(row.owner), scopes: row.scopes as string[], grant, ...boundOf(row) }
           // The code is spent either way: a refusal issues nothing
-          if (!(await heard('code', issued, row.data))) return withdrawn()
+          if (!(await heard('code', issued, row.data))) return withdrawn(issued)
           await usedClient(issued.client)
           return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
         }
@@ -1075,8 +1111,9 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const alreadyUsed = () => oauthError(c, 400, 'invalid_grant', 'This refresh token was already used, so every refresh token from this sign-in is revoked: authorize again.')
           if (!held) {
             // No row: a token this server made, of a family that has moved past it, is a replay
-            if (made && (await isBehind(made))) {
-              await revokeGrant(made.family)
+            const family = made && (await movedPast(made))
+            if (family) {
+              await endGrant(made.family, 'replayed', String(family.client))
               return alreadyUsed()
             }
             return oauthError(c, 400, 'invalid_grant', 'This refresh token is expired, revoked or unknown: authorize again.')
@@ -1099,7 +1136,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
             const usedAt = Number((await store.get('refresh', key))?.usedAt ?? 0)
             if (reuseGrace > 0 && usedAt && now() - usedAt <= reuseGrace && !(await store.get('refresh', sha(successor)))?.used)
               return c.json({ ...(await issue(origin, issued)), refresh_token: successor }, 200, { 'cache-control': 'no-store' })
-            await revokeGrant(grant)
+            await endGrant(grant, 'replayed', issued.client)
             return alreadyUsed()
           }
           const access = await issue(origin, issued)
@@ -1131,10 +1168,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const issued = { client, name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant, ...boundOf(registration) }
           if (config.onGrant) {
             // Refused, the grant ends, so the agent's identity assertion buys nothing either; heard, jwt-bearer may follow
-            if (!(await heard('claim', issued))) {
-              await revokeGrant(grant)
-              return withdrawn()
-            }
+            if (!(await heard('claim', issued))) return withdrawn(issued)
             await store.put('registration', client, { ...registration, collected: true }, now() + REGISTRATION_TTL)
           }
           const assertion = await sign({ sub: client, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
@@ -1166,7 +1200,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (decision?.status === 'denied') return oauthError(c, 400, 'access_denied', 'The owner said no.')
           if (decision?.status === 'approved') {
             const issued = { client: String(record.client), name: String(record.name), owner: String(decision.owner), scopes: record.scopes as string[], grant: newGrant(), ...boundOf(record) }
-            if (!(await heard('device', issued))) return withdrawn()
+            if (!(await heard('device', issued))) return withdrawn(issued)
             await usedClient(issued.client)
             return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
           }
@@ -1203,8 +1237,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const value = body.token ?? ''
       const refresh = await store.get('refresh', sha(value))
       // Any token of a sign-in ends it, an earlier one too: this server knows its family by its MAC when it keeps no row
-      const family = refresh ? String(refresh.family ?? sha(value)) : generationOf(value)?.family
-      if (family) await revokeGrant(family)
+      const made = refresh ? null : generationOf(value)
+      const family = refresh ? String(refresh.family ?? sha(value)) : made?.family
+      const client = refresh ? refresh.client : made && (await store.get('refresh-family', made.family))?.client
+      if (family) await endGrant(family, 'revoked', typeof client === 'string' ? client : undefined)
       if (refresh) await store.delete('refresh', sha(value))
       const { publicKey } = await ready
       const { payload } = await jwtVerify(value, publicKey, { issuer: issuerOf(c), algorithms: ['ES256'] }).catch(() => ({ payload: null }))
@@ -1215,12 +1251,16 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
 
   /**
    * Revokes every token a client or agent registration holds and drops the registration (the owner's kill switch): a
-   * revoked client registers again and gets a new id.
+   * revoked client registers again and gets a new id. `onRevoke` hears it once, naming the client and no grant.
+   *
+   * @example
+   * await oauth.revokeClient(caller.client)
    */
   const revokeClient = async (clientId: string) => {
     await store.put('revoked-client', clientId, {}, now() + REVOKED_TTL)
     await store.delete('client', clientId)
     await store.delete('registration', clientId)
+    await tellRevoked({ client: clientId, reason: 'client_revoked' })
   }
 
   return { mount, verify, resourceMetadataFor, resourceOf, rootOf, issuerOf, mcpPath, revokeGrant, revokeClient, ticketOf, answeredOf, complete, authorizationServer, protectedResource, authMd }

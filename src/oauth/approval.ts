@@ -44,6 +44,13 @@ export type SignInGrant = {
   data?: Record<string, string>
 }
 
+/**
+ * What `onRevoke` hears when a grant ends: `revoked` (`revokeGrant`, or a refresh token at `/oauth/revoke`), `replayed`
+ * (a used code or refresh token sent again), `withdrawn` (`onGrant` said no), `client_revoked` (`revokeClient`: every
+ * grant of the client, none named). `client` is absent where the kit does not know it (`revokeGrant`).
+ */
+export type SignInRevoked = { grant?: string; client?: string; reason: 'revoked' | 'replayed' | 'withdrawn' | 'client_revoked' }
+
 /** Host names that are this machine: an http redirect may use only these. @example LOOPBACK.includes(url.hostname) */
 export const LOOPBACK = ['localhost', '127.0.0.1', '[::1]']
 const NONCE = /^[\w-]{32,64}$/

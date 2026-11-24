@@ -507,6 +507,63 @@ describe('OAuth callers: the client and the grant, not the name', () => {
     expect((await (await bearer(app, granted.identity_assertion)).json()).error).toBe('invalid_grant')
   })
 
+  it('tells onRevoke every way a grant ends: revoked, replayed, withdrawn, its client revoked', async () => {
+    const told: unknown[] = []
+    const { app, oauth } = await oauthApp(memoryOAuthStore(), {
+      onRevoke: async (revoked) => void told.push(revoked),
+      onGrant: async (grant) => grant.kind !== 'claim',
+    })
+    const grantOf = async (accessToken: string) => (await callerOf(app, accessToken)).grant as string
+    const heard = () => told.splice(0)
+
+    const byApi = await signedIn(app)
+    const apiGrant = await grantOf(byApi.tokens.access_token)
+    await oauth.revokeGrant(apiGrant)
+    expect(heard()).toEqual([{ grant: apiGrant, reason: 'revoked' }])
+
+    const byEndpoint = await signedIn(app)
+    const endpointGrant = await grantOf(byEndpoint.tokens.access_token)
+    await app.request('/oauth/revoke', form({ token: byEndpoint.tokens.refresh_token }))
+    expect(heard()).toEqual([{ grant: endpointGrant, client: byEndpoint.client_id, reason: 'revoked' }])
+
+    // A refresh token sent again, its row kept or gone
+    for (const replay of [0, 1]) {
+      const replayed = await signedIn(app)
+      const replayedGrant = await grantOf(replayed.tokens.access_token)
+      const rotated = await (await refreshWith(app, replayed.tokens.refresh_token)).json()
+      if (replay) await refreshWith(app, rotated.refresh_token)
+      await refreshWith(app, replay ? rotated.refresh_token : replayed.tokens.refresh_token)
+      expect(heard()).toEqual([{ grant: replayedGrant, client: replayed.client_id, reason: 'replayed' }])
+    }
+
+    const code = await approvedCode(app)
+    const first = await (await code.exchange()).json()
+    const codeGrant = await grantOf(first.access_token)
+    await code.exchange()
+    expect(heard()).toEqual([{ grant: codeGrant, client: code.client_id, reason: 'replayed' }])
+
+    // onGrant said no to a claim: its grant ends before any token
+    const { registration } = await claimed(app)
+    expect(heard()).toEqual([{ grant: expect.any(String), client: registration.registration_id, reason: 'withdrawn' }])
+
+    await oauth.revokeClient(code.client_id)
+    expect(heard()).toEqual([{ client: code.client_id, reason: 'client_revoked' }])
+  })
+
+  it('revokes, and answers as ever, when onRevoke throws', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { app, oauth } = await oauthApp(memoryOAuthStore(), { onRevoke: async () => { throw new Error('the log is down') } })
+    const { tokens } = await signedIn(app)
+    expect((await app.request('/oauth/revoke', form({ token: tokens.refresh_token }))).status).toBe(200)
+    expect((await callerWith(app, tokens.access_token)).status).toBe(401)
+    const other = await signedIn(app)
+    await refreshWith(app, other.tokens.refresh_token)
+    expect((await (await refreshWith(app, other.tokens.refresh_token)).json()).error).toBe('invalid_grant')
+    await expect(oauth.revokeClient(other.client_id)).resolves.toBeUndefined()
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining('onRevoke failed: the log is down'))
+    errors.mockRestore()
+  })
+
   it('uses a claimed registration’s id as the grant when it was claimed before grants', async () => {
     const store = memoryOAuthStore()
     const { app } = await oauthApp(store)
