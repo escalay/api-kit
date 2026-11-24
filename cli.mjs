@@ -18,9 +18,11 @@
  *                                             missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it);
  *                                             --keep records those edited files as kept in kit.json: a note while they stay so
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
- *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--yes]
+ *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--no-install] [--yes]
  *                                             a new app: features/, the kit in src/kit, tests; Node (server.ts, a
- *                                             container) and/or Workers (worker.ts, D1). It never asks; --yes is accepted
+ *                                             container) and/or Workers (worker.ts, D1); then pnpm install, format and
+ *                                             migrations, so its gate passes as made (--no-install leaves them to you).
+ *                                             It never asks; --yes is accepted
  *   kit feature <plural-name> [--app .] [--switch]
  *                                             a new feature folder (schema, repo, routes, handlers, tools), listed;
  *                                             --switch lists it in src/features/catalog.ts so an owner can switch it off
@@ -364,7 +366,8 @@ const scriptsFor = (runtime, preset) => {
   const gateOf = (...more) => ({
     lint: 'oxlint',
     format: 'oxfmt',
-    check: ['pnpm typecheck', 'pnpm lint', 'oxfmt --check', ...more].join(' && '),
+    // Each failure names its fix: oxfmt's own message doesn't, and the migrations check does
+    check: ['pnpm typecheck', 'pnpm lint', "(oxfmt --check || (echo 'Not formatted: run pnpm format' >&2 && exit 1))", ...more].join(' && '),
     gate: 'pnpm check && pnpm test',
     prepare: 'tsx scripts/hooks.ts',
   })
@@ -1299,6 +1302,23 @@ const usageOf = (name) => {
   return lines.join('\n')
 }
 
+/** Runs each pnpm step in a new app until one fails; returns the steps left, that one first. Without pnpm, all of them. */
+const runFirst = (root, steps) => {
+  if (spawnSync('pnpm', ['--version'], { encoding: 'utf8' }).status !== 0) {
+    console.log('pnpm is not on the PATH (`corepack enable` gives you the one package.json names), so nothing was installed')
+    return steps
+  }
+  for (const [at, args] of steps.entries()) {
+    console.log(`$ pnpm ${args.join(' ')}`)
+    // Never waits on a prompt: stdin is closed
+    if (spawnSync('pnpm', args, { cwd: root, stdio: ['ignore', 'inherit', 'inherit'] }).status !== 0) {
+      console.log(`pnpm ${args.join(' ')} failed: run it again from the Next line`)
+      return steps.slice(at)
+    }
+  }
+  return []
+}
+
 const commands = {
   help: () => console.log(HELP),
 
@@ -1435,7 +1455,10 @@ const commands = {
     writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', packageManager: KIT_PACKAGE_MANAGER, engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps), ...cloudflare }, null, 2) + '\n')
     if (!flags.has('--bare')) addFeature(root, 'notes')
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
-    console.log(`Next: cd ${relative(process.cwd(), root)} && pnpm install && pnpm format${runtime === 'node' ? '' : ' && pnpm migrations'} && pnpm test && pnpm dev`)
+    // What makes the app pass its own gate as made: what init writes is in the kit's long-line style, and D1 needs migrations/
+    const firstRun = [['install'], ['format'], ...(runtime === 'node' ? [] : [['migrations']])]
+    const left = flags.has('--no-install') ? firstRun : runFirst(root, firstRun)
+    console.log(`Next: cd ${relative(process.cwd(), root)} && ${[...left.map((args) => `pnpm ${args.join(' ')}`), 'pnpm test', 'pnpm dev'].join(' && ')}`)
     console.log(`Skills: npx skills add ${REPO} gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
     console.log(`Brand: make brand/ yours, then ${RESVG_INSTALL} && \`npx @escalay/kit brand\` renders the favicon, PNG icons and OG card into ${BRAND_MODULE}`)
   },

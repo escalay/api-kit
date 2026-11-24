@@ -820,10 +820,11 @@ describe('the copy-in CLI', () => {
     await mkdir(parent, { recursive: true })
     try {
       // The way `npm create escalay demo-api` starts: create-escalay hands its arguments to `init`; flags may come first
-      const made = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'packages/create-escalay/index.mjs'), '--preset', 'api', '--yes', '--title', 'Demo API', 'demo-api'], { cwd: parent, encoding: 'utf8' })
+      // --no-install: the kit's own packages resolve the app here, without a download
+      const made = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'packages/create-escalay/index.mjs'), '--preset', 'api', '--yes', '--no-install', '--title', 'Demo API', 'demo-api'], { cwd: parent, encoding: 'utf8' })
       expect(made.status, made.stderr).toBe(0)
       expect(existsSync(join(parent, 'api'))).toBe(false)
-      // api-kit-build's first command is the one init prints, up to the dev server
+      // Without the install, init's Next line names what it would have run; api-kit-build gives it for that case
       const next = made.stdout.match(/^Next: cd demo-api && (.+) && pnpm dev$/m)?.[1]
       expect(next).toBe('pnpm install && pnpm format && pnpm migrations && pnpm test')
       expect(await readFile(join(import.meta.dirname, '..', 'skills/api-kit-build/SKILL.md'), 'utf8')).toContain(`\`cd my-api && ${next}\``)
@@ -927,7 +928,7 @@ describe('the copy-in CLI', () => {
       expect(await readFile(join(app, 'sdk/cli/engine/index.ts'), 'utf8')).toBe(await readFile(join(import.meta.dirname, '..', 'templates/sdk/sdk/cli/engine/index.ts'), 'utf8'))
       expect(cli(parent, 'cli', '--app', 'edge-none').stderr).toContain('no sdk/package.json')
 
-      expect(cli(parent, 'init', 'edge-api', '--runtime', 'cloudflare').status).toBe(0)
+      expect(cli(parent, 'init', 'edge-api', '--runtime', 'cloudflare', '--no-install').status).toBe(0)
       for (const path of ['src/server.ts', 'Dockerfile', 'container']) expect(existsSync(join(parent, 'edge-api', path)), path).toBe(false)
       expect(JSON.parse(await readFile(join(parent, 'edge-api/package.json'), 'utf8')).scripts.dev).toBe('wrangler dev')
       // AGENTS.md speaks only of the runtimes the app has, and never of pnpm's own `deploy`
@@ -949,7 +950,7 @@ describe('the copy-in CLI', () => {
       for (const name of named) expect(existsSync(join(import.meta.dirname, '..', 'skills', name, 'SKILL.md')), name).toBe(true)
       // Prebuilt binaries need no build scripts, so `pnpm install` doesn't stop to ask
       expect(await readFile(join(parent, 'edge-api/pnpm-workspace.yaml'), 'utf8')).toContain('workerd: false')
-      expect(cli(parent, 'init', 'box-api', '--runtime', 'node').status).toBe(0)
+      expect(cli(parent, 'init', 'box-api', '--runtime', 'node', '--no-install').status).toBe(0)
       for (const path of ['src/worker.ts', 'wrangler.jsonc', 'test/workers']) expect(existsSync(join(parent, 'box-api', path)), path).toBe(false)
       const box = await readFile(join(parent, 'box-api/AGENTS.md'), 'utf8')
       expect(box).not.toMatch(/wrangler|worker\.ts|runtime:/)
@@ -989,7 +990,7 @@ describe('the copy-in CLI', () => {
         for (const line of ['      - run: pnpm check\n', '      - run: pnpm test\n']) expect(ci).toContain(line)
         const scripts = JSON.parse(await readFile(join(parent, name, 'package.json'), 'utf8')).scripts
         expect(scripts).toMatchObject({ gate: 'pnpm check && pnpm test', prepare: 'tsx scripts/hooks.ts' })
-        expect(scripts.check).toMatch(/^pnpm typecheck && pnpm lint && oxfmt --check/)
+        expect(scripts.check).toMatch(/^pnpm typecheck && pnpm lint && \(oxfmt --check \|\| \(echo 'Not formatted: run pnpm format' >&2 && exit 1\)\)/)
         expect(scripts.check.includes('scripts/migrations.ts --check'), name).toBe(name !== 'box-api')
         expect(scripts.check).not.toContain('vite build')
         expect(await readFile(join(parent, name, '.githooks/pre-push'), 'utf8')).toContain('exec pnpm gate')
@@ -1019,6 +1020,27 @@ describe('the copy-in CLI', () => {
     }
   }, 120_000)
 
+  it('installs a new app and runs its format and migrations, so its gate passes as made', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-init-'))
+    const bin = join(parent, 'bin')
+    await mkdir(bin)
+    const log = join(parent, 'pnpm.log')
+    // A stand-in pnpm: logs where and what it ran
+    await writeFile(join(bin, 'pnpm'), `#!/bin/sh\n[ "$1" = --version ] && echo 12.3.4 && exit 0\necho "$(basename "$PWD") $*" >> "${log}"\n`, { mode: 0o755 })
+    const init = (...args: string[]) => spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), 'init', ...args], { cwd: parent, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })
+    const both = init('ran-api', '--no-git')
+    expect(both.status, both.stderr).toBe(0)
+    const node = init('box-api', '--runtime', 'node', '--no-git')
+    expect(node.status, node.stderr).toBe(0)
+    expect((await readFile(log, 'utf8')).trim().split('\n')).toEqual(['ran-api install', 'ran-api format', 'ran-api migrations', 'box-api install', 'box-api format'])
+    expect(both.stdout).toMatch(/^Next: cd ran-api && pnpm test && pnpm dev$/m)
+    // No pnpm: the app is made, and the Next line names every step
+    const without = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), 'init', 'plain-api', '--no-git'], { cwd: parent, encoding: 'utf8', env: { ...process.env, PATH: '/nowhere' } })
+    expect(without.status, without.stderr).toBe(0)
+    expect(without.stdout).toMatch(/^Next: cd plain-api && pnpm install && pnpm format && pnpm migrations && pnpm test && pnpm dev$/m)
+    await rm(parent, { recursive: true, force: true })
+  })
+
   it('makes an app with a browser side that typechecks and passes its tests on all three sides', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-app-${process.pid}`)
     await rm(parent, { recursive: true, force: true })
@@ -1027,7 +1049,7 @@ describe('the copy-in CLI', () => {
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
       const refused = cli(parent, 'init', 'box', '--preset', 'app', '--runtime', 'node')
       expect([refused.status, refused.stderr]).toEqual([1, 'kit: the app preset runs on Cloudflare Workers; leave --runtime out or use --runtime cloudflare\n'])
-      const made = cli(parent, 'init', 'desk', '--preset', 'app', '--title', 'Desk')
+      const made = cli(parent, 'init', 'desk', '--preset', 'app', '--title', 'Desk', '--no-install')
       expect(made.status, made.stderr).toBe(0)
       expect(made.stdout).toContain('for Cloudflare Workers, with a browser app in web/,')
       const app = join(parent, 'desk')

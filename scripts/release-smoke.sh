@@ -20,10 +20,7 @@ if ! jq -re '.packageManager | test("^pnpm@[0-9]+\\.[0-9]+\\.[0-9]+$")' package.
   echo "::error::a new app's package.json pins no pnpm (packageManager)"
   exit 1
 fi
-pnpm install
-pnpm format
-pnpm migrations
-# Everything the app's CI and its pre-push hook run
+# As made (create installs, formats and writes migrations/): everything the app's CI and its pre-push hook run
 pnpm gate
 # Ready for the Deploy to Cloudflare button, checked by the published kit
 npx -y "@escalay/kit@$version" button --check

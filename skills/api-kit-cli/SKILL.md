@@ -115,7 +115,7 @@ default; `--app` is the app's folder, `.` by default.
 
 | Command | What it does |
 |---|---|
-| `kit init <dir>` | a new app (`npm create escalay <dir>` runs it): `--preset`, `--runtime both\|cloudflare\|node`, `--title`, `--bare` (no `notes`), `--no-git` |
+| `kit init <dir>` | a new app (`npm create escalay <dir>` runs it): `--preset`, `--runtime both\|cloudflare\|node`, `--title`, `--bare` (no `notes`), `--no-git`; then `pnpm install`, `format` and `migrations` (`--no-install` leaves them out) |
 | `kit add <part…>` | copies parts and the parts they need; `--install`, `--web-dir` for browser parts |
 | `kit list` | every part, what it needs, which are installed |
 | `kit diff [--patch]` | per file: unchanged, you edited, the kit changed, both |

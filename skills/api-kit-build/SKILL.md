@@ -13,8 +13,10 @@ Each part's rules travel with it in `src/kit/<part>/README.md`; the full standar
 
 1. `npm create escalay my-api` (add `-- --runtime node` or `cloudflare`; the default is both). For a tool people
    also open in a browser: `-- --preset app` (Cloudflare only; `web/` served under `/app` by the same Worker).
-   Then run what its `Next:` line prints, up to `pnpm dev`: `cd my-api && pnpm install && pnpm format && pnpm migrations && pnpm test`
-   (with `--runtime node` there is no `pnpm migrations`). Done when it passes. Give your coding agent the kit's
+   It installs the app, formats it and writes its migrations, so its gate passes as made. Then run what its `Next:`
+   line prints, up to `pnpm dev`: `cd my-api && pnpm test`; with `-- --no-install`, or without pnpm, it is
+   `cd my-api && pnpm install && pnpm format && pnpm migrations && pnpm test` (with `--runtime node` there is no
+   `pnpm migrations`). Done when it passes. Give your coding agent the kit's
    skills with `npx skills add escalay/api-kit`.
 2. Read `AGENTS.md` in the new app, then `src/kit/core/README.md`, `db`, `mcp` and `testing`.
 3. `pnpm dev`, then open `/docs`, `/llms.txt` and `/mcp`. The example `notes` feature shows the shape.
