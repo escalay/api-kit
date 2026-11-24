@@ -24,7 +24,7 @@ apps copy in and own. Read the repository's `AGENTS.md` and `docs/STANDARD.md` f
 `src/<part>/README.md` ships with the part, so it changes with the code in the same pull request. Its shape is
 `README_SHAPE` in `scripts/parts.mjs` (listed in `docs/PARTS.md`, Every README has one shape), checked by
 `test/readmes.test.mjs`. The `Standard:` line under its rules equals the registry's `meta.standard`, history stays in
-`docs/upgrading.md`, and every option and hook is in it. Each `###` heading is given once, and a README stays under
+`docs/upgrading.md`, every option and hook is in it, and so is every value the part exports (the test fails on one it never names). Each `###` heading is given once, and a README stays under
 20 KB (`test/one-source.test.mjs`; oauth has its own cap, which only goes down: cut or move text, never raise it).
 
 ## 3. The registry item
@@ -80,15 +80,20 @@ A browser part is one file in `src/browser/`, with `meta: { "entry": true, "web"
 - **New apps.** Does every new app need it? Then it joins `APP_MODULES` in `cli.mjs` (`WEB_APP_MODULES` for the
   `app` preset's browser), the generator test's `kit.json` modules, and the starter's wiring in `templates/app`.
   Most parts do not: an app adds them with `kit add`.
-- **The map.** `docs/PARTS.md` is generated from `registry.json`: run `pnpm parts` after changing a part's
-  registry item (`test/parts.test.mjs` fails while it is stale), and give the part a row in its goal table in
+- **The map.** `docs/PARTS.md` and the root README's parts and skills tables are generated from `registry.json`
+  and each skill's frontmatter: run `pnpm parts` after changing a part's registry item or a skill's `description`
+  (`test/parts.test.mjs` fails while either is stale), and give the part a row in its goal table in
   `scripts/parts.mjs` when it serves a new goal. The `api-kit-build` skill names every part by goal: add the new one there
   (a test checks every part is named in some skill). `AGENTS.md`'s layout table has no row per part: it points at
   `docs/PARTS.md`.
 - **The release note.** The pull request's title is the line in the release notes: `feat(reminders): …` for a new
   part or option, `fix(<part>): …` for a fix. A change an app must act on (a new migration step, a renamed export, a
-  changed default) gets its entry in `docs/upgrading.md` and says so in the part's README. Existing apps keep
-  working: new behaviour is an option with today's default.
+  changed default) gets an entry under `### Unreleased (after <manifest version>)` (the version in
+  `.release-please-manifest.json`; `### Unreleased (after 1.30.0): <topic>` when the part has several) at the top of
+  the part's section of `docs/upgrading.md`, and says so in the part's README. Before the release pull request
+  merges, the heading becomes the version it releases (`### 1.31.0`); `test/readmes.test.mjs` fails on any other
+  form, on headings out of order, and on an Unreleased heading left behind a release. Existing apps keep working:
+  new behaviour is an option with today's default.
 
 ## Checks
 

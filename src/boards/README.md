@@ -65,7 +65,7 @@ The feature shape (copy it for your own features):
 
 | File | What |
 |---|---|
-| `schema.ts` | the Drizzle tables and `BOARDS_MIGRATIONS` (step 1 = its tables) |
+| `schema.ts` | the Drizzle tables (`boards`, `boardItems`) and `BOARDS_MIGRATIONS` (step 1 = its tables) |
 | `repo.ts` | `boardsRepo(db)`: the only queries, nothing about HTTP |
 | `routes.ts` | `boardRoutes(config)`: the `createRoute` contracts and their schemas |
 | `handlers.ts` | `boardHandlers(config, repo)`: request → repo → HAL; a missing board or item is a `ProblemError` |

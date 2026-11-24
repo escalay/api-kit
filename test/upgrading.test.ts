@@ -1,0 +1,137 @@
+import { spawnSync } from 'node:child_process'
+import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+const KIT = join(import.meta.dirname, '..')
+const KIT_VERSION: string = JSON.parse(readFileSync(join(KIT, 'package.json'), 'utf8')).version
+const UPGRADING = readFileSync(join(KIT, 'docs/upgrading.md'), 'utf8')
+const run = (cliPath: string, cwd: string, ...args: string[]) => spawnSync(process.execPath, [cliPath, ...args], { cwd, encoding: 'utf8' })
+const cli = (cwd: string, ...args: string[]) => run(join(KIT, 'cli.mjs'), cwd, ...args)
+
+/** A part folder's section of docs/upgrading.md, without its `## ` line. */
+const sectionOf = (folder: string, markdown = UPGRADING) => {
+  const start = markdown.indexOf(`\n## ${folder}\n`)
+  const end = markdown.indexOf('\n## ', start + 1)
+  return markdown.slice(start + `\n## ${folder}\n`.length, end < 0 ? undefined : end)
+}
+
+/** An app whose kit.json records `version`, with `parts` (and what they need) copied in. */
+const appAt = async (version: string, ...parts: string[]) => {
+  const app = await mkdtemp(join(tmpdir(), 'kit-upgrading-'))
+  expect(cli(app, 'add', ...parts).status).toBe(0)
+  const lockPath = join(app, 'src/kit/kit.json')
+  await writeFile(lockPath, JSON.stringify({ ...JSON.parse(await readFile(lockPath, 'utf8')), version }))
+  return app
+}
+
+/** Runs a `kit …` command exactly as the CLI printed it between backticks. */
+const runPrinted = (app: string, printed: string) => {
+  const command = /`(kit upgrading[^`]*)`/.exec(printed)?.[1]
+  expect(command, printed).toBeDefined()
+  return cli(app, ...command!.split(' ').slice(1))
+}
+
+describe('kit upgrading', () => {
+  it('prints every note of each installed part’s section after the version kit.json records, and no other part’s', async () => {
+    const app = await appAt('0.0.1', 'oauth', 'search-react')
+    const printed = cli(app, 'upgrading')
+    expect(printed.status, printed.stderr).toBe(0)
+    expect(printed.stdout).toContain(`Upgrade notes for core, db, oauth, browser after kit 0.0.1, up to kit ${KIT_VERSION}`)
+    // A browser part's notes are its README's folder: browser
+    for (const folder of ['core', 'oauth']) {
+      expect(printed.stdout).toContain(`\n## ${folder}\n`)
+      for (const heading of sectionOf(folder).match(/^### .*$/gm) ?? []) expect(printed.stdout, `${folder}: ${heading}`).toContain(heading)
+      for (const line of sectionOf(folder).split('\n').filter((one) => one.startsWith('- '))) expect(printed.stdout, line).toContain(line)
+    }
+    for (const folder of ['guide', 'mcp', 'switches', 'testing']) expect(printed.stdout, folder).not.toContain(`\n## ${folder}\n`)
+  })
+
+  it('leaves out what kit.json’s version already had, or --from’s', async () => {
+    const app = await appAt('1.29.0', 'core')
+    const since = cli(app, 'upgrading').stdout
+    expect(since).toContain('### 1.30.0')
+    expect(since).toContain('`tellApp`')
+    expect(since).not.toContain('### 1.29.0')
+    const from = cli(app, 'upgrading', '--from', '1.27.0').stdout
+    expect(from).toContain('Upgrade notes for core after kit 1.27.0')
+    for (const heading of ['### 1.30.0', '### 1.29.0', '### 1.27.1']) expect(from, heading).toContain(heading)
+    expect(from).not.toContain('### 1.27.0')
+    // Versions compare as numbers, not text
+    expect(cli(app, 'upgrading', '--from', '1.9.0').stdout).toContain('### 1.27.0')
+    expect(cli(app, 'upgrading', '--from', 'latest').stderr).toContain('--from is a version, like 1.29.0')
+  })
+
+  it('says so when nothing changed for the parts since', async () => {
+    const app = await appAt(KIT_VERSION, 'db')
+    const printed = cli(app, 'upgrading')
+    expect([printed.status, printed.stdout]).toEqual([0, `No upgrade notes for core, db after kit ${KIT_VERSION} (this is kit ${KIT_VERSION})\n`])
+    const none = await mkdtemp(join(tmpdir(), 'kit-upgrading-'))
+    expect(cli(none, 'upgrading').stderr).toContain('no kit.json in src/kit')
+  })
+
+  it('reads Unreleased notes, topics after a version, and code blocks as the notes they are in', async () => {
+    // A kit whose docs/upgrading.md is a fixture: the CLI reads its docs beside itself
+    const kit = await mkdtemp(join(tmpdir(), 'kit-copy-'))
+    for (const file of ['cli.mjs', 'registry.json', 'package.json']) await copyFile(join(KIT, file), join(kit, file))
+    await mkdir(join(kit, 'docs'))
+    await writeFile(
+      join(kit, 'docs/upgrading.md'),
+      [
+        '# Upgrading', '', '## Taking a new version', '', '### 9.9.9', '', '- not a part', '',
+        '## core', '', 'Read these first.', '',
+        '### Unreleased (after 1.30.0)', '', '- an unreleased note', '',
+        '### 1.30.0: approvals', '', '- a topic note', '', '```md', '## not a section', '### not a note', '```', '',
+        '### 1.30.0', '', '- a plain note', '',
+        '### 1.29.0', '', '- an old note', '',
+        '## browser', '', '### 1.30.0', '', '- a browser note', '',
+        '## mcp', '', '### 1.30.0', '', '- an mcp note', '',
+      ].join('\n'),
+    )
+    const app = await appAt('1.29.0', 'core', 'search-client')
+    const printed = run(join(kit, 'cli.mjs'), app, 'upgrading')
+    expect(printed.stdout).toBe(
+      [
+        `Upgrade notes for core, browser after kit 1.29.0, up to kit ${KIT_VERSION} (the kit's docs/upgrading.md):`, '',
+        '## core', '',
+        '### Unreleased (after 1.30.0)', '', '- an unreleased note', '',
+        '### 1.30.0: approvals', '', '- a topic note', '', '```md', '## not a section', '### not a note', '```', '',
+        '### 1.30.0', '', '- a plain note', '',
+        '## browser', '',
+        '### 1.30.0', '', '- a browser note', '',
+      ].join('\n'),
+    )
+  })
+
+  it('is what doctor and update tell an app behind the kit to run, and what they print gives the notes', async () => {
+    const app = await appAt('1.29.0', 'core')
+    const doctor = cli(app, 'doctor')
+    const note = 'note     kit.json says kit 1.29.0: `kit upgrading --dir src/kit` prints what changed for its parts since, and what to do'
+    expect(doctor.stdout.split('\n')).toContain(note)
+    // The note is not a finding, as docs/upgrading.md says: the one to fix is the `behind` line doctor printed before
+    expect(doctor.stdout.split('\n').filter((line) => /^\w+ {2,}/.test(line)).map((line) => line.split(' ')[0])).toEqual(['note', 'behind'])
+    expect([doctor.status, doctor.stdout.split('\n').at(-2)]).toEqual([1, '1 to fix in src/kit'])
+    expect(UPGRADING).toContain('neither changes the exit code or `doctor`\'s count to fix')
+    expect(runPrinted(app, note).stdout).toContain('### 1.30.0')
+    const updated = cli(app, 'update')
+    expect(updated.status).toBe(0)
+    const told = updated.stdout.split('\n').find((line) => line.includes('kit upgrading'))!
+    expect(told).toBe('What changed for these parts since kit 1.29.0: `kit upgrading --dir src/kit --from 1.29.0`')
+    // kit.json now records this kit, so the printed --from is what still finds the notes
+    expect(cli(app, 'upgrading').stdout).toContain('No upgrade notes')
+    expect(runPrinted(app, told).stdout).toContain('### 1.30.0')
+    // An app at this kit's version is told nothing
+    expect(cli(app, 'doctor').stdout).not.toContain('kit upgrading')
+    expect(cli(app, 'update').stdout).not.toContain('kit upgrading')
+  })
+
+  it('reads the docs the npm package ships', async () => {
+    expect(JSON.parse(await readFile(join(KIT, 'package.json'), 'utf8')).files).toContain('docs')
+  })
+
+  it('is how the kit’s skill and a new app’s AGENTS.md take a newer kit', async () => {
+    for (const path of ['skills/api-kit-build/SKILL.md', 'templates/app/AGENTS.md']) expect(await readFile(join(KIT, path), 'utf8'), path).toContain('npx @escalay/kit upgrading')
+  })
+})

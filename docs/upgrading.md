@@ -7,10 +7,14 @@ lists every release.
 ## Taking a new version
 
 ```bash
+npx @escalay/kit upgrading --dir src/kit      # this page's notes for your parts since kit.json's version
 npx @escalay/kit doctor --dir src/kit         # missing, edited, behind: one line each with its fix
 npx @escalay/kit diff --dir src/kit --patch   # your edits next to the kit's changes
 npx @escalay/kit update --dir src/kit         # never overwrites your edits without --force
 ```
+
+When `kit.json` records an older kit, `doctor` prints a `note` line naming `kit upgrading`, and `update` a line naming
+`kit upgrading --from <that version>`; neither changes the exit code or `doctor`'s count to fix.
 
 The app owns the copy, and nothing follows `main`: a version is taken on purpose. A file equal to the kit's counts as
 unchanged, whatever `kit.json` recorded. `update` keeps a file you edited; when the kit also changed that file since
