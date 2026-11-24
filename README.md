@@ -148,7 +148,7 @@ What changes for an app between versions, part by part: [docs/upgrading.md](docs
 your edits, and what to do when it exits 1: [Taking a new version](docs/upgrading.md#taking-a-new-version).
 
 `--dir` defaults to `src/kit`. The app imports `./kit/index.js` and each entry part's folder (`./kit/mcp/index.js`,
-`./kit/boards/index.js`, `./kit/testing/index.js`). Its container build needs nothing from this repo.
+`./kit/testing/index.js`). Its container build needs nothing from this repo.
 
 The browser parts go into the frontend. Either a kit of their own, or, in a repo that has both, `--web-dir`
 (relative to `--dir`, remembered in `kit.json`) so one `kit.json` tracks the server and browser files:

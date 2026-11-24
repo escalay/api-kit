@@ -360,6 +360,13 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## boards
 
+### Unreleased (after 1.31.0)
+
+- `itemOf` may return a promise: the routes await it, so a card looked up in the database answers a ref that is not
+  there with a 404 on save and `item: null` on the board. A synchronous `itemOf` works as before.
+- `kit/index.ts` re-exports boards, like `people` and `setup`: `import { registerBoards } from './kit/index.js'`.
+  `update` rewrites `index.ts`; imports from `./kit/boards/index.js` keep working.
+
 ### 1.30.0
 
 - Two PUTs of one item that arrive together add it once (201, then 200), never a 500.

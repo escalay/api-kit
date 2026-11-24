@@ -435,6 +435,15 @@ describe('the copy-in CLI', () => {
     expect(await readFile(join(app, 'src/kit/core/api.ts'), 'utf8')).toBe(await readFile(join(import.meta.dirname, '..', 'src/core/api.ts'), 'utf8'))
   })
 
+  it('re-exports boards from the kit’s index like people and setup, and keeps its own folder importable', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    const added = cli(app, 'add', 'boards', 'people', '--dir', 'src/kit')
+    expect(added.status, added.stderr).toBe(0)
+    const index = await readFile(join(app, 'src/kit/index.ts'), 'utf8')
+    for (const part of ['boards', 'people']) expect(index).toContain(`export * from './${part}/index.js'`)
+    expect(existsSync(join(app, 'src/kit/boards/index.ts'))).toBe(true)
+  })
+
   it('tells your edits from the kit’s and never overwrites an edit without --force', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     cli(app, 'add', 'core', '--dir', 'kit')

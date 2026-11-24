@@ -163,6 +163,17 @@ describe('boards', () => {
       "extra_tool: sample arguments for a tool that doesn't exist",
     ]))
   })
+  it('awaits an itemOf that looks the ref up in a database: a missing one is a 404, a found one is on the board', async () => {
+    const app = createAgentApi({ title: 'Logos', version: '1.0.0', description: 'Logos.', tags: [{ name: 'Boards', description: 'Collections.' }], auth: { realm: 'logos', keys: parseApiKeys(`agent:${hashApiKey(KEY)}`) } })
+    const Card = z.object({ slug: z.string(), client: z.string(), _links: LinksSchema }).openapi('LogoCard', { description: 'A logo.' })
+    const lookup = async (slug: string) => (LOGOS[slug] ? { slug, client: LOGOS[slug], _links: {} } : null)
+    await registerBoards(app, { db: await testDb(), item: Card, refExample: 'logo:fox', itemOf: (ref) => lookup(ref.slice('logo:'.length)) })
+    const { id } = await (await call(app, 'POST', '/api/boards', { name: 'Async' })).json()
+    expect((await call(app, 'PUT', `/api/boards/${id}/items/logo:nope`)).status).toBe(404)
+    expect((await call(app, 'PUT', `/api/boards/${id}/items/logo:fox`)).status).toBe(201)
+    expect((await (await call(app, 'GET', `/api/boards/${id}`)).json())._embedded.items.map((entry: { item: { client: string } }) => entry.item.client)).toEqual(['Fox Films'])
+  })
+
   it('lets a page manage boards through the browser client', async () => {
     const app = await sampleApi()
     const client = createBoardsClient<{ client: string }>({ fetchImpl: ((url: string, init?: RequestInit) => app.request(url, init)) as typeof fetch, headers: { authorization: `Bearer ${KEY}` } })

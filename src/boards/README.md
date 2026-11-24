@@ -19,13 +19,13 @@ The owner's own collections of the app's items for a project, with a note per it
 npx @escalay/kit add boards
 ```
 
-Needs `db` and `mcp` (and through them `core`). Imported from `./kit/boards/index.js`. The browser side is
+Needs `db` and `mcp` (and through them `core`). Imported from `./kit/index.js`, like `people` and `setup`. The browser side is
 `boards-client` and `boards-react` (browser README).
 
 ## Wire it
 
 ```ts
-import { boardTools, registerBoards } from './kit/boards/index.js'
+import { boardTools, registerBoards } from './kit/index.js'
 
 await registerBoards(app, { db, item: RecipeCardSchema, refExample: 'recipe:soup', itemOf: (ref, origin) => cardOfRef(ref, origin), suggestions })
 const tools = boardTools({ noun: 'recipes', label: (recipe) => recipe.title, refExample: 'recipe:soup', suggestions: true })
@@ -42,7 +42,7 @@ Routes: `GET|POST /api/boards` (`?item=<ref>`: the boards holding it), `GET|PATC
 |---|---|---|---|
 | `db` | `Db` | required | the app's database; the boards tables are migrated into it |
 | `item` | zod schema | required | the OpenAPI schema of an item's card |
-| `itemOf` | `(ref, origin) => card \| null` | required | a ref → the app's card, or null when it left the catalog (a save of it is a 404) |
+| `itemOf` | `(ref, origin) => card \| null`, or a promise of it | required | a ref → the app's card, or null when it left the catalog (a save of it is a 404); awaited, so it may look the ref up in the database |
 | `refExample` | string | required | the app's own ref (`recipe:soup`), shown in the routes' parameters |
 | `refPattern` | RegExp | `BOARD_REF` (`<type>:<id>`) | what a ref looks like; another is a 400 |
 | `suggestions` | `(refs, limit, origin) => cards` | none | cards like those on a board, best first, without what is on it; set, the suggestions route exists |

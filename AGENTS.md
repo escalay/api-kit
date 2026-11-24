@@ -55,8 +55,7 @@ for a look at the kit on Workers by hand)
 
 - `npx @escalay/kit add <parts…> --dir <app>/src/kit --install`, or one part with
   `npx shadcn add escalay/api-kit/<part>` and then `npx @escalay/kit adopt` (the README has the rest). The app imports
-  `./kit/index.js` and each entry part's folder (`./kit/mcp/index.js`, `./kit/boards/index.js`,
-  `./kit/testing/index.js`); its container build needs nothing from this repo.
+  `./kit/index.js` and each entry part's folder (`./kit/mcp/index.js`, `./kit/testing/index.js`); its container build needs nothing from this repo.
 - A new app: `npm create escalay <name>` (`init <dir>`); a new feature in it: `feature <plural-name>`.
 - The app owns the copy. Before taking a new kit version: `doctor`, `diff --patch`, then `update`; how `update` treats
   the app's edits is in [docs/upgrading.md › Taking a new version](docs/upgrading.md#taking-a-new-version). A fix
