@@ -307,6 +307,9 @@ describe('accepts', () => {
       ['/s/soups/../bakes/mcp', '/s/bakes/mcp', 401, ONLY_ITS_SPACE],
       ['/s/%2e%2e/mcp', '/mcp', 401, ONLY_ITS_SPACE],
     ])
+    // Judged there, not just unrouted: a Bakes member is refused below Soups' address
+    const bakes = (await join(await makeInvite('bakes'), { resource: BAKES, asked: BAKES })).tokens.access_token
+    expect(refusalOf(await call('/s/soups/mcp/', bakes))).toBe(ONLY_ITS_SPACE)
   })
 
   it('follows a renamed space by its id, and refuses its old name even once another space takes it', async () => {
