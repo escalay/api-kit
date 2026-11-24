@@ -6,6 +6,16 @@ import type { BoardsConfig } from './index.js'
 import type { BoardRow, BoardsRepo } from './repo.js'
 import type { BoardRoutes } from './routes.js'
 
+/** What a PUT does to the item's note: `keep` it, `clear` it, or set this text. */
+type NoteChange = 'keep' | 'clear' | { text: string }
+
+/** A PUT's note: none sent (or blank) keeps it, null clears it, text sets it. */
+const noteChangeOf = (note: string | null | undefined): NoteChange => {
+  if (note === null) return 'clear'
+  const text = note?.trim()
+  return text ? { text } : 'keep'
+}
+
 export const boardHandlers = (config: BoardsConfig, repo: BoardsRepo) => {
   const path = config.path ?? '/api/boards'
   const rowOf = async (boardId: string) => {
@@ -60,10 +70,12 @@ export const boardHandlers = (config: BoardsConfig, repo: BoardsRepo) => {
 
   const save: RouteHandler<BoardRoutes['save']> = async (c) => {
     const { id: boardId, ref: itemRef } = c.req.valid('param')
-    const { note } = ((await c.req.json().catch(() => ({}))) ?? {}) as { note?: string }
+    const { note } = ((await c.req.json().catch(() => ({}))) ?? {}) as { note?: string | null }
     await rowOf(boardId)
     if (config.itemOf(itemRef, originOf(c)) == null) throw new ProblemError('not_found', { detail: `No item ${itemRef} in the catalog. Add items by the ref their search results and links give.` })
-    const saved = await repo.save(boardId, itemRef, note?.trim() || null)
+    const change = noteChangeOf(note)
+    const saved = await repo.save(boardId, itemRef, typeof change === 'object' ? change.text : null)
+    if (change === 'clear') await repo.clearNote(boardId, itemRef)
     return c.json(await boardOf(originOf(c), await rowOf(boardId)), saved === 'added' ? 201 : 200)
   }
 

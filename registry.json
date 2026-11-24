@@ -77,6 +77,11 @@
           "target": "~/src/kit/core/cli.ts"
         },
         {
+          "path": "src/core/hooks.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/core/hooks.ts"
+        },
+        {
           "path": "src/core/README.md",
           "type": "registry:file",
           "target": "~/src/kit/core/README.md"

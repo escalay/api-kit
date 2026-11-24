@@ -18,7 +18,7 @@ import type { AuthInfo } from '@modelcontextprotocol/server'
 import type { Context, Hono } from 'hono'
 import { mountedOf, publicOriginOf, sendPublic, WELL_KNOWN, type AgentBrand } from '../core/discovery.js'
 import { originOf } from '../core/hal.js'
-import { callWaiting, FORWARDED, problemText, type CallApi, type McpTool } from '../mcp/index.js'
+import { callWaiting, FORWARDED, pollRun, problemText, type CallApi, type McpTool } from '../mcp/index.js'
 import { memoryStore, type KeyValueStore } from '../core/kv.js'
 
 export const A2A_VERSION = '1.0'
@@ -54,7 +54,15 @@ type Part = { text?: string; data?: unknown; url?: string; raw?: string; mediaTy
 type Message = { messageId: string; role: string; parts: Part[]; contextId?: string; taskId?: string; metadata?: Record<string, unknown> }
 type TaskState = 'TASK_STATE_WORKING' | 'TASK_STATE_COMPLETED' | 'TASK_STATE_FAILED' | 'TASK_STATE_CANCELED' | 'TASK_STATE_AUTH_REQUIRED'
 type Task = { id: string; contextId: string; status: { state: TaskState; message?: Message; timestamp: string }; artifacts?: unknown[]; history?: Message[]; metadata: Record<string, unknown> }
-type Stored = { owner: string; task: Task; skill: string; args: Record<string, unknown>; created: number }
+type Stored = {
+  owner: string
+  task: Task
+  skill: string
+  args: Record<string, unknown>
+  created: number
+  /** The run a slow call answered with (its `Location`), polled until it ends; absent on tasks stored by 1.29.0. */
+  location?: string
+}
 
 const TERMINAL = new Set<TaskState>(['TASK_STATE_COMPLETED', 'TASK_STATE_FAILED', 'TASK_STATE_CANCELED'])
 const DAY = 86_400_000
@@ -146,26 +154,36 @@ export const mountA2A = (app: Hono<any, any, any>, config: A2AConfig) => {
     },
   })
 
-  const save = async (owner: string, stored: Stored) => {
+  /** Saves a task, unless it ended meanwhile (canceled while a run was in flight): then the ended one is what stands. */
+  const save = async (owner: string, stored: Stored): Promise<Stored> => {
+    const current = (await store.get(KIND, stored.task.id)) as Stored | null
+    if (current && TERMINAL.has(current.task.status.state)) return current
     // The store takes epoch seconds
     await store.put(KIND, stored.task.id, stored as never, Math.floor((stored.created + DAY) / 1000))
     const index = ((await store.get(INDEX, owner))?.ids as string[] | undefined) ?? []
     if (!index.includes(stored.task.id)) await store.put(INDEX, owner, { ids: [stored.task.id, ...index].slice(0, 500) }, Math.floor((Date.now() + DAY) / 1000))
+    return stored
   }
   const load = async (owner: string, id: unknown) => {
     const stored = typeof id === 'string' ? ((await store.get(KIND, id)) as Stored | null) : null
     if (!stored || stored.owner !== owner) throw new RpcError(ERRORS.taskNotFound, `No task ${String(id)} for this caller (tasks are kept for a day).`)
-    return stored
+    // Each request changes its own copy: a memory store hands out the stored object itself
+    return structuredClone(stored)
   }
   const shown = (stored: Stored, historyLength?: number) => {
     const { history = [], ...task } = stored.task
     return historyLength === 0 ? task : { ...task, history: historyLength ? history.slice(-historyLength) : history }
   }
 
-  /** Runs (or asks again for) the task's tool call and records the outcome on the task. */
+  /**
+   * Runs the task's tool call, or polls the run it is waiting on, and records the outcome on the task. A task waiting on
+   * a run never calls its tool again until the run is done: the tool may have side effects.
+   */
   const run = async (c: Context, stored: Stored, wait: number) => {
     const skill = byId.get(stored.skill)!
-    const { response, pending } = await callWaiting(callApi, skill.tool.call(stored.args as never), authOf(c), wait)
+    const call = skill.tool.call(stored.args as never)
+    const { response, pending, location } = stored.location ? await pollRun(callApi, call, stored.location, authOf(c), wait) : await callWaiting(callApi, call, authOf(c), wait)
+    stored.location = location ?? undefined
     const json = await response.json().catch(() => null)
     const at = new Date().toISOString()
     const task = stored.task
@@ -178,8 +196,7 @@ export const mountA2A = (app: Hono<any, any, any>, config: A2AConfig) => {
       task.status = { state, message: agentMessage(problemText(json, response.status), task), timestamp: at }
     }
     if (task.status.message) task.history = [...(task.history ?? []), task.status.message]
-    await save(stored.owner, stored)
-    return stored
+    return save(stored.owner, stored)
   }
 
   const argsOf = (skill: A2ASkill, message: Message) => {

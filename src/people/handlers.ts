@@ -11,7 +11,8 @@ import type { PeopleRepo } from './repo.js'
 import type { PeopleRoutes } from './routes.js'
 import type { PersonRow } from './schema.js'
 import { distinctName, passkeyBaseName } from './names.js'
-import { endSession, enrolmentPurposeOf, isAdmin, personOf, startSession, tellApp, type EnrolmentPurpose, type RecoveryListener } from './session.js'
+import { tellApp } from '../core/hooks.js'
+import { endSession, enrolmentPurposeOf, isAdmin, personOf, startSession, type EnrolmentPurpose, type RecoveryListener } from './session.js'
 
 const NO_STORE = { 'cache-control': 'no-store' }
 const CHALLENGE_MINUTES = 5
@@ -223,12 +224,12 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     if (!email === !domain) throw new ProblemError('bad_request', { detail: 'Send either an email or a domain.' })
     if (domain && !(await repo.hasDomain(domain))) {
       await repo.addDomain(domain, by)
-      await onTeamChange?.({ who: `@${domain}`, from: null, to: 'member', by }, c)
+      await tellApp('onTeamChange', () => onTeamChange?.({ who: `@${domain}`, from: null, to: 'member', by }, c))
     }
     if (email) {
       if (await repo.byEmail(email)) throw new ProblemError('conflict', { detail: `${email} is already on the team: change their role instead.` })
       await repo.add({ id: newId('prs'), email, role: role ?? 'member', name: name ?? null, createdAt: new Date().toISOString(), lastSeenAt: null })
-      await onTeamChange?.({ who: email, from: null, to: role ?? 'member', by, notify: notify ?? true }, c)
+      await tellApp('onTeamChange', () => onTeamChange?.({ who: email, from: null, to: role ?? 'member', by, notify: notify ?? true }, c))
     }
     return c.json(await teamBody(c), 201, NO_STORE)
   }
@@ -244,7 +245,7 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     const { role } = c.req.valid('json')
     if (role === 'member' && (await lastOwner(person))) throw new ProblemError('conflict', { detail: 'This is the last owner: make someone else an owner first.' })
     await repo.setRole(person.id, role)
-    if (person.role !== role) await onTeamChange?.({ who: person.email, from: person.role, to: role, by }, c)
+    if (person.role !== role) await tellApp('onTeamChange', () => onTeamChange?.({ who: person.email, from: person.role, to: role, by }, c))
     return c.json((await repo.get(person.id))!, 200, NO_STORE)
   }
   const removeFromTeam: RouteHandler<PeopleRoutes['removeFromTeam']> = async (c) => {
@@ -252,7 +253,7 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     const person = await personFor(c.req.valid('param').id)
     if (await lastOwner(person)) throw new ProblemError('conflict', { detail: 'This is the last owner: make someone else an owner first.' })
     await repo.remove(person.id)
-    await onTeamChange?.({ who: person.email, from: person.role, to: null, by }, c)
+    await tellApp('onTeamChange', () => onTeamChange?.({ who: person.email, from: person.role, to: null, by }, c))
     return c.body(null, 204)
   }
   const removeDomain: RouteHandler<PeopleRoutes['removeDomain']> = async (c) => {
@@ -260,7 +261,7 @@ export const peopleHandlers = (repo: PeopleRepo, { db, rpName, sessionPath, team
     const { domain } = c.req.valid('param')
     if (!(await repo.hasDomain(domain))) throw new ProblemError('not_found', { detail: `${domain} is not on the team. GET ${teamPath} lists the domains.` })
     await repo.removeDomain(domain)
-    await onTeamChange?.({ who: `@${domain}`, from: 'member', to: null, by }, c)
+    await tellApp('onTeamChange', () => onTeamChange?.({ who: `@${domain}`, from: 'member', to: null, by }, c))
     return c.body(null, 204)
   }
 

@@ -1,15 +1,15 @@
-import { describe, expect, it } from 'vitest'
-import { createAgentApi, hashApiKey, holderOf, KEYS_TAG, keyTools, parseApiKeys, registerKeys, storedKeysOf, testDb } from '../src/index.js'
+import { describe, expect, it, vi } from 'vitest'
+import { createAgentApi, hashApiKey, holderOf, KEYS_TAG, keyTools, parseApiKeys, registerKeys, storedKeysOf, testDb, type KeyChange } from '../src/index.js'
 import { lintOpenApi, toolRoutes, toolsRun } from '../src/testing/index.js'
 
 const KEY = 'owner-key'
 
-const setup = async () => {
+const setup = async ({ onKeyChange }: { onKeyChange?: (change: KeyChange) => void } = {}) => {
   const db = await testDb()
   const keys = parseApiKeys(`owner:${hashApiKey(KEY)}`)
   const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [KEYS_TAG], auth: { realm: 'sample', keys, storedKeys: storedKeysOf(db) } })
   const changes: unknown[] = []
-  await registerKeys(app, { db, fixedKeys: [...keys.values()], keyPrefix: 'sk', onKeyChange: (change) => void changes.push(change) })
+  await registerKeys(app, { db, fixedKeys: [...keys.values()], keyPrefix: 'sk', onKeyChange: onKeyChange ?? ((change) => void changes.push(change)) })
   const as = (key: string) => (path: string, init: RequestInit = {}) => app.request(path, { ...init, headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' } })
   return { app, owner: as(KEY), as, changes }
 }
@@ -49,6 +49,21 @@ describe('keys', () => {
       { id: made.id, name: 'ci', action: 'deleted', by: 'owner' },
     ])
     expect(JSON.stringify(changes)).not.toContain(made.key)
+  })
+
+  it('makes and revokes the key even when the app\'s hook throws, and logs the throw', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { owner, as } = await setup({ onKeyChange: () => { throw new Error('the log is down') } })
+      const made = await owner('/api/keys', { method: 'POST', body: JSON.stringify({ name: 'ci' }) })
+      expect(made.status).toBe(201)
+      const key = (await made.json()) as { id: string; key: string }
+      expect((await as(key.key)('/api/me')).status).toBe(200)
+      expect((await owner(`/api/keys/${key.id}`, { method: 'DELETE' })).status).toBe(204)
+      expect(logged.mock.calls.map(([line]) => line)).toEqual(['onKeyChange failed: the log is down', 'onKeyChange failed: the log is down'])
+    } finally {
+      logged.mockRestore()
+    }
   })
 
   it('refuses a name already taken, by a made key or the deployment', async () => {

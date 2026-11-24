@@ -39,8 +39,8 @@ export type BoardsClient<Item> = {
   get: (id: string) => Promise<Board<Item>>
   rename: (id: string, change: { name?: string; description?: string }) => Promise<Board<Item>>
   remove: (id: string) => Promise<void>
-  /** Puts an item on a board (or changes its note); harmless to repeat. */
-  save: (id: string, ref: string, note?: string) => Promise<Board<Item>>
+  /** Puts an item on a board (or changes its note: left out keeps it, null clears it); harmless to repeat. */
+  save: (id: string, ref: string, note?: string | null) => Promise<Board<Item>>
   unsave: (id: string, ref: string) => Promise<void>
   suggestions: (id: string, limit?: number) => Promise<Item[]>
 }
@@ -67,7 +67,7 @@ export const createBoardsClient = <Item>({ path = '/api/boards', fetchImpl = (..
     get: async (id) => boardOf(await call(at(id))),
     rename: async (id, change) => boardOf(await call(at(id), { method: 'PATCH', body: JSON.stringify(change) })),
     remove: async (id) => void (await call(at(id), { method: 'DELETE' })),
-    save: async (id, ref, note) => boardOf(await call(`${at(id)}/items/${encodeURIComponent(ref)}`, { method: 'PUT', body: JSON.stringify(note ? { note } : {}) })),
+    save: async (id, ref, note) => boardOf(await call(`${at(id)}/items/${encodeURIComponent(ref)}`, { method: 'PUT', body: JSON.stringify(note === undefined ? {} : { note }) })),
     unsave: async (id, ref) => void (await call(`${at(id)}/items/${encodeURIComponent(ref)}`, { method: 'DELETE' })),
     suggestions: async (id, limit) => (await call(`${at(id)}/suggestions${limit ? `?limit=${limit}` : ''}`))._embedded.items as Item[],
   }

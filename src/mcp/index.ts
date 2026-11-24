@@ -10,7 +10,8 @@
  * const tools = [mcpTool({ name: 'search_recipes', title: 'Search recipes', description: '…', input: z.object({ q: z.string() }),
  *   call: ({ q }) => ({ path: '/api/v1/search/recipes', query: { q } }), summarize: (page) => … })]
  * mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools, callApi: inProcess(app) }), allowedHostnames: ['cookbook.example.com'] })
- * // a stdio client on a laptop: the same tools over HTTP with its own key
+ * // a stdio client on a laptop: the same tools over HTTP with its own key (serveStdio is the SDK's:
+ * // import { serveStdio } from '@modelcontextprotocol/server/stdio')
  * serveStdio(mcpServerFactory({ info, instructions, tools, callApi: overHttp(origin, process.env.COOKBOOK_API_KEY!) }))
  */
 import { createMcpHandler, McpServer, originValidationResponse, ResourceTemplate, SUPPORTED_PROTOCOL_VERSIONS, UriTemplate, type AuthInfo, type CallToolResult, type McpRequestContext, type McpServerFactory } from '@modelcontextprotocol/server'
@@ -117,23 +118,57 @@ export const problemText = (json: any, status: number) =>
 export const problemOf = (json: any, status: number): Record<string, unknown> & { status: number } =>
   json && typeof json === 'object' && 'title' in json ? { ...json, status: typeof json.status === 'number' ? json.status : status } : { type: 'about:blank', title: `HTTP ${status}`, status }
 
-/**
- * A slow route answers 202 with a run in `Location`: the tool polls it (up to `waitMs`), then asks again for the
- * cached result, so a client sees one answer. Past the wait it says which run to check.
- */
-export const callWaiting = async (callApi: CallApi, call: ApiCall, auth: AuthInfo | undefined, waitMs: number) => {
-  let response = await callApi(call, auth)
+/** How a slow call stands: its answer, or (`pending`, the run's id, and `location`, its path) a run still working. */
+export type Waited = { response: Response; pending: string | null; location: string | null }
+
+const POLL_MS = 3000
+
+/** A call's answer, or the run it started when it answered 202 with a `Location`. */
+const waitedOf = (response: Response): Waited => {
   const location = response.headers.get('location')
-  if (response.status !== 202 || !location) return { response, pending: null }
+  return response.status === 202 && location ? { response, pending: location.split('/').pop()!, location } : { response, pending: null, location: null }
+}
+
+/** A path for `callApi` from a link's absolute `href`. */
+const pathOf = (href: string) => {
+  const url = new URL(href, 'http://localhost')
+  return url.pathname + url.search
+}
+
+/**
+ * Polls a slow call's run (its `Location`) until `waitMs` has passed, looking at least once. Done: the answer is the
+ * run's `_links.result` when it names one, else the call made once more (a slow route caches its answer: the
+ * standard's 202 rule); a call that answers 202 again started another run, which is pending in turn. Failed: the
+ * run's answer. It never makes the call again while the run works, so a call with side effects isn't repeated.
+ *
+ * @example
+ * const { response, location } = await pollRun(callApi, tool.call(args), stored.location, auth, 0)
+ */
+export const pollRun = async (callApi: CallApi, call: ApiCall, location: string, auth: AuthInfo | undefined, waitMs: number): Promise<Waited> => {
   const until = Date.now() + waitMs
-  while (Date.now() < until) {
-    await new Promise((resolve) => setTimeout(resolve, 3000))
-    const run = (await (await callApi({ path: location }, auth)).json().catch(() => null)) as { status?: string } | null
-    if (run?.status === 'done') return { response: await callApi(call, auth), pending: null }
-    if (run?.status === 'failed') return { response: await callApi({ path: location }, auth), pending: null }
+  for (;;) {
+    const run = await callApi({ path: location }, auth)
+    const { status, _links } = ((await run.clone().json().catch(() => null)) ?? {}) as { status?: string; _links?: { result?: { href?: string } } }
+    if (status === 'done') {
+      const result = _links?.result?.href
+      return waitedOf(await callApi(result ? { path: pathOf(result) } : call, auth))
+    }
+    if (status === 'failed') return { response: run, pending: null, location: null }
+    if (Date.now() >= until) return { response: run, pending: location.split('/').pop()!, location }
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS))
   }
-  response = await callApi({ path: location }, auth)
-  return { response, pending: location.split('/').pop()! }
+}
+
+/**
+ * Makes a call; a slow route answers 202 with a run in `Location`, which `pollRun` polls (up to `waitMs`), so a client
+ * sees one answer. Past the wait it says which run to check, and where.
+ *
+ * @example
+ * const { response, pending, location } = await callWaiting(callApi, tool.call(args), auth, 60_000)
+ */
+export const callWaiting = async (callApi: CallApi, call: ApiCall, auth: AuthInfo | undefined, waitMs: number): Promise<Waited> => {
+  const answered = waitedOf(await callApi(call, auth))
+  return answered.location ? pollRun(callApi, call, answered.location, auth, waitMs) : answered
 }
 
 /**
@@ -214,9 +249,12 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
       tool.name,
       { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, ...hintsOf(tool) }, _meta: { ...(route ? { [ROUTE_META]: route } : {}), [CLI_META]: { name: cli.name, positional: cli.positional, examples: cli.examples }, ...listed } },
       async (args: Record<string, unknown>, ctx): Promise<CallToolResult> => {
-        const { response, pending } = await callWaiting(callApi, tool.call(args as never), ctx.http?.authInfo, waitMs)
+        const { response, pending, location } = await callWaiting(callApi, tool.call(args as never), ctx.http?.authInfo, waitMs)
         const json = await response.json().catch(() => null)
-        if (pending) return { content: [{ type: 'text', text: `Still working: run ${pending}. Check it with get_run, then call ${tool.name} again with the same arguments (it answers at once when done).` }], _meta: { [PENDING_META]: { run: pending }, ...listed } }
+        if (pending) {
+          const text = `Still working: run ${pending}. GET ${location} until its status is done (the run is also in _meta["${PENDING_META}"]), then call ${tool.name} again with the same arguments (it answers at once when done).`
+          return { content: [{ type: 'text', text }], _meta: { [PENDING_META]: { run: pending, location }, ...listed } }
+        }
         if (!response.ok) return { isError: true, content: [{ type: 'text', text: problemText(json, response.status) }], _meta: { [PROBLEM_META]: problemOf(json, response.status), ...listed } }
         return {
           content: [{ type: 'text', text: tool.summarize(json, args as never) }, ...(tool.links?.(json) ?? []).map((link) => ({ type: 'resource_link' as const, ...link }))],

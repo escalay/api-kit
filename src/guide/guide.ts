@@ -5,7 +5,8 @@
  *   skills/SKILL.md, *.md     a skill folder: a router plus one playbook per task (also the MCP prompts)
  * `/llms-full.txt` is assembled from them in the order given, so it never drifts from its parts. `{{origin}}` and any
  * `{{dotted.path}}` from `vars()` are filled per request; a placeholder with no value is left visible and reported by
- * `fillTemplate`, which the tests check. The parts that must match the code are generated, never written by hand:
+ * `fillTemplate`, which the tests check; `{{origin}}` is the app's `publicOrigin` when it has one. The parts that must
+ * match the code are generated, never written by hand:
  * `{{api.endpoints}}`, `{{api.tag.<slug>}}`, `{{api.unblock}}`, `{{mcp.tools}}`, `{{cli.commands}}`, `{{skills.<name>.playbooks}}`
  * (see `reference.ts`). Each skill folder is also published for discovery: `/.well-known/agent-skills/index.json`
  * and a deterministic archive per skill with references, or its SKILL.md alone.
@@ -23,7 +24,6 @@ import { join, relative } from 'node:path'
 import type { Context, Hono } from 'hono'
 import { CACHE } from '../core/cache.js'
 import { frontmatterOf, recordMounted, mountedOf, publicOriginOf, sendPublic, skillsIndex, tarGz, WELL_KNOWN, type SkillArtifact } from '../core/discovery.js'
-import { originOf } from '../core/hal.js'
 import { problemResponse } from '../core/problem.js'
 import { brandVars, generatedVars, type CliCommandLike, type OpenApiDoc } from './reference.js'
 
@@ -78,6 +78,47 @@ export const fullOrder = (files: Map<string, string>, order: string[]) =>
       : files.has(entry) ? [entry] : [],
   )
 
+/** Origins that keep a fetched spec and rendered skills. Without `publicOrigin` a caller names its own origin, so the caches stay this small. */
+const MAX_ORIGINS = 8
+
+/** A map that keeps the `max` entries used last: a new one past it lets go of the one unused longest. */
+const recentlyUsed = <Value>(max: number) => {
+  const entries = new Map<string, Value>()
+  return {
+    get: (key: string) => {
+      const value = entries.get(key)
+      if (value === undefined) return undefined
+      entries.delete(key)
+      entries.set(key, value)
+      return value
+    },
+    set: (key: string, value: Value) => {
+      entries.delete(key)
+      entries.set(key, value)
+      if (entries.size > max) entries.delete(entries.keys().next().value!)
+    },
+    delete: (key: string) => void entries.delete(key),
+  }
+}
+
+/** A plain object or array: what JSON spells out whole. */
+const isPlain = (value: object) => Array.isArray(value) || [Object.prototype, null].includes(Object.getPrototypeOf(value))
+
+/**
+ * The values a render was filled from, as a key to compare; null when they hold what JSON can't spell out whole (a
+ * Map, a class instance, a BigInt, a cycle), and then nothing is kept: every request renders again.
+ */
+const valuesKeyOf = (values: unknown) => {
+  try {
+    return JSON.stringify(values, (_key, value: unknown) => {
+      if (['bigint', 'function', 'symbol'].includes(typeof value) || (value && typeof value === 'object' && !isPlain(value))) throw new Error('not plain')
+      return value
+    })
+  } catch {
+    return null
+  }
+}
+
 /** The guide as served: its template files and a renderer that fills them for one origin. */
 export type Guide = { files: Map<string, string>; render: (origin: string, name: string) => Promise<string> }
 
@@ -93,19 +134,23 @@ export const serveGuide = (app: Hono<any, any, any> & Requester, { vars, full, c
   const files = source.files ? (source.files instanceof Map ? source.files : new Map(Object.entries(source.files))) : guideFiles(source.dir!)
   // The OpenAPI document only changes with a deploy: fetch it once per origin, in-process, with the caller's own
   // credentials (a private service answers the spec only to them); only a good answer is kept
-  const docs = new Map<string, Promise<OpenApiDoc>>()
+  const docs = recentlyUsed<Promise<OpenApiDoc>>(MAX_ORIGINS)
   const docOf = (origin: string, credentials: Record<string, string>) => {
-    if (!docs.has(origin)) {
-      const url = new URL(origin)
-      const fetched = Promise.resolve(app.request(WELL_KNOWN.openapi, { headers: { 'x-forwarded-proto': url.protocol.slice(0, -1), 'x-forwarded-host': url.host, ...credentials } })).then((response) => {
-        if (!response.ok) throw new Error(`the spec answered ${response.status}`)
-        return response.json() as Promise<OpenApiDoc>
-      })
-      docs.set(origin, fetched)
-      fetched.catch(() => docs.delete(origin))
-    }
-    return docs.get(origin)!
+    const kept = docs.get(origin)
+    if (kept) return kept
+    const url = new URL(origin)
+    const fetched = Promise.resolve(app.request(WELL_KNOWN.openapi, { headers: { 'x-forwarded-proto': url.protocol.slice(0, -1), 'x-forwarded-host': url.host, ...credentials } })).then((response) => {
+      if (!response.ok) throw new Error(`the spec answered ${response.status}`)
+      return response.json() as Promise<OpenApiDoc>
+    })
+    docs.set(origin, fetched)
+    fetched.catch(() => {
+      if (docs.get(origin) === fetched) docs.delete(origin)
+    })
+    return fetched
   }
+  // The origin every page names: the app's `publicOrigin` when set, so a forwarded host can't change it
+  const originFor = (c: Context) => publicOriginOf(app, c)
   const credentialsOf = (c: Context) => Object.fromEntries((['authorization', 'cookie', 'cf-access-jwt-assertion'] as const).flatMap((name) => (c.req.header(name) ? [[name, c.req.header(name)!]] : [])))
   const render = async (origin: string, name: string, credentials: Record<string, string> = {}) => {
     const generated = generatedVars({ origin, doc: await docOf(origin, credentials), tools: mountedOf(app).mcp?.tools, resources: mountedOf(app).mcp?.resources, commands: commands?.commands, files })
@@ -114,15 +159,15 @@ export const serveGuide = (app: Hono<any, any, any> & Requester, { vars, full, c
   }
   const send = (c: Context, body: string) => c.body(body, 200, { 'content-type': MARKDOWN, 'cache-control': CACHE.docs })
 
-  app.get('/llms.txt', async (c) => (files.has('llms.txt') ? send(c, await render(originOf(c), 'llms.txt', credentialsOf(c))) : problemResponse(c, 'not_found')))
+  app.get('/llms.txt', async (c) => (files.has('llms.txt') ? send(c, await render(originFor(c), 'llms.txt', credentialsOf(c))) : problemResponse(c, 'not_found')))
   app.get('/llms-full.txt', async (c) => {
-    const parts = await Promise.all(fullOrder(files, full).map(async (name) => `<!-- ${name} -->\n\n${(await render(originOf(c), name, credentialsOf(c))).trim()}\n`))
+    const parts = await Promise.all(fullOrder(files, full).map(async (name) => `<!-- ${name} -->\n\n${(await render(originFor(c), name, credentialsOf(c))).trim()}\n`))
     return send(c, parts.join('\n---\n\n'))
   })
   for (const folder of ['agents', 'skills']) {
     app.get(`/${folder}/*`, async (c) => {
       const name = c.req.path.slice(1)
-      return files.has(name) ? send(c, await render(originOf(c), name, credentialsOf(c))) : problemResponse(c, 'not_found', { detail: `No ${name}. The index is /llms.txt.` })
+      return files.has(name) ? send(c, await render(originFor(c), name, credentialsOf(c))) : problemResponse(c, 'not_found', { detail: `No ${name}. The index is /llms.txt.` })
     })
   }
 
@@ -139,21 +184,26 @@ export const serveGuide = (app: Hono<any, any, any> & Requester, { vars, full, c
         return { name, description, type: 'archive' as const, url: `/.well-known/agent-skills/${name}.tar.gz`, bytes: tarGz(entries), mediaType: 'application/gzip' }
       }),
     )
-  // The catalogs read artifacts synchronously: keep the last set built per origin
-  const built = new Map<string, SkillArtifact[]>()
+  // Kept per origin with the values they were filled from (`vars()`): built again only when those change, or every
+  // time when they can't be compared. A render that fails is never kept. The catalogs read the set synchronously,
+  // right after refreshing it
+  const built = recentlyUsed<{ values: string | null; list: SkillArtifact[] }>(MAX_ORIGINS)
   const artifactsNow = async (origin: string, credentials: Record<string, string> = {}) => {
+    const values = valuesKeyOf(vars())
+    const kept = built.get(origin)
+    if (values !== null && kept?.values === values) return kept.list
     const list = await artifacts(origin, credentials)
-    built.set(origin, list)
+    built.set(origin, { values, list })
     return list
   }
-  recordMounted(app, { skills: (origin) => built.get(origin) ?? [], refreshSkills: artifactsNow })
+  recordMounted(app, { skills: (origin) => built.get(origin)?.list ?? [], refreshSkills: artifactsNow })
 
   app.get(WELL_KNOWN.skillsIndex, async (c) => {
-    const origin = publicOriginOf(app, c)
+    const origin = originFor(c)
     return sendPublic(c, JSON.stringify(skillsIndex(origin, await artifactsNow(origin, credentialsOf(c))), null, 2), 'application/json')
   })
   app.get('/.well-known/agent-skills/:file', async (c) => {
-    const skill = (await artifactsNow(publicOriginOf(app, c), credentialsOf(c))).find((one) => one.url === c.req.path)
+    const skill = (await artifactsNow(originFor(c), credentialsOf(c))).find((one) => one.url === c.req.path)
     return skill ? sendPublic(c, skill.bytes, skill.mediaType) : problemResponse(c, 'not_found', { detail: `No ${c.req.path}. The index is ${WELL_KNOWN.skillsIndex}.` })
   })
   return { files, render }

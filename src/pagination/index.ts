@@ -13,13 +13,37 @@ import { z } from '@hono/zod-openapi'
 import { linksOf, LinksSchema, pathWith } from '../core/hal.js'
 import { ProblemError } from '../core/problem.js'
 
+/**
+ * The `limit` query parameter: a page's size, `fallback` when left out, at most `max`.
+ *
+ * @example
+ * request: { query: z.object({ limit: limitQuery({ fallback: 50, max: 100 }), cursor: cursorQuery }) }
+ */
 export const limitQuery = ({ fallback = 20, max = 200 } = {}) =>
   z.coerce.number().int().min(1).max(max).default(fallback).openapi({ description: `How many items per page (1–${max}, default ${fallback}).`, example: fallback })
 
+/**
+ * The `cursor` query parameter: where the next page starts, copied from `_links.next`.
+ *
+ * @example
+ * request: { query: z.object({ limit: limitQuery(), cursor: cursorQuery }) }
+ */
 export const cursorQuery = z.string().max(2048).optional().openapi({ description: 'Where to continue: copy it from `_links.next`, never build it yourself.' })
 
+/**
+ * A cursor from the route's own position (usually the last row's sort key): base64url JSON. `pageOf` calls it for `next`.
+ *
+ * @example
+ * encodeCursor({ id: 'a2' }) // 'eyJpZCI6ImEyIn0'
+ */
 export const encodeCursor = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
 
+/**
+ * The position a cursor holds, checked against `schema`; undefined without one. A cursor this API didn't issue is a 400.
+ *
+ * @example
+ * const after = decodeCursor(query.cursor, z.object({ id: z.string() }))?.id ?? ''
+ */
 export const decodeCursor = <T>(cursor: string | undefined, schema: z.ZodType<T>): T | undefined => {
   if (!cursor) return undefined
   try {
@@ -36,13 +60,19 @@ type Query = Record<string, string | number | boolean | string[] | null | undefi
  * list's query schema.
  *
  * @example
- * query: z.object({ ...sortQuery(['saves', 'name'], 'saves'), ...pageQuery() })
+ * query: z.object({ ...sortQuery(['saves', 'name'], 'saves'), limit: limitQuery(), cursor: cursorQuery })
  */
 export const sortQuery = <Field extends string>(fields: [Field, ...Field[]], fallback: Field) => ({
   sortBy: z.enum(fields).default(fallback as never).openapi({ description: `Order by: ${fields.join(', ')}.` }),
   order: z.enum(['asc', 'desc']).optional().openapi({ description: 'Ascending or descending; omitted, each field’s natural order (counts high to low, names A to Z).' }),
 })
 
+/**
+ * A page as HAL: `count`, `total` when given, `_links.self` and `_links.next` (with `next` as its cursor), the items under `_embedded.<name>`.
+ *
+ * @example
+ * pageOf({ origin, path: c.req.path, query: { limit }, name: 'recipes', items, next: more ? { id: items.at(-1)!.id } : null })
+ */
 export const pageOf = <Item>({ origin, path, query, name, items, next, total }: { origin: string; path: string; query: Query; name: string; items: Item[]; next: unknown; total?: number }) => ({
   count: items.length,
   ...(total === undefined ? {} : { total }),
@@ -53,7 +83,12 @@ export const pageOf = <Item>({ origin, path, query, name, items, next, total }: 
   _embedded: { [name]: items },
 })
 
-/** The OpenAPI schema of a page whose items live under `_embedded.<name>`. */
+/**
+ * The OpenAPI schema of a page whose items live under `_embedded.<name>`.
+ *
+ * @example
+ * pageSchema('RecipePage', 'recipes', RecipeCardSchema, 'A page of recipes.')
+ */
 export const pageSchema = <Item extends z.ZodTypeAny>(component: string, name: string, item: Item, description: string) =>
   z
     .object({

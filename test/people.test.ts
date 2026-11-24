@@ -1,11 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { sql } from 'drizzle-orm'
 import {
   createAgentApi,
   hashApiKey,
   KEYS_TAG,
   memoryGuardStore,
+  migrate,
   parseApiKeys,
   passkeyBaseName,
+  peopleRepo,
+  PEOPLE_MIGRATIONS,
   PEOPLE_OPEN_PATHS,
   PEOPLE_TAG,
   registerKeys,
@@ -19,6 +23,7 @@ import {
   teamTools,
   testDb,
   type AddressTrust,
+  type PeopleOptions,
   type SetupStep,
 } from '../src/index.js'
 import { lintOpenApi, softAuthenticator, toolRoutes, toolsRun } from '../src/testing/index.js'
@@ -28,7 +33,7 @@ const CODE = 'K7Q2-9XMD'
 const ORIGIN = 'http://app.test'
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1'
 
-const setup = async (options: { code?: string | undefined; steps?: SetupStep[]; address?: AddressTrust } = {}) => {
+const setup = async (options: { code?: string | undefined; steps?: SetupStep[]; address?: AddressTrust; limits?: PeopleOptions['limits'] } = {}) => {
   const code = 'code' in options ? options.code : CODE
   const steps = options.steps ?? []
   const db = await testDb()
@@ -52,7 +57,7 @@ const setup = async (options: { code?: string | undefined; steps?: SetupStep[]; 
   const teamChanges: unknown[] = []
   const passkeyChanges: unknown[] = []
   const recoveries: unknown[] = []
-  await registerPeople(app, { db, rpName: 'Sample', fixedKeys, onTeamChange: (change) => void teamChanges.push(change), onPasskeyChange: (change) => void passkeyChanges.push(change) })
+  await registerPeople(app, { db, rpName: 'Sample', fixedKeys, onTeamChange: (change) => void teamChanges.push(change), onPasskeyChange: (change) => void passkeyChanges.push(change), limits: options.limits })
   await registerSetup(app, { db, code, steps, guards: memoryGuardStore(), fixedKeys, onRecovery: (recovery) => void recoveries.push(recovery) })
   await registerKeys(app, { db, fixedKeys })
   app.get('/api/v1/me', (c) => c.json(c.get('caller' as never)))
@@ -87,6 +92,8 @@ const setup = async (options: { code?: string | undefined; steps?: SetupStep[]; 
   return { app, db, browser, asKey, claimAsOwner, teamChanges, passkeyChanges, recoveries }
 }
 
+afterEach(() => vi.useRealTimers())
+
 describe('claiming a deployment', () => {
   it('refuses every claim when no setup code is set', async () => {
     const { browser } = await setup({ code: undefined })
@@ -118,6 +125,14 @@ describe('claiming a deployment', () => {
     const guesser = browser('198.51.100.7')
     for (let attempt = 0; attempt < 5; attempt++) expect((await guesser.call('POST', '/api/setup/claim', { code: `GUESS-${attempt}`, email: 'g@example.com' })).status).toBe(403)
     expect((await guesser.call('POST', '/api/setup/claim', { code: CODE, email: 'g@example.com' })).status).toBe(429)
+  })
+
+  it('counts only wrong codes against the day\'s 20, so guesses from many addresses never lock out the right code', async () => {
+    const { browser } = await setup()
+    const claim = (address: string, code: string) => browser(address).call('POST', '/api/setup/claim', { code, email: 'owner@example.com' })
+    for (let guess = 0; guess < 20; guess++) expect((await claim(`198.51.100.${guess}`, `GUESS-${guess}`)).status).toBe(403)
+    expect((await claim('198.51.100.20', 'GUESS-20')).status).toBe(429)
+    expect((await claim('203.0.113.9', CODE)).status).toBe(200)
   })
 
   it('the setup claim counts by the trusted address', async () => {
@@ -214,6 +229,23 @@ describe('recovering with a session still open, and hooks that fail', () => {
     expect(claimed).toMatchObject({ mode: 'recover', enrolment: expect.any(String) })
     expect(made).toMatchObject({ status: 200, body: { signedIn: true, passkeys: 2 } })
   })
+
+  it('changes the team when the app\'s hook throws, and logs the throw', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const db = await testDb()
+      const keys = parseApiKeys(`owner-key:${hashApiKey(KEY)}`)
+      const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [PEOPLE_TAG], auth: { realm: 'sample', keys, open: [...PEOPLE_OPEN_PATHS] } })
+      await registerPeople(app, { db, rpName: 'Sample', fixedKeys: [...keys.values()], onTeamChange: () => { throw new Error('the log is down') } })
+      const asKey = (path: string, method: string, body?: unknown) => app.request(`${ORIGIN}${path}`, { method, headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) })
+      expect((await asKey('/api/team', 'POST', { email: 'ana@example.com' })).status).toBe(201)
+      const [ana] = (await (await asKey('/api/team', 'GET')).json()).people
+      expect((await asKey(`/api/team/people/${ana.id}`, 'PATCH', { role: 'owner' })).status).toBe(200)
+      expect(logged.mock.calls.map(([line]) => line)).toEqual(['onTeamChange failed: the log is down', 'onTeamChange failed: the log is down'])
+    } finally {
+      logged.mockRestore()
+    }
+  })
 })
 
 describe('passkeys and the session', () => {
@@ -286,6 +318,58 @@ describe('passkeys and the session', () => {
     expect(await owner.json('POST', '/api/session/passkeys/register/verify', { challengeId: again.challengeId, enrolment, response: await device.register(again.options, ORIGIN) })).toMatchObject({ signedIn: true })
     // Once a passkey is made, the enrolment is spent
     expect((await browser().call('POST', '/api/session/passkeys/register/options', { enrolment })).status).toBe(401)
+  })
+
+  it('takes a challenge once when two verifies of it arrive together', async () => {
+    const { browser, claimAsOwner, db } = await setup()
+    const { authenticator } = await claimAsOwner()
+    const again = browser()
+    const { challengeId, options } = await again.json('POST', '/api/session/passkeys/login/options')
+    const response = await authenticator.login(options, ORIGIN)
+    const answers = await Promise.all([again.call('POST', '/api/session/passkeys/login/verify', { challengeId, response }), browser().call('POST', '/api/session/passkeys/login/verify', { challengeId, response })])
+    expect(answers.map((answer) => answer.status).sort()).toEqual([200, 400])
+
+    const repo = peopleRepo(db)
+    await repo.addChallenge({ id: 'wch_twice', kind: 'enrol', challenge: 'c', personId: 'prs_1', expiresAt: new Date(Date.now() + 60_000).toISOString() })
+    const taken = await Promise.all([repo.takeChallenge('wch_twice', 'enrol'), repo.takeChallenge('wch_twice', 'enrol')])
+    expect(taken.filter(Boolean)).toHaveLength(1)
+    // An expired one is taken out, never handed back
+    await repo.addChallenge({ id: 'wch_old', kind: 'login', challenge: 'c', personId: null, expiresAt: new Date(Date.now() - 1000).toISOString() })
+    expect(await repo.takeChallenge('wch_old', 'login')).toBeUndefined()
+    expect(await repo.peekChallenge('wch_old', 'login')).toBeUndefined()
+  })
+
+  it('sweeps expired challenges and sessions from its writes, at most once a minute', async () => {
+    let at = Date.parse('2026-11-10T09:00:00Z')
+    vi.useFakeTimers({ toFake: ['Date'], now: at })
+    const db = await testDb()
+    await migrate(db, 'people', PEOPLE_MIGRATIONS)
+    const repo = peopleRepo(db)
+    const rows = async () => Number((await db.all<[number]>(sql`select (select count(*) from webauthn_challenges) + (select count(*) from sessions)`))[0]![0])
+    const inSeconds = (seconds: number) => new Date(at + seconds * 1000).toISOString()
+    await repo.addChallenge({ id: 'wch_soon', kind: 'login', challenge: 'c', personId: null, expiresAt: inSeconds(10) })
+    await repo.addSession('session-soon', 'prs_1', inSeconds(10), null)
+    vi.setSystemTime((at += 30_000))
+    // Both lapsed, but the last sweep was under a minute ago
+    await repo.addChallenge({ id: 'wch_later', kind: 'login', challenge: 'c', personId: null, expiresAt: inSeconds(300) })
+    expect(await rows()).toBe(3)
+    vi.setSystemTime((at += 31_000))
+    await repo.addSession('session-later', 'prs_1', inSeconds(3600), null)
+    expect(await rows()).toBe(2)
+    expect(await db.all(sql`select name from sqlite_master where type = 'index' and name = 'sessions_by_person'`)).toHaveLength(1)
+  })
+
+  it('limits the anonymous options routes per address when given limits, and not without', async () => {
+    const limited = await setup({ limits: { store: memoryGuardStore() } })
+    const caller = limited.browser('198.51.100.7')
+    for (let call = 0; call < 30; call++) expect((await caller.call('POST', '/api/session/passkeys/login/options')).status).toBe(200)
+    const refused = await caller.call('POST', '/api/session/passkeys/register/options', {})
+    expect(refused.status).toBe(429)
+    expect(Number(refused.headers.get('retry-after'))).toBeGreaterThan(0)
+    expect((await limited.browser('198.51.100.8').call('POST', '/api/session/passkeys/login/options')).status).toBe(200)
+
+    const open = (await setup()).browser('198.51.100.7')
+    for (let call = 0; call < 31; call++) expect((await open.call('POST', '/api/session/passkeys/login/options')).status).toBe(200)
   })
 
   it('refuses a passkey nobody registered, and an enrolment used twice', async () => {

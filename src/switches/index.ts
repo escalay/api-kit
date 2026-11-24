@@ -19,6 +19,7 @@ import type { OpenAPIHono, RouteHandler } from '@hono/zod-openapi'
 import type { Context, MiddlewareHandler } from 'hono'
 import type { Caller } from '../core/auth.js'
 import { linksOf, originOf } from '../core/hal.js'
+import { tellApp } from '../core/hooks.js'
 import { ProblemError, problemResponses } from '../core/problem.js'
 import { dependentsOf, keyOf, needsInOrder, type Catalog } from './catalog.js'
 import { contextOf, contextOfScope, isScope, type FlagAnswer, type FlagContext, type FlagOverride, type FlagProvider, type FlagReason, type ResolveOptions } from './providers.js'
@@ -360,7 +361,7 @@ export const switches = <C extends Catalog>({ catalog, providers, off = [], path
       if (c.req.valid('query').dryRun === 'true') return c.json({ dryRun: true, key, scope, on, changes, feature: (await listFor(c, true)).featureOf(key) }, 200, { 'cache-control': 'no-store' })
       const by = nameOf(callerOf(c))
       await writer!.write!({ key, scope, on, by }, options(true))
-      await onSwitch?.({ key, scope, on, by }, c)
+      await tellApp('onSwitch', () => onSwitch?.({ key, scope, on, by }, c))
       return c.json({ dryRun: false, key, scope, on, changes, feature: (await listFor(c, true)).featureOf(key) }, 200, { 'cache-control': 'no-store' })
     }
     app.openapi(routes.list, list)

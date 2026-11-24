@@ -32,14 +32,17 @@ export const boardsRepo = (db: Db) => {
     },
     items: (id: string) => db.select({ ref: boardItems.ref, note: boardItems.note, addedAt: boardItems.addedAt }).from(boardItems).where(eq(boardItems.boardId, id)).orderBy(desc(boardItems.addedAt)),
     refs: async (id: string) => (await db.select({ ref: boardItems.ref }).from(boardItems).where(eq(boardItems.boardId, id))).map((row) => row.ref),
-    /** Puts an item on a board, or changes its note; 'added' or 'noted'. */
+    /**
+     * Puts an item on a board, or sets its note (null keeps the one it has); 'added' or 'noted'. The insert decides, so
+     * two saves at once add it once.
+     */
     save: async (id: string, ref: string, note: string | null): Promise<'added' | 'noted'> => {
-      const existed = (await db.select({ ref: boardItems.ref }).from(boardItems).where(and(eq(boardItems.boardId, id), eq(boardItems.ref, ref)))).length > 0
-      if (existed) await db.update(boardItems).set({ note: sql`coalesce(${note}, ${boardItems.note})` }).where(and(eq(boardItems.boardId, id), eq(boardItems.ref, ref)))
-      else await db.insert(boardItems).values({ boardId: id, ref, note, addedAt: now() })
+      const added = await db.insert(boardItems).values({ boardId: id, ref, note, addedAt: now() }).onConflictDoNothing().returning({ ref: boardItems.ref })
+      if (!added.length && note !== null) await db.update(boardItems).set({ note }).where(and(eq(boardItems.boardId, id), eq(boardItems.ref, ref)))
       await touch(id)
-      return existed ? 'noted' : 'added'
+      return added.length ? 'added' : 'noted'
     },
+    clearNote: (id: string, ref: string) => db.update(boardItems).set({ note: null }).where(and(eq(boardItems.boardId, id), eq(boardItems.ref, ref))),
     unsave: async (id: string, ref: string) => {
       await db.delete(boardItems).where(and(eq(boardItems.boardId, id), eq(boardItems.ref, ref)))
       await touch(id)

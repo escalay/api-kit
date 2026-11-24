@@ -14,7 +14,7 @@ import { guideSkills, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMc
 import { guideGaps, guideRoutes, lintOpenApi, toolRoutes } from '../src/testing/index.js'
 import { migrate, openDb } from '../src/db/index.js'
 import { OAUTH_MIGRATIONS } from '../src/oauth/schema.js'
-import { memoryOAuthStore } from '../src/oauth/index.js'
+import { createOAuth, generateOAuthKey, memoryOAuthStore } from '../src/oauth/index.js'
 import { approvedCode, oauthApp, signedIn } from './oauth-store-contract.js'
 
 const { key, hash } = mintApiKey('test')
@@ -1119,6 +1119,65 @@ describe('the app template’s container', () => {
   })
 })
 
+describe('the guide under many origins', () => {
+  const FILES = { 'llms.txt': '# Apps at {{origin}}, {{counts.apps}} of them\n', 'skills/apps/SKILL.md': '---\nname: apps\ndescription: Use when finding apps at {{origin}}.\n---\n\n# {{counts.apps}} apps\n', 'skills/apps/references/find.md': '# Find one\n' }
+  const guided = async ({ publicOrigin }: { publicOrigin?: string } = {}) => {
+    const oauth = publicOrigin ? createOAuth({ name: 'Apps', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null, publicOrigin }) : undefined
+    const app = createAgentApi({ title: 'Apps', version: '1.0.0', description: 'Apps.', tags: [], auth: { realm: 'apps', keys: parseApiKeys('') }, ...(oauth ? { oauth } : {}) })
+    const state = { apps: 2, varsCalls: 0 }
+    serveGuide(app, { files: FILES, vars: () => ((state.varsCalls += 1), { counts: { apps: state.apps } }), full: ['llms.txt'] })
+    const specFetches = vi.spyOn(app, 'request')
+    const fetchedSpecs = () => specFetches.mock.calls.filter(([path]) => path === '/openapi.json').length
+    const from = (host: string, path = '/llms.txt') => app.request(path, { headers: { 'x-forwarded-proto': 'https', 'x-forwarded-host': host } })
+    return { app, state, fetchedSpecs, from }
+  }
+
+  it('names the public origin whatever host a caller forwards, when publicOrigin is set', async () => {
+    const { from, fetchedSpecs } = await guided({ publicOrigin: 'https://apps.example.test' })
+    for (const host of ['elsewhere.example.test', 'other.example.test']) {
+      const text = await (await from(host)).text()
+      expect(text).toBe('# Apps at https://apps.example.test, 2 of them\n')
+    }
+    expect(fetchedSpecs()).toBe(1)
+  })
+
+  it('keeps the spec for a bounded number of origins when any caller can name one', async () => {
+    const { from, fetchedSpecs } = await guided()
+    for (let n = 1; n <= 20; n++) expect(await (await from(`host${n}.example.test`)).text()).toContain(`https://host${n}.example.test`)
+    expect(fetchedSpecs()).toBe(20)
+    await from('host20.example.test')
+    expect(fetchedSpecs()).toBe(20)
+    // The first origin was let go long ago: its spec is fetched again
+    await from('host1.example.test')
+    expect(fetchedSpecs()).toBe(21)
+  })
+
+  it('renders the skills discovery once per origin, and again when the guide\'s values change', async () => {
+    const { from, state } = await guided({ publicOrigin: 'https://apps.example.test' })
+    const index = async () => (await from('apps.example.test', '/.well-known/agent-skills/index.json')).json()
+    const first = await index()
+    const calls = state.varsCalls
+    expect(await index()).toEqual(first)
+    expect((await from('apps.example.test', '/.well-known/agent-skills/apps.tar.gz')).status).toBe(200)
+    // Each request reads the values once, to see whether they changed; nothing is rendered again
+    expect(state.varsCalls).toBe(calls + 2)
+    state.apps = 3
+    const changed = await index()
+    expect(changed.skills[0].digest).not.toBe(first.skills[0].digest)
+  })
+
+  it('renders the skills discovery every time when the guide\'s values can\'t be compared', async () => {
+    const app = createAgentApi({ title: 'Apps', version: '1.0.0', description: 'Apps.', tags: [], auth: { realm: 'apps', keys: parseApiKeys('') } })
+    const tally = { apps: 2 }
+    // A Map spells out as {} and a BigInt not at all: neither could tell a change
+    serveGuide(app, { files: FILES, vars: () => ({ counts: { apps: tally.apps }, seen: new Map([['apps', tally.apps]]), big: 1n }), full: ['llms.txt'] })
+    const digestOf = async () => (await (await app.request('/.well-known/agent-skills/index.json')).json()).skills[0].digest
+    const first = await digestOf()
+    tally.apps = 3
+    expect(await digestOf()).not.toBe(first)
+  })
+})
+
 describe('a guide\'s skills over MCP', () => {
   it('offers each skill folder as a skill and each playbook as a prompt, from a folder or a module', async () => {
     const files = {
@@ -1373,6 +1432,18 @@ describe('MCP (2026-07-28)', () => {
     const call = async (name: string, args: Record<string, unknown>) => (await (await rpc(app as never, 'tools/call', { name, arguments: args })).json()).result
     return { app, call }
   }
+
+  it('names the run to poll, and where, when a slow route is still working', async () => {
+    const api = new Hono()
+    api.post('/api/v1/reports', (c) => c.json({ status: 'running' }, 202, { location: '/api/v1/runs/r1' }))
+    api.get('/api/v1/runs/r1', (c) => c.json({ status: 'running' }))
+    const report = mcpTool({ name: 'make_report', title: 'Make a report', description: 'A slow report.', input: z.object({}), call: () => ({ method: 'POST', path: '/api/v1/reports' }), summarize: () => 'done' })
+    const app = new Hono()
+    mountMcp(app, { factory: mcpServerFactory({ info: { name: 'sample', version: '1.0.0' }, instructions: 'Reports.', tools: [report], callApi: inProcess(api), waitMs: 0 }), allowedHostnames: ['localhost'] })
+    const result = (await (await rpc(app as never, 'tools/call', { name: 'make_report', arguments: {} })).json()).result
+    expect(result.content[0].text).toBe('Still working: run r1. GET /api/v1/runs/r1 until its status is done (the run is also in _meta["api-kit/pending"]), then call make_report again with the same arguments (it answers at once when done).')
+    expect(result._meta['api-kit/pending']).toEqual({ run: 'r1', location: '/api/v1/runs/r1' })
+  })
 
   it('by default every JSON answer carries structuredContent', async () => {
     for (const { call } of [await twoTools(), await twoTools('always')]) {

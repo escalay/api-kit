@@ -23,14 +23,14 @@ mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools: [getNote]
 | `mcpTool`, `mcpResource` | a tool (route call + summary) and an attachable resource |
 | `routeOf`, `ROUTE_META` | a tool's route (`GET /api/v1/recipes/{id}`), published in `tools/list` as `_meta["api-kit/route"]`; set `route` on a tool whose path is built in steps |
 | `cli` on a tool or resource, `cliOf`, `CLI_META` | its command on the app's CLI, noun then verb (`cli: { name: 'note view', examples: [{ run: 'note view n_1', about: 'One note' }] }`), published with its positional arguments (the route's path parameters) as `_meta["api-kit/cli"]` |
-| `PROBLEM_META`, `PENDING_META` | a failed call carries its problem (with `status`) in `_meta["api-kit/problem"]`; one still working names its run in `_meta["api-kit/pending"]` |
+| `PROBLEM_META`, `PENDING_META` | a failed call carries its problem (with `status`) in `_meta["api-kit/problem"]`; one still working names its run and the path to poll (`{ run, location }`) in `_meta["api-kit/pending"]`, and its text says to `GET` that path until the run is done, then call the tool again |
 | `mountedMcp(app)` | the tools and resources `mountMcp` serves, for `cliGaps` and `cliSnapshot` |
 | `guideSkills({ files, fill })` | the guide's skill folders as the factory's `skills` and `prompts` (one prompt per playbook); `fill` renders a file first when a skill uses placeholders. Served so a plain MCP client finds them (below) |
 | `mcpServerFactory` | the server: info, instructions, tools, resources, prompts, skills; `toolsTtlMs` sets how long clients cache `tools/list` (default an hour); `structured` says when a tool's JSON rides as `structuredContent`: `'always'` (the default) or `'withOutput'` (only for a tool with an `output` schema; the others answer text only, so the app's CLI prints `{ text }` for their `--json`) |
 | `mountMcp` | `/mcp` (Streamable HTTP, MCP 2026-07-28 with a fallback for older clients) and the Server Card; the app's brand (`createAgentApi({ brand })`) fills `title`, `description`, `websiteUrl` and `icons` where `info` leaves them out |
 | `serverInfoOf(info, brand, origin, { inline })` | that identity: the inline PNG icon first (2025's `initialize`, `server/discover`, the card), left out of the serverInfo 2026-07-28 stamps on every other answer; a stdio factory takes `brand` itself |
 | `inProcess(app)` / `overHttp(origin, key)` | how tools reach the routes: in the same process, or over HTTP for a stdio entry |
-| `callWaiting` | follows a 202 run until it finishes, so a slow route still answers the tool |
+| `callWaiting`, `pollRun` | `callWaiting` makes the call and follows a 202 run until it finishes, so a slow route still answers the tool; past the wait it names the run (`pending`) and its path (`location`). `pollRun` polls a run already started (looking at least once) and never makes the call again while it works; once done, the answer is the run's `_links.result` (in the tool route's shape) when it names one, else the call made once more for its cached answer, and a 202 to that is a new run, still pending |
 
 ## Rules
 

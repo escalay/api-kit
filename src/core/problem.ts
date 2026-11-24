@@ -4,7 +4,7 @@
  * that says what to do next. Validation errors list each bad field in `errors`.
  *
  * @example
- * throw new ProblemError(404, 'not_found', { detail: 'No item 42. Search with GET /api/v1/search/recipes.' })
+ * throw new ProblemError('not_found', { detail: 'No item 42. Search with GET /api/v1/search/recipes.' })
  * createRoute({ …, responses: { 200: …, ...problemResponses(400, 404) } })
  */
 import { z } from '@hono/zod-openapi'

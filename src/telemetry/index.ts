@@ -2,7 +2,7 @@
  * A daily anonymous usage report, for a product people deploy for themselves: once a day, from 24 hours after the
  * first run, it POSTs `{ schema, instance, version, report }` to `${url}/v1/${product}`. The instance is a random v4
  * UUID made on the first run; the report holds only coarse ranges (`countRange`, `dayRange`) and yes/no answers.
- * It sends nothing when `DO_NOT_TRACK=1` or `TELEMETRY=off` is set or the owner switched it off, and it never throws
+ * It sends nothing when `DO_NOT_TRACK=1` or `TELEMETRY=off` (or `false`, `0`) is set or the owner switched it off, and it never throws
  * into the app.
  *   GET   {path}   whether it is on, and exactly the body it would send
  *   PATCH {path}   { enabled } (owner only)
@@ -34,7 +34,7 @@ export type TelemetryValue = string | boolean
 export type TelemetryReport = Record<string, TelemetryValue>
 /** The body the collector takes, and nothing else. */
 export type TelemetryBody = { schema: number; instance: string; version: string; report: TelemetryReport }
-/** What turns the report off from the environment: `DO_NOT_TRACK=1` or `TELEMETRY=off`. */
+/** What turns the report off from the environment: `DO_NOT_TRACK=1` or `TELEMETRY=off` (or `false`, `0`). */
 export type TelemetryEnv = { DO_NOT_TRACK?: string; TELEMETRY?: string }
 
 export type TelemetryConfig = {
@@ -128,13 +128,13 @@ export const telemetry = (config: TelemetryConfig) => {
 
   const bodyFor = async (db: Db, row: TelemetryRow): Promise<TelemetryBody> => ({ schema: config.schemaVersion, instance: row.instance, version: config.version, report: coarseReport(await config.collect(db), config.choices) })
 
-  /** The body as it would be sent now, made from the app's `collect`. */
   /** The row, with `enabled` read from the app's own switch when it keeps one. */
   const stateOf = async (db: Db): Promise<TelemetryRow> => {
     const row = await telemetryRepo(db).state()
     return config.switch ? { ...row, enabled: await config.switch.isOn() } : row
   }
 
+  /** The body as it would be sent now, made from the app's `collect`. */
   const bodyOf = async (db: Db) => {
     await migrate(db, 'telemetry', TELEMETRY_MIGRATIONS)
     return bodyFor(db, await stateOf(db))
@@ -155,7 +155,8 @@ export const telemetry = (config: TelemetryConfig) => {
       if (now.getTime() - Date.parse(row.since) < DAY_MS) return { sent: false, why: 'Nothing is sent in the first 24 hours.' }
       if (row.lastSentAt?.slice(0, 10) === now.toISOString().slice(0, 10)) return { sent: false, why: 'Already sent today.' }
       const body = await bodyFor(db, row)
-      await repo.markSent(now.toISOString())
+      // The stamp decides, so replicas running the schedule together send once
+      if (!(await repo.markSent(now.toISOString()))) return { sent: false, why: 'Already sent today.' }
       const answer = await (config.fetch ?? fetch)(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(SEND_MS) })
       if (!answer.ok) return { sent: false, why: `The collector answered ${answer.status}.` }
       const { latest } = ((await answer.json().catch(() => ({}))) ?? {}) as { latest?: unknown }
@@ -173,15 +174,25 @@ export const telemetry = (config: TelemetryConfig) => {
     // The first run starts here: the instance id and the 24 hours of quiet
     await repo.state()
     const routes = telemetryRoutes({ path, tag })
+    /** The body it would send, or why it can't be made: a `collect` that throws never fails the route. */
+    const shownBody = async (row: TelemetryRow) => {
+      try {
+        return { body: await bodyFor(db, row), failed: null }
+      } catch (error) {
+        const body: TelemetryBody = { schema: config.schemaVersion, instance: row.instance, version: config.version, report: {} }
+        return { body, failed: `The report can’t be made now (${(error as Error).message}): nothing is sent until it can.` }
+      }
+    }
     const reportOf = async (c: Context) => {
       const row = await stateOf(db)
       const off = offBecause(env(c), row)
+      const { body, failed } = await shownBody(row)
       return {
         on: !off,
-        why: off ?? 'Sent once a day, from 24 hours after the first run.',
+        why: off ?? failed ?? 'Sent once a day, from 24 hours after the first run.',
         enabled: row.enabled,
         endpoint,
-        body: await bodyFor(db, row),
+        body,
         since: row.since,
         lastSentAt: row.lastSentAt,
         latest: row.latest,

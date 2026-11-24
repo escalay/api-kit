@@ -30,7 +30,7 @@ export const boardRoutes = (config: BoardsConfig) => {
   const BoardListSchema = z.object({ count: z.number().int(), _links: LinksSchema, _embedded: z.object({ boards: z.array(BoardSchema) }) }).openapi('BoardList', { description: 'Boards, most recently changed first.' })
   const BoardInputSchema = z.object({ name: z.string().min(1).max(120).openapi({ example: 'Bank identity references' }), description: z.string().max(1000).optional().openapi({ description: 'What the board is for.' }) }).openapi('BoardInput', { description: 'A board’s name and what it is for.' })
   const BoardPatchSchema = BoardInputSchema.partial().openapi('BoardPatch', { description: 'A new name or description.' })
-  const NoteSchema = z.object({ note: z.string().max(1000).optional().openapi({ description: 'Why it is here.' }) }).openapi('BoardItemInput', { description: 'An optional note for the item.' })
+  const NoteSchema = z.object({ note: z.string().max(1000).nullable().optional().openapi({ description: 'Why it is here. Left out (or blank) keeps the note it has; null clears it.' }) }).openapi('BoardItemInput', { description: 'An optional note for the item.' })
   const SuggestionsSchema = z.object({ count: z.number().int(), _links: LinksSchema, _embedded: z.object({ items: z.array(config.item) }) }).openapi('BoardSuggestions', { description: 'Items like those on a board, best first.' })
   const id = z.string().min(1).max(80).openapi({ description: 'The board’s id.', example: '0b2e4c1a-5d1f-4b3e-9a51-7c8f2e6d1a90' })
   const ref = z.string().regex(config.refPattern ?? BOARD_REF).openapi({ description: 'The item’s ref, e.g. `' + config.refExample + '`.', example: config.refExample })

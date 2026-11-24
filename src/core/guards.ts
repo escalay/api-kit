@@ -40,32 +40,72 @@ export type GuardStore = {
   release: (id: string) => Promise<void>
 }
 
-/** The guards' state in this process's memory: one Node instance. Old entries go once there are `maxEntries`. */
+const PRUNE_MS = 60_000
+
+/**
+ * The guards' state in this process's memory: one Node instance. What lapsed is dropped at most once a minute (by the
+ * time the guards pass, no timer), and each read checks its entry's own expiry. Past `maxEntries` rate windows, the one
+ * counted longest ago goes; past `maxEntries` idempotency keys, the oldest answers go, never a lock a request holds.
+ *
+ * @example
+ * createAgentApi({ …, guards: { store: memoryGuardStore({ maxEntries: 5000 }) } })
+ */
 export const memoryGuardStore = ({ maxEntries = 2000 }: { maxEntries?: number } = {}): GuardStore => {
-  const windows = new Map<string, { start: number; used: number }>()
-  const keys = new Map<string, { answer: StoredAnswer | null; expiresAt: number }>()
+  // The maps keep their oldest entry first: a window moves to the end when counted
+  const windows = new Map<string, { start: number; used: number; endsAt: number }>()
+  // A key is either running (a request holds it, until `expiresAt`) or answered, never both
+  const running = new Map<string, number>()
+  const answers = new Map<string, { answer: StoredAnswer; expiresAt: number }>()
+  let prunedAt = -Infinity
   const prune = (now: number) => {
-    for (const [id, entry] of keys) if (entry.expiresAt <= now || keys.size > maxEntries) keys.delete(id)
+    if (now - prunedAt < PRUNE_MS) return
+    prunedAt = now
+    for (const [id, window] of windows) if (window.endsAt <= now) windows.delete(id)
+    for (const [id, expiresAt] of running) if (expiresAt <= now) running.delete(id)
+    for (const [id, entry] of answers) if (entry.expiresAt <= now) answers.delete(id)
+  }
+  const capWindows = () => {
+    for (const id of windows.keys()) {
+      if (windows.size <= maxEntries) return
+      windows.delete(id)
+    }
+  }
+  // A running lock stays: its request is still answering, and letting go would let a retry run it twice
+  const capKeys = () => {
+    for (const id of answers.keys()) {
+      if (running.size + answers.size <= maxEntries) return
+      answers.delete(id)
+    }
   }
   return {
     count: async (id, windowMs, now) => {
+      prune(now)
       const current = windows.get(id)
-      const window = current && now - current.start < windowMs ? current : { start: now, used: 0 }
+      const window = current && now - current.start < windowMs ? current : { start: now, used: 0, endsAt: now + windowMs }
       window.used++
+      windows.delete(id)
       windows.set(id, window)
-      if (windows.size > maxEntries) for (const [old, entry] of windows) if (now - entry.start >= windowMs) windows.delete(old)
-      return { ...window }
+      capWindows()
+      return { start: window.start, used: window.used }
     },
     claim: async (id, lockMs, now) => {
       prune(now)
-      const entry = keys.get(id)
-      if (entry) return entry.answer ?? 'running'
-      keys.set(id, { answer: null, expiresAt: now + lockMs })
+      // A lapsed answer or lock no longer holds the key, pruned yet or not
+      const answered = answers.get(id)
+      if (answered && answered.expiresAt > now) return answered.answer
+      if ((running.get(id) ?? -Infinity) > now) return 'running'
+      answers.delete(id)
+      running.set(id, now + lockMs)
+      capKeys()
       return null
     },
-    save: async (id, answer, expiresAt) => void keys.set(id, { answer, expiresAt }),
+    save: async (id, answer, expiresAt) => {
+      running.delete(id)
+      answers.set(id, { answer, expiresAt })
+      capKeys()
+    },
     release: async (id) => {
-      if (keys.get(id)?.answer === null) keys.delete(id)
+      running.delete(id)
     },
   }
 }
@@ -208,6 +248,12 @@ export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, stor
  */
 export type RateLimitOptions = { policy: string; limit: number; windowSeconds: number; store?: GuardStore; address?: AddressTrust; key?: (c: Context) => string | null }
 
+/**
+ * At most `limit` calls per `windowSeconds` per caller on the routes it guards (the rules are at the top of this file).
+ *
+ * @example
+ * app.use('/api/v1/products/:id/gaps', rateLimit({ policy: 'paid', limit: 120, windowSeconds: 3600, store: await dbGuardStore(db) }))
+ */
 export const rateLimit = ({ policy, limit, windowSeconds, store = memoryGuardStore(), address, key }: RateLimitOptions): MiddlewareHandler =>
   async (c, next) => {
     const who = key ? key(c) : callerOf(c, address)
