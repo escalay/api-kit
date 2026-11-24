@@ -44,7 +44,7 @@ parts an app copies in (`npx @escalay/kit add`, see the README); its `testing` p
 ## 3. Representations: HAL
 
 - Media type `application/hal+json` for resources and pages; problems are `application/problem+json`.
-- **`_links`** on every resource: absolute `href`s (built from the forwarded proto and host), `self` always, plus
+- **`_links`** on every resource: absolute `href`s (built from the forwarded proto and host, §9), `self` always, plus
   every neighbour worth visiting (`cook`, `recipes`, `similar`, `web` for the human page). Agents follow links; they
   never build URLs from ids.
 - **`_embedded`** holds related resources inlined on request (`?include=steps,cook`), each once.
@@ -227,7 +227,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
     whole origin, path-scoped resources included. An app that wants otherwise refuses it in its own `accepts`, as for
     the root.
 - **Open endpoints (`publicOrigin`, `limits`):** an app whose sign-in is reachable outside Access passes
-  `publicOrigin` and `limits`. `publicOrigin` is the only origin the issuer, `iss`, every metadata document, auth.md,
+  `publicOrigin` and `limits`, and an app behind a proxy or reachable by more than one host passes `publicOrigin`.
+  `publicOrigin` is the only origin the issuer, `iss`, every metadata document, auth.md,
   the 401's pointer, the resource's origin check, the root audience and the same-origin rule use, and the origin every
   publicly cached discovery document names (api-catalog, robots.txt, sitemap.xml, poppy.json, the Server Card, the
   Agent Card, the skills index and archives, the AI Catalog), so a forged `X-Forwarded-Host` changes none of them and
@@ -291,6 +292,12 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   counts by its /64, and an IPv6 address that carries an IPv4 one (mapped, NAT64) counts as that IPv4 address. The
   default, `'headers'`, is the earlier read (`cf-connecting-ip`, else the whole `X-Forwarded-For`, as sent): an app on
   Node names its source, and `kit doctor` notes one that doesn't.
+- **A forwarded host counts only when it is a bare host** (`originOf`): the first `X-Forwarded-Host` is taken when it
+  is a name, an IPv4 address or a bracketed IPv6 one with an optional port, and the first `X-Forwarded-Proto` when it
+  is `http` or `https`; anything else (a path, query, fragment or user in it) gives the request URL's own. A path in a
+  forwarded host would otherwise move the OAuth root under a space's resource, and that space's token would work as
+  a root one everywhere. A caller can still forward any bare host, so an app behind a proxy or reachable by more than
+  one host sets `publicOrigin` (§7), the one origin every token, audience and check names.
 - Every model key is the app's own capped OpenRouter key, never a shared one; the
   cap answers `429 spend_cap`.
 

@@ -23,7 +23,7 @@ import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, TOOLS_HASH_META, 
 import { attachSkills, instructionsWithSkills } from './skills.js'
 import { MODERN_PROTOCOL_VERSION, mountedOf, publicOriginOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN, type AgentBrand, type ServerIcon } from '../core/discovery.js'
 import { neverKeep } from '../core/guards.js'
-import { originOf, pathWith } from '../core/hal.js'
+import { originOf, originOfRequest, pathWith } from '../core/hal.js'
 
 type Query = Record<string, string | number | boolean | string[] | null | undefined>
 export type ApiCall = { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; path: string; query?: Query; body?: unknown }
@@ -96,13 +96,6 @@ export const serverInfoOf = (info: McpServerInfo, brand: AgentBrand | undefined,
   const websiteUrl = info.websiteUrl ?? brand.websiteUrl
   const icons = info.icons ?? brand.icons(origin, { inline })
   return { ...info, title: info.title ?? brand.title, description: info.description ?? brand.description, ...(websiteUrl ? { websiteUrl } : {}), ...(icons.length ? { icons } : {}) }
-}
-
-/** The public origin of the request MCP serves, as `mountMcp` forwards it; none over stdio. */
-const originOfRequest = (request: Request | undefined) => {
-  if (!request) return null
-  const url = new URL(request.url)
-  return `${request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() ?? url.protocol.replace(':', '')}://${request.headers.get('x-forwarded-host') ?? url.host}`
 }
 
 const HOUR = 3_600_000
@@ -259,7 +252,7 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
   const brand = ctx?.brand ?? ownBrand
   // No request (stdio): this server is the connection's only identity, so it takes the whole of it
   const whole = ctx?.era !== 'modern' || !ctx.requestInfo || ctx.requestInfo.headers.get('mcp-method') === 'server/discover'
-  const identity = serverInfoOf(info, brand, originOfRequest(ctx?.requestInfo), { inline: whole })
+  const identity = serverInfoOf(info, brand, ctx?.requestInfo ? originOfRequest(ctx.requestInfo) : null, { inline: whole })
   const server = new McpServer(identity, { instructions: instructionsWithSkills(instructions, skills), cacheHints: { 'server/discover': cached, 'tools/list': { ...cached, ttlMs: toolsTtlMs }, 'prompts/list': cached, 'resources/list': cached, 'resources/templates/list': cached } })
   // Clients that cache the list learn from any answer that it changed
   const listed = { [TOOLS_HASH_META]: toolsHashOf(tools, resources) }
