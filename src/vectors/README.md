@@ -29,7 +29,8 @@ const similar = nearest(space, vectorOf(space, 'note:1')!, { limit: 12 })
   checkout means live search runs on stale vectors: keep one copy current.
 - **One writer per ledger.** `embedMissing` holds `<file>.lock` (made only if missing, holding its process id) while it
   runs; a second run on the same file, in this process or another, throws naming the lock. A lock whose process is
-  gone (a crash) is taken over on the same machine; a lock left on shared storage by another machine stays until
+  gone (a crash) is taken over on the same machine. A lock with no process id yet is a writer still starting for 10
+  seconds, and taken over only after that; a lock left on shared storage by another machine stays until
   someone deletes it. Two machines building one ledger at once is not supported: build in one place, sync the file.
 - **A torn last line** (a write cut short by a crash) is left out by `readLedger` with one `console.warn`, and the next
   `embedMissing` drops it before appending (and embeds its item again, the only cost); a whole last line cut just

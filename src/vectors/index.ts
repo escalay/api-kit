@@ -18,7 +18,7 @@
  * standouts(meaning, await embedder.query('a fox made of triangles'), { limit: 24 })
  */
 import { createHash } from 'node:crypto'
-import { appendFile, open, readFile, truncate, unlink } from 'node:fs/promises'
+import { appendFile, open, readFile, stat, truncate, unlink } from 'node:fs/promises'
 
 export const EMBEDDING_MODEL = 'google/gemini-embedding-2'
 export const DIMENSIONS = 768
@@ -204,9 +204,23 @@ const isAlive = (pid: number) => {
   }
 }
 
+/** How long a lock without a process id may be a writer that made it and has not written its id yet. */
+const STARTING_MS = 10_000
+
+/**
+ * Who holds a lock: its process, or, while it holds no id and is under `STARTING_MS` old, a writer still starting.
+ * `held` is false once that process is gone, or an empty lock is older.
+ */
+const holderOf = async (lock: string): Promise<{ pid?: number; held: boolean }> => {
+  const pid = Number(await readFile(lock, 'utf8').catch(() => '')) || undefined
+  if (pid) return { pid, held: isAlive(pid) }
+  const madeAt = (await stat(lock).catch(() => undefined))?.mtimeMs
+  return { held: madeAt !== undefined && Date.now() - madeAt < STARTING_MS }
+}
+
 /**
  * Takes `<file>.lock` (made only if missing, holding this process's id) so one writer appends to a ledger at a time;
- * a lock whose process is gone is taken over. Returns its release.
+ * a lock whose process is gone, or one left empty for `STARTING_MS`, is taken over. Returns its release.
  */
 const lockLedger = async (file: string): Promise<() => Promise<void>> => {
   const lock = `${file}.lock`
@@ -218,8 +232,8 @@ const lockLedger = async (file: string): Promise<() => Promise<void>> => {
       return () => unlink(lock).catch(() => {})
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      const holder = Number(await readFile(lock, 'utf8').catch(() => ''))
-      if (attempt > 1 || (holder && isAlive(holder))) throw new Error(`${file} is being written by process ${holder || 'unknown'} (${lock}): run one embedMissing per ledger at a time. If none runs, delete ${lock}.`)
+      const holder = await holderOf(lock)
+      if (attempt > 1 || holder.held) throw new Error(`${file} is being written by process ${holder.pid ?? 'unknown'} (${lock}): run one embedMissing per ledger at a time. If none runs, delete ${lock}.`)
       await unlink(lock).catch(() => {})
     }
   }

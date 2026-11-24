@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { appendFile, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
@@ -94,6 +94,20 @@ describe('vectors', () => {
     await writeFile(`${file}.lock`, String(spawnSync(process.execPath, ['-e', '']).pid))
     expect(await embedMissing({ file, items: [...items, { key: 'k4', content: 't4' }], embed })).toMatchObject({ embedded: 1, fresh: 4 })
     await expect(readFile(`${file}.lock`, 'utf8')).rejects.toThrow()
+  })
+
+  it('takes an empty lock for a writer still starting, and takes it over only once it is old', async () => {
+    const file = await ledgerFile()
+    const items = [{ key: 'k0', content: 't0' }]
+    const embed = vi.fn(async (inputs: EmbeddingInput[]): Promise<Embedded> => ({ vectors: inputs.map(() => along(0)), tokens: 1, cost: 0 }))
+    await writeFile(`${file}.lock`, '')
+    await expect(embedMissing({ file, items, embed })).rejects.toThrow(`${file}.lock`)
+    expect(embed).not.toHaveBeenCalled()
+
+    // Left empty by a writer that died before writing its id
+    const minuteAgo = new Date(Date.now() - 60_000)
+    await utimes(`${file}.lock`, minuteAgo, minuteAgo)
+    expect(await embedMissing({ file, items, embed })).toMatchObject({ embedded: 1 })
   })
 
   it('embeds only what is missing or changed, writing each batch as it returns', async () => {
