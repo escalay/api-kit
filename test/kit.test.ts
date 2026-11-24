@@ -1128,6 +1128,29 @@ describe('the copy-in CLI', () => {
     }
   }, 120_000)
 
+  it('gives a feature the pagination part an app lacks, never moving an older kit copy to this version', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-feature-'))
+    expect(cli(parent, 'init', 'old-api', '--no-install', '--no-git').status).toBe(0)
+    const app = join(parent, 'old-api')
+    const lockPath = join(app, 'src/kit/kit.json')
+    const lock = JSON.parse(await readFile(lockPath, 'utf8'))
+    const withoutPagination = { ...lock, modules: lock.modules.filter((name: string) => name !== 'pagination'), files: Object.fromEntries(Object.entries(lock.files).filter(([file]) => !file.startsWith('pagination/'))) }
+    await rm(join(app, 'src/kit/pagination'), { recursive: true })
+    // An app at an older kit: nothing written, and the command that adds the part at its own version
+    await writeFile(lockPath, JSON.stringify({ ...withoutPagination, version: '1.30.0' }))
+    const older = cli(app, 'feature', 'things')
+    expect([older.status, older.stderr]).toEqual([1, expect.stringContaining('`npx @escalay/kit@1.30.0 add pagination --dir src/kit`')])
+    expect(existsSync(join(app, 'src/features/things'))).toBe(false)
+    expect(JSON.parse(await readFile(lockPath, 'utf8')).version).toBe('1.30.0')
+    // At this kit's version, the part is copied in first
+    await writeFile(lockPath, JSON.stringify(withoutPagination))
+    const current = cli(app, 'feature', 'things')
+    expect(current.status, current.stderr).toBe(0)
+    expect(current.stdout).toContain('Copied the pagination part into src/kit')
+    expect(JSON.parse(await readFile(lockPath, 'utf8')).modules).toContain('pagination')
+    await rm(parent, { recursive: true, force: true })
+  })
+
   it('installs a new app and runs its format and migrations, so its gate passes as made', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'kit-init-'))
     const bin = join(parent, 'bin')

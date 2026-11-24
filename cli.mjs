@@ -520,9 +520,13 @@ const addFeature = (root, name, switchable = false, fieldSpec = SAMPLE_FIELDS) =
   if (existsSync(folder)) fail(`src/features/${name} already exists`)
   const text = readFileSync(list, 'utf8')
   if (!text.includes('// kit:imports') || !text.includes('  // kit:features')) fail('src/features/index.ts lost its `// kit:imports` or `// kit:features` line; add the feature there by hand')
-  // The list pages by cursor with the pagination part, which an app made before 1.32 may not have
-  const lock = join(root, 'src/kit/kit.json')
-  if (existsSync(lock) && !JSON.parse(readFileSync(lock, 'utf8')).modules.includes('pagination')) {
+  // The list pages by cursor with the pagination part, which an older app may not have. `add` would also move every
+  // part to this kit, so an app at another version is told the command for its own instead
+  const lockFile = join(root, 'src/kit/kit.json')
+  const kit = existsSync(lockFile) ? JSON.parse(readFileSync(lockFile, 'utf8')) : null
+  if (kit && !kit.modules.includes('pagination') && kit.version !== VERSION)
+    fail(`a feature's list pages with the pagination part, which src/kit lacks: \`npx @escalay/kit@${kit.version} add pagination --dir src/kit\` adds it at your kit's version (or take kit ${VERSION} first: \`kit upgrading\`, then \`kit update\`), then run this again`)
+  if (kit && !kit.modules.includes('pagination')) {
     const added = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'add', 'pagination', '--dir', 'src/kit'], { cwd: root, encoding: 'utf8' })
     if (added.status !== 0) fail(`a feature's list pages with the pagination part, and copying it failed: ${added.stderr}`)
     console.log('Copied the pagination part into src/kit: the new list pages by cursor')
