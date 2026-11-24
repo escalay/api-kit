@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.30.1](https://github.com/escalay/api-kit/compare/v1.30.0...v1.30.1) (2026-11-24)
+
+
+### Fixed
+
+* never keep a secret shown once for an idempotency replay ([#102](https://github.com/escalay/api-kit/issues/102)) ([3edc8a0](https://github.com/escalay/api-kit/commit/3edc8a009902c4a081c768d7db3ac758694ebac7))
+
+
+### Documentation
+
+* generated tables, guarded notes, and kit upgrading ([#101](https://github.com/escalay/api-kit/issues/101)) ([cc9735c](https://github.com/escalay/api-kit/commit/cc9735c274d205d70a94aa6e87c258103a92269b))
+* one source per fact, with tests that keep it so ([#99](https://github.com/escalay/api-kit/issues/99)) ([fce0a94](https://github.com/escalay/api-kit/commit/fce0a94910a2a97951f395b20e930d0a3c2cadfa))
+
 ## [1.30.0](https://github.com/escalay/api-kit/compare/v1.29.0...v1.30.0) (2026-11-24)
 
 
