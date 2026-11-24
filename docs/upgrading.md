@@ -244,8 +244,8 @@ Nothing to do in any version recorded here.
 
 ### Unreleased (after 1.30.0)
 
-- `FORWARDED` adds `idempotency-key`: a tool's route gets the caller's key, so a retried `tools/call` runs the route
-  once (through 1.30.0 a retry replayed the whole `/mcp` answer, a key made by a tool included). `mountMcp` never keeps
+- `FORWARDED` adds `idempotency-key`: a tool's route gets the caller's key with the call's JSON-RPC id
+  (`<key>:<id>`, so two calls in one batch never share it), and a retried `tools/call` runs the route once (through 1.30.0 a retry replayed the whole `/mcp` answer, a key made by a tool included). `mountMcp` never keeps
   its own answer, on any path. `pollRun`'s call made again once a run is done goes without the key, so it gets the
   result, not the 202 kept for it.
 

@@ -136,6 +136,16 @@ const pathOf = (href: string) => {
   return url.pathname + url.search
 }
 
+/**
+ * The caller's auth for one JSON-RPC call: its Idempotency-Key gets the call's id, so the calls of one batch never
+ * share a key, and a retried call (the same id) runs its route once.
+ */
+const perCallAuth = (auth: AuthInfo | undefined, id: string | number): AuthInfo | undefined => {
+  const headers = (auth?.extra?.headers ?? {}) as Record<string, string>
+  const key = headers['idempotency-key']
+  return key && auth ? { ...auth, extra: { ...auth.extra, headers: { ...headers, 'idempotency-key': `${key}:${id}` } } } : auth
+}
+
 /** The caller's auth without its Idempotency-Key: a call made again after its run is done wants the result, not the 202 kept for that key. */
 const freshCallOf = (auth: AuthInfo | undefined): AuthInfo | undefined => {
   const { 'idempotency-key': _key, ...headers } = (auth?.extra?.headers ?? {}) as Record<string, string>
@@ -256,7 +266,7 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
       tool.name,
       { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, ...hintsOf(tool) }, _meta: { ...(route ? { [ROUTE_META]: route } : {}), [CLI_META]: { name: cli.name, positional: cli.positional, examples: cli.examples }, ...listed } },
       async (args: Record<string, unknown>, ctx): Promise<CallToolResult> => {
-        const { response, pending, location } = await callWaiting(callApi, tool.call(args as never), ctx.http?.authInfo, waitMs)
+        const { response, pending, location } = await callWaiting(callApi, tool.call(args as never), perCallAuth(ctx.http?.authInfo, ctx.mcpReq.id), waitMs)
         const json = await response.json().catch(() => null)
         if (pending) {
           const text = `Still working: run ${pending}. GET ${location} until its status is done (the run is also in _meta["${PENDING_META}"]), then call ${tool.name} again with the same arguments (it answers at once when done).`

@@ -131,8 +131,8 @@ sequenceDiagram
 - A resource template's query variables (`{?format}`) may be left out of a URI.
 - A tool's `authInfo.clientId` is an OAuth agent's client_id (never the name it registered), else the key's name or
   the person's email; `authInfo.extra` adds the agent's `grant` and `name` beside the forwarded `headers`
-  (`FORWARDED`: the credentials and `Idempotency-Key`, so a retried call runs its route once; `mountMcp` never keeps
-  its own answer).
+  (`FORWARDED`: the credentials and `Idempotency-Key`, given each call as `<key>:<JSON-RPC id>`, so a retried call
+  runs its route once; `mountMcp` never keeps its own answer).
 - Skills are findable from `resources/list` alone, without the extension's methods: each `SKILL.md` is listed as
   `<name> skill: start here` with its frontmatter description, and its `references/*.md` too while a skill has at
   most 20; the `skill://{+path}` template's description names the start URI; reading a folder (`skill://`, `skill://postbox`,

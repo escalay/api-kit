@@ -277,6 +277,25 @@ describe('idempotency', () => {
       }
     })
 
+    it('runs each call of a keyed JSON-RPC batch once: every call gets a key of its own', async () => {
+      const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`tester:${hashApiKey(KEY)}`) } })
+      let runs = 0
+      app.post('/api/notes', (c) => c.json({ note: ++runs }, 201))
+      relays(app, '/api/notes')
+      const call = (id: number, text: string) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'add_note', arguments: { text } } })
+      // Protocol 2025-03-26 still takes a batch: two calls in one request, under one Idempotency-Key
+      const batch = async () =>
+        (await app.request('/mcp', { method: 'POST', headers: { authorization: `Bearer ${KEY}`, 'idempotency-key': 'batch-1', 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-03-26' }, body: JSON.stringify([call(1, 'e'), call(2, 'f')]) })).text()
+      const first = await batch()
+      expect(first).not.toMatch(/isError|still running|different body/)
+      expect(runs).toBe(2)
+      // The same batch again: each call is answered as it was, and nothing runs twice
+      const again = await batch()
+      expect(again).not.toMatch(/isError/)
+      expect(again).toContain('{\\"note\\":2}')
+      expect(runs).toBe(2)
+    })
+
     it('keeps no secret when idempotency is wired by hand: the relay marks its own answer', async () => {
       const app = new Hono()
       const store = memoryGuardStore()
