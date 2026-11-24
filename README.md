@@ -100,6 +100,9 @@ The full standard: [docs/STANDARD.md](docs/STANDARD.md). Why the layout is what 
 
 ## Parts
 
+[docs/PARTS.md](docs/PARTS.md) maps them: what each needs, where the app imports it from, its STANDARD sections, how
+the parts depend on each other, and which parts a goal takes, in the order they go in.
+
 | Part | What | README |
 |---|---|---|
 | `core` | `createAgentApi`: OpenAPI 3.1 + Scalar, HAL, problem+json, keys + Access, caching, Idempotency-Key, rate limits, discovery, a key-value store type; `newId`, `waitFor`, `Jobs` (a queue for later work) | [core](src/core/README.md) |
@@ -114,11 +117,15 @@ The full standard: [docs/STANDARD.md](docs/STANDARD.md). Why the layout is what 
 | `web` | the front door: a public `/` or none, the browser app under `/app` | [web](src/web/README.md) |
 | `brand` | one brand on every surface: `brand/brand.ts` and `icon.svg`, rendered by `kit brand` into the favicon, PNG icons and OG card; MCP serverInfo, the Server Card, OpenAPI's `x-logo` and the A2A card read it | [brand](src/brand/README.md) |
 | `keys` | API keys made and revoked through the app's own API beside `API_KEYS`, `GET /api/me`, their MCP tools | [keys](src/keys/README.md) |
+| `people` | the owner and the members of a deployment: passkey sign-in with an HttpOnly session cookie, Access members matched to the team by email or domain, roles, the team routes and MCP tools | [people](src/people/README.md) |
+| `setup` | claiming a fresh deployment with the `SETUP_CODE` secret (fails closed, rate-limited), recovery by rotating it, and a setup checklist of the app's own steps, each checked for real | [setup](src/setup/README.md) |
 | `boards` | the owner's collections of items with notes; `boardRef` / `parseBoardRef`; the reference feature shape | [boards](src/boards/README.md) |
 | `telemetry` | a daily anonymous usage report (coarse ranges only) to the product's collector, the owner's switch, `GET /api/telemetry` showing exactly what is sent | [telemetry](src/telemetry/README.md) |
 | `switches` | feature switches: one catalog of the app's additive features, each on or off for everyone, a person or an API key, from the database or any flag service (`fromSdk`); `gated` routes answer 403 `feature_disabled`; `GET`/`PATCH /api/features` | [switches](src/switches/README.md) |
-| `testing` | `lintOpenApi`, `guideRoutes`, `guideGaps`, `toolRoutes`, `toolsRun` | [testing](src/testing/README.md) |
-| `search-client`, `search-react`, `vector-search-ui`, `boards-client`, `boards-react` | the browser side: typed clients, headless hooks, an optional shadcn block | [browser](src/browser/README.md) |
+| `testing` | `lintOpenApi`, `guideRoutes`, `guideGaps`, `toolRoutes`, `toolsRun`, `cliGaps` and `cliSnapshot`, `softAuthenticator` (passkeys in CI), `approveSignIn` (an OAuth approval as a browser makes it) | [testing](src/testing/README.md) |
+| `search-client`, `search-react`, `vector-search-ui` | search in the browser: a typed client and controller, headless React hooks, an optional shadcn block | [browser](src/browser/README.md) |
+| `boards-client`, `boards-react` | boards in the browser: a typed client, headless React hooks | [browser](src/browser/README.md) |
+| `switches-client`, `switches-react`, `switches-ui` | feature switches in the browser: the features for the person signed in, React hooks and `<Feature>`, an optional shadcn panel and notice | [browser](src/browser/README.md) |
 
 ## Add parts to an existing app
 
