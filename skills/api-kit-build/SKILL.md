@@ -17,7 +17,7 @@ Each part's rules travel with it in `src/kit/<part>/README.md`; the full standar
    line prints, up to `pnpm dev`: `cd my-api && pnpm test`; with `-- --no-install`, or without pnpm, it is
    `cd my-api && pnpm install && pnpm format && pnpm migrations && pnpm test` (with `--runtime node` there is no
    `pnpm migrations`). Done when it passes. Give your coding agent the kit's
-   skills with `npx skills add escalay/api-kit`.
+   skills with `npx skills add escalay/api-kit -y` (without `-y` the installer stops to ask).
 2. Read `AGENTS.md` in the new app, then `src/kit/core/README.md`, `db`, `mcp` and `testing`.
 3. `pnpm dev`, then open `/docs`, `/llms.txt` and `/mcp`. The example `notes` feature shows the shape.
 4. Replace `notes` with real features: the `api-kit-feature` skill, one feature at a time.

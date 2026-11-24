@@ -839,7 +839,8 @@ describe('the copy-in CLI', () => {
       expect(next).toBe('pnpm install && pnpm format && pnpm migrations && pnpm test')
       expect(await readFile(join(import.meta.dirname, '..', 'skills/api-kit-build/SKILL.md'), 'utf8')).toContain(`\`cd my-api && ${next}\``)
       // and the line after it gives the coding agent the kit's skills
-      expect(made.stdout).toMatch(/^Next: .*\nSkills: npx skills add escalay\/api-kit /m)
+      // -y: without it the installer stops to ask, which an agent's shell never answers
+      expect(made.stdout).toMatch(/^Next: .*\nSkills: npx skills add escalay\/api-kit -y /m)
       const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
@@ -994,7 +995,7 @@ describe('the copy-in CLI', () => {
         expect(text).toContain('`pnpm run deploy`')
       }
       // AGENTS.md says how to add the kit's skills, naming only skills the kit has
-      const skillsLine = both.split('\n').find((line) => line.startsWith('- `npx skills add escalay/api-kit`'))
+      const skillsLine = both.split('\n').find((line) => line.startsWith('- `npx skills add escalay/api-kit -y`'))
       expect(skillsLine).toBeDefined()
       const named = [...skillsLine!.matchAll(/`(api-kit-[a-z]+)`/g)].map(([, name]) => name!)
       expect(named).toEqual(expect.arrayContaining(['api-kit-build', 'api-kit-feature', 'api-kit-review']))

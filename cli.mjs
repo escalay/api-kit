@@ -1562,7 +1562,8 @@ const commands = {
     const firstRun = [['install'], ['format'], ...(runtime === 'node' ? [] : [['migrations']])]
     const left = flags.has('--no-install') ? firstRun : runFirst(root, firstRun)
     console.log(`Next: cd ${relative(process.cwd(), root)} && ${[...left.map((args) => `pnpm ${args.join(' ')}`), 'pnpm test', 'pnpm dev'].join(' && ')}`)
-    console.log(`Skills: npx skills add ${REPO} gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
+    // -y: the installer otherwise stops to ask which skills and agents, and an agent's shell never answers
+    console.log(`Skills: npx skills add ${REPO} -y gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
     console.log(`Brand: make brand/ yours, then ${RESVG_INSTALL} && \`npx @escalay/kit brand\` renders the favicon, PNG icons and OG card into ${BRAND_MODULE}`)
   },
 
