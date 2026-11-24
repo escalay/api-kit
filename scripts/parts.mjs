@@ -36,6 +36,25 @@ export const GOALS = [
   { goal: 'Sharing: invites to a space, asks to join, the owner’s approval', parts: ['oauth', 'people'], note: 'no sharing part yet: build it on oauth’s `approve`, `complete` with `resource`, `ticketTtl`, `onGrant` and `onRevoke` (oauth README)' },
 ]
 
+/**
+ * Every part's README: `# <folder>`, one paragraph saying what it is, then these sections in this order
+ * (`test/readmes.test.mjs` checks them).
+ */
+export const README_SHAPE = [
+  ['Use it when', 'what it is for'],
+  ["Don't use it when", 'what it is not for, and what to use instead'],
+  ['Add it', 'the `kit add` command and what the part needs'],
+  ['Wire it', 'the block to copy into the app'],
+  ['Options', 'a table: option, type, default, what it does'],
+  ['Exports', 'what the part exports, and its files'],
+  ['Flows', 'a Mermaid sequence or state diagram for every flow of more than two steps'],
+  ['Rules', 'what holds, and the STANDARD sections'],
+  ['Failure modes', 'a table: what the caller sees, and why'],
+  ['Limits', 'scaling ceilings and runtimes: Node only, Workers, one writer'],
+  ['Tests', 'the helpers that test it, and the kit’s own tests'],
+  ['Upgrading', 'a link to its section of docs/upgrading.md, never history inline'],
+]
+
 /** A list of part names cli.mjs declares as `const <name> = [...]`. */
 const listIn = (cliSource, name) => {
   const list = new RegExp(`const ${name} = \\[([^\\]]*)\\]`).exec(cliSource)?.[1]
@@ -167,6 +186,14 @@ export const partsMarkdown = (registry, cliSource) => {
     '```',
     '',
     'Dashed: browser layers.',
+    '',
+    '## Every README has one shape',
+    '',
+    'Each part’s README opens with `# <folder>` and one paragraph saying what it is, then these sections, in this order',
+    '(`test/readmes.test.mjs` checks them). What changed between versions lives in [upgrading.md](upgrading.md), never in',
+    'a README.',
+    '',
+    ...README_SHAPE.map(([heading, what], index) => `${index + 1}. **${heading}**: ${what}`),
     '',
   ].join('\n')
 }

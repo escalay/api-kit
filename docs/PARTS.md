@@ -138,3 +138,22 @@ flowchart LR
 ```
 
 Dashed: browser layers.
+
+## Every README has one shape
+
+Each part’s README opens with `# <folder>` and one paragraph saying what it is, then these sections, in this order
+(`test/readmes.test.mjs` checks them). What changed between versions lives in [upgrading.md](upgrading.md), never in
+a README.
+
+1. **Use it when**: what it is for
+2. **Don't use it when**: what it is not for, and what to use instead
+3. **Add it**: the `kit add` command and what the part needs
+4. **Wire it**: the block to copy into the app
+5. **Options**: a table: option, type, default, what it does
+6. **Exports**: what the part exports, and its files
+7. **Flows**: a Mermaid sequence or state diagram for every flow of more than two steps
+8. **Rules**: what holds, and the STANDARD sections
+9. **Failure modes**: a table: what the caller sees, and why
+10. **Limits**: scaling ceilings and runtimes: Node only, Workers, one writer
+11. **Tests**: the helpers that test it, and the kit’s own tests
+12. **Upgrading**: a link to its section of docs/upgrading.md, never history inline

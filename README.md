@@ -137,6 +137,8 @@ npx @escalay/kit diff --dir apps/api/src/kit --patch # before upgrading
 npx @escalay/kit update --dir apps/api/src/kit       # never overwrites your edits without --force
 ```
 
+What changes for an app between versions, part by part: [docs/upgrading.md](docs/upgrading.md).
+
 A file equal to the kit's counts as unchanged, whatever `kit.json` recorded. When `update` keeps a file you edited
 that the kit changed since the version `kit.json` records, it exits 1 and leaves `kit.json` at that older version,
 so `doctor` still names the file: `update --force` takes the kit's, then make your edits again.
