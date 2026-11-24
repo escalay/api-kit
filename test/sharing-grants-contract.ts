@@ -8,7 +8,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import { decodeJwt } from 'jose'
 import { describe, expect, it } from 'vitest'
-import { createAgentApi, createOAuth, dbOAuthStore, generateOAuthKey, hashApiKey, memoryOAuthStore, parseApiKeys, type Db, type OAuthConfig, type OAuthStore, type SignInDecision, type SignInRevoked } from '../src/index.js'
+import { createAgentApi, createOAuth, dbOAuthStore, generateOAuthKey, hashApiKey, memoryOAuthStore, parseApiKeys, type Db, type AgentBrand, type OAuthConfig, type OAuthStore, type SignInDecision, type SignInRevoked } from '../src/index.js'
 import { createSharing, registerSharing, sharingInvites, sharingMembers, sharingRepo, SHARING_OPEN_PATHS, type SharingOptions, type Space } from '../src/sharing/index.js'
 import { approveSignIn } from '../src/testing/index.js'
 import { DAY, HOUR, inviteRow, memberRow } from './sharing-rows.js'
@@ -39,7 +39,7 @@ export const grantOf = (token: string) => String(decodeJwt(token).grant)
  * page (or with `pages` the part's own), under `publicOrigin` (the part needs one). The owner (the `x-test-owner` header) gets the kit's own consent page. `byNameDelay` slows `spaces.byName`, as a
  * slow lookup inside `onGrant` would be.
  */
-export const grantsApp = async (db: Db, { options = {}, oauth: oauthOptions = {}, byNameDelay = 0, publicOrigin = ORIGIN, pages = false }: { options?: Partial<SharingOptions>; oauth?: Partial<OAuthConfig>; byNameDelay?: number; publicOrigin?: string; pages?: boolean } = {}) => {
+export const grantsApp = async (db: Db, { options = {}, oauth: oauthOptions = {}, byNameDelay = 0, publicOrigin = ORIGIN, pages = false, brand }: { options?: Partial<SharingOptions>; oauth?: Partial<OAuthConfig>; byNameDelay?: number; publicOrigin?: string; pages?: boolean; brand?: AgentBrand } = {}) => {
   // Each app its own shelves, so a test may rename or delete one
   const shelves: Space[] = [{ id: 'sp_soups', name: 'soups', title: 'Soups' }, { id: 'sp_bakes', name: 'bakes', title: 'Bakes' }]
   const spaces = {
@@ -64,6 +64,7 @@ export const grantsApp = async (db: Db, { options = {}, oauth: oauthOptions = {}
     title: 'Sample', version: '1.0.0', description: 'A recipe box.', tags: [],
     auth: { realm: 'sample', keys: parseApiKeys(`owner:${hashApiKey(KEY)}`), open: ['/test/join', ...SHARING_OPEN_PATHS], relay: ['/mcp', '/a2a', sharing.relay] },
     oauth,
+    ...(brand ? { brand } : {}),
   })
   app.post('/test/join', async (c) => {
     const body = await c.req.parseBody()

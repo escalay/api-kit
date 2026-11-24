@@ -2,9 +2,10 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { decodeJwt } from 'jose'
 import { describe, expect, it } from 'vitest'
-import { matches, testDb } from '../src/index.js'
+import { createBrand, defineBrand, matches, testDb, type AgentBrand } from '../src/index.js'
 import { createSharing, SHARING_OPEN_PATHS, sharingSignInPaths, signInStepOf, type SharingOptions } from '../src/sharing/index.js'
 import { approveSignIn } from '../src/testing/index.js'
+import { ASSETS } from './brand-fixture.js'
 import { BAKES, grantsApp, ORIGIN, OWNER, REDIRECT, SOUPS } from './sharing-grants-contract.js'
 
 const SECRET = 'a sharing secret of thirty-two bytes or more, for tests only'
@@ -18,9 +19,9 @@ const wordsOf = (html: string) => html.replace(/<style>[\s\S]*?<\/style>/g, '').
 type NewInvite = { id: string; code: string }
 
 /** The recipe box with the part's own sign-in pages, and a browser that opens a sign-in once and posts its page many times. */
-const box = async ({ options = {} }: { options?: Partial<SharingOptions> } = {}) => {
+const box = async ({ options = {}, brand }: { options?: Partial<SharingOptions>; brand?: AgentBrand } = {}) => {
   const knownReturns = [{ name: 'Sample App', callback: 'sample-app:/callback' }, { name: 'Client A', callback: REDIRECT }]
-  const made = await grantsApp(await testDb(), { pages: true, options: { knownReturns, ...options } })
+  const made = await grantsApp(await testDb(), { pages: true, brand, options: { knownReturns, ...options } })
   const { app } = made
   const makeInvite = async (space = 'soups', body: Record<string, unknown> = { label: 'Sam' }) => (await made.makeInvite(space, body)) as unknown as NewInvite
 
@@ -70,14 +71,17 @@ describe('approve', () => {
       const stranger = await open({ resource })
       expect([resource, stranger.page.status, stranger.html]).toEqual([resource, 200, expect.stringContaining('connect it to the address in your invite instead')])
       expect(stranger.html).not.toContain('<form')
-      // A live ticket for the root, from the owner's consent page, posted here with the right code: refused, signed in or not
+      // A live ticket for the root, from the owner's consent page, posted here with the right code: the part refuses it itself
       const owners = await open({ resource, headers: { 'x-test-owner': OWNER } })
-      for (const headers of [{}, { 'x-test-owner': OWNER }] as Record<string, string>[]) {
-        const forged = await post(owners, { code: invite.code }, headers)
-        expect([resource, forged.status, forged.headers.get('location')]).toEqual([resource, expect.any(Number), null])
-        expect(forged.status).toBeGreaterThanOrEqual(400)
-      }
+      const signedOut = await post(owners, { code: invite.code })
+      expect([resource, signedOut.status, signedOut.headers.get('location'), await signedOut.text()]).toEqual([resource, 400, null, expect.stringContaining('connect it to the address in your invite instead')])
+      const signedIn = await post(owners, { code: invite.code }, { 'x-test-owner': OWNER })
+      expect([resource, signedIn.status, signedIn.headers.get('location'), await signedIn.text()]).toEqual([resource, 403, null, expect.stringContaining('Join from the page this site showed you')])
     }
+    // A client that named nothing, at the owner's consent page: the owner's to approve there, never here
+    const unnamed = await open({ headers: { 'x-test-owner': OWNER } })
+    const kits = await post(unnamed, { code: invite.code }, { 'x-test-owner': OWNER })
+    expect([kits.status, kits.headers.get('location'), await kits.text()]).toEqual([403, null, expect.stringContaining('Join from the page this site showed you')])
     expect(await inviteState(invite.id)).toBe('open')
   })
 
@@ -151,6 +155,18 @@ describe('approve', () => {
     }
     const scheme = await open({ resource: SOUPS, redirect: 'sample-app:/callback' })
     expect(scheme.page.headers.get('content-security-policy')).toMatch(/form-action 'self' sample-app:$/)
+  })
+
+  it('carries the app’s brand on the page approve shows and on the page a post answers', async () => {
+    const brand = createBrand(defineBrand({ name: 'sample', title: 'Sample Notes', description: 'Notes for agents.', accent: '#2563eb' }), ASSETS)
+    const { open, post } = await box({ brand })
+    const opened = await open({ resource: SOUPS })
+    const wrong = await (await post(opened, { code: 'BDKM-QXTW' })).text()
+    for (const [name, html] of [['code page', opened.html], ['wrong code', wrong]]) {
+      for (const part of ['<link rel="icon" href="/icon.svg" type="image/svg+xml">', '<img src="/icon.svg"', 'Sample Notes', 'button{background:#2563eb']) expect([name, html]).toEqual([name, expect.stringContaining(part)])
+    }
+    const plain = await (await box()).open({ resource: SOUPS })
+    for (const absent of ['<link rel="icon"', '<img', 'Sample Notes']) expect(plain.html).not.toContain(absent)
   })
 
   it('shows a page saying sharing is not ready before registerSharing binds it', async () => {

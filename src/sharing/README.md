@@ -293,7 +293,7 @@ stateDiagram-v2
   probe T5; `lintOpenApi`, `toolRoutes`, `toolsRun`, `cliGaps`.
 - `test/sharing-grants.test.ts`: the addresses (probe T6); `bind`; `onGrant` (probe T7, `race.mts`); `accepts`;
   `onRevoke`; `memberOf`. Its contract (`test/sharing-grants-contract.ts`) runs on node:sqlite.
-- `test/sharing-signin.test.ts`: the ladder; the pages (probes T1, T4; returns, names, headers, a missing space alike);
+- `test/sharing-signin.test.ts`: the ladder; the pages (probes T1, T4; returns, names, headers, the brand, a missing space alike);
   joining (scopes, the code's space, hidden fields, codes not ours, another site); the fifth wrong code; the limits;
   `sharingSignInPaths`.
 - `test/workers/sharing.test.ts`: the migration, both claims, the cap and the grants contract on D1, the keys in workerd.
