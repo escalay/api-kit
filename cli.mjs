@@ -481,6 +481,12 @@ const callsOf = (text, name) =>
 /** An option a call names, as `key:` or shorthand (`key,`, `key }`). */
 const namesOption = (call, key) => new RegExp(`\\b${key}\\s*[:,}]`).test(call)
 
+/** An option a call names with a value other than `false` (`limits: false` is no limits). */
+const setsOption = (call, key) => namesOption(call, key) && !new RegExp(`\\b${key}\\s*:\\s*false\\b`).test(call)
+
+/** Source with its comments blanked and its strings kept: an option or call named only in a comment is not code. */
+const codeOf = (text) => text.replace(/('(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`)|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match, string) => string ?? '')
+
 /**
  * The app's own source files: under the nearest `src/` above the kit folder inside the app, else `./src` (the kit
  * folder left out). Never above the app (the folder kit runs in): a `src` there holds other projects.
@@ -494,7 +500,7 @@ const appTexts = () => {
     .filter((entry) => entry.isFile() && /\.(m?ts|m?js|tsx)$/.test(entry.name))
     .map((entry) => join(entry.parentPath, entry.name))
     .filter((path) => relative(dir, path).startsWith('..') && !path.includes('node_modules'))
-    .map((path) => readFileSync(path, 'utf8'))
+    .map((path) => codeOf(readFileSync(path, 'utf8')))
 }
 
 /** A hint, not a finding: an app served on Node whose code names no `address` counts anonymous callers by headers as sent. */
@@ -507,12 +513,14 @@ const addressNotes = (texts) => {
 /**
  * Hints, not findings, on the app's OAuth server: an `approve` that opens the sign-in page to anyone without `limits`
  * and `publicOrigin` (what `createOAuth` warns of at start), and an app with the people part whose `owner` never asks
- * `personOf`, so a passkey owner can't approve.
+ * `personOf`, so a passkey owner can't approve. The owner is often a variable declared beside the call, so `personOf`
+ * is looked for in the file that calls `createOAuth`, never in another.
  */
 const oauthNotes = (texts, modules) => {
-  const calls = texts.flatMap((text) => callsOf(text, 'createOAuth'))
-  const open = calls.some((call) => namesOption(call, 'approve') && !(namesOption(call, 'limits') && namesOption(call, 'publicOrigin')))
-  const ownerless = modules.includes('people') && calls.length > 0 && !texts.some((text) => text.includes('personOf'))
+  const servers = texts.filter((text) => callsOf(text, 'createOAuth').length > 0)
+  const calls = servers.flatMap((text) => callsOf(text, 'createOAuth'))
+  const open = calls.some((call) => namesOption(call, 'approve') && !(setsOption(call, 'limits') && namesOption(call, 'publicOrigin')))
+  const ownerless = modules.includes('people') && servers.length > 0 && !servers.some((text) => /\bpersonOf\(/.test(text))
   return [
     ...(open ? ['note     createOAuth has approve, so its sign-in page answers anyone, but no limits or publicOrigin: pass both (oauth README, Open endpoints; STANDARD §7)'] : []),
     ...(ownerless ? ['note     the app has the people part, but no createOAuth owner asks personOf: a deploy signed in by passkey alone can never approve a sign-in (oauth README)'] : []),

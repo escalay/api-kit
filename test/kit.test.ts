@@ -564,6 +564,12 @@ describe('the copy-in CLI', () => {
     expect(cli(app, 'doctor').stdout).toContain(open)
     await writeFile(join(app, 'src/app.ts'), approving.replace('approve:', "limits: { store: guards }, publicOrigin: env.PUBLIC_ORIGIN, approve:"))
     expect(cli(app, 'doctor').stdout).not.toContain('createOAuth has approve')
+    // limits: false is no limits, as createOAuth reads it; a URL in the call is code, not a comment
+    await writeFile(join(app, 'src/app.ts'), approving.replace('approve:', "limits: false, publicOrigin: 'https://sample.example.test', approve:"))
+    expect(cli(app, 'doctor').stdout).toContain(open)
+    // Options only in a comment are not passed
+    await writeFile(join(app, 'src/app.ts'), `// pass limits: { store: guards }, publicOrigin: env.PUBLIC_ORIGIN\n/* or limits: guards, publicOrigin, */\n${approving}`)
+    expect(cli(app, 'doctor').stdout).toContain(open)
     // The owner of a deploy signed in by passkey: only personOf knows them
     cli(app, 'add', 'people')
     await writeFile(join(app, 'src/app.ts'), "const oauth = createOAuth({ name: 'Sample', signingKey, store, owner: access ? accessOwner(access) : async () => null })\n")
@@ -571,6 +577,20 @@ describe('the copy-in CLI', () => {
     expect(cli(app, 'doctor').stdout).toContain(passkeys)
     await writeFile(join(app, 'src/app.ts'), "const oauth = createOAuth({ name: 'Sample', signingKey, store, owner: async (c) => (await personOf(c, db))?.email ?? null })\n")
     expect(cli(app, 'doctor').stdout).not.toContain('people part')
+    // The starter's own lines: its comment suggests personOf, its owner does not ask it
+    const starter = await readFile(join(import.meta.dirname, '..', 'templates/app/src/app.ts'), 'utf8')
+    const starterOwner = starter.slice(starter.indexOf('  // Who may approve a sign-in'), starter.indexOf('  const app = createAgentApi('))
+    expect(starterOwner).toContain('personOf(c, db)')
+    await writeFile(join(app, 'src/app.ts'), starterOwner)
+    expect(cli(app, 'doctor').stdout).toContain(passkeys)
+    // Its suggestion taken: the owner asks personOf
+    const suggested = /\/\/ (async \(c\) => .*personOf.*)\n/.exec(starterOwner)![1]!
+    await writeFile(join(app, 'src/app.ts'), starterOwner.replace('access ? accessOwner(access) : async () => null', suggested))
+    expect(cli(app, 'doctor').stdout).not.toContain('people part')
+    // personOf asked in another file (a route of the app's) says nothing of the server's owner
+    await writeFile(join(app, 'src/app.ts'), starterOwner)
+    await writeFile(join(app, 'src/rooms.ts'), 'export const roomsOf = async (c, db) => (await personOf(c, db))?.rooms ?? []\n')
+    expect(cli(app, 'doctor').stdout).toContain(passkeys)
   })
 
   it('doctor notes a Node app with no address source wherever its kit sits under src', async () => {

@@ -23,7 +23,8 @@ const app = createAgentApi({ …, oauth })                   // mounts /oauth/*,
 ```
 
 `owner` is who may approve on the kit's pages. Behind Access, `accessOwner(access)`. An app with the `people` part asks
-its session, or a deploy signed in by passkey alone can never approve a sign-in (`kit doctor` notes it). An app behind
+its session, or a deploy signed in by passkey alone can never approve a sign-in (`kit doctor` notes it when the file
+that calls `createOAuth` never calls `personOf`; comments don't count). An app behind
 Access as well asks `accessOwner(access)` when this answers null:
 
 ```ts
@@ -345,7 +346,8 @@ const oauth = createOAuth({
 - **`dbOAuthStore` prunes expired rows** on a write, at most once a minute, besides when it is made, through an index
   on `expires_at` (`OAUTH_MIGRATIONS` step 2).
 - **`createOAuth` warns once at start** (`console.warn`) when `approve` is set without both `limits` and
-  `publicOrigin`, and `kit doctor` notes the same from the app's source.
+  `publicOrigin` (`limits: false` counts as not set), and `kit doctor` notes the same from the app's code, comments
+  left out.
 - **`limits`** (default `false`: none) counts per address, read by `addressOf` from `address` (default the app's
   `createAgentApi({ address })`). A named source counts a global IPv6 address by its /64; with none named, the
   `'headers'` read takes the address as sent, each IPv6 address on its own. Past a limit: 429 with `Retry-After` (JSON
