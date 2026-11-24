@@ -164,11 +164,9 @@ export const sharingGrantsContract = (name: string, makeDb: () => Promise<Db>) =
       const run = unique()
       const grant = (label: string) => `${label}-${run}`
       const client = `client-gone-${run}`
-      for (const one of ['revoked', 'replayed', 'withdrawn', 'bystander', 'replayed-unused']) await repo.addOwnerMember(memberRow('sp_soups', now, grant(one)))
+      for (const one of ['revoked', 'replayed', 'withdrawn', 'bystander']) await repo.addOwnerMember(memberRow('sp_soups', now, grant(one)))
       await repo.addOwnerMember(memberRow('sp_soups', now, grant('client-a'), { clientId: client }))
       await repo.addOwnerMember(memberRow('sp_bakes', now, grant('client-b'), { clientId: client }))
-      // Each used its first token, but one: a replay before its first use undoes the sign-in
-      for (const one of ['revoked', 'replayed', 'withdrawn', 'bystander', 'client-a', 'client-b']) await repo.noteFirstUse(grant(one), now)
       // Invites an agent made: open ones end with its grant or client, a redeemed one stays redeemed
       const byAgent = (label: string, change: Parameters<typeof inviteRow>[3]) => repo.addInvite(inviteRow('sp_soups', now, `${label}-${run}`, change))
       const madeUnderRevoked = (await byAgent('agent-open', { madeByGrant: grant('revoked'), madeByClient: `agent-${run}` }))!
@@ -180,18 +178,17 @@ export const sharingGrantsContract = (name: string, makeDb: () => Promise<Db>) =
       const tell = async () => {
         await sharing.oauth.onRevoke({ grant: grant('revoked'), reason: 'revoked' })
         await sharing.oauth.onRevoke({ grant: grant('replayed'), client: `client-${grant('replayed')}`, reason: 'replayed' })
-        await sharing.oauth.onRevoke({ grant: grant('replayed-unused'), client: `client-${grant('replayed-unused')}`, reason: 'replayed' })
         await sharing.oauth.onRevoke({ grant: grant('withdrawn'), client: `client-${grant('withdrawn')}`, reason: 'withdrawn' })
         await sharing.oauth.onRevoke({ client, reason: 'client_revoked' })
       }
       const rows = async () => {
-        const members = await Promise.all(['revoked', 'replayed', 'withdrawn', 'bystander', 'client-a', 'client-b', 'joined', 'replayed-unused'].map(async (one) => (await repo.memberByGrant(grant(one))) ?? null))
+        const members = await Promise.all(['revoked', 'replayed', 'withdrawn', 'bystander', 'client-a', 'client-b', 'joined'].map(async (one) => (await repo.memberByGrant(grant(one))) ?? null))
         const invites = await Promise.all([madeUnderRevoked, madeUnderWithdrawn, madeByGoneClient, redeemed].map(async (id) => (await repo.inviteAt('sp_soups', id))?.revokedAt ?? null))
         return { members: members.map((row) => row && { endedReason: row.endedReason, endedAt: row.endedAt }), invites }
       }
       await tell()
       const once = await rows()
-      expect(once.members.map((row) => (row ? row.endedReason : 'deleted'))).toEqual(['revoked', 'replayed', 'deleted', null, 'client_revoked', 'client_revoked', null, 'deleted'])
+      expect(once.members.map((row) => (row ? row.endedReason : 'deleted'))).toEqual(['revoked', 'replayed', 'deleted', null, 'client_revoked', 'client_revoked', null])
       expect(once.invites.map(Boolean)).toEqual([true, false, true, false])
       await tell()
       expect(await rows()).toEqual(once)

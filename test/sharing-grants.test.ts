@@ -3,7 +3,7 @@ import { decodeJwt } from 'jose'
 import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
 import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, migrate, testDb, type OAuthStore, type SignInAsk, type SignInGrant, type TokenCaller } from '../src/index.js'
-import { appNameOf, createSharing, FIRST_USE_WITHIN, registerSharing, SHARING_MIGRATIONS } from '../src/sharing/index.js'
+import { appNameOf, createSharing, registerSharing, SHARING_MIGRATIONS } from '../src/sharing/index.js'
 import { BAKES, grantOf, grantsApp, ORIGIN, OWNER, sharingGrantsContract, SOUPS } from './sharing-grants-contract.js'
 import { HOUR } from './sharing-rows.js'
 
@@ -312,13 +312,9 @@ describe('accepts', () => {
     expect([answer.status, refusalOf(answer)]).toEqual([401, ONLY_ITS_SPACE])
   })
 
-  it('notes a member’s first use once, and its use at most once an hour', async () => {
+  it('notes a member’s use at most once an hour', async () => {
     const { makeInvite, join, call, memberOfToken, ageMember } = await box()
     const token = (await join(await makeInvite())).tokens.access_token
-    expect((await memberOfToken(token))?.firstUsedAt).toBeNull()
-    await call('/s/soups/mcp', token)
-    const firstUse = (await memberOfToken(token))?.firstUsedAt
-    expect(firstUse).toEqual(expect.any(String))
     const grant = grantOf(token)
     const recent = new Date(Date.now() - HOUR / 2).toISOString()
     await ageMember(grant, { lastSeenAt: recent })
@@ -327,7 +323,6 @@ describe('accepts', () => {
     await ageMember(grant, { lastSeenAt: new Date(Date.now() - 2 * HOUR).toISOString() })
     await call('/s/soups/mcp', token)
     expect(Date.parse((await memberOfToken(token))!.lastSeenAt)).toBeGreaterThan(Date.now() - 60_000)
-    expect((await memberOfToken(token))?.firstUsedAt).toBe(firstUse)
   })
 
   it('keeps a space token a space token under a forged X-Forwarded-Host, even one refreshed there', async () => {

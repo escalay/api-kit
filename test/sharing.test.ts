@@ -6,7 +6,6 @@ import {
   askingStateOf,
   CODE_ALPHABET,
   codeHashOf,
-  FIRST_USE_WITHIN,
   inviteStateOf,
   linkHashOf,
   MAX_OPEN_INVITES,
@@ -93,11 +92,9 @@ describe('the named states', () => {
     expect(requestStateOf(row, member, now)).toBe(state)
   })
 
-  const member = { endedAt: null, endedReason: null, expiresAt: at(NOW, 7 * DAY).toISOString(), lastSeenAt: NOW.toISOString(), firstUsedAt: NOW.toISOString() }
+  const member = { endedAt: null, endedReason: null, expiresAt: at(NOW, 7 * DAY).toISOString(), lastSeenAt: NOW.toISOString() }
   it.each([
     [{ state: 'active' }, member, NOW],
-    [{ state: 'pending' }, { ...member, firstUsedAt: null }, NOW],
-    [{ state: 'ended', reason: 'removed' }, { ...member, firstUsedAt: null, endedAt: NOW.toISOString(), endedReason: 'removed' }, NOW],
     [{ state: 'active' }, { ...member, expiresAt: null }, at(NOW, 29 * DAY)],
     [{ state: 'ended', reason: 'removed' }, { ...member, endedAt: NOW.toISOString(), endedReason: 'removed' }, NOW],
     [{ state: 'ended', reason: 'expired' }, member, at(NOW, 7 * DAY)],
@@ -108,7 +105,6 @@ describe('the named states', () => {
 
   it.each([
     ['active', member],
-    ['active', { ...member, firstUsedAt: null }],
     ['signed_out', { ...member, endedAt: NOW.toISOString(), endedReason: 'revoked' }],
     ['signed_out', { ...member, endedAt: NOW.toISOString(), endedReason: 'lapsed' }],
     ['hidden', { ...member, endedAt: NOW.toISOString(), endedReason: 'removed' }],
@@ -249,20 +245,6 @@ describe('an invite claim', () => {
     expect(await repo.endMember('sp_soups', memberId!, 'removed', NOW)).toBe('grant-kept')
     expect(await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-after'), NOW)).toBeNull()
     expect(await repo.revokeInvite('sp_soups', inviteId, NOW)).toBe(false)
-  })
-
-  it('opens the invite again when a member whose first token was never used is undone, and never once it was used', async () => {
-    const { repo, inviteId } = await opened()
-    await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-unused'), NOW)
-    expect(await repo.deletePendingMemberOfGrant('grant-unused')).toBe(true)
-    expect(await repo.deletePendingMemberOfGrant('grant-unused')).toBe(false)
-    expect((await repo.inviteAt('sp_soups', inviteId))?.memberId).toBeNull()
-    await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-used'), NOW)
-    await repo.noteFirstUse('grant-used', at(NOW, 1))
-    await repo.noteFirstUse('grant-used', at(NOW, 2))
-    expect((await repo.memberByGrant('grant-used'))?.firstUsedAt).toBe(at(NOW, 1).toISOString())
-    expect(await repo.deletePendingMemberOfGrant('grant-used')).toBe(false)
-    expect((await repo.inviteAt('sp_soups', inviteId))?.memberId).not.toBeNull()
   })
 
   it('refuses a code collision on create without throwing', async () => {
@@ -465,7 +447,7 @@ describe('an agent’s invites', () => {
     expect(await repo.revokeInvitesMadeByGrant('grant-agent', NOW)).toBe(1)
     expect(await repo.revokeInvitesMadeByGrant('grant-agent', NOW)).toBe(0)
     expect(await repo.revokeInvitesMadeByClient('client-agent', NOW)).toBe(1)
-    expect(memberStateOf((await repo.memberByGrant('grant-sam'))!, NOW)).toEqual({ state: 'pending' })
+    expect(memberStateOf((await repo.memberByGrant('grant-sam'))!, NOW)).toEqual({ state: 'active' })
   })
 })
 
@@ -528,23 +510,5 @@ describe('aging', () => {
     await repo.addRequest(requestRow('sp_soups', NOW, 'lapsing'))
     expect(await repo.deleteClosedRequests(NOW)).toBe(1)
     expect(await repo.deleteClosedRequests(at(NOW, DAY))).toBe(1)
-  })
-
-  it('deletes members whose first token went unused past the hour, so their invite opens again, and never a used or ended one', async () => {
-    const repo = sharingRepo(await sharingDb())
-    const inviteId = (await repo.addInvite(inviteRow('sp_soups', NOW, 'thrown')))!
-    await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-thrown'), NOW)
-    await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-used'))
-    await repo.noteFirstUse('grant-used', NOW)
-    await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-removed'))
-    await repo.endMemberOfGrant('grant-removed', 'removed', NOW)
-    await repo.addOwnerMember(memberRow('sp_soups', at(NOW, 1), 'grant-recent'))
-    // sweep passes the hour before now: a member joined at or before it with its first token unused is deleted
-    const sweptAt = at(NOW, FIRST_USE_WITHIN)
-    expect(await repo.deleteUnusedMembers(at(sweptAt, -FIRST_USE_WITHIN - 1))).toEqual([])
-    expect(await repo.deleteUnusedMembers(at(sweptAt, -FIRST_USE_WITHIN))).toEqual(['grant-thrown'])
-    expect(await repo.deleteUnusedMembers(at(sweptAt, -FIRST_USE_WITHIN))).toEqual([])
-    expect(inviteStateOf((await repo.inviteAt('sp_soups', inviteId))!, null, sweptAt)).toBe('open')
-    for (const kept of ['grant-used', 'grant-removed', 'grant-recent']) expect(await repo.memberByGrant(kept), kept).toBeDefined()
   })
 })

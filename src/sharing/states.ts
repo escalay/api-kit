@@ -5,7 +5,7 @@
  *
  * @example
  * inviteStateOf(invite, member, new Date())   // 'open' | 'redeemed' | 'revoked' | 'expired'
- * memberStateOf(member, new Date())            // { state: 'pending' }, { state: 'active' } or { state: 'ended', reason: 'lapsed' }
+ * memberStateOf(member, new Date())            // { state: 'active' } or { state: 'ended', reason: 'lapsed' }
  */
 import type { EndedReason, Lifetime } from './schema.js'
 import type { InviteRow, MemberRow, RequestRow, SpaceRow } from './repo.js'
@@ -17,8 +17,6 @@ const DAY = 24 * HOUR
 export const REDEEM_WITHIN = DAY
 /** A member whose sign-in went unused this long is ended as `lapsed`, as the kit's refresh token lapses. */
 export const UNSEEN_FOR = 30 * DAY
-/** A pending member whose first token goes unused this long is deleted by aging: its exchange likely failed. */
-export const FIRST_USE_WITHIN = HOUR
 /** Asks in a row that lapse or are refused unanswered before asking pauses. */
 export const UNANSWERED_PAUSE = 10
 /** Open invites a space may hold at once. */
@@ -48,26 +46,22 @@ export const requestStateOf = (request: Pick<RequestRow, 'state' | 'expiresAt'>,
   return request.state
 }
 
-export type MemberState = { state: 'pending' } | { state: 'active' } | { state: 'ended'; reason: EndedReason }
+export type MemberState = { state: 'active' } | { state: 'ended'; reason: EndedReason }
 
-/**
- * A member's state: ended with its reason, or ended now when its lifetime passed or it went unseen (fail closed); else
- * pending until its first token is used (the kit may have issued none), then active.
- */
-export const memberStateOf = (member: Pick<MemberRow, 'endedAt' | 'endedReason' | 'expiresAt' | 'lastSeenAt' | 'firstUsedAt'>, now: Date): MemberState => {
+/** A member's state: ended with its reason, or ended now when its lifetime passed or it went unseen (fail closed). */
+export const memberStateOf = (member: Pick<MemberRow, 'endedAt' | 'endedReason' | 'expiresAt' | 'lastSeenAt'>, now: Date): MemberState => {
   if (member.endedAt) return { state: 'ended', reason: member.endedReason ?? 'revoked' }
   if (member.expiresAt && isPast(member.expiresAt, now)) return { state: 'ended', reason: 'expired' }
   if (Date.parse(member.lastSeenAt) <= now.getTime() - UNSEEN_FOR) return { state: 'ended', reason: 'lapsed' }
-  if (!member.firstUsedAt) return { state: 'pending' }
   return { state: 'active' }
 }
 
 export type MemberListing = 'active' | 'signed_out' | 'hidden'
 
-/** How the owner's list shows a member: a pending one as active, removed and replaced ones gone, other ended ones signed out. */
-export const memberListingOf = (member: Pick<MemberRow, 'endedAt' | 'endedReason' | 'expiresAt' | 'lastSeenAt' | 'firstUsedAt'>, now: Date): MemberListing => {
+/** How the owner's list shows a member: removed and replaced ones are gone, other ended ones are signed out. */
+export const memberListingOf = (member: Pick<MemberRow, 'endedAt' | 'endedReason' | 'expiresAt' | 'lastSeenAt'>, now: Date): MemberListing => {
   const current = memberStateOf(member, now)
-  if (current.state !== 'ended') return 'active'
+  if (current.state === 'active') return 'active'
   if (current.reason === 'removed' || current.reason === 'replaced') return 'hidden'
   return 'signed_out'
 }

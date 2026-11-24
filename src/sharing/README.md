@@ -89,7 +89,7 @@ throws when it has no `publicOrigin`: that origin and its MCP path say which tok
 | `tools.ts` | `sharingTools`: the MCP tools for the owner routes |
 | `schema.ts` | the Drizzle tables `sharingSpaces`, `sharingInvites`, `sharingRequests`, `sharingMembers`, and `SHARING_MIGRATIONS` (step 1: the four tables and ten indexes); what each column means is in its JSDoc |
 | `repo.ts` | `sharingRepo(db)`: every statement over the tables, nothing about HTTP (below) |
-| `states.ts` | the named states: `inviteStateOf`, `requestStateOf`, `memberStateOf`, `memberListingOf`, `askingStateOf`; the times `redeemByOf`, `memberExpiresAtOf`, `REDEEM_WITHIN` (a day), `FIRST_USE_WITHIN` (an hour), `UNSEEN_FOR` (30 days), `UNANSWERED_PAUSE` (10), `MAX_OPEN_INVITES` (100) |
+| `states.ts` | the named states: `inviteStateOf`, `requestStateOf`, `memberStateOf`, `memberListingOf`, `askingStateOf`; the times `redeemByOf`, `memberExpiresAtOf`, `REDEEM_WITHIN` (a day), `UNSEEN_FOR` (30 days), `UNANSWERED_PAUSE` (10), `MAX_OPEN_INVITES` (100) |
 | `secrets.ts` | `sharingKeys`, `newLinkToken` (192 bits), `newInviteCode` (`BDKM-QXTW`, from `CODE_ALPHABET`), `normalisedCode`, `newShownCode` (6 digits), and what the tables keep instead: `linkHashOf`, `codeHashOf`, `addressKeyOf` (HMACs), `ticketHashOf` (SHA-256) |
 
 The owner routes (`{path}` default `/api/spaces`) and their tools:
@@ -110,8 +110,8 @@ The owner routes (`{path}` default `/api/spaces`) and their tools:
 | `sharing_spaces` | `spaceAt`, `setAskToJoin` (clears a pause), `noteUnanswered`, `noteAnswered`, `forgetSpace` |
 | `sharing_invites` | `addInvite` (null at 100 open, or on a link or code hash already taken), `inviteAt`, `inviteByLink`, `inviteByCodeAt`, `inviteByCodeAnywhere` (only for a client that named no space), `listInvites`, `countOpenInvites`, `revokeInvite`, `revokeInvitesReplacing`, `revokeInvitesMadeByGrant`, `revokeInvitesMadeByClient`, `revokeInvitesOf` |
 | `sharing_requests` | `addRequest` (null on a ticket that already asked), `requestAt`, `requestByTicket`, `listRequests`, `countWaitingAt`, `countWaitingFrom` (an address), `approveRequest`, `refuseRequest`, `refuseWaitingAt` |
-| `sharing_members` | `claimInvite`, `claimRequest`, `addOwnerMember`, `memberByGrant`, `memberAt`, `listMembers`, `noteFirstUse`, `noteSeen`, `endMember`, `endMemberOfGrant`, `endMembersOfClient`, `endMembersOf`, `deleteMemberOfGrant`, `deletePendingMemberOfGrant` |
-| aging | `deleteUnusedMembers`, `endExpiredMembers`, `endLapsedMembers`, `deleteEndedMembers`, `deleteClosedInvites`, `deleteClosedRequests` |
+| `sharing_members` | `claimInvite`, `claimRequest`, `addOwnerMember`, `memberByGrant`, `memberAt`, `listMembers`, `noteSeen`, `endMember`, `endMemberOfGrant`, `endMembersOfClient`, `endMembersOf`, `deleteMemberOfGrant` |
+| aging | `endExpiredMembers`, `endLapsedMembers`, `deleteEndedMembers`, `deleteClosedInvites`, `deleteClosedRequests` |
 
 ## Flows
 
@@ -183,10 +183,9 @@ A member (`memberStateOf`). Past its lifetime or unseen for 30 days it reads as 
 
 ```mermaid
 stateDiagram-v2
-  [*] --> pending: a claim, or the owner's approval
-  pending --> active: accepts sees its first token
-  pending --> [*]: withdrawn, replayed, or unused an hour, so deleted and its invite open again
+  [*] --> active: a claim, or the owner's approval
   active --> ended: its grant revoked or replayed, its lifetime, 30 days unseen, removed, replaced, its space gone
+  active --> [*]: withdrawn (a veto, or a failed exchange), so deleted and its invite open again
   ended --> [*]: 90 days
 ```
 
@@ -208,9 +207,9 @@ stateDiagram-v2
 - **A grant never holds more than was given:** an invite's approver `invite:<id>` and scopes within the invite's; the
   owner's `owner:<email>` (never the bare email: never the owner's token), the resource's space id, a lifetime the part
   has. A sharing approval never makes a root grant.
-- **`onRevoke` mirrors the kit**: `withdrawn`, and `replayed` while the row is pending (no token used: the client's
-  retry after a failed exchange), delete it, so its invite opens again; `client_revoked` ends the client's rows, any
-  other end the grant's. Then, unless withdrawn, the open invites an agent made under that
+- **`onRevoke` mirrors the kit**: `withdrawn` (a veto, or anything failing after `onGrant`'s yes: the kit withdraws
+  the grant) deletes its row, so its invite opens again; `client_revoked` ends the client's rows, any other end the
+  grant's. Then, unless withdrawn, the open invites an agent made under that
   grant or client are revoked; people who joined through them keep access. Told twice, nothing moves.
 - **Before `bind`** (`registerSharing`), `onGrant` says no and `accepts` takes only a token with no audience.
 - **`resources` is a pure check of the path** (`spaceNameIn`): cased, encoded and dotted names are no space.
@@ -261,7 +260,7 @@ stateDiagram-v2
 | 400 `invalid_grant` "withdrawn" | `onGrant` said no: a space grant not from the part's pages; an invite spent, revoked, late or another space's; more scope, or another approver; a sharing approval at the root |
 | 401 "works only at its own space" | a live space token at another space (or an old name), `/mcp`, an `/api` route `spaceOfPath` doesn't name, or a space `byId` misses |
 | 401 "ended on …", "lapsed", "not ready" | the member's lifetime passed; 30 days unused; a token with an audience before `bind` |
-| 500 at `/oauth/token`, the invite redeemed | a throw after the claim (a hook chained after the part's, a store): no token. The client's retry, or aging after an hour unused (`deleteUnusedMembers`; sweep revokes its grant), opens it again |
+| 500 at `/oauth/token`, the invite open again | a throw after the claim (a hook chained after the part's, a store): no token; the kit withdraws the grant and `onRevoke` deletes the row |
 
 ## Limits
 
