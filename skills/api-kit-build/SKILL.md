@@ -74,8 +74,9 @@ Add one with `npx @escalay/kit add <part> --dir src/kit --install` (browser part
 
 ## Taking a newer kit
 
-1. Read the kit's `docs/upgrading.md` for every version after the one `src/kit/kit.json` records: what each part
-   changed and what the app must do.
+1. `npx @escalay/kit upgrading`: it prints, for the parts in `src/kit/kit.json`, every upgrade note after the
+   version it records: what each part changed and what the app must do. After `update`, the `--from` it prints
+   still finds them.
 2. `npx @escalay/kit doctor`: one line per file that is missing, edited, or behind, each with its fix.
 3. `npx @escalay/kit diff --patch`: your edits beside the kit's changes.
 4. `npx @escalay/kit update`: writes what the kit changed and keeps every file you edited. When the kit changed a

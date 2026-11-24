@@ -473,6 +473,7 @@ describe('the copy-in CLI', () => {
     const sick = cli(app, 'doctor')
     expect(sick.status).toBe(1)
     expect(sick.stdout.trim().split('\n')).toEqual([
+      'note     kit.json says kit 0.0.1: `kit upgrading --dir src/kit` prints what changed for its parts since, and what to do',
       'missing  core/kv.ts: `kit update --dir src/kit` writes it again',
       "edited   core/hal.ts: yours to keep; `kit diff --dir src/kit --patch` shows the change, `kit update --dir src/kit --force` takes the kit's",
       `behind   pagination was copied from kit 0.0.1 and kit ${KIT_VERSION} changed it: \`kit diff --dir src/kit --patch\`, then \`kit update --dir src/kit\``,
@@ -493,7 +494,11 @@ describe('the copy-in CLI', () => {
     const diff = cli(app, 'diff', '--dir', 'kit')
     expect(diff.stdout).toMatch(/unchanged\s+core\/cache\.ts/)
     expect(diff.status).toBe(0)
-    expect(cli(app, 'doctor', '--dir', 'kit').stdout.trim().split('\n')).toEqual([`behind   kit.json says kit 0.0.1, this is ${KIT_VERSION} with the same files: \`kit update --dir kit\` records it`, '1 to fix in kit'])
+    expect(cli(app, 'doctor', '--dir', 'kit').stdout.trim().split('\n')).toEqual([
+      'note     kit.json says kit 0.0.1: `kit upgrading --dir kit` prints what changed for its parts since, and what to do',
+      `behind   kit.json says kit 0.0.1, this is ${KIT_VERSION} with the same files: \`kit update --dir kit\` records it`,
+      '1 to fix in kit',
+    ])
     const updated = cli(app, 'update', '--dir', 'kit')
     expect(updated.status).toBe(0)
     expect(updated.stdout).not.toContain('core/cache.ts')
@@ -632,7 +637,7 @@ describe('the copy-in CLI', () => {
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1', files: { ...lock.files, 'core/cache.ts': 'older' } }))
     const kept = cli(app, 'doctor', '--dir', 'kit')
     expect(kept.status).toBe(1)
-    expect(kept.stdout.trim().split('\n')).toEqual([keptLine, '1 to fix in kit'])
+    expect(kept.stdout.trim().split('\n')).toEqual(['note     kit.json says kit 0.0.1: `kit upgrading --dir kit` prints what changed for its parts since, and what to do', keptLine, '1 to fix in kit'])
     // At this kit's version (an older CLI stamped it over the kept file) the record is all there is: the edit is yours, never 'copied from' the new kit
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, files: { ...lock.files, 'core/cache.ts': 'older' } }))
     const stamped = cli(app, 'doctor', '--dir', 'kit')

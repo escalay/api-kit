@@ -7,6 +7,7 @@ lists every release.
 ## Taking a new version
 
 ```bash
+npx @escalay/kit upgrading --dir src/kit      # this page's notes for your parts since kit.json's version
 npx @escalay/kit doctor --dir src/kit         # missing, edited, behind: one line each with its fix
 npx @escalay/kit diff --dir src/kit --patch   # your edits next to the kit's changes
 npx @escalay/kit update --dir src/kit         # never overwrites your edits without --force
