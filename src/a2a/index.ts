@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto'
 import type { AuthInfo } from '@modelcontextprotocol/server'
 import type { Context, Hono } from 'hono'
 import { mountedOf, publicOriginOf, sendPublic, WELL_KNOWN, type AgentBrand } from '../core/discovery.js'
-import { neverKeep } from '../core/guards.js'
+import { neverKeep, SHOWN_ONCE_HEADER } from '../core/guards.js'
 import { originOf } from '../core/hal.js'
 import { callWaiting, FORWARDED, pollRun, problemText, type CallApi, type McpTool } from '../mcp/index.js'
 import { memoryStore, type KeyValueStore } from '../core/kv.js'
@@ -96,6 +96,12 @@ const rpcError = (id: unknown, [code, message, reason]: readonly [number, string
 })
 
 const agentMessage = (text: string, task: Pick<Task, 'id' | 'contextId'>): Message => ({ messageId: randomUUID(), role: 'ROLE_AGENT', parts: [{ text }], taskId: task.id, contextId: task.contextId })
+
+/** A finished task as it is kept when its answer showed a secret once: no artifacts, and a message saying why. */
+const withoutArtifacts = (stored: Stored): Stored => {
+  const message = agentMessage('Done. Its answer held a secret, shown once in the reply to SendMessage and never kept, so it is not shown again.', stored.task)
+  return { ...stored, task: { ...stored.task, artifacts: undefined, status: { ...stored.task.status, message }, history: [...(stored.task.history ?? []), message] } }
+}
 
 /** The Agent Card (spec §4.4.1) for this origin. */
 export const agentCard = (origin: string, { path = '/a2a', info, skills, oauth, brand }: A2AConfig) => ({
@@ -197,7 +203,11 @@ export const mountA2A = (app: Hono<any, any, any>, config: A2AConfig) => {
       task.status = { state, message: agentMessage(problemText(json, response.status), task), timestamp: at }
     }
     if (task.status.message) task.history = [...(task.history ?? []), task.status.message]
-    return save(stored.owner, stored)
+    if (!response.headers.has(SHOWN_ONCE_HEADER)) return save(stored.owner, stored)
+    // The answer showed a secret once (a new key): this caller gets it now, and the task is kept without it
+    const secretless = withoutArtifacts(stored)
+    const kept = await save(stored.owner, secretless)
+    return kept === secretless ? stored : kept
   }
 
   const argsOf = (skill: A2ASkill, message: Message) => {

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { eq } from 'drizzle-orm'
 import { describe, expect, it, vi } from 'vitest'
-import { createAgentApi, dbGuardStore, hashApiKey, holderOf, KEYS_TAG, keyTools, kitGuards, memoryGuardStore, parseApiKeys, registerKeys, storedKeysOf, testDb, type Db, type GuardStore, type KeyChange, type StoredAnswer } from '../src/index.js'
+import { createAgentApi, dbGuardStore, hashApiKey, holderOf, KEYS_TAG, keyTools, kitGuards, memoryGuardStore, memoryStore, parseApiKeys, registerKeys, storedKeysOf, testDb, type Db, type GuardStore, type KeyChange, type StoredAnswer } from '../src/index.js'
 import { mountA2A } from '../src/a2a/index.js'
 import { inProcess, mcpServerFactory, mountMcp } from '../src/mcp/index.js'
 import { cliSnapshot, lintOpenApi, toolRoutes, toolsRun } from '../src/testing/index.js'
@@ -166,11 +166,39 @@ describe('a key made through a relay, wherever it is mounted', () => {
   })
 })
 
+describe('a key made through A2A', () => {
+  it('is answered once by SendMessage, and its task is kept without it', async () => {
+    const { app, owner } = await setup()
+    const store = memoryStore()
+    const written: unknown[] = []
+    const createKey = keyTools().find((tool) => tool.name === 'create_key')!
+    mountA2A(app, { info: { name: 'Sample', description: 'Keys.', version: '1.0.0' }, skills: [{ tool: createKey, text: 'name', tags: ['keys'] }], callApi: inProcess(app), waitMs: 0, store: { ...store, put: (kind, id, value, expiresAt) => (written.push(value), store.put(kind, id, value, expiresAt)) } })
+    const rpc = async (method: string, params: unknown) =>
+      (await app.request('/a2a', { method: 'POST', headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json', 'a2a-version': '1.0' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })).json() as Promise<any>
+
+    const sent = await rpc('SendMessage', { message: { messageId: 'm1', role: 'ROLE_USER', parts: [{ data: { name: 'agent' } }] } })
+    const { task } = sent.result
+    expect(task.status.state).toBe('TASK_STATE_COMPLETED')
+    const key = task.artifacts[0].parts[1].data.key as string
+    expect(key).toMatch(/^sk_/)
+
+    const got = await rpc('GetTask', { id: task.id })
+    expect(got.result.status.state).toBe('TASK_STATE_COMPLETED')
+    expect(JSON.stringify(got)).not.toContain(key)
+    expect(got.result.status.message.parts[0].text).toMatch(/shown once/)
+    const listed = await rpc('ListTasks', { includeArtifacts: true })
+    expect(listed.result.tasks).toHaveLength(1)
+    expect(JSON.stringify(listed)).not.toContain(key)
+    expect(JSON.stringify(written)).not.toContain(key)
+    expect(await keyNamesOf(owner)).toEqual(['agent'])
+  })
+})
+
 describe('a made key and Idempotency-Key', () => {
   it.each(['memory', 'database'] as const)('never keeps the key to replay (%s guards): the same Idempotency-Key answers 409 shown_once', async (guards) => {
     const { app, db, kept, owner } = await setup({ guards })
     const made = await makeKey(app, 'ci', 'k1')
-    expect(made.status).toBe(201)
+    expect([made.status, made.headers.get('shown-once')]).toEqual([201, 'true'])
     const { id, key } = (await made.json()) as { id: string; key: string }
 
     const replayed = await makeKey(app, 'ci', 'k1')

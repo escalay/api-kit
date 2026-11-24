@@ -268,7 +268,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 - **A secret shown once is never kept to replay.** A route whose answer shows one (a new API key, an enrolment, a
   session cookie, an invite code) calls `showOnce(c, replay)`: the guard keeps only `replay`, never the body or a
   header, and a retry with the same key and body is a `409 shown_once` whose detail says what was made, where to see
-  it, that the secret is never shown again, and what to do if it was lost. Never a `400`: the kit's client sends a key
+  it, that the secret is never shown again, and what to do if it was lost. The answer carries `Shown-Once: true`, so
+  a relay keeps nothing of it either (an A2A task is kept without its artifact). Never a `400`: the kit's client sends a key
   on every create, so creating keeps working. A relay (MCP, A2A, wherever mounted) never keeps its own answer
   (`neverKeep`) and hands the caller's Idempotency-Key to the route its tool runs, which keeps its own: a retried tool
   call runs once and never answers a secret twice. `skip` is for a route where a retry should run again (the secret

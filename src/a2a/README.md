@@ -102,7 +102,8 @@ stateDiagram-v2
 
 - Pick the 1–3 tools another agent would delegate to; the first skill answers a message that names none.
 - The JSON-RPC answer is never kept by Idempotency-Key; the caller's key goes on to the route a skill runs, so a
-  retried `SendMessage` runs it once.
+  retried `SendMessage` runs it once. A task whose answer showed a secret once (`Shown-Once`, a new key) answers it
+  in that `SendMessage` reply only: it is kept without its artifacts, so `GetTask` and `ListTasks` never show it.
 - A message's text fills the skill's `text` argument; a `data` part may give all the arguments.
 - Requests send `A2A-Version: 1.0` (a header, or the `A2A-Version` query parameter); none means 0.3, refused with
   `VERSION_NOT_SUPPORTED` (-32009).

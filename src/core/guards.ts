@@ -211,9 +211,13 @@ const NEVER_KEPT = 'kit:never-kept'
  */
 export const neverKeep = (c: Context) => c.set(NEVER_KEPT as never, true as never)
 
+/** The header on an answer that shows a secret once, for whatever relays it (A2A keeps its task without it). */
+export const SHOWN_ONCE_HEADER = 'shown-once'
+
 /**
  * Marks this request's answer as showing a secret once (a new key, an enrolment, a session cookie): `idempotency` then
  * keeps only `replay`, and a retry with the same Idempotency-Key gets it as a 409 `shown_once` instead of the answer.
+ * The answer carries `Shown-Once: true`.
  * `replay` says what was made, where to see it, that the secret is never shown again, and what to do if it was lost;
  * never the secret. A blank one throws: the answer would be kept whole.
  *
@@ -223,6 +227,7 @@ export const neverKeep = (c: Context) => c.set(NEVER_KEPT as never, true as neve
 export const showOnce = (c: Context, replay: string) => {
   if (!replay.trim()) throw new Error('showOnce needs the words a retry is told: what was made, and where to see it.')
   c.set(SHOWN_ONCE as never, replay as never)
+  c.header(SHOWN_ONCE_HEADER, 'true')
 }
 
 /** What the guard keeps of this request's answer: only what a replay is told when it showed a secret once, else all of it. */

@@ -160,11 +160,11 @@ connect: MCP clients through OAuth (the 401 names the resource metadata), others
 
 ### Guards (`guards.ts`)
 
-- `idempotency` (wired by `createAgentApi`): `Idempotency-Key` on POST and PATCH, as the flow below. Kept 24 hours,
+- `idempotency` (wired by `createAgentApi`): `Idempotency-Key` on POST and PATCH (the flow below). Kept 24 hours,
   only what `keep` passes (a success: after a refusal or a server error a retry runs again). Never kept: `/oauth/*`,
   `/agent/identity*`, a relay (`neverKeep`), and `guards.skip` (an open route answering a secret: `['/join/*']`).
-- `showOnce(c, replay)`: an answer that shows a secret once keeps only `replay`, and a retry gets it as a 409
-  `shown_once` (keys, setup's claim, `startSession`).
+- `showOnce(c, replay)`: an answer showing a secret once keeps only `replay` (a retry's 409 `shown_once`) and
+  carries `SHOWN_ONCE_HEADER`. Keys, setup, `startSession` use it.
 - `rateLimit({ policy, limit, windowSeconds, store?, address?, key? })` for anything that spends money: the draft
   `RateLimit-Policy` / `RateLimit` headers, and a 429 with `Retry-After` past the limit.
 - Both keep state in a `GuardStore`: `memoryGuardStore({ maxEntries })` (the default, one Node process) or

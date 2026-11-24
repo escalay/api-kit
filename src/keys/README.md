@@ -82,7 +82,7 @@ sequenceDiagram
 - A key is shown once, in the answer that makes it. Names are unique, and a deployment key's name is taken.
 - Idempotency-Key never keeps the key (`showOnce`, core): a retry with the same key and body is a 409 `shown_once`
   naming the key made and where it is, and a new Idempotency-Key makes another. Lost the first answer? Revoke that key
-  and make another.
+  and make another. Made over MCP or A2A, the key is in that one reply only: an A2A task keeps no artifact.
 - `onKeyChange` hears each key made or deleted: log it with the app's events. It is told once the key is stored or gone,
   and a hook that throws is logged, never answered: a made key is still shown (once) with its 201.
 - A deleted key stops working on its next request.

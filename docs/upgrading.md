@@ -256,6 +256,9 @@ Nothing to do in any version recorded here.
 
 - `mountA2A` never keeps its own answer and passes the caller's `Idempotency-Key` to the route a skill runs, as MCP
   does: a retried `SendMessage` runs the route once.
+- A task whose route answered `Shown-Once: true` (core's `showOnce`: a new key) is kept without its artifacts: the
+  `SendMessage` reply shows the secret, and `GetTask` and `ListTasks` say it was shown once. Through 1.30.0 the task
+  kept a made key for a day.
 
 ### 1.30.0
 
