@@ -72,6 +72,9 @@ does not call it.
   set); `dbOAuthStore` and `memoryOAuthStore` have it. A store of the app's own without it falls back to a read then
   a write, safe only one request at a time. Its `trim` should skip rows marked `held: true` and leave them out of the
   `keep` newest; one that does not evicts held tickets like any other.
+- **`OAuthStore` has an optional `extend`** (one conditional write: `{ until }` kept under an id, never lowered, the
+  longest returned), for the `held-nonce` row; `dbOAuthStore` and `memoryOAuthStore` have it. Without it, a read then
+  a write: two holds sent at once from one browser may keep the shorter life.
 - When a browser that already has the ticket cookie opens another sign-in, `/oauth/authorize` reads one more row
   (`held-nonce`, written only by `holdTicket`), so the renewed cookie never cuts a held ticket short.
 

@@ -198,7 +198,7 @@ An OAuth caller (`c.get('caller')`) is `{ kind: 'agent', client, grant, name, sc
 | `oauth.holdTicket(c, ticket, seconds)` | holds one ticket for a decision made later (an ask to join): `{ expiresAt, cookie }`, or null when it expired, was answered, or this browser did not open it |
 | `oauth.revokeGrant(grant)`, `oauth.revokeClient(clientId)` | end one sign-in; end every sign-in of a client and drop its registration (the owner's kill switch) |
 | `generateOAuthKey()` | a new signing key, a private JWK JSON string |
-| `dbOAuthStore(db)`, `memoryOAuthStore()`, `OAuthStore` | the stores: `get`, `put`, `delete`, plus `take`, `markUsed`, `trim` and `hold` |
+| `dbOAuthStore(db)`, `memoryOAuthStore()`, `OAuthStore` | the stores: `get`, `put`, `delete`, plus `take`, `markUsed`, `trim`, `hold` and `extend` |
 | `OAUTH_MIGRATIONS`, `oauthKeys` | the `oauth` table and its steps |
 | `SignInAsk`, `SignInDecision`, `SignInGrant`, `SignInRevoked`, `TokenCaller`, `OAuthConfig` | the types |
 
@@ -206,7 +206,7 @@ An OAuth caller (`c.get('caller')`) is `{ kind: 'agent', client, grant, name, sc
 |---|---|
 | `index.ts` | `createOAuth` and everything it returns, `generateOAuthKey` |
 | `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`, `SignInRevoked`; the ticket cookie and the same-origin rule |
-| `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take`, `markUsed`, `trim` and `hold`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start, then on a write at most once a minute), `memoryOAuthStore` |
+| `store.ts` | `OAuthStore` (its methods above), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start, then on a write at most once a minute), `memoryOAuthStore` |
 | `schema.ts` | the `oauth` table, its `expires_at` index, and `OAUTH_MIGRATIONS` |
 
 ## Flows
@@ -473,16 +473,16 @@ holds that one ticket (Flows: Deciding later) and sets `held.cookie` on the wait
 - It lives `seconds` from now (`expiresAt`); holding again moves it again. The hold is one conditional write (the
   store's `hold`), so a hold landing after `complete` gives null and never reopens the ticket.
 - `cookie` keeps the nonce cookie at least as long: the longest of `ticketTtl` and what remains of every ticket held in
-  that browser, so no later sign-in there cuts the held one short (a `held-nonce` row per holding browser).
+  that browser, so no later sign-in there cuts the held one short (a `held-nonce` row per holding browser, which only
+  grows: two holds at once keep the longer, through the store's `extend`).
 - Newer tickets never evict it: it is outside `maxUnusedTickets` and keeps its client held. The kit does not cap held
   tickets: the app bounds them (say, one ask per address) and passes `limits`.
 
 The page polls an app route (`ticketOf` first) and submits its form once decided: `complete` still needs the browser
 that opened the ticket, a same-origin POST, once (a fetch would not follow the 302 back to the client). A decision
-after the held life finds it expired. `test/oauth.test.ts` runs this pattern. A hold does not renew
-its client: a registration no sign-in has used lapses a week after it was made, and a decision after that is refused
-(`ticketOf` null; `complete` the page that says to add the connection again). A long `ticketTtl` still works, but makes
-every page live as long and protects none: newer tickets evict an unheld one, and then its client.
+after the held life finds it expired. `test/oauth.test.ts` runs this pattern. A hold does not renew its client: a
+registration no sign-in has used lapses a week after it was made, and a decision after that is refused (`ticketOf`
+null; `complete` the page that says to add the connection again).
 
 ### Audiences (RFC 8707)
 
@@ -710,9 +710,9 @@ The requests are the Flows diagram (Device authorization). Nothing to wire: `mou
   code), the claim page takes the claim attempt ("This code expired", 410), and the device page takes the typed code
   (the code form again, 400), so Allow and Deny from two tabs write one answer.
 - Revoking an access token (`/oauth/revoke`) ends only that token; `revokeGrant` ends the sign-in.
-- The store makes single use hold under concurrent requests: `markUsed` (codes, refresh tokens), `take` and `hold`
-  (a held ticket) are one statement each in `dbOAuthStore`, honour expiry, and read a row with no `used` key (a
-  sign-in from before) as unused. A store without them falls back to a read then a write, safe only one request at a
+- The store makes single use hold under concurrent requests: `markUsed` (codes, refresh tokens), `take`, `hold`
+  (a held ticket) and `extend` (a browser's held life) are one statement each in `dbOAuthStore`, honour expiry, and
+  read a row with no `used` key (a sign-in from before) as unused. A store without them falls back to a read then a write, safe only one request at a
   time: tests.
 - OAuth rows live in SQLite or D1, never Workers KV: KV is eventually consistent, so a new code reads as unknown and a
   revoke can be undone.

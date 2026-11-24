@@ -425,6 +425,14 @@ export const createOAuth = (config: OAuthConfig) => {
           return held
         })
 
+  /** The store's own `extend`, or a read then a write: safe only one request at a time. */
+  const extend = async (kind: string, id: string, until: number) => {
+    if (store.extend) return store.extend(kind, id, until)
+    const longest = Math.max(Number((await store.get(kind, id))?.until ?? 0), until)
+    await store.put(kind, id, { until: longest }, longest)
+    return longest
+  }
+
   /** The store's own `take`, or a read then a delete: safe only one request at a time. */
   const take = async (kind: string, id: string) => {
     if (store.take) return store.take(kind, id)
@@ -821,8 +829,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     const expiresAt = now() + seconds
     // Conditional: a hold racing `complete` never reopens a spent ticket
     if (!(await hold('consent', ticket, expiresAt))) return null
-    const heldUntil = Math.max(await heldUntilOf(nonce), expiresAt)
-    await store.put('held-nonce', sha(nonce), { until: heldUntil }, heldUntil)
+    // Conditional too: two holds in this browser at once keep the longer, and each cookie carries it
+    const heldUntil = await extend('held-nonce', sha(nonce), expiresAt)
     return { expiresAt, cookie: ticketCookie(c, nonce, cookieLife(heldUntil), issuerOf(c)) }
   }
 

@@ -33,6 +33,11 @@ export type OAuthStore = KeyValueStore & {
    * the new value; null for a used, expired or unknown row. Conditional, so a hold racing `markUsed` never reopens it.
    */
   hold?: (kind: string, id: string, expiresAt: number) => Promise<Record<string, unknown> | null>
+  /**
+   * Keeps `{ until }` under the id, living until then, and never lowers it: the longest `until` written stays, and is
+   * returned. An expired row counts as none. Conditional, so two holds racing keep the longer.
+   */
+  extend?: (kind: string, id: string, until: number) => Promise<number>
 }
 
 /** A store in memory, for tests and single-process scripts. */
@@ -73,13 +78,18 @@ export const memoryOAuthStore = (): OAuthStore => {
       rows.set(`${kind}:${id}`, { value, expiresAt })
       return value
     },
+    extend: async (kind, id, until) => {
+      const longest = Math.max(live(kind, id)?.expiresAt ?? 0, until)
+      rows.set(`${kind}:${id}`, { value: { until: longest }, expiresAt: longest })
+      return longest
+    },
   }
 }
 
 /**
  * A store in the app's database (`openDb`), so issued tokens survive a restart and ride along in the app's backup.
  * Migrates its `oauth` table and drops expired rows when made, then on a write at most once a minute. `take`,
- * `markUsed`, `trim` and `hold` are one statement each, on node:sqlite and D1 alike.
+ * `markUsed`, `trim`, `hold` and `extend` are one statement each, on node:sqlite and D1 alike.
  *
  * @example
  * const store = await dbOAuthStore(await openDb(`file:${join(env.STATE_DIR, 'state.sqlite')}`))
@@ -136,6 +146,15 @@ export const dbOAuthStore = async (db: Db): Promise<OAuthStore> => {
         .where(and(liveAt(kind, id), sql`coalesce(json_extract(${oauthKeys.value}, '$.used'), 0) = 0`))
         .returning({ value: oauthKeys.value })
       return row ? JSON.parse(row.value) : null
+    },
+    extend: async (kind, id, until) => {
+      await prune()
+      // An expired row not yet pruned ends before `until`, so the larger is always the live one
+      const longest = sql`max(${oauthKeys.expiresAt}, excluded.expires_at)`
+      const [row] = await db.insert(oauthKeys).values({ kind, id, value: JSON.stringify({ until }), expiresAt: until })
+        .onConflictDoUpdate({ target: [oauthKeys.kind, oauthKeys.id], set: { value: sql`json_object('until', ${longest})`, expiresAt: longest } })
+        .returning({ expiresAt: oauthKeys.expiresAt })
+      return row!.expiresAt
     },
   }
 }

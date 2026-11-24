@@ -345,6 +345,38 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect(await store.get('consent', ticket)).toMatchObject({ used: true, answer: 'approved' })
     })
 
+    it('keeps the longest of two holds one browser sends at once: both cookies, and the next sign-in, keep the week', async () => {
+      const store = await make()
+      const week = 7 * 24 * 3600
+      const maxAgeOf = (answer: Response) => Number(/Max-Age=(\d+)/.exec(answer.headers.getSetCookie().join(';'))?.[1])
+      let arrived = 0
+      let release = () => {}
+      const together = new Promise<void>((resolve) => (release = resolve))
+      // Both holds pass the ticket's own write together, then record the browser's held life at the same moment
+      const { app } = await joinApp({ ...store, hold: async (...args) => (++arrived === 2 && release(), await together, store.hold!(...args)) })
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      const open = async () => ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      const [long, short] = [await open(), await open()]
+      const answers = await Promise.all([browser.post('/join/hold', { ticket: long, seconds: String(week) }), browser.post('/join/hold', { ticket: short, seconds: '60' })])
+      expect(answers.map((answer) => answer.status)).toEqual([200, 200])
+      for (const answer of answers) expect(maxAgeOf(answer)).toBeGreaterThan(week - 10)
+      expect(maxAgeOf(await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`))).toBeGreaterThan(week - 10)
+      expect((await browser.post('/join', { ticket: long, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+    })
+
+    it('extends a row to the longest life written, never shorter, and ignores one that expired', async () => {
+      const store = await make()
+      const id = `x-${crypto.randomUUID()}`
+      const [week, day] = [now() + 7 * 86_400, now() + 86_400]
+      expect(await Promise.all([store.extend!('held-nonce', id, week), store.extend!('held-nonce', id, day)])).toEqual([week, week])
+      expect(await store.extend!('held-nonce', id, day)).toBe(week)
+      expect(await store.get('held-nonce', id)).toEqual({ until: week })
+      await store.put('held-nonce', `${id}-old`, { until: now() + 99_999 }, now() - 1)
+      expect(await store.extend!('held-nonce', `${id}-old`, day)).toBe(day)
+      expect(await store.get('held-nonce', `${id}-old`)).toEqual({ until: day })
+    })
+
     // workers-oauth-provider #420; better-auth GHSA-7w99-5wm4-3g79; OAuth 2.1 §4.1.3
     it('gives one token for two exchanges of a code at once, and the second valid one revokes what the first got', async () => {
       const { app } = await oauthApp(await make())
