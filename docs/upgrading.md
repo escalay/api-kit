@@ -24,7 +24,7 @@ the version in `kit.json` up.
 
 ## core
 
-### Unreleased (after 1.30.1)
+### 1.31.0
 
 - `core/cli.ts` gains `CallAt` (a tool call's mount parameters, the mcp part's) and `PLACEHOLDER_AT`, which `routeOf`,
   `pathKeysOf` and the guide pass a call. Nothing to change in the app.
@@ -94,7 +94,7 @@ the version in `kit.json` up.
 
 ## oauth
 
-### Unreleased (after 1.30.1)
+### 1.31.0
 
 New: `SignInAsk.named` (the client chose its `resource`, so `complete` binds no other for it) and `SignInAsk.expiresAt`
 (the ticket's expiry, epoch seconds). What an app may see change:
@@ -283,7 +283,7 @@ Nothing to do in any version recorded here.
 
 ## mcp
 
-### Unreleased (after 1.30.1)
+### 1.31.0
 
 - `mountMcp` takes a path with parameters (`/s/:space/mcp`): each tool's `call` and resource's `read` get them as a
   second argument, `at.params`, decoded (also in `authInfo.extra.params`). A tool with one argument works as before,
@@ -424,7 +424,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## testing
 
-### Unreleased (after 1.30.1)
+### 1.31.0
 
 - `approveSignIn(app, query, { form: { action, fields } })` drives an app's own sign-in page (`approve`): it posts
   the one `<form method="post">` whose `action` is `form.action`, with its hidden inputs and `fields`, and throws

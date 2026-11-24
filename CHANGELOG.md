@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.31.0](https://github.com/escalay/api-kit/compare/v1.30.1...v1.31.0) (2026-11-24)
+
+
+### New
+
+* **mcp:** a mount path's parameters reach each tool's call ([#106](https://github.com/escalay/api-kit/issues/106)) ([cf8a31d](https://github.com/escalay/api-kit/commit/cf8a31d5ffd4d2a7cea5ef9c20da2491b560de20))
+* **oauth, testing:** what an app's own sign-in page needs ([#103](https://github.com/escalay/api-kit/issues/103)) ([6e3883c](https://github.com/escalay/api-kit/commit/6e3883c965b192bb9c05e3ba350403a02e72b909))
+* **oauth:** hold a ticket for a decision made later ([#105](https://github.com/escalay/api-kit/issues/105)) ([c69220d](https://github.com/escalay/api-kit/commit/c69220d40ae241cdd7dc512403bd2549d39ed5ca))
+
 ## [1.30.1](https://github.com/escalay/api-kit/compare/v1.30.0...v1.30.1) (2026-11-24)
 
 
