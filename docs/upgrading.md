@@ -89,6 +89,24 @@ the version in `kit.json` up.
 
 ## oauth
 
+### Unreleased (after 1.30.1)
+
+New: `SignInAsk.named` (the client chose its `resource`, so `complete` binds no other for it) and `SignInAsk.expiresAt`
+(the ticket's expiry, epoch seconds). What an app may see change:
+
+- **Only an http redirect to a loopback host is "this computer".** A custom scheme (`sample-app:`, `evil-app://`, a
+  scheme a browser registers to open any page) was read as an app on this computer; any app may claim one, so it is
+  now named as where the client returns, as a host is: the kit's consent page says it sends you back to
+  `sample-app:`, and `SignInAsk.onThisComputer` is false for it and for `https://localhost`. An
+  app's own page that trusted `onThisComputer` for an app's scheme lists that exact callback itself. Which redirects
+  a client may register does not change.
+- **A grant ended while `onGrant` ran gets no token.** With `onGrant` set, the kit reads the grant's and the client's
+  revoke markers again after it answers yes, in the code, device and claim branches. A grant ended meanwhile (a
+  retried exchange of the same code, `revokeGrant`, `revokeClient`) answers `invalid_grant` ("This sign-in was
+  revoked: start again.") where it used to get tokens that failed at once, and `onRevoke` hears it a second time,
+  after the row `onGrant` wrote, so the app ends that row too. An app without `onGrant` sees no change. A grant's
+  revoke marker now keeps its reason; one written by 1.30.0 reads as `revoked`.
+
 ### 1.30.0
 
 New, off unless set: `ticketTtl` (default 600, as before), `complete`'s `resource`, `onRevoke`. Defaults that change
@@ -370,6 +388,12 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - `onSwitch` is guarded: a hook that throws is logged and never answered, so the switch stays made.
 
 ## testing
+
+### Unreleased (after 1.30.1)
+
+- `approveSignIn(app, query, { form: { action, fields } })` drives an app's own sign-in page (`approve`): it posts
+  the one `<form method="post">` whose `action` is `form.action`, with its hidden inputs and `fields`, and throws
+  when none or more than one matches. Without `form`, nothing changes.
 
 ### 1.29.0
 

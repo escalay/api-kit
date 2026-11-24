@@ -76,8 +76,8 @@ or real domain: on Workers it deploys with `pnpm run deploy:env`.
 
 With the `oauth` part, a test per row in the app's tests. The owner approves through `approveSignIn(app, query,
 { headers })` (`testing`): the kit's page, its ticket cookie, a same-origin POST. An app with an `approve` hook drives
-its own page the same way: `GET /oauth/authorize`, keep its `set-cookie`, post the page's `ticket` to the app's route
-with that cookie and `sec-fetch-site: same-origin`. Standard: §7 and §23.
+its own page the same way with `approveSignIn(app, query, { form: { action, fields } })`: the one form posting to
+`action`, its hidden inputs and `fields`, the cookie, `sec-fetch-site: same-origin`. Standard: §7 and §23.
 
 | Row | Passes when |
 |---|---|
