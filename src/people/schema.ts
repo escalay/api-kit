@@ -1,5 +1,5 @@
 /** The people of a deployment (an owner and members), their passkeys, their signed-in browser sessions, and the short-lived WebAuthn challenges between two calls. */
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
 export const people = sqliteTable('people', {
   id: text('id').primaryKey(),
@@ -35,14 +35,18 @@ export const passkeys = sqliteTable('passkeys', {
   lastUsedAt: text('last_used_at'),
 })
 
-export const sessions = sqliteTable('sessions', {
-  /** The SHA-256 of the cookie's token: the token itself is never stored. */
-  hash: text('hash').primaryKey(),
-  personId: text('person_id').notNull(),
-  createdAt: text('created_at').notNull(),
-  expiresAt: text('expires_at').notNull(),
-  userAgent: text('user_agent'),
-})
+export const sessions = sqliteTable(
+  'sessions',
+  {
+    /** The SHA-256 of the cookie's token: the token itself is never stored. */
+    hash: text('hash').primaryKey(),
+    personId: text('person_id').notNull(),
+    createdAt: text('created_at').notNull(),
+    expiresAt: text('expires_at').notNull(),
+    userAgent: text('user_agent'),
+  },
+  (table) => [index('sessions_by_person').on(table.personId)],
+)
 
 /** A challenge waits here between "options" and "verify"; an enrolment lets someone not yet signed in add their first passkey. */
 export const challenges = sqliteTable('webauthn_challenges', {
@@ -60,6 +64,7 @@ export const PEOPLE_MIGRATIONS = [
   'create index if not exists passkeys_by_person on passkeys (person_id)',
   'create table if not exists sessions (hash text primary key, person_id text not null, created_at text not null, expires_at text not null, user_agent text)',
   'create table if not exists webauthn_challenges (id text primary key, kind text not null, challenge text not null, person_id text, expires_at text not null)',
+  'create index if not exists sessions_by_person on sessions (person_id)',
 ] as const
 
 export type PersonRow = typeof people.$inferSelect

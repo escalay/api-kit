@@ -63,10 +63,14 @@ and the report's own `enabled` column is left alone.
 
 ## Rules
 
-- Off, and nothing sent, when `DO_NOT_TRACK=1` (or `true`) or `TELEMETRY=off` is set, or the owner switched it off;
-  `GET` says which. The route reads those from the Worker's bindings, else `process.env` (or pass `env`).
+- Off, and nothing sent, when `DO_NOT_TRACK=1` (or `true`) or `TELEMETRY=off` (or `false`, `0`; any case) is set, or
+  the owner switched it off; `GET` says which. The route reads those from the Worker's bindings, else `process.env` (or pass `env`).
 - Nothing in the first 24 hours after the first run; then at most one try per UTC day, recorded before the POST, so a
   dead collector is not hit again until tomorrow. A 5 second timeout. It never throws into the app.
+- The day's stamp is one conditional update, and only the call that made it sends: replicas (or Workers isolates)
+  running the schedule together send once.
+- A `collect` that throws never fails the routes: `GET` and `PATCH` answer with an empty `report` and a `why` that
+  names the error, and nothing is sent until it works.
 - When the collector answers `{ "latest": "1.5.0" }`, `latest` is kept and shown: the newest version there is.
 - Raise `schemaVersion` whenever `collect` changes what it returns.
 - Say in the product's README and setup page that it reports, what, and how to switch it off.

@@ -44,8 +44,15 @@ check: async () => ((await flags.isOn('sending')) ? checkSending() : { ok: false
 ## Rules
 
 - **Fails closed:** with no code set, every claim is refused (503, naming the secret to set).
-- Attempts are limited: 5 an hour per address, 20 a day in all (429). A wrong code is 403. The address is read from
-  the source the app names with `createAgentApi({ address })` (`addressOf`, core README); without one, as sent.
+- Attempts are limited: every attempt counts at its address, 5 an hour (429, even for the right code); wrong codes
+  count in all, 20 a day (past it a wrong code is 429, not 403). A wrong code is 403. The address is read from the
+  source the app names with `createAgentApi({ address })` (`addressOf`, core README); without one, as sent.
+- **The right code always gets through the day's count**: only wrong codes fill it, so nobody can spend it and lock
+  the owner out of claiming (through 1.29.0 every attempt counted, and 20 junk posts did). The threat that leaves: a
+  guesser spread over many addresses is held back only by the per-address limit and the code's length, so the code
+  is long and random (the deploy form's is). What can still refuse the right code is its own address's 5 an hour:
+  where every caller shares one address (no named source, so the `local` bucket), anyone can fill it, so name the
+  source (`address: { header: 'cf-connecting-ip' }` behind Cloudflare).
 - A claimed deployment answers its own code with 409. A **different** code (the secret was rotated) opens recovery
   for an existing owner's email, once: it becomes the code on record.
 - `onRecovery` hears an owner getting back in, in two stages (`{ stage, who, passkey }`): `started` when a rotated code

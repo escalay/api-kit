@@ -5,7 +5,7 @@
  * recovery for the owner (a passkey works only on the host it was made on, and devices get lost). Each checklist step
  * is the app's own and is checked for real, every time.
  *   GET  {path}            claimed? code set? recovery open? (never needs a key)
- *   POST {path}/claim      { code, email } → { mode: claim|recover, enrolment }   (5 an hour per address, 20 a day)
+ *   POST {path}/claim      { code, email } → { mode: claim|recover, enrolment }   (5 an hour per address; 20 wrong codes a day in all)
  *   GET  {path}/checklist  every step, checked now (owner only)
  *
  * @example
@@ -24,7 +24,8 @@ import { newId } from '../core/ids.js'
 import { ProblemError } from '../core/problem.js'
 import { migrate, type Db } from '../db/index.js'
 import { isAdmin, peopleRepo, startEnrolment } from '../people/index.js'
-import { recoveryListeners, tellApp } from '../people/session.js'
+import { tellApp } from '../core/hooks.js'
+import { recoveryListeners } from '../people/session.js'
 import { setupRoutes, type SetupRoutes } from './routes.js'
 import { SETUP_MIGRATIONS, setupState } from './schema.js'
 
@@ -95,15 +96,17 @@ export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards,
 
   const claim: RouteHandler<SetupRoutes['claim']> = async (c) => {
     const now = Date.now()
-    // From the source the app named with createAgentApi({ address })
-    const address = addressOf(c)
-    const mine = await guards.count(`setup-claim ip:${address}`, PER_ADDRESS.windowMs, now)
-    const all = await guards.count('setup-claim all', IN_ALL.windowMs, now)
-    if (mine.used > PER_ADDRESS.limit || all.used > IN_ALL.limit)
-      throw new ProblemError('too_many_requests', { detail: 'Too many setup attempts: wait an hour (or a day, when many were tried) and check the code in the deploy settings.' })
+    // Every attempt counts at its address (from the source the app named with createAgentApi({ address }))
+    const mine = await guards.count(`setup-claim ip:${addressOf(c)}`, PER_ADDRESS.windowMs, now)
+    if (mine.used > PER_ADDRESS.limit) throw new ProblemError('too_many_requests', { detail: 'Too many setup attempts from here: wait an hour and check the code in the deploy settings.' })
     if (!codeHash) throw new ProblemError('unavailable', { detail: 'No setup code is set, so nobody can claim this deployment. Set the SETUP_CODE secret (`wrangler secret put SETUP_CODE`, or in the dashboard) and try again.' })
     const { code: given, email, name } = c.req.valid('json')
-    if (hashApiKey(given.trim()) !== codeHash) throw new ProblemError('forbidden', { detail: 'That setup code is not right. Check the SETUP_CODE secret on your deployment and try again.' })
+    if (hashApiKey(given.trim()) !== codeHash) {
+      // Only a wrong code counts in all, so nobody can spend the day's attempts and lock out the right one
+      const wrong = await guards.count('setup-claim all', IN_ALL.windowMs, now)
+      if (wrong.used > IN_ALL.limit) throw new ProblemError('too_many_requests', { detail: 'Too many wrong setup codes today: check the code in the deploy settings and try again tomorrow.' })
+      throw new ProblemError('forbidden', { detail: 'That setup code is not right. Check the SETUP_CODE secret on your deployment and try again.' })
+    }
     const state = await stateOf()
     const at = new Date().toISOString()
     if (!state) {

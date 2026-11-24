@@ -10,7 +10,7 @@ proves it).
 
 | File | What |
 |---|---|
-| `schema.ts` | `people`, `team_domains`, `passkeys`, `sessions`, `webauthn_challenges`, and `PEOPLE_MIGRATIONS` |
+| `schema.ts` | `people`, `team_domains`, `passkeys`, `sessions` (indexed by person), `webauthn_challenges`, and `PEOPLE_MIGRATIONS` |
 | `repo.ts` | `peopleRepo`: the only queries (people, domains, passkeys, sessions, challenges, `sweep`) |
 | `session.ts` | `startSession`, `endSession`, `personOf`, `sessionOf` (for `auth.session`), `roleOf` (for `access.roleOf`), `isAdmin`, `startEnrolment` (with its purpose: `claim` or `recovery`) |
 | `routes.ts` | `peopleRoutes`: the session, the passkey ceremonies, your passkeys, the team |
@@ -37,8 +37,9 @@ const app = createAgentApi({ …, tags: [...tags, PEOPLE_TAG, SETUP_TAG], auth: 
   realm, keys, open: [...PEOPLE_OPEN_PATHS, ...SETUP_OPEN_PATHS], session: sessionOf(db),
   access: access && { ...access, roleOf: roleOf(db) },
 } })
-await registerPeople(app, { db, rpName: 'Postbox', fixedKeys, onTeamChange: (change, c) => log('team', change), onPasskeyChange: (change, c) => log('passkey', change) })
-await registerSetup(app, { db, code: env.SETUP_CODE, guards: await dbGuardStore(db), fixedKeys, steps })
+const guards = await dbGuardStore(db)
+await registerPeople(app, { db, rpName: 'Postbox', fixedKeys, limits: { store: guards, address: { header: 'cf-connecting-ip' } }, onTeamChange: (change, c) => log('team', change), onPasskeyChange: (change, c) => log('passkey', change) })
+await registerSetup(app, { db, code: env.SETUP_CODE, guards, fixedKeys, steps })
 // MCP: tools: [...featureTools, ...teamTools()]
 // The browser: @simplewebauthn/browser's startRegistration / startAuthentication with `options`, then post the answer
 ```
@@ -53,6 +54,14 @@ CI: claim → `register(options, origin)` → verify → `login(options, origin)
 - A cookie write must come from the same site (`Sec-Fetch-Site`, else `Origin`); other sites can't post through it.
 - Each challenge is used once and expires in 5 minutes; an enrolment (from setup) in 15. A valid enrolment is used
   for its person even in a browser that is still signed in, so a recovery made there completes and is told as one.
+- A challenge is taken in one statement, so two verifies of it sent together sign in once.
+- Expired challenges and sessions are swept from the writes that add them, at most once a minute per database
+  (`sweep` in the repo is that delete).
+- `limits` (default `false`: none) allows 30 calls a minute to the two options routes together, per caller: a signed-in
+  person by their email, anyone else by address (`addressOf`, from `address`, default the app's
+  `createAgentApi({ address })`). Past it: 429 with `Retry-After`, and nothing stored. Each anonymous call stores a
+  challenge for 5 minutes, so an app whose sign-in page is open to anyone passes `limits` (on Workers with
+  `dbGuardStore(db)`, so every isolate shares the count).
 - A new passkey is named after the device and browser it was made in (`Mac · Chrome`, from the user agent) unless the
   person posts a name of their own; a bare device word (`Mac`, `This device`) counts as none. Two of a person's passkeys
   never share a name: the later one is numbered (`Mac · Chrome (2)`).
@@ -62,6 +71,7 @@ CI: claim → `register(options, origin)` → verify → `login(options, origin)
 - `onTeamChange` hears each change to the team (`{ who, from, to, by, notify }`: an email or `@domain`, the role before and
   after, null when off the team; `notify`, for a person just added, is false when the caller asked that they not be told);
   an unchanged role or a domain already listed is not a change. Log it with the app's events, and send any invite from it.
+  It is told once the change is made, and a hook that throws is logged, never answered: the change stays made.
 - `onPasskeyChange` hears each passkey added or removed (`{ action, who, id, name, by, via }`: `who` is the email it
   belongs to, `name` the device and browser it was made in unless its person named it, `via`, for one added, how its
   maker got in: `session`, or an enrolment from `claim` or `recovery`). It is told once the passkey and the session

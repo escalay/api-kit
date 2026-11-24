@@ -79,6 +79,49 @@ describe('boards', () => {
     expect((await app.request('/api/boards', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"name":"x"}' })).status).toBe(401)
   })
 
+  it('adds an item once when two PUTs of it arrive together', async () => {
+    const app = await sampleApi()
+    const { id } = await (await call(app, 'POST', '/api/boards', { name: 'Race' })).json()
+    const answers = await Promise.all([call(app, 'PUT', `/api/boards/${id}/items/logo:fox`, { note: 'one' }), call(app, 'PUT', `/api/boards/${id}/items/logo:fox`, { note: 'two' })])
+    expect(answers.map((answer) => answer.status).sort()).toEqual([200, 201])
+    expect((await (await call(app, 'GET', `/api/boards/${id}`)).json()).items).toBe(1)
+  })
+
+  it('keeps a note when none is sent, clears it on null, and sets it otherwise', async () => {
+    const app = await sampleApi()
+    const { id } = await (await call(app, 'POST', '/api/boards', { name: 'Notes' })).json()
+    const noteOf = async () => (await (await call(app, 'GET', `/api/boards/${id}`)).json())._embedded.items[0].note
+    await call(app, 'PUT', `/api/boards/${id}/items/logo:fox`, { note: 'the ears' })
+    await call(app, 'PUT', `/api/boards/${id}/items/logo:fox`)
+    expect(await noteOf()).toBe('the ears')
+    await call(app, 'PUT', `/api/boards/${id}/items/logo:fox`, { note: '  ' })
+    expect(await noteOf()).toBe('the ears')
+    await call(app, 'PUT', `/api/boards/${id}/items/logo:fox`, { note: null })
+    expect(await noteOf()).toBeNull()
+
+    const tools = boardTools({ noun: 'logos', label: (logo) => logo.client })
+    const save = tools.find((tool) => tool.name === 'save_to_board')!
+    const auth = { token: KEY, clientId: 'agent', scopes: [], extra: { headers: { authorization: `Bearer ${KEY}` } } }
+    await inProcess(app)(save.call(save.input.parse({ id, ref: 'logo:fox', note: 'by a tool' }) as never), auth)
+    expect(await noteOf()).toBe('by a tool')
+    await inProcess(app)(save.call(save.input.parse({ id, ref: 'logo:fox', note: null }) as never), auth)
+    expect(await noteOf()).toBeNull()
+
+    const client = createBoardsClient<{ client: string }>({ fetchImpl: ((url: string, init?: RequestInit) => app.request(url, init)) as typeof fetch, headers: { authorization: `Bearer ${KEY}` } })
+    await client.save(id, 'logo:fox', 'by a page')
+    expect(await noteOf()).toBe('by a page')
+    await client.save(id, 'logo:fox', null)
+    expect(await noteOf()).toBeNull()
+  })
+
+  it('tells agents what a ref looks like, with the app\'s example', () => {
+    const refOf = (tools: ReturnType<typeof boardTools>, name: string) => (tools.find((tool) => tool.name === name)!.input.shape as Record<string, { description?: string }>).ref!.description
+    const withExample = boardTools({ noun: 'logos', label: (logo) => logo.client, refExample: 'logo:fox' })
+    for (const name of ['save_to_board', 'remove_from_board']) expect(refOf(withExample, name)).toContain('`<type>:<id>`, e.g. `logo:fox`')
+    expect(refOf(boardTools({ noun: 'logos', label: (logo) => logo.client }), 'save_to_board')).toContain('`<type>:<id>`')
+    expect(withExample.find((tool) => tool.name === 'save_to_board')!.cli).toMatchObject({ examples: [{ run: expect.stringContaining('logo:fox') }] })
+  })
+
   it('documents the routes to the standard and gives agents the same as tools', async () => {
     const app = await sampleApi()
     const doc = await (await app.request('/openapi.json')).json()

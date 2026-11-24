@@ -8,17 +8,21 @@ type BoardJson = { id: string; name: string; items: number; description?: string
  * The MCP tools for the same routes, so an agent can keep what it finds for the owner: list, make, open, save to and
  * take off boards (and suggestions, when the app has them).
  *
+ * `refExample` is the app's own ref (`registerBoards`' `refExample`), shown to agents so they send a whole ref.
+ *
  * @example
- * boardTools({ noun: 'recipes', label: (recipe) => `${recipe.title} (${recipe.year})`, suggestions: true })
+ * boardTools({ noun: 'recipes', label: (recipe) => `${recipe.title} (${recipe.year})`, refExample: 'recipe:soup', suggestions: true })
  */
-export const boardTools = ({ path = '/api/boards', noun, label, suggestions = false }: { path?: string; noun: string; label: (item: any) => string; suggestions?: boolean }): McpTool[] => {
+export const boardTools = ({ path = '/api/boards', noun, label, refExample, suggestions = false }: { path?: string; noun: string; label: (item: any) => string; refExample?: string; suggestions?: boolean }): McpTool[] => {
   const line = (board: BoardJson) => `${board.name} · ${board.items} ${noun} · id ${board.id}`
+  const refText = `The item’s ref, \`<type>:<id>\`${refExample ? `, e.g. \`${refExample}\`` : ''}, as search results and links give it.`
+  const sampleRef = refExample ?? 'recipe:soup'
   const tools: McpTool[] = [
     mcpTool({
       name: 'list_boards',
       title: 'The owner’s boards',
       description: `Every board (a named collection of ${noun} for a project) with how much is on it; give \`item\` to see which boards hold one.`,
-      input: z.object({ item: z.string().optional().describe('Only boards holding this ref.') }),
+      input: z.object({ item: z.string().optional().describe(`Only boards holding this ref (\`<type>:<id>\`${refExample ? `, e.g. \`${refExample}\`` : ''}).`) }),
       annotations: { readOnlyHint: true, openWorldHint: false },
       cli: { name: 'board list', examples: [{ run: 'board list', about: 'Every board' }] },
       call: ({ item }) => ({ path, query: item ? { item } : {} }),
@@ -48,19 +52,19 @@ export const boardTools = ({ path = '/api/boards', noun, label, suggestions = fa
       name: 'save_to_board',
       title: 'Save to a board',
       description: `Puts one of the ${noun} on a board, with an optional note on why; saving it again only changes the note.`,
-      input: z.object({ id: z.string().describe('The board’s id.'), ref: z.string().describe('The item’s ref, from a search result (e.g. its id).'), note: z.string().optional().describe('Why it belongs here.') }),
+      input: z.object({ id: z.string().describe('The board’s id.'), ref: z.string().describe(refText), note: z.string().nullable().optional().describe('Why it belongs here. Left out keeps the note it has; null clears it.') }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      cli: { name: 'board save', examples: [{ run: 'board save brd_a1b2 item_1 --note "for the menu"', about: 'Keep an item on a board, with why' }] },
-      call: ({ id, ref, note }) => ({ method: 'PUT', path: `${path}/${encodeURIComponent(id)}/items/${encodeURIComponent(ref)}`, body: note ? { note } : {} }),
+      cli: { name: 'board save', examples: [{ run: `board save brd_a1b2 ${sampleRef} --note "for the menu"`, about: 'Keep an item on a board, with why' }] },
+      call: ({ id, ref, note }) => ({ method: 'PUT', path: `${path}/${encodeURIComponent(id)}/items/${encodeURIComponent(ref)}`, body: note === undefined ? {} : { note } }),
       summarize: (json: BoardJson) => `Saved. ${line(json)}`,
     }),
     mcpTool({
       name: 'remove_from_board',
       title: 'Take off a board',
       description: `Takes one of the ${noun} off a board.`,
-      input: z.object({ id: z.string().describe('The board’s id.'), ref: z.string().describe('The item’s ref.') }),
+      input: z.object({ id: z.string().describe('The board’s id.'), ref: z.string().describe(refText) }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-      cli: { name: 'board remove', examples: [{ run: 'board remove brd_a1b2 item_1 --yes', about: 'Take an item off a board' }] },
+      cli: { name: 'board remove', examples: [{ run: `board remove brd_a1b2 ${sampleRef} --yes`, about: 'Take an item off a board' }] },
       call: ({ id, ref }) => ({ method: 'DELETE', path: `${path}/${encodeURIComponent(id)}/items/${encodeURIComponent(ref)}` }),
       summarize: () => 'Removed.',
     }),

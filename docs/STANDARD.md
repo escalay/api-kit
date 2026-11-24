@@ -124,7 +124,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   **passkey** (WebAuthn, `@simplewebauthn/server`); signing in with it sets an HttpOnly cookie (`__Host-session` on
   https, SameSite=Lax, 30 days) whose token is stored only as a SHA-256. `auth.session` checks it after keys and agent
   tokens and before Access; a write made with it must come from the same site, as with Access's cookie. Claiming
-  **fails closed** (no secret set: 503) and is limited (5 an hour per address, read as §9 says, 20 a day in all); a claimed deployment
+  **fails closed** (no secret set: 503) and is limited (5 an hour per address, read as §9 says; 20 wrong codes a day in all, so the right code is never locked out); a claimed deployment
   answers the same code with 409, and a **rotated** code opens recovery for an existing owner, once. **Members** come
   through Access: with `access.roleOf: roleOf(db)` an email that is neither listed nor of a listed domain gets 403
   (without `roleOf`, Access works as before). Roles: `owner` does everything; `member` everything but admin (the team,
@@ -132,14 +132,18 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   Admin checks use `isAdmin(caller, fixedKeys)`: the owner or a key from `API_KEYS`. The last owner cannot be demoted
   or removed, and an owner cannot remove their last passkey (409). Passkeys work only on the host they were made on.
   A new passkey is named after the device and browser it was made in unless the person names it, and no two of a
-  person's passkeys share a name.
+  person's passkeys share a name. A challenge is taken in one statement (two verifies of it sign in once), and expired
+  challenges and sessions are swept from the writes that add them, at most once a minute. The options routes store a
+  challenge for anyone who asks: an app whose sign-in is open to anyone passes `registerPeople({ limits })` (30 a
+  minute per caller, an anonymous one by address).
 - **Who changed access is on the record:** `registerPeople` takes `onTeamChange` (each person or domain added, its
   role changed, or removed: `who`, the role `from` and `to`, `by`, and for a person added `notify`, false when the
   caller asked that they not be told), `onPasskeyChange` (each passkey added or removed: whose, its id and name, `by`,
   and for one added `via`: `session`, `claim` or `recovery`), `registerSetup` takes `onRecovery` (an owner's recovery
   `started` with a rotated code and `completed` with the passkey it made) and `registerKeys` takes `onKeyChange` (each key
   made or deleted: its id, name and `by`, never its value). An app logs them where it logs the rest, so an owner can
-  see who was let in, and alerts the person whose way in changed.
+  see who was let in, and alerts the person whose way in changed. Every hook is told after its change is made, and a
+  hook that throws is logged, never answered (`tellApp`): the change stands and the request succeeds.
 - **Open without auth:** `/api/health`, `/openapi.json`, `/docs`, `/llms*.txt`, `/agents/*`, `/skills/*`,
   `/problems/*` (no data), and with a brand (§22) its files: `/favicon.ico`, `/icon.svg`, `/icon-192.png`,
   `/icon-512.png`, `/apple-touch-icon.png`, `/og.png`, `/site.webmanifest`, and `/icon-dark.svg`,
@@ -269,7 +273,9 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 
 ## 10. The agent guide
 
-Templates in `apps/api/guide/`, served live with `{{origin}}`, `{{snapshot}}`, `{{counts.*}}` filled. On Workers the
+Templates in `apps/api/guide/`, served live with `{{origin}}`, `{{snapshot}}`, `{{counts.*}}` filled. `{{origin}}` is
+the app's `publicOrigin` when it has one, so a forwarded host never changes what the guide names; what is kept per
+origin (the spec, the skills discovery renders) is bounded. On Workers the
 folder is shipped as a module (`kit guide` → `src/guide.gen.ts`, served with `serveGuide({ files })`), and
 a test fails when the module is older than the folder. **Anything the
 code already knows is generated, never written by hand**, so the guide cannot drift from the API:
@@ -355,7 +361,8 @@ fact, steps with checkable done-when criteria.
   as security schemes, one skill per chosen tool) and JSON-RPC `SendMessage`, `GetTask`, `ListTasks`, `CancelTask`.
   A message's text fills the skill's main argument (a `data` part may give all of them; `metadata.skill` picks the
   skill, else the first); the task's artifact is the tool's summary (text) plus the route's JSON (data). A slow route
-  leaves the task `TASK_STATE_WORKING` until `GetTask` finds it done. Tasks are kept a day, visible only to their
+  leaves the task `TASK_STATE_WORKING` until `GetTask`, polling the run (never calling the tool again while it works),
+  finds it done; a canceled task stays canceled. Tasks are kept a day, visible only to their
   caller. Requests must send `A2A-Version: 1.0` (absent means 0.3: `-32009`); streaming, push and the extended card
   answer the spec's errors and the card says they are off. Pick the one-call workflows as skills, not every tool.
 
@@ -462,7 +469,9 @@ Where items have pictures or prose worth searching by sense, not by keyword (`ve
 - **Never pay twice.** One append-only JSONL ledger per space, keyed by item, with the hash of model, size and content;
   `embedMissing` embeds only stale items and appends each batch as it returns. Builds run off the request path (a job,
   or a larger machine for big sets), keep ledgers in object storage, start with a pilot (`limit: 200`) and carry a `budget`; a
-  402/403 is a `SpendCapError` that stops the run, and a rerun resumes.
+  402/403 is a `SpendCapError` that stops the run, and a rerun resumes. One run writes a ledger at a time
+  (`<file>.lock`); a torn last line (a crash mid-append) is skipped with a warning and dropped by the next run, and
+  any other line that isn't JSON is damage that stops the read.
 - **Routes.** `GET {path}?q=&by=look|meaning|both` (words), `POST {path}` (a picture: multipart `image` or JSON
   `{ image }`, filters in the query), `GET {item}/similar?by=` (likeness, free). Results are HAL,
   `_embedded.results[]` of `{ score, z, space, item }`. Every filter is declared on all three.
@@ -510,10 +519,12 @@ The owner's own collections of a catalog's items (`boards.ts`, `boards-client.ts
   (`refs.ts`, shipped with both `boards` and `boards-client`), never by hand. Boards live in the app's database (`db`) next to
   its OAuth state.
 - `GET /api/boards` (`?item=<ref>`: where it is saved), `POST` (201 + `Location`), `GET|PATCH|DELETE /api/boards/{id}`,
-  `PUT|DELETE /api/boards/{id}/items/{ref}` (idempotent; a note per item), and `/suggestions` when the app can say
+  `PUT|DELETE /api/boards/{id}/items/{ref}` (idempotent, also when two arrive together; a note per item: left out
+  keeps it, `null` clears it), and `/suggestions` when the app can say
   what is alike (e.g. the centroid of the board's look vectors). Writes need `write`.
+- Boards are single-owner: every caller with `read` sees every board. Per-person boards are the app's own feature.
 - Agents get `list_boards`, `create_board`, `get_board`, `save_to_board`, `remove_from_board` (and
-  `board_suggestions`). Browsers use the headless client and hooks; the UI is the app's.
+  `board_suggestions`); `boardTools({ refExample })` shows them the app's ref. Browsers use the headless client and hooks; the UI is the app's.
 
 ## 18. Usage reports
 
@@ -525,11 +536,11 @@ A product people deploy for themselves may report its use once a day (`telemetry
 - The report holds **coarse ranges and booleans, never ids or text**: counts as `0`, `1-10`, `11-100`, `101-1k`,
   `1k-10k`, `10k+` (`countRange`), days as `0`, `1-7`, `8-30`, `31-90`, `91-365`, `365+` (`dayRange`). Anything else
   is dropped before sending.
-- Off when `DO_NOT_TRACK=1` or `TELEMETRY=off` is set, or the owner switched it off (`PATCH /api/telemetry`
+- Off when `DO_NOT_TRACK=1` or `TELEMETRY=off` (`false`, `0`) is set, or the owner switched it off (`PATCH /api/telemetry`
   `{ enabled }`, owner only). `GET /api/telemetry` shows whether it is on, why, and exactly the body it would send;
   agents get it as `get_telemetry`.
 - It runs from the app's scheduled handler (`sendDaily`), is tried at most once a day even when the collector is
-  down, and never throws into the app. The collector may answer `{ "latest": "<version>" }`; the app keeps and shows it.
+  down or several instances run it, and never throws into the app. The collector may answer `{ "latest": "<version>" }`; the app keeps and shows it.
 - The product's README and setup say that it reports, what, and how to switch it off.
 
 ## 19. The command line

@@ -9,6 +9,40 @@ import * as dbModule from '../src/db/index.js'
 guardStoreContract('memory', async () => memoryGuardStore())
 guardStoreContract('database (node:sqlite)', async () => dbGuardStore(await testDb()), async () => countedDbStore(await testDb()))
 
+describe('memoryGuardStore past maxEntries', () => {
+  const answer = { bodyHash: 'h', status: 201, headers: [] as [string, string][], body: btoa('{}') }
+
+  it('never lets go of a running lock, however many answers come after it', async () => {
+    const store = memoryGuardStore({ maxEntries: 2 })
+    expect(await store.claim('running', 60_000, 1_000)).toBeNull()
+    for (let n = 0; n < 5; n++) {
+      expect(await store.claim(`done-${n}`, 60_000, 1_000)).toBeNull()
+      await store.save(`done-${n}`, answer, 100_000)
+    }
+    expect(await store.claim('running', 60_000, 2_000)).toBe('running')
+    // The oldest answers went instead
+    expect(await store.claim('done-4', 60_000, 2_000)).toEqual(answer)
+    expect(await store.claim('done-0', 60_000, 2_000)).toBeNull()
+  })
+
+  it('passes over running locks when it caps, however many there are', async () => {
+    const store = memoryGuardStore({ maxEntries: 100 })
+    const started = performance.now()
+    // Each claim scanning every lock before it would take seconds here
+    for (let n = 0; n < 50_000; n++) expect(await store.claim(`running-${n}`, 60_000, 1_000)).toBeNull()
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(await store.claim('running-0', 60_000, 2_000)).toBe('running')
+    expect(await store.claim('running-49999', 60_000, 2_000)).toBe('running')
+  })
+
+  it('keeps at most maxEntries rate windows, letting go of the one counted longest ago', async () => {
+    const store = memoryGuardStore({ maxEntries: 3 })
+    for (const id of ['a', 'b', 'c', 'd']) await store.count(id, 3_600_000, 1_000)
+    expect(await store.count('d', 3_600_000, 2_000)).toMatchObject({ used: 2 })
+    expect(await store.count('a', 3_600_000, 2_000)).toMatchObject({ used: 1 })
+  })
+})
+
 describe('the db module entry', () => {
   // An app's generated kit index re-exports only db/index.ts
   it('exports the guard store', () => expect(typeof dbModule.dbGuardStore).toBe('function'))

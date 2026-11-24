@@ -1,8 +1,9 @@
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { appendFile, mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { appendLedger, centroid, createEmbedder, DIMENSIONS, documentText, embedMissing, embedRequest, encodeVector, hashOf, imageDataUrl, nearest, queryText, readLedger, SpendCapError, standouts, vectorSpace, type Embedded, type EmbeddingInput } from '../src/vectors/index.js'
 
 /** A unit vector along `axis`, leaning `lean` into the next one. */
@@ -47,6 +48,66 @@ describe('vectors', () => {
     expect(vectorSpace(ledger).matrix[1]).toBeCloseTo(1)
     expect(vectorSpace(ledger, (key) => key === 'b').keys).toEqual(['b'])
     expect((await readLedger(join(tmpdir(), 'no-such-ledger.jsonl'))).size).toBe(0)
+  })
+
+  it('skips a torn last line with one warning, mends it before the next append, and refuses a broken middle line', async () => {
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const file = await ledgerFile()
+      await appendLedger(file, [{ key: 'a', hash: hashOf('a'), vector: encodeVector(along(0)) }])
+      // A crash mid-append leaves part of a line and no newline
+      await appendFile(file, '{"key":"b","hash":"')
+      expect([...(await readLedger(file)).keys()]).toEqual(['a'])
+      expect(warned).toHaveBeenCalledTimes(1)
+      expect(String(warned.mock.calls[0]![0])).toContain(`${file}: line 2 is torn`)
+
+      const embed = async (inputs: EmbeddingInput[]): Promise<Embedded> => ({ vectors: inputs.map(() => along(1)), tokens: 1, cost: 0 })
+      expect(await embedMissing({ file, items: [{ key: 'a', content: 'a' }, { key: 'b', content: 'b' }], embed })).toMatchObject({ embedded: 1, fresh: 1 })
+      expect([...(await readLedger(file)).keys()]).toEqual(['a', 'b'])
+      expect(warned).toHaveBeenCalledTimes(2)
+
+      // A whole last line cut before its newline is kept, and the next line starts on its own
+      const unended = await ledgerFile()
+      await appendFile(unended, JSON.stringify({ key: 'a', hash: hashOf('a'), vector: encodeVector(along(0)) }))
+      await embedMissing({ file: unended, items: [{ key: 'a', content: 'a' }, { key: 'b', content: 'b' }], embed })
+      expect([...(await readLedger(unended)).keys()]).toEqual(['a', 'b'])
+      expect(warned).toHaveBeenCalledTimes(2)
+
+      const broken = await ledgerFile()
+      await appendFile(broken, `${JSON.stringify({ key: 'a', hash: 'h', vector: '' })}\n{"key":\n${JSON.stringify({ key: 'b', hash: 'h', vector: '' })}\n`)
+      await expect(readLedger(broken)).rejects.toThrow(`${broken}: line 2 is not a ledger line`)
+    } finally {
+      warned.mockRestore()
+    }
+  })
+
+  it('lets one embedMissing write a ledger at a time, and takes over a lock its dead writer left', async () => {
+    const file = await ledgerFile()
+    const items = Array.from({ length: 4 }, (_, n) => ({ key: `k${n}`, content: `t${n}` }))
+    const embed = async (inputs: EmbeddingInput[]): Promise<Embedded> => ({ vectors: inputs.map(() => along(0)), tokens: 1, cost: 0 })
+    const runs = await Promise.allSettled([embedMissing({ file, items, embed }), embedMissing({ file, items, embed })])
+    expect(runs.map((run) => run.status).sort()).toEqual(['fulfilled', 'rejected'])
+    expect(String((runs.find((run) => run.status === 'rejected') as PromiseRejectedResult).reason)).toContain(`${file}.lock`)
+    expect((await readFile(file, 'utf8')).trim().split('\n')).toHaveLength(4)
+
+    // A writer that died without letting go
+    await writeFile(`${file}.lock`, String(spawnSync(process.execPath, ['-e', '']).pid))
+    expect(await embedMissing({ file, items: [...items, { key: 'k4', content: 't4' }], embed })).toMatchObject({ embedded: 1, fresh: 4 })
+    await expect(readFile(`${file}.lock`, 'utf8')).rejects.toThrow()
+  })
+
+  it('takes an empty lock for a writer still starting, and takes it over only once it is old', async () => {
+    const file = await ledgerFile()
+    const items = [{ key: 'k0', content: 't0' }]
+    const embed = vi.fn(async (inputs: EmbeddingInput[]): Promise<Embedded> => ({ vectors: inputs.map(() => along(0)), tokens: 1, cost: 0 }))
+    await writeFile(`${file}.lock`, '')
+    await expect(embedMissing({ file, items, embed })).rejects.toThrow(`${file}.lock`)
+    expect(embed).not.toHaveBeenCalled()
+
+    // Left empty by a writer that died before writing its id
+    const minuteAgo = new Date(Date.now() - 60_000)
+    await utimes(`${file}.lock`, minuteAgo, minuteAgo)
+    expect(await embedMissing({ file, items, embed })).toMatchObject({ embedded: 1 })
   })
 
   it('embeds only what is missing or changed, writing each batch as it returns', async () => {

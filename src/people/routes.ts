@@ -100,7 +100,7 @@ export const peopleRoutes = ({ sessionPath, teamPath, tag }: { sessionPath: stri
     description: 'A WebAuthn registration challenge. Signed in, it adds a passkey to you; with an `enrolment` (from claiming or recovering a deployment) it makes your first one.',
     security: [],
     request: body(z.object({ enrolment: z.string().optional().openapi({ description: 'The enrolment from setup, when not signed in.' }) }).openapi('PasskeyRegisterInput', { description: 'An enrolment, or nothing when signed in.' })),
-    responses: { 200: json('The challenge.', WebAuthnOptionsSchema), ...problemResponses(400, 401) },
+    responses: { 200: json('The challenge.', WebAuthnOptionsSchema), ...problemResponses(400, 401, 429) },
   }),
   registerVerify: createRoute({
     method: 'post',
@@ -130,7 +130,7 @@ export const peopleRoutes = ({ sessionPath, teamPath, tag }: { sessionPath: stri
     summary: 'Start signing in with a passkey',
     description: 'A WebAuthn sign-in challenge any passkey made on this host can answer.',
     security: [],
-    responses: { 200: json('The challenge.', WebAuthnOptionsSchema), ...problemResponses(400) },
+    responses: { 200: json('The challenge.', WebAuthnOptionsSchema), ...problemResponses(400, 429) },
   }),
   loginVerify: createRoute({
     method: 'post',

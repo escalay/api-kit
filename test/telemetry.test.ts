@@ -109,6 +109,34 @@ describe('telemetry', () => {
     expect(await unversioned.sendDaily(db)).toEqual({ sent: false, why: 'The version "dev" is not like 1.2.3.' })
   })
 
+  it('sends once a day when two replicas run the schedule together', async () => {
+    const tick = clock()
+    const { db, usage, sent } = await setup()
+    const replica = telemetry({ product: 'notes', schemaVersion: 2, version: '1.4.2', url: 'https://pulse.example.test', collect: () => ({}), fetch: async (url, init) => (sent.push({ url: String(url), body: JSON.parse(String(init?.body)), signal: init?.signal }), Response.json({})) })
+    tick(DAY)
+    const runs = await Promise.all([usage.sendDaily(db), replica.sendDaily(db)])
+    expect(runs.map((run) => run.sent).sort()).toEqual([false, true])
+    expect(runs.find((run) => !run.sent)!.why).toBe('Already sent today.')
+    expect(sent).toHaveLength(1)
+  })
+
+  it('answers the routes when collect throws, saying why, and still switches', async () => {
+    const { owner } = await setup({ collect: () => { throw new Error('no table') } })
+    const shown = await owner()
+    expect(shown.status).toBe(200)
+    expect(await shown.json()).toMatchObject({ on: true, why: 'The report can’t be made now (no table): nothing is sent until it can.', body: { schema: 2, version: '1.4.2', report: {} } })
+    const off = await owner({ method: 'PATCH', body: JSON.stringify({ enabled: false }) })
+    expect(off.status).toBe(200)
+    expect(await off.json()).toMatchObject({ on: false, enabled: false, why: 'The owner switched it off.' })
+  })
+
+  it('reads TELEMETRY=off, false or 0 as off', async () => {
+    const tick = clock()
+    const { db, usage } = await setup()
+    tick(2 * DAY)
+    for (const value of ['off', 'false', '0', 'OFF']) expect(await usage.sendDaily(db, { TELEMETRY: value })).toEqual({ sent: false, why: 'TELEMETRY=off is set in the environment.' })
+  })
+
   it('reads and writes the owner’s switch where the app keeps it, so there is one switch, not two', async () => {
     let on = true
     const changes: string[] = []

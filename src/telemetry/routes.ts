@@ -14,7 +14,7 @@ const TelemetryBodySchema = z
 
 const TelemetrySchema = z
   .object({
-    on: z.boolean().openapi({ description: 'Whether the daily report is sent: the owner’s switch, and neither `DO_NOT_TRACK=1` nor `TELEMETRY=off` set.' }),
+    on: z.boolean().openapi({ description: 'Whether the daily report is sent: the owner’s switch, and neither `DO_NOT_TRACK=1` nor `TELEMETRY=off` (`false`, `0`) set.' }),
     why: z.string().openapi({ description: 'Why it is on or off, in a sentence.', example: 'Sent once a day, from 24 hours after the first run.' }),
     enabled: z.boolean().openapi({ description: 'The owner’s switch alone (`PATCH` changes it).' }),
     endpoint: z.string().openapi({ description: 'Where the report goes.', example: 'https://pulse.example.com/v1/notes' }),
@@ -42,7 +42,7 @@ export const telemetryRoutes = ({ path, tag }: { path: string; tag: string }) =>
     operationId: 'updateTelemetry',
     tags: [tag],
     summary: 'Switch the usage report on or off',
-    description: 'Turns the daily usage report on or off for this deployment. Owner only. `DO_NOT_TRACK=1` or `TELEMETRY=off` in the environment keep it off whatever this says.',
+    description: 'Turns the daily usage report on or off for this deployment. Owner only. `DO_NOT_TRACK=1` or `TELEMETRY=off` (`false`, `0`) in the environment keep it off whatever this says.',
     request: {
       body: {
         required: true,

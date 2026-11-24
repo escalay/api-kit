@@ -58,7 +58,7 @@ export const useItemBoards = <Item>(client: BoardsClient<Item>, ref: string | nu
   const [holding, setHolding] = useState<Set<string>>(new Set())
   const reload = useCallback(async () => setHolding(ref ? new Set((await client.list(ref)).map((board) => board.id)) : new Set()), [client, ref])
   useEffect(() => void reload().catch(() => setHolding(new Set())), [reload])
-  const save = async (boardId: string, note?: string) => {
+  const save = async (boardId: string, note?: string | null) => {
     if (!ref) return
     await client.save(boardId, ref, note)
     await reload()
