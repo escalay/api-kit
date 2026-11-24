@@ -176,6 +176,22 @@ describe('onGrant', () => {
     expect((await chained.join(invite)).status).toBe(200)
   })
 
+  it('spends the invite when the exchange throws after the claim, and a retried exchange ends its member', async () => {
+    // The app chained the wrong way round, and its hook threw: the kit issues nothing and tells no one
+    const chained: Awaited<ReturnType<typeof grantsApp>> = await box({
+      oauth: { onGrant: async (grant, c) => (await chained.sharing.oauth.onGrant(grant, c)) && Promise.reject(new Error('the app’s store is down')) },
+    })
+    const invite = await chained.makeInvite()
+    const { exchange } = await chained.signIn({ resource: SOUPS, decision: chained.inviteDecision(invite) })
+    expect((await exchange()).status).toBe(500)
+    const [member] = await chained.membersOfInvite(invite.id)
+    expect([await chained.inviteState(invite.id), member?.endedReason, chained.revoked]).toEqual(['redeemed', null, []])
+    // The code is spent, so the client's retry is a replay: the kit ends the grant and the part its row
+    expect((await exchange()).status).toBe(400)
+    const [ended] = await chained.membersOfInvite(invite.id)
+    expect([await chained.inviteState(invite.id), ended?.endedReason]).toEqual(['redeemed', 'replayed'])
+  })
+
   it('leaves no live member after a retried exchange while onGrant runs (race.mts)', async () => {
     const { makeInvite, signIn, inviteDecision, membersOfInvite, revoked } = await box({ byNameDelay: 50 })
     const invite = await makeInvite()
@@ -255,7 +271,8 @@ describe('accepts', () => {
     const { makeInvite, join, call, ageMember } = await box()
     const token = (await join(await makeInvite())).tokens.access_token
     await ageMember(grantOf(token), { expiresAt: '2026-03-12T08:00:00.000Z' })
-    expect(refusalOf(await call('/s/soups/mcp', token))).toBe('This access ended on 12 March 2026 (UTC): ask the owner for a new invite.')
+    // Its own token, so wherever it is used it hears why it ended, never the out-of-place sentence
+    for (const path of ['/s/soups/mcp', '/s/bakes/mcp', '/mcp']) expect([path, refusalOf(await call(path, token))]).toEqual([path, 'This access ended on 12 March 2026 (UTC): ask the owner for a new invite.'])
   })
 })
 

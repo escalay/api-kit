@@ -48,8 +48,8 @@ await registerSharing(app, sharing, { oauth })   // migrates, binds the hooks to
 mcpServerFactory({ tools: [...FEATURE_TOOLS, ...sharingTools({ noun: 'shelf' })], … })   // the owner's MCP only
 ```
 
-An app with hooks of its own chains them, its veto first so a refusal never spends an invite (the other way round,
-the kit withdraws the grant and `onRevoke` deletes the claim's row).
+An app with hooks of its own chains them, its veto first so a refusal never spends an invite (after the claim, the
+kit withdraws the grant and `onRevoke` deletes its row; a throw spends it: Failure modes).
 
 ```ts
 onGrant: async (grant, c) => (await mine.onGrant(grant, c)) && (await sharing.oauth.onGrant(grant, c)),
@@ -204,9 +204,9 @@ stateDiagram-v2
 
 - **A member is its row.** `accepts` finds it by the token's grant, its space by `byId`, and compares that space's
   name now with the one the request is about (its path at a space address, else `spaceOfPath`). A renamed space keeps
-  its members; its old name opens nothing to them, even once another space takes it. Anything out of place gets one
-  sentence (`ONLY_ITS_SPACE`), whether or not the asked space exists. A row past its lifetime or unused for 30 days is
-  refused (that request is not a use); a use is noted at most once an hour.
+  its members; its old name opens nothing to them, even once another space takes it. A live member out of place gets
+  one sentence (`ONLY_ITS_SPACE`), whether or not the asked space exists. A row past its lifetime or unused for 30
+  days is refused, anywhere, saying why (that request is not a use); a use is noted at most once an hour.
 - **A grant never holds more than was given:** an invite's approver `invite:<id>` and scopes within the invite's; the
   owner's `owner:<email>` (never the bare email: never the owner's token), the resource's space id, a lifetime the part
   has. A sharing approval never makes a root grant.
@@ -259,8 +259,9 @@ stateDiagram-v2
 | 409 on `revokeInvite` | the invite was used already |
 | a once-only statement answers null or false | it lost or found nothing: the row is spent, revoked, late, decided or another space's, the grant has a member, or the space holds 100 open invites (`addInvite`; a taken code gets new ones, 3 tries) |
 | 400 `invalid_grant` "withdrawn" | `onGrant` said no: a space grant not from the part's pages; an invite spent, revoked, late or another space's; more scope, or another approver; a sharing approval at the root |
-| 401 "works only at its own space" | a space token at another space (or an old name), `/mcp`, an `/api` route `spaceOfPath` doesn't name, or a space `byId` misses |
+| 401 "works only at its own space" | a live space token at another space (or an old name), `/mcp`, an `/api` route `spaceOfPath` doesn't name, or a space `byId` misses |
 | 401 "ended on …", "lapsed", "not ready" | the member's lifetime passed; 30 days unused; a token with an audience before `bind` |
+| 500 at `/oauth/token`, the invite redeemed | a throw after the claim (a hook chained after the part's, a store): no token; a retry ends the member (`replayed`); make a new invite |
 
 ## Limits
 

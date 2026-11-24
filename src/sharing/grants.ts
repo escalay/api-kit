@@ -28,7 +28,7 @@ const SPACE = '{space}'
 const APP_NAME_LENGTH = 80
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
-/** One sentence for every space token out of place, whether or not the asked space exists. */
+/** One sentence for every live member's token out of place, whether or not the asked space exists; an ended one hears why instead. */
 export const ONLY_ITS_SPACE = 'This sign-in works only at its own space: connect again from the address you were given.'
 const NOT_READY = 'Sharing is not ready here yet (the app calls registerSharing before serving): try again in a minute.'
 
