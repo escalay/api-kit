@@ -1363,15 +1363,21 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
   it('refuses a ticket decided after its unused client lapsed, though the ticket still lives', async () => {
     let at = Date.now()
     vi.useFakeTimers({ toFake: ['Date'], now: at })
-    const { app } = await joinApp(memoryOAuthStore(), { ticketTtl: 2 * 24 * 3600 })
+    const store = memoryOAuthStore()
+    const { app } = await joinApp(store, { ticketTtl: 2 * 24 * 3600 })
     const client_id = await registered(app)
     // A client registered six days ago opens a ticket of two days: the client lapses on its seventh
     vi.setSystemTime((at += 6 * 24 * 3600 * 1000))
     const browser = browserOf(app)
     const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
     vi.setSystemTime((at += 24 * 3600 * 1000 + 1000))
+    expect(await store.get('client', client_id)).toBeNull()
+    expect(await store.get('consent', ticket)).not.toBeNull()
+    // ticketOf answers null; complete answers the page that says to add the connection again
     const late = await browser.post('/join', { ticket, invite: 'garden-42' })
     expect([late.status, late.headers.get('location'), await late.text()]).toEqual([400, null, expect.stringContaining('This sign-in expired')])
+    const direct = await browser.post('/join/direct', { ticket, invite: 'garden-42' })
+    expect([direct.status, direct.headers.get('location'), await direct.text()]).toEqual([400, null, expect.stringContaining('Remove this connection in your app and add it again.')])
   })
 
   it('lets complete bind an invite’s grant to its space when the client named none, and its token works nowhere else', async () => {
