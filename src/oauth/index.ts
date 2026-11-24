@@ -507,8 +507,9 @@ export const createOAuth = (config: OAuthConfig) => {
   }
 
   /**
-   * Ends a grant `onGrant` said yes to that got no token, as `withdrawn`, and tells the app, so a row it wrote in
-   * `onGrant` never outlives it. Never throws: a store that fails here is logged, and the answer is an error either way.
+   * Ends a grant that got no token, as `withdrawn`, and tells the app, so a row it wrote in `onGrant` never outlives it
+   * (a no from the app may follow a yes from a hook it chained). Never throws: a store that fails here is logged, and
+   * the answer is an error either way.
    */
   const withdrawAfterYes = async ({ grant, client }: Grant) => {
     try {
@@ -1200,9 +1201,9 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const origin = issuerOf(c)
       /** More than one resource for a row bound to one, checked before any write; a row from before audiences ignores resource altogether. */
       const manyFor = async (row: Record<string, unknown>) => typeof row.audience === 'string' && (await manyResources(c))
-      /** onGrant said no: the grant ends before any token, and the app hears it did. */
+      /** onGrant said no: the grant ends before any token, and the app hears it did, even when the store fails. */
       const withdrawn = async (issued: Grant) => {
-        await endGrant(issued.grant, 'withdrawn', issued.client)
+        await withdrawAfterYes(issued)
         return oauthError(c, 400, 'invalid_grant', 'This sign-in was withdrawn: start again.')
       }
       /** `onGrant`'s word on a grant; a throw withdraws the grant before it goes on to the 500. */

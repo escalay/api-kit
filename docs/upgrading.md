@@ -131,6 +131,9 @@ the version in `kit.json` up.
   nothing was told and a row the app wrote in `onGrant` stayed. A grant ended while `onGrant` ran is also told
   `withdrawn` now, where 1.31.0 told the marker's reason (`replayed`, `revoked`, `client_revoked`) again. An app whose
   `onRevoke` treats `withdrawn` as "never became a member" (deletes the row) needs nothing else.
+- When `onGrant` says no and the store then fails to write the grant's marker, `onRevoke` is still told `withdrawn`
+  and the answer is 400 `invalid_grant`; 1.31.0 answered 500 and told nothing, so a row a hook chained inside
+  `onGrant` wrote (its yes before the app's no) stayed.
 
 ### 1.31.0
 

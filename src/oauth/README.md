@@ -409,8 +409,8 @@ every first token in `onGrant`:
   the ticket stays live.
 - `onGrant(grant, c)` hears the first token of every grant. It runs after the kit's own checks (client, redirect and
   verifier for a code; the owner's answer for a device; the collected claim token for a claim), once per grant however
-  many polls race. false withdraws it: `invalid_grant` ("This sign-in was withdrawn: start again"), the code or device
-  code spent, the grant ended (`onRevoke` hears `withdrawn`). After its yes, whatever stops the tokens withdraws the
+  many polls race. false withdraws it: `invalid_grant`, the code or device code spent, the grant ended (`onRevoke`
+  hears `withdrawn`, even when the store fails). After its yes, whatever stops the tokens withdraws the
   grant once, `onRevoke` told, before the error: a throw in it or in the tokens' writes (500), or a grant ended while
   it ran (a replayed code, a revoke: "This sign-in was revoked"). It is not asked on refresh
   or jwt-bearer: judge later requests in `accepts`. An app that keeps its own rows per grant makes them here and

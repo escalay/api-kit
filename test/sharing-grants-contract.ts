@@ -8,7 +8,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import { decodeJwt } from 'jose'
 import { describe, expect, it } from 'vitest'
-import { createAgentApi, createOAuth, generateOAuthKey, hashApiKey, memoryOAuthStore, parseApiKeys, type Db, type OAuthConfig, type SignInDecision, type SignInRevoked } from '../src/index.js'
+import { createAgentApi, createOAuth, dbOAuthStore, generateOAuthKey, hashApiKey, memoryOAuthStore, parseApiKeys, type Db, type OAuthConfig, type OAuthStore, type SignInDecision, type SignInRevoked } from '../src/index.js'
 import { createSharing, registerSharing, sharingInvites, sharingMembers, sharingRepo, type SharingOptions, type Space } from '../src/sharing/index.js'
 import { approveSignIn } from '../src/testing/index.js'
 import { DAY, HOUR, inviteRow, memberRow } from './sharing-rows.js'
@@ -154,6 +154,18 @@ export const sharingGrantsContract = (name: string, makeDb: () => Promise<Db>) =
       expect((await loser.json()).error).toBe('invalid_grant')
       expect(await box.membersOfInvite(invite.id)).toHaveLength(1)
       expect(await box.inviteState(invite.id)).toBe('redeemed')
+    })
+
+    // The app's no after the part's yes, while the kit's grant marker can't be written: the kit still tells onRevoke
+    it.each(['memory', name])('withdraw a grant the app refused after the part said yes, when the %s store fails the marker write', async (kind) => {
+      const db = await makeDb()
+      const inner = kind === 'memory' ? memoryOAuthStore() : await dbOAuthStore(db)
+      const store: OAuthStore = { ...inner, put: (row, id, value, expiresAt) => (row === 'revoked-family' ? Promise.reject(new Error('the marker write failed')) : inner.put(row, id, value, expiresAt)) }
+      const box: Awaited<ReturnType<typeof grantsApp>> = await grantsApp(db, { oauth: { store, onGrant: async (grant, c) => (await box.sharing.oauth.onGrant(grant, c)) && false } })
+      const invite = await box.makeInvite()
+      const answer = await (await box.signIn({ resource: SOUPS, decision: box.inviteDecision(invite) })).exchange()
+      expect([answer.status, (await answer.json()).error]).toEqual([400, 'invalid_grant'])
+      expect([box.revoked.map((told) => told.reason), await box.membersOfInvite(invite.id), await box.inviteState(invite.id)]).toEqual([['withdrawn'], [], 'open'])
     })
 
     it('end the right rows for every onRevoke reason, the same when told twice', async () => {
