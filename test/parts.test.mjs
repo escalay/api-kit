@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { GOALS, orderOf, partsMarkdown, skillsIn, starterParts, withReadmeTables } from '../scripts/parts.mjs'
+import { GOALS, orderOf, partsMarkdown, skillsIn, starterParts, useItWhen, withReadmeTables } from '../scripts/parts.mjs'
 
 const root = join(import.meta.dirname, '..')
 const read = (path) => readFileSync(join(root, path), 'utf8')
@@ -92,10 +92,16 @@ describe('the root README', () => {
     }
   })
 
-  it('gives each skill folder a row, saying when to use it from its frontmatter', () => {
+  it('gives each skill folder a row, saying when to use it from its frontmatter: the first sentence, after "Use when"', () => {
     const skills = skillsIn(root)
     expect(skills.map((skill) => skill.name)).toEqual(readdirSync(join(root, 'skills')).sort())
-    for (const { name, description } of skills) expect(read('README.md'), name).toContain(`| [\`${name}\`](skills/${name}/SKILL.md) | ${description.replace(/^Use when /, '')} |`)
+    for (const { name, description } of skills) {
+      const when = description.replace(/^Use when /, '').split('. ')[0].replace(/\.?$/, '.')
+      expect(description, name).toContain(when.slice(0, -1))
+      expect(read('README.md'), name).toContain(`| [\`${name}\`](skills/${name}/SKILL.md) | ${when} |`)
+    }
+    expect(useItWhen('Use when a thing happens. Covers a, b. Not for c.')).toBe('a thing happens.')
+    expect(useItWhen('Use when one sentence')).toBe('one sentence.')
   })
 
   it('refuses a README that lost a table’s markers, rather than dropping the table', () => {

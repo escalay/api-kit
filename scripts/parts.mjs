@@ -221,10 +221,13 @@ const partsTable = (registry) => [
   }),
 ]
 
+/** A skill's README cell: its description's first sentence after "Use when"; the rest (what it covers) stays in the skill. */
+export const useItWhen = (description) => `${description.replace(/^Use when /, '').split('. ')[0].replace(/\.$/, '')}.`
+
 const skillsTable = (skills) => [
   '| Skill | Use it when |',
   '|---|---|',
-  ...skills.map(({ name, description }) => `| [${code(name)}](skills/${name}/SKILL.md) | ${cell(description.replace(/^Use when /, ''))} |`),
+  ...skills.map(({ name, description }) => `| [${code(name)}](skills/${name}/SKILL.md) | ${cell(useItWhen(description))} |`),
 ]
 
 /** Replaces what sits between `<!-- <name>:start … -->` and `<!-- <name>:end -->` with `lines`; throws when a marker is gone. */
