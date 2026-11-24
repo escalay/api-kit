@@ -120,6 +120,8 @@ flowchart TD
 - Each challenge is used once and expires in 5 minutes; an enrolment (from setup) in 15. A valid enrolment is used
   for its person even in a browser that is still signed in, so a recovery made there completes and is told as one.
 - A challenge is taken in one statement, so two verifies of it sent together sign in once.
+- A session cookie is shown once: `startSession` marks its answer (`showOnce`, core), so Idempotency-Key never keeps
+  the cookie, and a retried verify with the same key is a 409 `shown_once`: sign in again, with new options.
 - Expired challenges and sessions are swept from the writes that add them, at most once a minute per database
   (`sweep` in the repo is that delete).
 - `limits` (default `false`: none) allows 30 calls a minute to the two options routes together, per caller: a signed-in
@@ -149,6 +151,7 @@ flowchart TD
 | The caller sees | Why |
 |---|---|
 | 400 "This challenge expired or was used: ask for new options." | the challenge is older than 5 minutes, or a verify already took it |
+| 409 `shown_once` "This Idempotency-Key already signed in" | a retried verify with the same Idempotency-Key: its session cookie was set once |
 | 400 "The passkey could not be checked" | the WebAuthn answer failed its checks (origin, signature, challenge) |
 | 401 "This passkey is not known here" | a passkey made on another host, or never registered: recover on `/setup` |
 | 401 "This enrolment has expired or was used" | the enrolment from setup is older than 15 minutes, or spent: claim or recover again |
@@ -173,7 +176,8 @@ flowchart TD
 - `softAuthenticator()` (testing part) answers the ceremonies the way a phone would, so the whole flow runs in CI:
   claim → `register(options, origin)` → verify → `login(options, origin)` → verify.
 - `toolsRun` (testing part) runs the team tools.
-- `test/people.test.ts`: the claim, passkeys, sessions, races, sweeping, limits, the team, the hooks;
+- `test/people.test.ts`: the claim, passkeys, sessions, races, sweeping, limits, the team, the hooks, a retried
+  verify that never answers or stores the session;
   `test/workers/races.test.ts` races the single statements on D1.
 
 ## Upgrading

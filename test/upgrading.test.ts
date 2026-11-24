@@ -27,6 +27,15 @@ const appAt = async (version: string, ...parts: string[]) => {
   return app
 }
 
+/** A copy of the kit whose docs/upgrading.md is `markdown`: the CLI reads the docs beside itself. */
+const kitWithNotes = async (markdown: string) => {
+  const kit = await mkdtemp(join(tmpdir(), 'kit-copy-'))
+  for (const file of ['cli.mjs', 'registry.json', 'package.json']) await copyFile(join(KIT, file), join(kit, file))
+  await mkdir(join(kit, 'docs'))
+  await writeFile(join(kit, 'docs/upgrading.md'), markdown)
+  return kit
+}
+
 /** Runs a `kit …` command exactly as the CLI printed it between backticks. */
 const runPrinted = (app: string, printed: string) => {
   const command = /`(kit upgrading[^`]*)`/.exec(printed)?.[1]
@@ -65,20 +74,17 @@ describe('kit upgrading', () => {
   })
 
   it('says so when nothing changed for the parts since', async () => {
+    // Notes up to this kit only: the real docs may hold Unreleased notes for core
+    const kit = await kitWithNotes(['# Upgrading', '', '## core', '', `### ${KIT_VERSION}`, '', '- a note', '', '## db', '', `### ${KIT_VERSION}`, '', '- a note', ''].join('\n'))
     const app = await appAt(KIT_VERSION, 'db')
-    const printed = cli(app, 'upgrading')
+    const printed = run(join(kit, 'cli.mjs'), app, 'upgrading')
     expect([printed.status, printed.stdout]).toEqual([0, `No upgrade notes for core, db after kit ${KIT_VERSION} (this is kit ${KIT_VERSION})\n`])
     const none = await mkdtemp(join(tmpdir(), 'kit-upgrading-'))
     expect(cli(none, 'upgrading').stderr).toContain('no kit.json in src/kit')
   })
 
   it('reads Unreleased notes, topics after a version, and code blocks as the notes they are in', async () => {
-    // A kit whose docs/upgrading.md is a fixture: the CLI reads its docs beside itself
-    const kit = await mkdtemp(join(tmpdir(), 'kit-copy-'))
-    for (const file of ['cli.mjs', 'registry.json', 'package.json']) await copyFile(join(KIT, file), join(kit, file))
-    await mkdir(join(kit, 'docs'))
-    await writeFile(
-      join(kit, 'docs/upgrading.md'),
+    const kit = await kitWithNotes(
       [
         '# Upgrading', '', '## Taking a new version', '', '### 9.9.9', '', '- not a part', '',
         '## core', '', 'Read these first.', '',
@@ -119,8 +125,9 @@ describe('kit upgrading', () => {
     expect(updated.status).toBe(0)
     const told = updated.stdout.split('\n').find((line) => line.includes('kit upgrading'))!
     expect(told).toBe('What changed for these parts since kit 1.29.0: `kit upgrading --dir src/kit --from 1.29.0`')
-    // kit.json now records this kit, so the printed --from is what still finds the notes
-    expect(cli(app, 'upgrading').stdout).toContain('No upgrade notes')
+    // kit.json now records this kit, so the printed --from is what still finds the notes: plain `upgrading` prints no
+    // released version's notes, only Unreleased ones when the docs have them
+    expect(cli(app, 'upgrading').stdout).not.toMatch(/^### \d/m)
     expect(runPrinted(app, told).stdout).toContain('### 1.30.0')
     // An app at this kit's version is told nothing
     expect(cli(app, 'doctor').stdout).not.toContain('kit upgrading')

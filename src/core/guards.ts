@@ -3,8 +3,11 @@
  *   idempotency   `Idempotency-Key` on POST and PATCH (IETF httpapi-idempotency-key): a retry with the same key and
  *                 body gets the stored answer (`Idempotent-Replayed: true`), the same key with another body is a 422,
  *                 one still in flight a 409. Kept 24 hours, and only what `keep` passes (by default a success, never
- *                 a refusal or a server error, which changed nothing). Never on `/oauth/*` and `/agent/identity*`,
- *                 whose answers hold tokens, nor on the paths an app adds to `skip`.
+ *                 a refusal or a server error, which changed nothing). An answer that shows a secret once (a new
+ *                 key, an enrolment, a session) says so with `showOnce`: only that it was made is kept, and a replay
+ *                 is a 409 `shown_once` saying what was made. Never on `/oauth/*` and `/agent/identity*`, whose
+ *                 answers hold tokens, the relay paths (`/mcp`, `/a2a`: a tool's answer is out of its sight), nor
+ *                 on the paths an app adds to `skip`.
  *   rateLimit     at most `limit` calls per `windowSeconds` per caller on the routes it guards, with the draft
  *                 `RateLimit-Policy` / `RateLimit` headers (IETF httpapi-ratelimit-headers) and a 429 problem with
  *                 `Retry-After` past it: a looping agent can't drain a paid budget.
@@ -22,8 +25,14 @@ import type { Context, MiddlewareHandler } from 'hono'
 import { matches, OAUTH_OPEN_PATHS } from './auth.js'
 import { problemResponse } from './problem.js'
 
-/** A stored answer to replay: the body is base64, so a store can keep it as JSON. */
-export type StoredAnswer = { bodyHash: string; status: number; headers: [string, string][]; body: string }
+/** An answer kept whole to replay: the body is base64, so a store can keep it as JSON. */
+export type ReplayedAnswer = { bodyHash: string; status: number; headers: [string, string][]; body: string }
+
+/** All that is kept of an answer shown once (`showOnce`): what a replay is told instead, never a body or a header. */
+export type ShownOnceAnswer = { bodyHash: string; shownOnce: string }
+
+/** What a `GuardStore` keeps for an idempotency key, as JSON. */
+export type StoredAnswer = ReplayedAnswer | ShownOnceAnswer
 
 /** Where the guards keep their state. Each method is atomic, so concurrent requests can't both pass a check. */
 export type GuardStore = {
@@ -190,6 +199,34 @@ const callerOf = (c: Context, trust?: AddressTrust) => {
   return caller ? `${caller.kind}:${caller.name ?? caller.email}` : `ip:${addressOf(c, trust)}`
 }
 
+const SHOWN_ONCE = 'kit:shown-once'
+
+/**
+ * Marks this request's answer as showing a secret once (a new key, an enrolment, a session cookie): `idempotency` then
+ * keeps only `replay`, and a retry with the same Idempotency-Key gets it as a 409 `shown_once` instead of the answer.
+ * `replay` says what was made, where to see it, that the secret is never shown again, and what to do if it was lost;
+ * never the secret.
+ *
+ * @example
+ * showOnce(c, `Made the key ${name} (GET ${path}/${id}) with this Idempotency-Key; the key was shown once, in that answer, and is never shown again. Lost it? Revoke it and make another.`)
+ */
+export const showOnce = (c: Context, replay: string) => c.set(SHOWN_ONCE as never, replay as never)
+
+/** What the guard keeps of this request's answer: only what a replay is told when it showed a secret once, else all of it. */
+const storedAnswerOf = async (c: Context, bodyHash: string): Promise<StoredAnswer> => {
+  const shownOnce = c.get(SHOWN_ONCE as never) as string | undefined
+  if (shownOnce) return { bodyHash, shownOnce }
+  const body = Buffer.from(await c.res.clone().arrayBuffer()).toString('base64')
+  return { bodyHash, status: c.res.status, headers: [...c.res.headers.entries()], body }
+}
+
+/** A stored answer as the retry gets it, marked `Idempotent-Replayed`: the first answer, or a 409 when it showed a secret once. */
+const replayOf = (c: Context, answer: StoredAnswer) => {
+  const replayed = { 'idempotent-replayed': 'true' }
+  if ('shownOnce' in answer) return problemResponse(c, 'shown_once', { detail: answer.shownOnce, headers: replayed })
+  return new Response(Buffer.from(answer.body, 'base64'), { status: answer.status, headers: [...answer.headers, ...Object.entries(replayed)] })
+}
+
 /** Which answers are kept to replay: a success. A refusal changed nothing, so a retry after its cause is fixed runs again. */
 const keepSuccess = (status: number) => status < 400
 
@@ -203,7 +240,10 @@ export type IdempotencyOptions = {
   store?: GuardStore
   /** Which statuses are kept to replay (default: below 400). `(status) => status < 500` keeps refusals too, as the kit once did; one that passes a 5xx keeps server errors as well. */
   keep?: (status: number) => boolean
-  /** More paths never kept, beside `/oauth/*` and `/agent/identity*`: an app's own open routes that answer a secret (a redirect holding a code). */
+  /**
+   * More paths never kept, beside `/oauth/*` and `/agent/identity*` (`createAgentApi` adds its relay paths): an app's
+   * own open routes that answer a secret (a redirect holding a code), where a retry should run again.
+   */
   skip?: string[]
 }
 
@@ -226,7 +266,7 @@ export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, stor
     if (hit === 'running') return problemResponse(c, 'conflict', { detail: 'A request with this Idempotency-Key is still running. Retry when it has answered.' })
     if (hit) {
       if (hit.bodyHash !== bodyHash) return problemResponse(c, 'unprocessable', { detail: 'This Idempotency-Key was used with a different body. Use a new key for a new request.' })
-      return new Response(Buffer.from(hit.body, 'base64'), { status: hit.status, headers: [...hit.headers, ['idempotent-replayed', 'true']] })
+      return replayOf(c, hit)
     }
     try {
       await next()
@@ -236,8 +276,7 @@ export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, stor
     }
     // What isn't kept (a refusal, a server error) frees the key: a retry with it runs again
     if (!keep(c.res.status)) return void (await store.release(id))
-    const body = Buffer.from(await c.res.clone().arrayBuffer()).toString('base64')
-    await store.save(id, { bodyHash, status: c.res.status, headers: [...c.res.headers.entries()], body }, now + ttlMs)
+    await store.save(id, await storedAnswerOf(c, bodyHash), now + ttlMs)
   }
 
 /**

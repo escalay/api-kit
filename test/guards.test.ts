@@ -1,7 +1,7 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import type { AddressInfo } from 'node:net'
-import { addressOf, createAgentApi, dbGuardStore, idempotency, memoryGuardStore, parseApiKeys, rateLimit, testDb, type AddressTrust, type GuardStore } from '../src/index.js'
+import { addressOf, createAgentApi, dbGuardStore, idempotency, memoryGuardStore, parseApiKeys, rateLimit, showOnce, testDb, type AddressTrust, type GuardStore } from '../src/index.js'
 import { countedDbStore, guardStoreContract } from './guard-store-contract.js'
 import { describe, expect, it } from 'vitest'
 import * as dbModule from '../src/db/index.js'
@@ -143,6 +143,67 @@ describe('idempotency', () => {
     expect(state.runs).toBe(2)
     await post()
     expect((await post()).headers.get('idempotent-replayed')).toBe('true')
+  })
+
+  describe('an answer shown once', () => {
+    const REPLAY = 'Made the key ci (GET /api/keys/key_1) with this Idempotency-Key; the key was shown once and is never shown again.'
+    /** A route that answers a new secret each run and marks it shown once, beside one that doesn't. */
+    const secrets = () => {
+      const state = { runs: 0, kept: [] as unknown[] }
+      const store = memoryGuardStore()
+      const app = new Hono()
+      app.use('*', idempotency({ store: { ...store, save: (id, answer, expiresAt) => (state.kept.push(answer), store.save(id, answer, expiresAt)) } }))
+      app.post('/api/keys', (c) => {
+        showOnce(c, REPLAY)
+        return c.json({ key: `sk_secret_${++state.runs}` }, 201, { location: '/api/keys/key_1', 'set-cookie': `session=token_${state.runs}` })
+      })
+      const post = (key: string, body = '{"name":"ci"}') => app.request('/api/keys', { method: 'POST', headers: { 'idempotency-key': key, 'content-type': 'application/json' }, body })
+      return { state, post }
+    }
+
+    it('answers a replay with a 409 shown_once that says what was made, never the secret', async () => {
+      const { state, post } = secrets()
+      const first = await post('k1')
+      expect(await first.json()).toEqual({ key: 'sk_secret_1' })
+      expect(first.headers.get('location')).toBe('/api/keys/key_1')
+      const replayed = await post('k1')
+      expect(replayed.status).toBe(409)
+      expect(replayed.headers.get('idempotent-replayed')).toBe('true')
+      expect(replayed.headers.get('set-cookie')).toBeNull()
+      expect(await replayed.json()).toMatchObject({ code: 'shown_once', status: 409, detail: REPLAY })
+      expect(state.runs).toBe(1)
+    })
+
+    it('keeps only what a replay is told: no body, no headers', async () => {
+      const { state, post } = secrets()
+      await post('k1')
+      expect(state.kept).toEqual([{ bodyHash: expect.any(String), shownOnce: REPLAY }])
+      expect(JSON.stringify(state.kept)).not.toContain('secret')
+      expect(JSON.stringify(state.kept)).not.toContain('token')
+    })
+
+    it('still answers another body under the same key with a 422, and a new key runs again', async () => {
+      const { state, post } = secrets()
+      await post('k1')
+      expect((await post('k1', '{"name":"other"}')).status).toBe(422)
+      const second = await post('k2')
+      expect(second.status).toBe(201)
+      expect(await second.json()).toEqual({ key: 'sk_secret_2' })
+      expect(state.runs).toBe(2)
+    })
+  })
+
+  it("never keeps createAgentApi's relay paths, whose tools may answer a secret once", async () => {
+    for (const relay of [undefined, ['/agents/mcp']]) {
+      const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(undefined), open: ['/mcp', '/a2a', '/agents/mcp', '/api/notes'], relay } })
+      let runs = 0
+      for (const path of ['/mcp', '/a2a', '/agents/mcp', '/api/notes']) app.post(path, (c) => c.json({ run: ++runs }))
+      const post = (path: string) => app.request(path, { method: 'POST', headers: { 'idempotency-key': 'k1', 'content-type': 'application/json' }, body: '{}' })
+      const replayedOn = async (path: string) => (await post(path), (await post(path)).headers.get('idempotent-replayed') === 'true')
+      const relayPaths = relay ?? ['/mcp', '/a2a']
+      for (const path of ['/mcp', '/a2a', '/agents/mcp']) expect(await replayedOn(path), `${String(relay)} ${path}`).toBe(!relayPaths.includes(path))
+      expect(await replayedOn('/api/notes')).toBe(true)
+    }
   })
 })
 

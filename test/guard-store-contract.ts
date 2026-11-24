@@ -1,6 +1,7 @@
 import { count as countAll, like } from 'drizzle-orm'
+import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
-import { dbGuardStore, kitGuards, type Db, type GuardStore } from '../src/index.js'
+import { dbGuardStore, idempotency, kitGuards, showOnce, type Db, type GuardStore } from '../src/index.js'
 
 /** Counts a store's rows whose id starts with `prefix`, for the checks that can't be seen through `GuardStore`. */
 export type RowCount = (prefix: string) => Promise<number>
@@ -54,6 +55,24 @@ export const guardStoreContract = (name: string, make: () => Promise<GuardStore>
       const answer = { bodyHash: 'h', status: 201, headers: [] as [string, string][], body: btoa('{}') }
       await store.save(id, answer, 200_000)
       expect(await store.claim(id, 60_000, 63_000)).toEqual(answer)
+    })
+
+    it('holds no secret from an answer shown once, only what a replay is told', async () => {
+      const store = await make()
+      const saved: string[] = []
+      const recording: GuardStore = { ...store, save: (id, answer, expiresAt) => (saved.push(id), store.save(id, answer, expiresAt)) }
+      const secret = `sk_${crypto.randomUUID()}`
+      const app = new Hono()
+      app.use('*', idempotency({ store: recording }))
+      app.post('/api/keys', (c) => {
+        showOnce(c, 'Made the key ci (GET /api/keys/key_1); the key was shown once and is never shown again.')
+        return c.json({ id: 'key_1', key: secret }, 201, { location: '/api/keys/key_1' })
+      })
+      const post = () => app.request('/api/keys', { method: 'POST', headers: { 'idempotency-key': `once-${crypto.randomUUID()}`, 'content-type': 'application/json' }, body: '{"name":"ci"}' })
+      expect((await post()).status).toBe(201)
+      const kept = await store.claim(saved[0]!, 60_000, Date.now())
+      expect(kept).toEqual({ bodyHash: expect.any(String), shownOnce: 'Made the key ci (GET /api/keys/key_1); the key was shown once and is never shown again.' })
+      expect(JSON.stringify(kept)).not.toContain(secret)
     })
 
     if (counted) it('prunes expired rows while running, at most once a minute', async () => {

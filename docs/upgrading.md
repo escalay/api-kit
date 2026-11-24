@@ -24,6 +24,22 @@ the version in `kit.json` up.
 
 ## core
 
+### Unreleased (after 1.30.0)
+
+- **Security:** `idempotency` kept a whole successful answer for 24 hours and replayed it, so an answer that showed a
+  secret once (a key made with `POST /api/keys`, setup's enrolment, a session cookie) sat in the guard store, in
+  memory or the `kit_guards` table, and a retry with the same `Idempotency-Key` got it again. A route now marks such
+  an answer with `showOnce(c, replay)`: the guard keeps only `replay`, and the retry is a 409 `shown_once` (a new
+  problem code) saying what was made. The keys, setup and people parts call it.
+- `createAgentApi` never keeps the relay paths (`auth.relay`, default `/mcp` and `/a2a`): a tool there runs its route
+  in a request of its own, out of the guard's sight. MCP mounted on another path that is not in `auth.relay`: add it to
+  `guards.skip`.
+- `StoredAnswer` is now `ReplayedAnswer | ShownOnceAnswer`. A custom `GuardStore` that keeps the answer as JSON needs
+  no change; one that copies known fields keeps `shownOnce` too.
+- After updating, delete the answers kept under 1.30.0 and before, which may hold secrets for up to 24 hours: on the
+  database store, `delete from kit_guards where kind = 'key'`; the memory store goes with a restart. A retry in flight
+  then runs again once, which for a create makes another.
+
 ### 1.30.0
 
 - `tellApp` (what the parts' hooks go through: a hook that throws is logged, never answered) lives in
@@ -271,12 +287,24 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## keys
 
+### Unreleased (after 1.30.0)
+
+- A made key is never kept by Idempotency-Key (core's `showOnce`): a create retried with the same key is a 409
+  `shown_once` naming the key made and where it is, never the key again. The kit's client retries a lost answer
+  with the same key, so it now gets that 409: revoke the key it names and make another. Delete the rows 1.30.0 kept
+  (core, above).
+
 ### 1.30.0
 
 - `onKeyChange` is guarded: a hook that throws is logged and never answered, so a key made is still shown (once) with
   its 201.
 
 ## people
+
+### Unreleased (after 1.30.0)
+
+- `startSession` marks its answer shown once (core's `showOnce`): Idempotency-Key never keeps the session cookie, and
+  a verify retried with the same key is a 409 `shown_once`. The verify routes document the 409.
 
 ### 1.30.0
 
@@ -287,6 +315,11 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - A migration step indexes sessions by person; `registerPeople` applies it when the app starts.
 
 ## setup
+
+### Unreleased (after 1.30.0)
+
+- The claim's enrolment is never kept by Idempotency-Key (core's `showOnce`): a claim or recovery retried with the same
+  key is a 409 `shown_once` saying to rotate the code to get back in.
 
 ### 1.30.0
 
