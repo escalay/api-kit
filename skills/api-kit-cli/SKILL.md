@@ -123,7 +123,7 @@ default; `--app` is the app's folder, `.` by default.
 | `kit upgrading` | what changed for the parts in `kit.json` since its version (or `--from`) and what to do: their notes from the kit's `docs/upgrading.md`; `doctor` and `update` print it when the app is behind |
 | `kit doctor` | missing, edited and behind files, `cliGaps`, notes (exits 1 with a fix per line); `--keep <file…>` records edits the team keeps, so they no longer fail it |
 | `kit adopt` | writes `kit.json` for parts the shadcn CLI copied |
-| `kit feature <plural-name>` | a feature folder; `--switch` lists it in the catalog so the owner can switch it off |
+| `kit feature <plural-name>` | a feature folder with a paged list; `--fields "name:string minutes:int"` gives its own fields, `--switch` lists it in the catalog so the owner can switch it off |
 | `kit guide` | `guide/` as `src/guide.gen.ts`, for Workers (an app made by `init` runs `pnpm guide`, which writes the same) |
 | `kit sdk`, `kit cli` | the client and the command line (above) |
 | `kit repo check\|apply` | the GitHub repository's settings and rules for `main` (§20), through `gh` |

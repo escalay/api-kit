@@ -23,9 +23,11 @@
  *                                             container) and/or Workers (worker.ts, D1); then pnpm install, format and
  *                                             migrations, so its gate passes as made (--no-install leaves them to you).
  *                                             It never asks; --yes is accepted
- *   kit feature <plural-name> [--app .] [--switch]
+ *   kit feature <plural-name> [--app .] [--switch] [--fields "name:string minutes:int tags:string[] notes:text?"]
  *                                             a new feature folder (schema, repo, routes, handlers, tools), listed;
- *                                             --switch lists it in src/features/catalog.ts so an owner can switch it off
+ *                                             --switch lists it in src/features/catalog.ts so an owner can switch it off;
+ *                                             --fields gives its own fields (string, text, int, number, bool, string[];
+ *                                             ? when it may be left out) instead of a title and a body
  *   kit guide [--from guide] [--out src/guide.gen.ts]  the guide folder as a module (GUIDE_FILES), for Workers
  *   kit sdk [--app .] [--package name] [--bin name]
  *                                             a typed TypeScript client in sdk/: generated types, a fetch-only core,
@@ -105,7 +107,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
+const VALUE_FLAGS = new Set(['--fields', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 /** The app the kit folder belongs to: `--app`, else the nearest folder at or above `--dir` with a package.json; null when none. */
@@ -324,7 +326,7 @@ const adopt = () => {
 // ---- Generators: a new app, a new feature ----
 
 /** The modules a new app starts with. */
-const APP_MODULES = ['core', 'db', 'oauth', 'guide', 'mcp', 'brand', 'switches', 'testing']
+const APP_MODULES = ['core', 'db', 'oauth', 'pagination', 'guide', 'mcp', 'brand', 'switches', 'testing']
 /** The browser parts the app preset's web/ starts with. */
 const WEB_APP_MODULES = ['switches-client', 'switches-react']
 const RUNTIME = { '@hono/node-server': '^2.1.8', tsx: '^4.23.15' }
@@ -455,14 +457,76 @@ export const namesOf = (name) => {
   }
 }
 
-const addFeature = (root, name, switchable = false) => {
-  const vars = namesOf(name)
+/**
+ * The types `feature --fields` takes: the Drizzle column, its SQL, the answer's and the input's zod, the TypeScript
+ * type, a value to make one with and another to change it to.
+ */
+const FIELD_TYPES = {
+  string: { column: (name) => `text('${name}')`, sql: 'text', out: 'z.string()', input: 'z.string().trim().min(1).max(200)', type: 'string', made: 'First', changed: 'Changed' },
+  text: { column: (name) => `text('${name}')`, sql: 'text', out: 'z.string()', input: 'z.string().max(10_000)', type: 'string', made: 'Some text', changed: 'Changed text' },
+  int: { column: (name) => `integer('${name}')`, sql: 'integer', out: 'z.number().int()', input: 'z.number().int()', type: 'number', made: 3, changed: 4 },
+  number: { column: (name) => `real('${name}')`, sql: 'real', out: 'z.number()', input: 'z.number()', type: 'number', made: 1.5, changed: 2.5 },
+  bool: { column: (name) => `integer('${name}', { mode: 'boolean' })`, sql: 'integer', out: 'z.boolean()', input: 'z.boolean()', type: 'boolean', made: true, changed: false },
+  'string[]': { column: (name) => `text('${name}', { mode: 'json' }).$type<string[]>()`, sql: 'text', out: 'z.array(z.string())', input: 'z.array(z.string().trim().min(1).max(200)).max(100)', type: 'string[]', made: ['one'], changed: ['two'] },
+}
+/** What the sample feature has when no --fields are given. */
+const SAMPLE_FIELDS = 'title:string body:text?'
+/** Names a feature's own fields can't take: the kit's, and the list's and the command line's flags. */
+const OWN_FIELDS = ['id', 'createdAt', 'updatedAt', 'limit', 'cursor', 'json', 'yes', 'dryRun', 'input', 'timeout', 'profile', 'help']
+
+/** `name:string minutes:int tags:string[] notes:text?`, read: each field's name, type, and whether it may be left out. */
+const fieldsOf = (spec) =>
+  spec.trim().split(/\s+/).map((field) => {
+    const [, name, type, optional] = field.match(/^([a-z][a-zA-Z0-9]*):([a-z]+(?:\[\])?)(\?)?$/) ?? []
+    if (!FIELD_TYPES[type]) fail(`${field}: a field is <name>:<type>, the type one of ${Object.keys(FIELD_TYPES).join(', ')}, and ? after it when it may be left out (notes:text?)`)
+    if (OWN_FIELDS.includes(name)) fail(`${name} is the kit’s own field or flag: name it something else`)
+    return { name, type, optional: Boolean(optional), ...FIELD_TYPES[type] }
+  })
+
+const snakeOf = (name) => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
+const literal = (value) => JSON.stringify(value).replaceAll('"', "'")
+const flagOf = ({ name, made }, value = made) => {
+  const flag = `--${name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`
+  return typeof value === 'boolean' ? (value ? flag : `--no-${flag.slice(2)}`) : `${flag} ${JSON.stringify([value].flat()[0])}`
+}
+
+/** The template's field placeholders, from the fields: columns, SQL, schemas, the tools' inputs, samples. */
+const fieldVarsOf = (fields) => {
+  const described = (field, zod) => `${field.name}: ${zod}.describe('Its ${snakeOf(field.name).replaceAll('_', ' ')}.')`
+  const [first, last] = [fields[0], fields.at(-1)]
+  return {
+    __column_imports__: [...new Set(['sqliteTable', 'text', ...fields.map((field) => field.column('').split('(')[0])])].sort().join(', '),
+    __columns__: fields.map((field) => `  ${field.name}: ${field.column(snakeOf(field.name))}${field.optional ? '' : '.notNull()'},`).join('\n'),
+    __sql_columns__: fields.map((field) => `${snakeOf(field.name)} ${field.sql}${field.optional ? '' : ' not null'}`).join(', '),
+    __out_fields__: fields.map((field) => `${field.name}: ${field.out}${field.optional ? '.nullable()' : ''},`).join(' '),
+    __in_fields__: fields.map((field) => `${field.name}: ${field.input}${field.optional ? '.optional()' : ''}.openapi({ description: 'Its ${snakeOf(field.name).replaceAll('_', ' ')}.', example: ${literal(field.made)} })`).join(', '),
+    __tool_create_fields__: fields.map((field) => described(field, `${field.input}${field.optional ? '.optional()' : ''}`)).join(', '),
+    __tool_update_fields__: fields.map((field) => described(field, `${field.input}.optional()`)).join(', '),
+    __card_fields__: fields.map((field) => `${field.name}: ${field.type}${field.optional ? ' | null' : ''}`).join('; '),
+    __detail_lines__: fields.map((field) => `\`${field.name}: \${row.${field.name}${field.type === 'string[]' ? `${field.optional ? '?' : ''}.join(', ')` : ''}${field.optional ? " ?? '–'" : ''}}\``).join(', '),
+    __first__: first.name,
+    __sample__: `{ ${fields.map((field) => `${field.name}: ${literal(field.made)}`).join(', ')} }`,
+    __patch_entries__: `${last.name}: ${literal(last.changed)}`,
+    __create_flags__: fields.filter((field) => !field.optional).map((field) => flagOf(field)).join(' '),
+    __edit_flags__: flagOf(last, last.changed),
+  }
+}
+
+const addFeature = (root, name, switchable = false, fieldSpec = SAMPLE_FIELDS) => {
+  const vars = { ...namesOf(name), ...fieldVarsOf(fieldsOf(fieldSpec)) }
   const list = join(root, 'src/features/index.ts')
   if (!existsSync(list)) fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
   const folder = join(root, 'src/features', name)
   if (existsSync(folder)) fail(`src/features/${name} already exists`)
   const text = readFileSync(list, 'utf8')
   if (!text.includes('// kit:imports') || !text.includes('  // kit:features')) fail('src/features/index.ts lost its `// kit:imports` or `// kit:features` line; add the feature there by hand')
+  // The list pages by cursor with the pagination part, which an app made before 1.32 may not have
+  const lock = join(root, 'src/kit/kit.json')
+  if (existsSync(lock) && !JSON.parse(readFileSync(lock, 'utf8')).modules.includes('pagination')) {
+    const added = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'add', 'pagination', '--dir', 'src/kit'], { cwd: root, encoding: 'utf8' })
+    if (added.status !== 0) fail(`a feature's list pages with the pagination part, and copying it failed: ${added.stderr}`)
+    console.log('Copied the pagination part into src/kit: the new list pages by cursor')
+  }
   copyTemplate(join(KIT, 'templates/feature'), folder, vars, (file) => (file === 'feature.test.ts' ? `${name}.test.ts` : file))
   writeFileSync(list, text.replace('// kit:imports', `import { feature as ${vars.__camel__} } from './${name}/index.js'\n// kit:imports`).replace('  // kit:features', `  ${vars.__camel__},\n  // kit:features`))
   if (switchable) {
@@ -1657,7 +1721,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
   feature: () => {
     const [name] = names
     if (!name) fail('name the feature, plural and kebab-case: feature reading-lists')
-    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, flags.has('--switch'))
+    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, flags.has('--switch'), valueOf('--fields'))
   },
 
   update: () => {

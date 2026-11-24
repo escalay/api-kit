@@ -16,7 +16,10 @@ an MCP tool.
 - `pnpm run deploy:env`: the same for a real deployment whose settings live outside the repository: `CLOUDFLARE_ACCOUNT_ID`, `D1_<BINDING>_ID`, every `vars` entry left `""` in `wrangler.jsonc`, optional `PUBLIC_HOST`, from the environment (a secret store's `run`). It writes the git-ignored `wrangler.deploy.jsonc`, makes missing queues and deploys. A repository that may go public keeps no account id or real domain: deploy it this way <!-- runtime:workers -->
 - `npx skills add escalay/api-kit`: the kit's skills for your coding agent: `api-kit-build` (parts, who may see what, a newer kit), `api-kit-feature` (a feature, its switch), `api-kit-review` (is it ready for agents), `api-kit-cli` (the command line, every `kit` command), `api-kit-skills` (this product's own skills)
 
-A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
+A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string minutes:int tags:string[] notes:text?"`
+(its own fields in every file; `kit feature --help` lists the types), then fill in what is its own. Removing one (the
+`notes` sample): delete `src/features/<name>/` and its lines in `src/features/index.ts` (and `catalog.ts`), then
+`pnpm guide`, and on Workers `pnpm migrations` (it removes the feature's files). A PATCH schema never takes `.default()`: it would overwrite what a PATCH leaves out.
 
 ## How changes ship
 

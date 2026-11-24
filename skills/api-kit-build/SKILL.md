@@ -42,7 +42,7 @@ In this order; stop at the first that fits.
 
 ## Parts beyond the core
 
-`init` copies `core`, `db`, `oauth`, `guide`, `mcp`, `brand`, `switches` and `testing`. The rest, by goal (every
+`init` copies `core`, `db`, `oauth`, `pagination`, `guide`, `mcp`, `brand`, `switches` and `testing`. The rest, by goal (every
 part, what it needs and the order to add them: the kit's `docs/PARTS.md`):
 
 | Goal | Parts |

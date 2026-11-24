@@ -93,6 +93,12 @@ the version in `kit.json` up.
 
 ## db
 
+### Unreleased (after 1.31.0)
+
+- A new app's `scripts/migrations.ts` removes the files of a feature taken out of the app (`--check` fails on them)
+  and numbers a new file after the highest, so a file deleted by hand never makes two share a number. An older app
+  can take the script from the kit's `templates/runtime-cloudflare/scripts/migrations.ts`.
+
 ### 1.30.1
 
 - `GUARD_MIGRATIONS` has a second step that deletes every stored idempotency answer (`kit_guards` rows of kind `key`
@@ -279,7 +285,11 @@ Tokens, codes, refresh rows and claims from before grants keep working.
 
 ## pagination
 
-Nothing to do in any version recorded here.
+### Unreleased (after 1.31.0)
+
+- A new app has the part, and `kit feature` writes a list paged by cursor with it (`limitQuery`, `cursorQuery`,
+  `pageOf`); in an app without it, `kit feature` copies it into `src/kit` first. Features made before keep their
+  `limit`-only lists until you page them.
 
 ## guide
 

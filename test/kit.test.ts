@@ -855,7 +855,8 @@ describe('the copy-in CLI', () => {
       // --switch: listed in the catalog, so an owner can switch it off, and the feature names its switch
       expect(await readFile(join(app, 'src/features/catalog.ts'), 'utf8')).toContain("  'reading-lists': { title: 'ReadingLists', description: 'ReadingLists: say here what switching it off stops.' },\n  // kit:catalog")
       expect(await readFile(join(app, 'src/features/reading-lists/index.ts'), 'utf8')).toContain("  name: 'reading-lists',\n  switch: 'reading-lists',")
-      expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'brand', 'switches', 'testing'])
+      // pagination too: a feature's list pages by cursor
+      expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'pagination', 'guide', 'mcp', 'brand', 'switches', 'testing'])
       // The starter brand: a monogram of the title, served as SVG until `kit brand` renders it
       expect(await readFile(join(app, 'brand/brand.ts'), 'utf8')).toContain("  name: 'demo-api',\n  title: 'Demo API',")
       expect(await readFile(join(app, 'brand/icon.svg'), 'utf8')).toContain('>D</text>')
@@ -896,6 +897,29 @@ describe('the copy-in CLI', () => {
       await migrate(await openDb(sqlite), 'oauth', OAUTH_MIGRATIONS)
       for (const file of ['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_oauth_2.sql']) sqlite.exec(await readFile(join(app, 'migrations', file), 'utf8'))
       expect(sqlite.prepare("select count(*) as n from kit_migrations where feature = 'oauth'").get()).toEqual({ n: 2 })
+      // A feature with its own fields, not the sample's title and body
+      const fields = 'name:string minutes:int tags:string[] vegan:bool? rating:number? story:text?'
+      const recipes = cli(parent, 'feature', 'recipes', '--app', 'demo-api', '--fields', fields)
+      expect(recipes.status, recipes.stderr).toBe(0)
+      const recipeSchema = await readFile(join(app, 'src/features/recipes/schema.ts'), 'utf8')
+      for (const column of ["name: text('name').notNull(),", "minutes: integer('minutes').notNull(),", "tags: text('tags', { mode: 'json' }).$type<string[]>().notNull(),", "vegan: integer('vegan', { mode: 'boolean' }),", "rating: real('rating'),", "story: text('story'),"]) expect(recipeSchema).toContain(column)
+      expect(recipeSchema).toContain('create table if not exists recipes (id text primary key, name text not null, minutes integer not null, tags text not null, vegan integer, rating real, story text, created_at text not null, updated_at text not null)')
+      expect(recipeSchema).not.toMatch(/title|body/)
+      expect(await readFile(join(app, 'src/features/recipes/routes.ts'), 'utf8')).toContain('never .default()')
+      expect(cli(parent, 'feature', 'meals', '--app', 'demo-api', '--fields', 'name:strin').stderr).toContain('name:strin: a field is <name>:<type>, the type one of string, text, int, number, bool, string[]')
+      expect(cli(parent, 'feature', 'meals', '--app', 'demo-api', '--fields', 'id:string').stderr).toContain('id is the kit’s own field')
+      expect(existsSync(join(app, 'src/features/meals'))).toBe(false)
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      expect((await readdir(current)).sort().at(-1)).toBe('0008_recipes_1.sql')
+      // A feature taken out leaves its files behind: --check names them, `pnpm migrations` removes them, and numbering goes on from the highest
+      await writeFile(join(current, '0009_gone_1.sql'), `-- kit: gone step 1 sha256 ${'0'.repeat(64)}\ncreate table if not exists gone (id text primary key);\n`)
+      const orphaned = spawnSync(bin('tsx'), ['scripts/migrations.ts', '--check'], { cwd: app, encoding: 'utf8' })
+      expect([orphaned.status, orphaned.stderr]).toEqual([1, expect.stringContaining('0009_gone_1.sql is for gone, which nothing here migrates: run pnpm migrations')])
+      const pruned = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
+      expect(pruned.stdout).toContain('Removed 0009_gone_1.sql')
+      await rm(join(current, '0005_notes_1.sql'))
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      expect((await readdir(current)).sort().slice(-2)).toEqual(['0008_recipes_1.sql', '0009_notes_1.sql'])
       for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
         const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
         expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
@@ -904,7 +928,7 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+13 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+17 passed/)
 
       // The client and its command line: `kit sdk` makes both; the CLI compiles on its own and offers the app's tools
       const sdk = cli(parent, 'sdk', '--app', 'demo-api')

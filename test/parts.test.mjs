@@ -42,7 +42,7 @@ describe('docs/PARTS.md, the map of the parts', () => {
   })
 
   it('reads the starter’s parts from cli.mjs, the list `init` copies', () => {
-    expect(starterParts(read('cli.mjs'))).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'brand', 'switches', 'testing'])
+    expect(starterParts(read('cli.mjs'))).toEqual(['core', 'db', 'oauth', 'pagination', 'guide', 'mcp', 'brand', 'switches', 'testing'])
   })
 
   it('names in api-kit-build exactly the parts `init` copies, in its order', () => {

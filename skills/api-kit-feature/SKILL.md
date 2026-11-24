@@ -1,6 +1,6 @@
 ---
 name: api-kit-feature
-description: Use when adding a feature (a resource with routes, data and MCP tools) to an API built on the Escalay api-kit, making a feature one the owner can switch off, or reshaping existing routes into the kit's feature folder. Covers kit feature (and --switch), schema, repo, routes, handlers, tools, the feature switch and the feature's test.
+description: Use when adding a feature (a resource with routes, data and MCP tools) to an API built on the Escalay api-kit, making a feature one the owner can switch off, removing a feature (the starter's notes sample), or reshaping existing routes into the kit's feature folder. Covers kit feature (--fields, --switch), schema, repo, routes, handlers, tools, the feature switch and the feature's test.
 ---
 
 # Add a feature the kit's way
@@ -10,8 +10,11 @@ A feature is one folder, `src/features/<name>/`, with one shape. The kit's `boar
 
 ## Steps
 
-1. `npx @escalay/kit feature <plural-name>` in the app (`reading-lists`, kebab-case, plural).
-   It makes the folder and lists the feature in `src/features/index.ts`. Done when `pnpm test` still passes.
+1. `npx @escalay/kit feature <plural-name> --fields "<name>:<type> …"` in the app (`recipes`, kebab-case, plural;
+   `--fields "name:string minutes:int tags:string[] notes:text?"`: `string`, `text`, `int`, `number`, `bool`,
+   `string[]`, `?` when it may be left out). It makes the folder with those fields in every file (without
+   `--fields`, a title and a body), a list paged by cursor, and lists the feature in `src/features/index.ts`.
+   Done when `pnpm test` still passes.
    A feature the app can work without (sending, webhooks, a report) takes `--switch`: it is also listed in
    `src/features/catalog.ts` (write there what switching it off stops) and named in its `index.ts` (`switch`), so
    `src/app.ts` registers it through `gated`: every route it adds answers `403 feature_disabled` while the owner has
@@ -30,6 +33,9 @@ A feature is one folder, `src/features/<name>/`, with one shape. The kit's `boar
 | `<name>.test.ts` | the feature's own behaviour | Through `app.request`, not the repo |
 
 3. On Workers, `pnpm migrations` after adding a migration step.
+   Removing a feature (the starter's `notes` once a real one exists): delete `src/features/<name>/`, its two lines in
+   `src/features/index.ts` (and its entry in `catalog.ts`), then `pnpm migrations` (it removes the feature's files
+   from `migrations/`) and `pnpm guide`.
 4. `pnpm guide` if you touched `guide/`. Never write an endpoint or tool list by hand.
 5. `pnpm test && pnpm typecheck`.
 
@@ -40,6 +46,8 @@ A feature is one folder, `src/features/<name>/`, with one shape. The kit's `boar
 - Every parameter has a description and a real `example`. Every query parameter the handler reads is in the query
   schema: an unknown one answers 400.
 - The 2xx schema is named (`.openapi('ReadingList', { description })`) and carries `_links` with `self`.
+- A PATCH body is the input schema's `.partial()`. Never `.default()` in an input schema a PATCH reuses: a field the
+  PATCH leaves out gets the default and overwrites what was there. Default in the repo's `create` instead.
 - Errors: `...problemResponses(400, 404)`. The `detail` says what to do next.
 - Lists page by cursor (`limitQuery`, `cursorQuery`, `pageOf` from the `pagination` part).
 - Work that is slow or costs money answers 202 with a run and sits behind `rateLimit`.
