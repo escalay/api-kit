@@ -12,8 +12,9 @@
  *   `/oauth/device_authorization` for a code like `BDKM-QXTW`, the owner types it at `/oauth/device`, and the device
  *   polls the token endpoint.
  * Access tokens are ES256 JWTs (one hour) signed with the app's key and checked against a revocation list on every
- * request; refresh tokens (30 days, rotated on each use; a used one sent again revokes every refresh token of that
- * sign-in, known by its MAC and its family's generation once its row is gone), codes and registrations live in the app's store as hashes. Nothing is granted before a person approves: an
+ * request. Refresh tokens last 30 days and rotate on each use; a used one sent again revokes every refresh token of
+ * that sign-in. An earlier refresh token is known by its MAC and its family's generation, even once its row is gone.
+ * Codes and registrations live in the app's store as hashes. Nothing is granted before a person approves: an
  * unclaimed registration can't get a token.
  * A caller is known by its client (the client_id) and its grant (one approval: every token from one sign-in, rotated
  * or not, shares it), never by the name it registered, which is for display. Revoking a grant ends its access tokens
@@ -23,9 +24,10 @@
  * this server issues for it, else the root (the issuer's origin). It never changes on refresh, and a grant from before
  * audiences never gains one. `accepts` judges whether a token's audience fits a request.
  * The endpoints anyone may call stay bounded: `publicOrigin` fixes the one origin every document, token and check
- * names; a registration no sign-in has used lives a week, every kind of row anyone may write is capped (a client a
- * live consent ticket holds stays); and `limits` counts registrations and claims, device authorizations, sign-in pages and token misses per address. Rules
- * after cloudflare/workers-oauth-provider (MIT): a registration's life starts again when it is first used.
+ * names; a registration no sign-in has used lives a week; every kind of row anyone may write is capped (a client a
+ * live consent ticket holds stays); and `limits` counts registrations and claims, device authorizations, sign-in
+ * pages and token misses per address. Rules after cloudflare/workers-oauth-provider (MIT): a registration's life
+ * starts again when it is first used.
  *
  * @example
  * const oauth = createOAuth({ name: 'Cookbook', signingKey: env.OAUTH_SIGNING_KEY, store, owner: (c) => ownerOf(c) })
@@ -145,12 +147,13 @@ export type OAuthConfig = {
   maxUnusedClients?: number
   /**
    * Codes waiting for a person (consent tickets, claim attempts, device codes and their user codes), kept at most of
-   * each (a whole number, default 10 000): past it a new one evicts the oldest.
+   * each (a whole number, default 10 000): past it a new one evicts the oldest, a ticket an app is still deciding too.
    */
   maxUnusedTickets?: number
   /**
    * Seconds a consent ticket lives, and its browser's nonce cookie: whole, from 60 to a week (default 600). Longer for
-   * an app that decides later (an ask to join the owner answers in hours): its page waits, then posts `complete`.
+   * an app that decides later (an ask to join the owner answers in hours): its page waits, then posts `complete`. It
+   * never renews its client: one whose unused client lapses first can no longer be approved.
    *
    * @example
    * ticketTtl: 24 * 3600   // the owner has a day to answer an ask to join
@@ -301,7 +304,7 @@ export const createOAuth = (config: OAuthConfig) => {
     if (max !== undefined && !(Number.isSafeInteger(max) && max >= 0)) throw new Error(`createOAuth: ${cap} must be a whole number of rows, 0 or more, not ${max}.`)
   }
   const ticketTtl = config.ticketTtl ?? CODE_TTL
-  // Never past a week: an unused client lapses then, and its ticket can no longer be answered
+  // Never past a week, an unused client's whole life: a ticket can't be approved once its client lapsed
   if (!(Number.isSafeInteger(ticketTtl) && ticketTtl >= 60 && ticketTtl <= UNUSED_CLIENT_TTL)) throw new Error(`createOAuth: ticketTtl must be whole seconds from 60 to a week (604800), not ${config.ticketTtl}.`)
   // Once, at start: the app's own page answers anyone at /oauth/authorize, outside Access
   if (config.approve && (!config.limits || publicOrigin === undefined))

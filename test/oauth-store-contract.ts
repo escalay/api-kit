@@ -234,6 +234,23 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect(await store.get('client', waiting)).toBeNull()
     })
 
+    it('lets a flood of newer tickets evict a waiting ticket, and then its client: the ticket cap protects no ticket', async () => {
+      const store = await make()
+      const { app } = await joinApp(store, { maxUnusedClients: 3, maxUnusedTickets: 3 })
+      const invited = await registered(app)
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(invited)}`)).text())
+      // Registrations alone never evict it: its ticket holds it
+      for (let n = 0; n < 10; n++) await registered(app)
+      expect(await store.get('client', invited)).not.toBeNull()
+      // maxUnusedTickets newer tickets: the waiting one is the oldest and goes, and its client is held no more
+      for (let n = 0; n < 3; n++) await browserOf(app).request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)
+      expect(await store.get('consent', ticket)).toBeNull()
+      await registered(app)
+      expect(await store.get('client', invited)).toBeNull()
+      expect(await (await browser.post('/join', { ticket, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+    })
+
     // workers-oauth-provider #420; better-auth GHSA-7w99-5wm4-3g79; OAuth 2.1 §4.1.3
     it('gives one token for two exchanges of a code at once, and the second valid one revokes what the first got', async () => {
       const { app } = await oauthApp(await make())

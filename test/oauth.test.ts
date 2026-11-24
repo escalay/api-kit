@@ -1360,6 +1360,20 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     expect(await (await owner.post('/join', { ticket: short, invite: 'garden-42' })).text()).toContain('This sign-in expired')
   })
 
+  it('refuses a ticket decided after its unused client lapsed, though the ticket still lives', async () => {
+    let at = Date.now()
+    vi.useFakeTimers({ toFake: ['Date'], now: at })
+    const { app } = await joinApp(memoryOAuthStore(), { ticketTtl: 2 * 24 * 3600 })
+    const client_id = await registered(app)
+    // A client registered six days ago opens a ticket of two days: the client lapses on its seventh
+    vi.setSystemTime((at += 6 * 24 * 3600 * 1000))
+    const browser = browserOf(app)
+    const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+    vi.setSystemTime((at += 24 * 3600 * 1000 + 1000))
+    const late = await browser.post('/join', { ticket, invite: 'garden-42' })
+    expect([late.status, late.headers.get('location'), await late.text()]).toEqual([400, null, expect.stringContaining('This sign-in expired')])
+  })
+
   it('lets complete bind an invite’s grant to its space when the client named none, and its token works nowhere else', async () => {
     const ALPHA = `${ORIGIN}/s/alpha/mcp`
     const BETA = `${ORIGIN}/s/beta/mcp`

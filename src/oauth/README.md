@@ -271,8 +271,17 @@ from 60 to a week; `createOAuth` throws otherwise), and so does the nonce cookie
 
 Nothing else changes: `complete` still needs the browser that opened the ticket, a same-origin POST, once. A fetch
 that follows the 302 itself would not take the browser back to the client, so the page submits the form. A decision
-made after the ticket's life finds it expired (the page says to start again from the app), and a ticket can't
-outlive its client: an unused registration lapses a week after it was made. `test/oauth.test.ts` runs this pattern.
+made after the ticket's life finds it expired (the page says to start again from the app). `test/oauth.test.ts` runs
+this pattern. Two ways a waiting ask ends before its life does:
+
+- **Its client lapses.** A ticket does not renew its client's life: a registration no sign-in has used lapses a week
+  after it was made, so a ticket opened by a client older than a week minus `ticketTtl` outlives it. A decision after
+  that is refused (`ticketOf` answers null; `complete` answers the page that says to add the connection again), and the
+  asker starts again from their app.
+- **Newer tickets evict it.** A waiting ticket is capped like any other (`maxUnusedTickets`): once that many newer
+  tickets are open, the oldest goes, and its client is no longer held. With `approve`, anyone can open one at
+  `/oauth/authorize`, so an app that decides later passes `limits` (it slows a flood per address, it doesn't stop one
+  from many addresses) and a `maxUnusedTickets` well above the asks it expects to have waiting at once.
 
 In tests, `approveSignIn(app, query, { headers })` from the `testing` part approves on the kit's page the way a
 browser does: it opens the page, keeps its ticket cookie, and posts same-origin.
@@ -332,7 +341,9 @@ const oauth = createOAuth({
 
   Never evicted: a used client (a sign-in collected its first token), a claimed registration, a client a live
   consent ticket holds (a page is waiting on a person: an invite, an ask to join), the claim token of a live
-  registration, an answered ticket, and a row from before the caps (no `used` flag). So the unused rows are at most
+  registration, an answered ticket, and a row from before the caps (no `used` flag). The waiting ticket itself is not
+  protected: `maxUnusedTickets` newer tickets evict it, and its client with it on a later registration (Deciding
+  later). So the unused rows are at most
   `maxUnusedClients` clients plus one per open ticket, `maxUnusedClients` registrations and as many claim tokens, and
   `maxUnusedTickets` of each of the four waiting kinds; the rest follow an approval (claimed registrations, tokens,
   refresh rows) or a signed-in person (device answers and tries). An approved device not yet collected (one poll,
