@@ -441,9 +441,9 @@ longer recognised as replays: they are only unknown.
 **Refresh storms** happen when one client refreshes the same token twice at once: two tabs sharing a sign-in, a CLI and
 its background job, or a refresh retried after a dropped answer. With the default 0, the second refresh is reuse and
 ends the sign-in, so the person signs in again. `createOAuth({ …, reuseGraceSeconds: 30 })` (the starter sets it)
-gives a used refresh token sent again inside the window the same successor: the next generation's token, which is the
-same each time it is made, so none is stored for it. It never makes a second branch: once that successor is used, or
-the window has passed, it is reuse. The successor is written by the first request, after it marks the used token. If
+gives a used refresh token sent again inside the window (less than `reuseGraceSeconds` after the first answer) the
+same successor: the next generation's token, which is the same each time it is made, so none is stored for it. It
+never makes a second branch: once that successor is used, or the window has passed, it is reuse. The successor is written by the first request, after it marks the used token. If
 that request dies in between, a retry in the window gets a successor no row backs, and its next refresh is
 `invalid_grant` (with 0 the retry would have revoked the grant instead). The retry never writes the row itself, since
 a write there could reset a successor already used.

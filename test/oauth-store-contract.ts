@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { decodeJwt } from 'jose'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createAgentApi, createOAuth, generateOAuthKey, parseApiKeys, type OAuthConfig, type OAuthStore } from '../src/index.js'
 import { approveSignIn } from '../src/testing/index.js'
 
@@ -355,6 +355,26 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect((await (await refreshWith(app, tokens.refresh_token)).json()).error).toBe('invalid_grant')
       expect((await callerWith(app, first.access_token)).status).toBe(401)
       expect((await (await refreshWith(app, first.refresh_token)).json()).error).toBe('invalid_grant')
+    })
+
+    it('with reuseGraceSeconds 30, gives a retry the same successor 29 seconds after the first answer, and ends the sign-in at 30', async () => {
+      const store = await make()
+      const { app } = await oauthApp(store, { reuseGraceSeconds: 30 })
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      try {
+        // A 1.29.0 token: its used row is kept 30 days, so the window alone decides
+        const legacy = `rt_${randomBytes(24).toString('base64url')}`
+        await store.put('refresh', sha(legacy), { client: 'client_old', name: 'Old', owner: OWNER, scopes: ['read'], family: `g-${crypto.randomUUID()}`, used: false }, now() + 3600)
+        const first = await (await refreshWith(app, legacy)).json()
+        vi.setSystemTime((at += 29 * 1000))
+        expect((await (await refreshWith(app, legacy)).json()).refresh_token).toBe(first.refresh_token)
+        vi.setSystemTime((at += 1000))
+        expect(await (await refreshWith(app, legacy)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+        expect((await callerWith(app, first.access_token)).status).toBe(401)
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('with reuseGraceSeconds, ends the sign-in when the successor was already used', async () => {

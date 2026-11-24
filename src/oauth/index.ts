@@ -367,8 +367,11 @@ export const createOAuth = (config: OAuthConfig) => {
   /** How far a family has rotated: its row's generation, 0 when it has none. */
   const generationOfFamily = async (family: string) => Number((await store.get('refresh-family', family))?.generation ?? 0)
 
-  /** Whether a token used at `usedAt` may still be retried: `reuseGraceSeconds` set and not yet over. */
-  const withinGrace = (usedAt: number) => reuseGrace > 0 && usedAt > 0 && now() - usedAt <= reuseGrace
+  /**
+   * Whether a token used at `usedAt` may still be retried: `reuseGraceSeconds` set and not yet over. Strict, like the
+   * store's expiry, so a row kept for the grace and the grace end at the same second.
+   */
+  const withinGrace = (usedAt: number) => reuseGrace > 0 && usedAt > 0 && now() - usedAt < reuseGrace
 
   /**
    * What a retry of a used refresh token gets: the successor the first answer held, while the grace lasts and that
