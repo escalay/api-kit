@@ -61,13 +61,13 @@ describe('the size of a part’s README', () => {
   const sizes = Object.fromEntries(folders.map((folder) => [folder, Buffer.byteLength(read(`src/${folder}/README.md`))]))
 
   it('stays under the ceiling, or under its own cap', () => {
-    for (const folder of folders) expect(sizes[folder], folder).toBeLessThanOrEqual(OVER[folder] ?? CEILING)
+    for (const folder of folders) expect(sizes[folder], `${folder}: cut or move text, never raise the cap`).toBeLessThanOrEqual(OVER[folder] ?? CEILING)
   })
 
   it('lists only READMEs over the ceiling, each with a cap close above it', () => {
     for (const [folder, cap] of Object.entries(OVER)) {
-      expect(sizes[folder], folder).toBeGreaterThan(CEILING)
-      expect(cap - sizes[folder], folder).toBeLessThanOrEqual(2 * 1024)
+      expect(sizes[folder], `${folder}: under the ceiling now, so drop it from OVER`).toBeGreaterThan(CEILING)
+      expect(cap - sizes[folder], `${folder}: shrank, so lower its cap`).toBeLessThanOrEqual(2 * 1024)
     }
   })
 })
