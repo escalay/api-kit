@@ -2,6 +2,7 @@
 import type { Context } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { hashApiKey, type Caller, type Role } from '../core/auth.js'
+import { showOnce } from '../core/guards.js'
 import type { Db } from '../db/index.js'
 import { peopleRepo } from './repo.js'
 
@@ -13,12 +14,13 @@ const randomToken = () => btoa(String.fromCharCode(...crypto.getRandomValues(new
 /** `__Host-` makes the browser refuse the cookie unless it is Secure, host-only and for `/`; plain http (local dev) can't carry it. */
 const cookieName = (c: Context, base: string) => (new URL(c.req.url).protocol === 'https:' ? `__Host-${base}` : base)
 
-/** Starts a session for a person and sets its cookie on the answer. */
+/** Starts a session for a person and sets its cookie on the answer, which Idempotency-Key never keeps to replay. */
 export const startSession = async (c: Context, db: Db, personId: string, base = 'session') => {
   const token = randomToken()
   const expires = new Date(Date.now() + SESSION_DAYS * DAY_MS)
   await peopleRepo(db).addSession(hashApiKey(token), personId, expires.toISOString(), c.req.header('user-agent')?.slice(0, 200) ?? null)
   setCookie(c, cookieName(c, base), token, { httpOnly: true, secure: new URL(c.req.url).protocol === 'https:', sameSite: 'Lax', path: '/', expires })
+  showOnce(c, 'This Idempotency-Key already signed in: its answer set a session cookie, shown once and never shown again. Not signed in on this browser? Sign in again, with new options.')
 }
 
 /** Ends this browser's session and clears its cookie. */

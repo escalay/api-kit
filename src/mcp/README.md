@@ -98,7 +98,7 @@ schema, when fixed), `annotations`, `call` (args, and `at` with the mount path's
 
 | File | What |
 |---|---|
-| `index.ts` | the server, tools, resources, mounting, the waits |
+| `index.ts` | the server, tools, resources, mounting, the waits; `problemOf` and `problemText` (a failed answer as a problem, and as one line an agent can act on), `toolsHashOf` (a short hash of the tool and template lists, on every tool as `_meta["api-kit/tools-hash"]`, `TOOLS_HASH_META`, so a client that caches the list learns it changed), `FORWARDED` (the request headers `mountMcp` passes on to the routes a tool calls) |
 | `skills.ts` | `guideSkills`, and `attachSkills` (the factory calls it): the extension plus what a plain client needs |
 
 ## Flows
@@ -142,8 +142,9 @@ sequenceDiagram
   cache or the run's `_links.result`. A 202 is never taken for an answer.
 - A resource template's query variables (`{?format}`) may be left out of a URI.
 - A tool's `authInfo.clientId` is an OAuth agent's client_id (never the name it registered), else the key's name or
-  the person's email; `authInfo.extra` adds the agent's `grant` and `name` beside the forwarded `headers`, and the
-  mount path's `params`.
+  the person's email; `authInfo.extra` adds the agent's `grant` and `name` beside the forwarded `headers`
+  (`FORWARDED`: the credentials and `Idempotency-Key`, given each call as `<key>:<JSON-RPC id>`, so a retried call
+  runs its route once; `mountMcp` never keeps its own answer, on any path), and the mount path's `params`.
 - A mount path's parameters come from the route alone, decoded: arguments, `_meta` and the query string never set
   them, and a dot segment (`/s/../mcp`, `/s/%2e%2e/mcp`) is resolved before routing, so it reaches `/mcp`. A tool
   encodes a parameter when it builds a path (`encodeURIComponent`). A parameter names a space, it never grants it:

@@ -67,7 +67,7 @@ check: async () => ((await flags.isOn('sending')) ? checkSending() : { ok: false
 
 | File | What |
 |---|---|
-| `schema.ts` | `setup_state` (one row once claimed: when, by whom, the hash of the code used) and `SETUP_MIGRATIONS` |
+| `schema.ts` | `setup_state` (`setupState`: one row once claimed: when, by whom, the hash of the code used) and `SETUP_MIGRATIONS` |
 | `routes.ts` | `setupRoutes`: status, claim, checklist |
 | `index.ts` | `registerSetup`, `SetupStep`, `Recovery`, `SETUP_TAG`, `SETUP_OPEN_PATHS` |
 
@@ -107,6 +107,8 @@ flowchart TD
   Cloudflare).
 - A claimed deployment answers its own code with 409. A **different** code (the secret was rotated) opens recovery
   for an existing owner's email, once: it becomes the code on record.
+- The enrolment is shown once: Idempotency-Key never keeps it (`showOnce`, core), so a retry with the same key is a
+  409 `shown_once` saying to rotate the code to get back in.
 - `onRecovery` hears an owner getting back in, in two stages (`{ stage, who, passkey }`): `started` when a rotated code
   is accepted for their email, `completed` when the enrolment it gave makes a passkey (named). Log both, and alert the
   owner on `started`: only someone holding the deployment's secrets can start one, and it may not be them. A hook
@@ -127,6 +129,7 @@ flowchart TD
 | 429 "Too many setup attempts from here" | more than 5 attempts this hour from this address, right code or not |
 | 429 "Too many wrong setup codes today" | more than 20 wrong codes today, from anywhere |
 | 409 "This deployment is already claimed" | the code on record was sent again: to recover, rotate the secret and use the new code |
+| 409 `shown_once` "This Idempotency-Key already opened setup" | a retry of a claim or recovery that was done: its enrolment was shown once |
 | 403 "Recovery is for an owner" | a rotated code sent with an email that isn't an owner's |
 | 403 on the checklist | the caller is not the owner or a key from `API_KEYS` |
 | a step "The check took too long." or "The check failed: …" | its `check` ran over 5 seconds or threw |
@@ -142,7 +145,7 @@ flowchart TD
 
 - `softAuthenticator()` (testing part) makes the owner's passkey from the claim's enrolment in CI.
 - `test/people.test.ts`: the claim, the limits by address and the day's wrong codes, recovery and its hook, the
-  checklist.
+  checklist, a retried claim that never answers or stores the enrolment.
 
 ## Upgrading
 

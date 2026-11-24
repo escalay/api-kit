@@ -11,7 +11,7 @@ import type { Context } from 'hono'
 import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryGuardStore, memoryOAuthStore, memoryStore, OAUTH_MIGRATIONS, oauthKeys, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, serveGuide, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
 import { ASSETS, cookbookApi } from './brand-fixture.js'
 import { approveSignIn } from '../src/testing/index.js'
-import { approvedCode, audOf, authorizeQuery, browserOf, callerWith, formWithTwoResources, joinApp, oauthApp, oauthStoreContract, refreshWith, registered, signedIn, ticketIn, typeClaim } from './oauth-store-contract.js'
+import { approvedCode, audOf, authorizeQuery, browserOf, callerWith, formWithTwoResources, heldTicket, joinApp, oauthApp, oauthStoreContract, refreshWith, registered, signedIn, ticketIn, typeClaim } from './oauth-store-contract.js'
 
 const OWNER = 'owner@example.test'
 const ORIGIN = 'http://localhost'
@@ -1056,6 +1056,8 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
       onThisComputer: false,
       scopes: ['read', 'write'],
       resource: `${ORIGIN}/mcp`,
+      named: true,
+      expiresAt: expect.any(Number),
       state: 'abc',
       arrival: { site: 'cross-site', referrerOrigin: 'https://client.example.test' },
     }])
@@ -1380,6 +1382,212 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     expect([direct.status, direct.headers.get('location'), await direct.text()]).toEqual([400, null, expect.stringContaining('Remove this connection in your app and add it again.')])
   })
 
+  describe('holding a ticket for a decision made later (holdTicket)', () => {
+    const maxAgeOf = (answer: Response) => Number(/Max-Age=(\d+)/.exec(cookieOf(answer) ?? '')?.[1])
+
+    it('lets an app hold one ticket for the owner’s decision while other pages keep ten minutes', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      // The app's own table: each waiting ask, and who approved it once the owner decided
+      const decisions = new Map<string, { approver?: string }>()
+      const { app, oauth } = await oauthApp(memoryOAuthStore(), {
+        approve: async (c, ask) => c.html(`<p>Ask to join?</p><form method="post" action="/ask"><input type="hidden" name="ticket" value="${ask.ticket}"><button>Ask</button></form>`),
+      }, { open: ['/ask', '/ask/state', '/ask/continue'] })
+      // Asking holds the ticket for a day: the waiting page carries the cookie that lives as long
+      app.post('/ask', async (c) => {
+        const ticket = String((await c.req.parseBody()).ticket ?? '')
+        const held = await oauth.holdTicket(c, ticket, 24 * 3600)
+        if (!held) return c.html('<p>This sign-in expired: start again from your app.</p>', 400)
+        decisions.set(ticket, {})
+        return c.html(`<p>Waiting for the owner.</p><form method="post" action="/ask/continue"><input type="hidden" name="ticket" value="${ticket}"></form>`, 200, { 'set-cookie': held.cookie })
+      })
+      app.post('/ask/state', async (c) => {
+        const ticket = String((await c.req.parseBody()).ticket ?? '')
+        return (await oauth.ticketOf(c, ticket)) ? c.json({ decided: Boolean(decisions.get(ticket)?.approver) }) : c.json(null, 400)
+      })
+      app.post('/ask/continue', async (c) => {
+        const ticket = String((await c.req.parseBody()).ticket ?? '')
+        const approver = decisions.get(ticket)?.approver
+        return approver ? oauth.complete(c, ticket, { approver }) : c.html('<p>Still waiting for the owner.</p>', 409)
+      })
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      const page = await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+      expect(maxAgeOf(page)).toBe(600)
+      const ticket = ticketIn(await page.text())
+      const waiting = await browser.post('/ask', { ticket })
+      expect(maxAgeOf(waiting)).toBe(24 * 3600)
+      expect(await (await browser.post('/ask/state', { ticket })).json()).toEqual({ decided: false })
+      expect((await browser.post('/ask/continue', { ticket })).status).toBe(409)
+      // The owner decides twenty hours later, long after a page's ten minutes
+      vi.setSystemTime((at += 20 * 3600 * 1000))
+      decisions.set(ticket, { approver: OWNER })
+      expect(await (await browser.post('/ask/state', { ticket })).json()).toEqual({ decided: true })
+      const done = await browser.post('/ask/continue', { ticket })
+      expect((await exchangeAt(app, done.headers.get('location'), client_id)).status).toBe(200)
+
+      // A page not held keeps ten minutes
+      const unheld = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      vi.setSystemTime((at += 601 * 1000))
+      expect((await browser.post('/ask', { ticket: unheld })).status).toBe(400)
+    })
+
+    // Probe T3: a waiting ticket evicted by newer ones under the kit's own limit
+    it('keeps a held ask through maxUnusedTickets newer tickets from one address, and an unheld one goes as before', async () => {
+      const redirect = 'https://client-c.example.test/cb'
+      const store = memoryOAuthStore()
+      const { app } = await joinApp(store, { maxUnusedTickets: 5, resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path) })
+      const client_id = await registered(app, 'Sample', redirect)
+      const at = { redirect_uri: redirect, resource: `${ORIGIN}/s/soups/mcp` }
+      const newer = async () => {
+        for (let n = 0; n < 5; n++) await app.request(`/oauth/authorize?${authorizeQuery(client_id, at)}`)
+      }
+      const browser = browserOf(app)
+      const waiting = await heldTicket(app, browser, client_id, at)
+      await newer()
+      expect(await store.get('consent', waiting)).not.toBeNull()
+      expect((await browser.post('/join', { ticket: waiting, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      expect(await (await browser.post('/join', { ticket: waiting, invite: 'garden-42' })).text()).toContain('Already approved')
+
+      const unheld = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id, at)}`)).text())
+      await newer()
+      expect(await store.get('consent', unheld)).toBeNull()
+      expect(await (await browser.post('/join', { ticket: unheld, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+    })
+
+    it('keeps a held ask through 10 000 newer tickets under the default cap, and an unheld one goes', async () => {
+      const store = memoryOAuthStore()
+      const { app } = await joinApp(store)
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      // Held a minute: by expiry the oldest of all, so only the hold keeps it
+      const waiting = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect((await browser.post('/join/hold', { ticket: waiting, seconds: '60' })).status).toBe(200)
+      const unheld = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      // 10 000 newer waiting tickets written straight to the store, then a few real sign-ins trim past the cap
+      for (let n = 0; n < 10_000; n++) await store.put('consent', `consent_newer-${n}`, { used: false }, Math.floor(Date.now() / 1000) + 600)
+      for (let n = 0; n < 3; n++) await app.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+      expect(await store.get('consent', unheld)).toBeNull()
+      expect((await browser.post('/join', { ticket: waiting, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+    })
+
+    it('holds tickets outside the cap: as many as the app holds stay, and an ordinary sign-in still opens and completes', async () => {
+      const store = memoryOAuthStore()
+      const { app } = await joinApp(store, { maxUnusedTickets: 2 })
+      const client_id = await registered(app)
+      const held = []
+      for (let n = 0; n < 3; n++) {
+        const browser = browserOf(app)
+        held.push({ browser, ticket: await heldTicket(app, browser, client_id) })
+      }
+      const browser = browserOf(app)
+      const ordinary = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect((await browser.post('/join', { ticket: ordinary, invite: 'garden-42' })).status).toBe(302)
+      for (const { browser, ticket } of held) expect((await browser.post('/join', { ticket, invite: 'garden-42' })).status).toBe(302)
+    })
+
+    it('gives null for a ticket another browser opened, one answered, expired or unknown', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      const { app } = await joinApp(memoryOAuthStore())
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      const open = async () => ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      const holdIn = async (from: ReturnType<typeof browserOf>, ticket: string) => (await from.post('/join/hold', { ticket })).json()
+
+      expect(await holdIn(browserOf(app), await open())).toBeNull()
+      const answered = await open()
+      await browser.post('/join', { ticket: answered, invite: 'garden-42' })
+      expect(await holdIn(browser, answered)).toBeNull()
+      expect(await holdIn(browser, 'consent_unknown')).toBeNull()
+      const lapsed = await open()
+      vi.setSystemTime((at += 601 * 1000))
+      expect(await holdIn(browser, lapsed)).toBeNull()
+    })
+
+    it('moves the expiry when held again, and never sets the cookie shorter than a page’s life', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      const { app } = await joinApp(memoryOAuthStore())
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)).text())
+      const first = await browser.post('/join/hold', { ticket })
+      expect([await first.json(), maxAgeOf(first)]).toEqual([{ expiresAt: Math.floor(at / 1000) + 24 * 3600 }, 24 * 3600])
+      // Twenty hours on, a day again: it lives past the first day's end
+      vi.setSystemTime((at += 20 * 3600 * 1000))
+      const again = await browser.post('/join/hold', { ticket, seconds: String(24 * 3600) })
+      expect((await again.json()).expiresAt).toBe(Math.floor(at / 1000) + 24 * 3600)
+      vi.setSystemTime((at += 10 * 3600 * 1000))
+      expect((await browser.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+
+      // A minute's hold leaves the cookie a page's ten minutes: other tickets in this browser keep theirs
+      const other = browserOf(app)
+      const short = ticketIn(await (await other.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)).text())
+      const minute = await other.post('/join/hold', { ticket: short, seconds: '60' })
+      expect([(await minute.json()).expiresAt, maxAgeOf(minute)]).toEqual([Math.floor(at / 1000) + 60, 600])
+    })
+
+    it('never shortens a held ticket’s cookie when the same browser opens another sign-in', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      const { app } = await joinApp(memoryOAuthStore())
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      const held = await heldTicket(app, browser, client_id)
+      // Two hours later the asker's app opens the sign-in again: the cookie keeps the held ticket's remaining life
+      vi.setSystemTime((at += 2 * 3600 * 1000))
+      const second = await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+      expect(maxAgeOf(second)).toBe(22 * 3600)
+      // and the new page still lives ten minutes
+      const page = ticketIn(await second.text())
+      vi.setSystemTime((at += 601 * 1000))
+      expect(await (await browser.post('/join', { ticket: page, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+      expect((await browser.post('/join', { ticket: held, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      // Once the held life is over, a sign-in sets a page's ten minutes again
+      vi.setSystemTime((at += 22 * 3600 * 1000))
+      expect(maxAgeOf(await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`))).toBe(600)
+    })
+
+    it('refuses a held ticket whose unused client lapsed with the page that says to add it again', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      const store = memoryOAuthStore()
+      const { app } = await joinApp(store)
+      const client_id = await registered(app)
+      // A client registered six days ago: two held days outlive it
+      vi.setSystemTime((at += 6 * 24 * 3600 * 1000))
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect((await browser.post('/join/hold', { ticket, seconds: String(2 * 24 * 3600) })).status).toBe(200)
+      vi.setSystemTime((at += 24 * 3600 * 1000 + 1000))
+      expect(await store.get('client', client_id)).toBeNull()
+      expect(await store.get('consent', ticket)).not.toBeNull()
+      expect(await (await browser.post('/join', { ticket, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+      const direct = await browser.post('/join/direct', { ticket, invite: 'garden-42' })
+      expect([direct.status, direct.headers.get('location'), await direct.text()]).toEqual([400, null, expect.stringContaining('Remove this connection in your app and add it again.')])
+    })
+
+    it('holds on a store without hold, one request at a time', async () => {
+      let at = Date.now()
+      vi.useFakeTimers({ toFake: ['Date'], now: at })
+      const { app } = await joinApp(memoryStore())
+      const browser = browserOf(app)
+      const client_id = await registered(app)
+      const ticket = await heldTicket(app, browser, client_id)
+      // A shorter hold after it in this browser keeps the day
+      const short = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect(maxAgeOf(await browser.post('/join/hold', { ticket: short, seconds: '60' }))).toBe(24 * 3600)
+      vi.setSystemTime((at += 3600 * 1000))
+      expect((await browser.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      expect((await browser.post('/join/hold', { ticket })).status).toBe(400)
+    })
+
+    it('takes a hold of a minute to a week, in whole seconds', async () => {
+      const { oauth } = await joinApp(memoryOAuthStore())
+      for (const wrong of [0, 59, 1.5, Number.NaN, 7 * 24 * 3600 + 1]) await expect(oauth.holdTicket({} as Context, 'consent_x', wrong), String(wrong)).rejects.toThrow(/holdTicket: seconds/)
+    })
+  })
+
   it('lets complete bind an invite’s grant to its space when the client named none, and its token works nowhere else', async () => {
     const ALPHA = `${ORIGIN}/s/alpha/mcp`
     const BETA = `${ORIGIN}/s/beta/mcp`
@@ -1528,7 +1736,7 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     }
   })
 
-  it('names what is asked for on the kit’s consent page, and where it returns: a host, or an app on this computer', async () => {
+  it('names what is asked for on the kit’s consent page, and where it returns: a host, a scheme, or an app on this computer', async () => {
     const { app } = await oauthApp(memoryOAuthStore(), { resources: (path) => path === '/s/alpha/mcp' })
     const owner = browserOf(app, { 'x-test-owner': OWNER })
     const pageFor = async (redirect: string, extra: Record<string, string> = {}) =>
@@ -1540,7 +1748,155 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     expect(hosted).toContain('<code>client.example.test</code>')
     expect(hosted).not.toContain('this computer')
     expect(await pageFor('http://127.0.0.1:33418/cb')).toContain('an app on this computer (<code>127.0.0.1:33418</code>)')
-    expect(await pageFor('sample-app://oauth/callback')).toContain('an app on this computer (<code>sample-app:</code>)')
+    const scheme = await pageFor('sample-app://oauth/callback')
+    expect(scheme).toContain('It sends you back to <code>sample-app:</code>.')
+    expect(scheme).not.toContain('this computer')
+  })
+
+  // The attack review's probe T1, with fixture schemes: a browser-launching or made-up scheme read as this computer
+  it('counts only a loopback http redirect as this computer, in the ask and on the kit’s consent page', async () => {
+    const returns: [string, string, boolean][] = [
+      ['http://127.0.0.1:33418/cb', '127.0.0.1:33418', true],
+      ['http://localhost/cb', 'localhost', true],
+      ['http://[::1]:8080/cb', '[::1]:8080', true],
+      ['http://LOCALHOST:9/cb', 'localhost:9', true],
+      ['https://localhost/cb', 'localhost', false],
+      ['sample-app:/cb', 'sample-app:', false],
+      ['evil-app://cb', 'evil-app:', false],
+      ['sample-browser:https://evil.example/cb', 'sample-browser:', false],
+      ['sample-browsers://evil.example/cb', 'sample-browsers:', false],
+    ]
+    const { app, asks } = await joinApp(memoryOAuthStore(), { resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path) })
+    const kit = await oauthApp(memoryOAuthStore())
+    const owner = browserOf(kit.app, { 'x-test-owner': OWNER })
+    for (const [redirect, host, onThisComputer] of returns) {
+      const opened = await browserOf(app).request(`/oauth/authorize?${authorizeQuery(await registered(app, 'Sample', redirect), { redirect_uri: redirect, resource: `${ORIGIN}/s/soups/mcp` })}`)
+      expect([opened.status, asks.at(-1)?.redirectHost, asks.at(-1)?.onThisComputer], redirect).toEqual([200, host, onThisComputer])
+      const consent = await (await owner.request(`/oauth/authorize?${authorizeQuery(await registered(kit.app, 'Sample', redirect), { redirect_uri: redirect })}`)).text()
+      expect(consent, redirect).toContain(onThisComputer ? `It sends you back to an app on this computer (<code>${host}</code>).` : `It sends you back to <code>${host}</code>.`)
+    }
+  })
+
+  // The attack review's probe T4: a client that named the root can't be bound to a space by the app's choice
+  it('says in the ask whether the client named its resource, which complete then keeps', async () => {
+    const SPACE = `${ORIGIN}/s/soups/mcp`
+    const asks: SignInAsk[] = []
+    const { app, oauth } = await oauthApp(memoryOAuthStore(), { resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path), approve: async (c, ask) => (asks.push(ask), c.html(`<form method="post" action="/join"><input type="hidden" name="ticket" value="${ask.ticket}"></form>`)) }, { open: ['/join'] })
+    app.post('/join', async (c) => oauth.complete(c, String((await c.req.parseBody()).ticket), { approver: 'invite:1', resource: SPACE }))
+    const client_id = await registered(app)
+    const open = async (extra: Record<string, string>) => {
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id, extra)}`)).text())
+      return { named: asks.at(-1)!.named, join: () => browser.post('/join', { ticket }) }
+    }
+    const root = await open({ resource: ORIGIN })
+    const mcp = await open({ resource: `${ORIGIN}/mcp` })
+    const space = await open({ resource: SPACE })
+    const none = await open({})
+    expect([root.named, mcp.named, space.named, none.named]).toEqual([true, true, true, false])
+    const refused = await root.join()
+    expect([refused.status, await refused.text()]).toEqual([400, expect.stringContaining(`The client asked for ${ORIGIN}, not ${SPACE}.`)])
+    expect((await space.join()).status).toBe(302)
+    expect((await none.join()).status).toBe(302)
+
+    // Without `resources`, a resource the server does not describe gets the root and binds nothing: not named
+    const loose = await joinApp(memoryOAuthStore())
+    await browserOf(loose.app).request(`/oauth/authorize?${authorizeQuery(await registered(loose.app), { resource: `${ORIGIN}/elsewhere` })}`)
+    expect(loose.asks.at(-1)).toMatchObject({ resource: ORIGIN, named: false })
+  })
+
+  it('carries the ticket’s expiry in the ask, the same through ticketOf', async () => {
+    const asks: SignInAsk[] = []
+    const { app, oauth } = await oauthApp(memoryOAuthStore(), { ticketTtl: 3600, approve: async (c, ask) => (asks.push(ask), c.html(`<input type="hidden" name="ticket" value="${ask.ticket}">`)) }, { open: ['/peek'] })
+    app.post('/peek', async (c) => c.json(await oauth.ticketOf(c, String((await c.req.parseBody()).ticket))))
+    const browser = browserOf(app)
+    const before = Math.floor(Date.now() / 1000)
+    const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)).text())
+    const after = Math.floor(Date.now() / 1000)
+    expect(asks[0]!.expiresAt).toBeGreaterThanOrEqual(before + 3600)
+    expect(asks[0]!.expiresAt).toBeLessThanOrEqual(after + 3600)
+    expect((await (await browser.post('/peek', { ticket })).json()).expiresAt).toBe(asks[0]!.expiresAt)
+  })
+
+  // The attack review's race.mts as written: a slow onGrant, and the same code exchanged again 10 ms later
+  it('leaves no live row when a client retries its token request during a slow onGrant', async () => {
+    const events: string[] = []
+    const members = new Map<string, string>()
+    const oauth = createOAuth({
+      name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(),
+      owner: async () => null,
+      resources: (path) => /^\/s\/[a-z0-9-]+\/mcp$/.test(path),
+      approve: async (c, ask) => c.html(`<input type="hidden" name="ticket" value="${ask.ticket}">`),
+      // The part's shape: claim, then a slow member insert
+      onGrant: async (grant) => { events.push('onGrant starts'); await new Promise((done) => setTimeout(done, 50)); members.set(grant.grant, 'active'); events.push('member row written active'); return true },
+      onRevoke: async (r) => { events.push(`onRevoke ${r.reason}: row ${r.grant && members.has(r.grant) ? 'found, ended' : 'not found'}`); if (r.grant && members.has(r.grant)) members.set(r.grant, 'ended') },
+      accepts: async () => true,
+    })
+    const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(''), open: ['/join'] }, oauth })
+    app.post('/join', async (c) => oauth.complete(c, String((await c.req.parseBody()).ticket), { approver: 'invite:1', data: { sharing: 'invite' } }))
+    const redirect = 'https://client.example.test/cb'
+    const client = (await (await app.request('/oauth/register', json({ client_name: 'App', redirect_uris: [redirect] }))).json()) as { client_id: string }
+    const verifier = randomBytes(32).toString('base64url')
+    const page = await app.request(`/oauth/authorize?${new URLSearchParams({ response_type: 'code', client_id: client.client_id, redirect_uri: redirect, code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256', resource: 'http://localhost/s/soups/mcp' })}`)
+    const ticket = /name="ticket" value="([^"]+)"/.exec(await page.text())![1]!
+    const cookie = page.headers.getSetCookie().map((line) => line.split(';')[0]).join('; ')
+    const joined = await app.request('/join', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': 'same-origin', cookie }, body: new URLSearchParams({ ticket }).toString() })
+    const code = new URL(joined.headers.get('location')!).searchParams.get('code')!
+    const exchange = () => app.request('/oauth/token', form({ grant_type: 'authorization_code', code, client_id: client.client_id, code_verifier: verifier }))
+    // A client that retries its token request while the first is still in onGrant
+    const first = exchange()
+    await new Promise((done) => setTimeout(done, 10))
+    const second = exchange()
+    const [a, b] = await Promise.all([first, second])
+    expect([a.status, b.status]).toEqual([400, 400])
+    expect([(await a.json()).access_token, (await b.json()).access_token]).toEqual([undefined, undefined])
+    expect(events).toEqual(['onGrant starts', 'onRevoke replayed: row not found', 'member row written active', 'onRevoke replayed: row found, ended'])
+    expect([...members.values()]).toEqual(['ended'])
+  })
+
+  describe('approveSignIn on an app’s own page', () => {
+    /** An app whose sign-in page is `pageOf(ask)`; `/join` and `/leave` complete as the owner, and keep what was posted. */
+    const ownPage = async (pageOf: (ask: SignInAsk) => string) => {
+      const posted: Record<string, unknown>[] = []
+      const { app, oauth } = await oauthApp(memoryOAuthStore(), { approve: async (c, ask) => c.html(pageOf(ask)) }, { open: ['/join', '/leave'] })
+      for (const path of ['/join', '/leave'])
+        app.post(path, async (c) => {
+          const body = await c.req.parseBody()
+          posted.push({ path, ...body })
+          return oauth.complete(c, String(body.ticket), { approver: OWNER })
+        })
+      const verifier = 'v'.repeat(43)
+      const query = authorizeQuery(await registered(app))
+      return { app, posted, query, exchange: (answer: Response) => app.request('/oauth/token', form({ grant_type: 'authorization_code', code: new URL(answer.headers.get('location')!).searchParams.get('code')!, client_id: query.get('client_id')!, code_verifier: verifier })) }
+    }
+
+    it('posts the one form whose action is named: its hidden inputs, the fields given, the ticket cookie, same-origin', async () => {
+      const { app, posted, query, exchange } = await ownPage((ask) => `<!doctype html><title>Join</title>
+<form method="get" action="/search"><input type="hidden" name="q" value="soups"></form>
+<form method="POST" action="/join"><input type="hidden" name="ticket" value="${ask.ticket}"><input value="soups &amp; bakes" name="note" type="hidden"><input name="code" aria-label="Code"><button>Join</button></form>
+<form method="post" action="/leave"><input type="hidden" name="ticket" value="${ask.ticket}"><button>Not now</button></form>`)
+      const answer = await approveSignIn(app, query, { form: { action: '/join', fields: { code: 'BDKM-QXTW' } } })
+      expect(answer.status).toBe(302)
+      expect(posted).toEqual([{ path: '/join', ticket: expect.stringMatching(/^consent_/), note: 'soups & bakes', code: 'BDKM-QXTW' }])
+      expect((await exchange(answer)).status).toBe(200)
+    })
+
+    it('throws, naming the forms it saw, when no form or two post to the action, and for an action that is no path here', async () => {
+      const two = await ownPage((ask) => `<form method="post" action="/join"><input type="hidden" name="ticket" value="${ask.ticket}"></form><form method="post" action="/join"><input type="hidden" name="ticket" value="${ask.ticket}"></form>`)
+      await expect(approveSignIn(two.app, two.query, { form: { action: '/join' } })).rejects.toThrow('approveSignIn: 2 forms post to /join, so which one is ambiguous (the page’s forms: post /join, post /join)')
+      const other = await ownPage((ask) => `<form method="get" action="/join"></form><form method="post" action="https://evil.example/join"><input type="hidden" name="ticket" value="${ask.ticket}"></form>`)
+      await expect(approveSignIn(other.app, other.query, { form: { action: '/join' } })).rejects.toThrow('approveSignIn: no form posts to /join (the page’s forms: get /join, post https://evil.example/join)')
+      await expect(approveSignIn(other.app, other.query, { form: { action: 'https://evil.example/join' } })).rejects.toThrow('approveSignIn: form.action must be a path on the app (/join), not https://evil.example/join')
+      await expect(approveSignIn(other.app, other.query, { form: { action: '//evil.example/join' } })).rejects.toThrow('approveSignIn: form.action must be a path on the app (/join), not //evil.example/join')
+      expect(two.posted).toEqual([])
+      expect(other.posted).toEqual([])
+    })
+
+    it('reads a numeric reference no character has as a browser does (U+FFFD), so the error still names the forms', async () => {
+      const malformed = await ownPage((ask) => `<form method="post" action="/join?from=&#x110000;&#0;&#xD800;&#99999999999;"><input type="hidden" name="ticket" value="${ask.ticket}"></form>`)
+      await expect(approveSignIn(malformed.app, malformed.query, { form: { action: '/join' } })).rejects.toThrow('approveSignIn: no form posts to /join (the page’s forms: post /join?from=����)')
+      expect(malformed.posted).toEqual([])
+    })
   })
 
   describe('the brand on the kit’s own pages', () => {

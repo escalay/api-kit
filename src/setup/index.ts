@@ -18,7 +18,7 @@ import type { OpenAPIHono, RouteHandler } from '@hono/zod-openapi'
 import { eq } from 'drizzle-orm'
 import type { Context } from 'hono'
 import { hashApiKey, type Caller } from '../core/auth.js'
-import { addressOf, type GuardStore } from '../core/guards.js'
+import { addressOf, showOnce, type GuardStore } from '../core/guards.js'
 import { linksOf, originOf } from '../core/hal.js'
 import { newId } from '../core/ids.js'
 import { ProblemError } from '../core/problem.js'
@@ -94,6 +94,10 @@ export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards,
     return c.json({ claimed: Boolean(state), codeSet: Boolean(codeHash), recovery: Boolean(state && codeHash && state.codeHash !== codeHash), _links: links(c) }, 200, { 'cache-control': 'no-store' })
   }
 
+  // An enrolment is shown once: a retry with the same Idempotency-Key is told this instead of getting it again
+  const enrolmentShownOnce = (c: Context) =>
+    showOnce(c, 'This Idempotency-Key already opened setup and was given an enrolment for making a passkey. The enrolment was shown once, in that answer, and is never shown again. Lost it? Change the SETUP_CODE secret on this deployment, then send the new code here.')
+
   const claim: RouteHandler<SetupRoutes['claim']> = async (c) => {
     const now = Date.now()
     // Every attempt counts at its address (from the source the app named with createAgentApi({ address }))
@@ -115,6 +119,7 @@ export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards,
       if (existing) await people.setRole(existing.id, 'owner')
       else await people.add({ id: ownerId, email, role: 'owner', name: name ?? null, createdAt: at, lastSeenAt: null })
       await db.insert(setupState).values({ id: 1, claimedAt: at, ownerId, codeHash })
+      enrolmentShownOnce(c)
       return c.json({ mode: 'claim' as const, enrolment: await startEnrolment(db, ownerId), _links: links(c) }, 200, { 'cache-control': 'no-store' })
     }
     if (state.codeHash === codeHash) throw new ProblemError('conflict', { detail: 'This deployment is already claimed. Lost the passkey? Change the SETUP_CODE secret on this deployment, then use the new code here to make a new one.' })
@@ -125,6 +130,7 @@ export const registerSetup = async (app: OpenAPIHono, { db, code, steps, guards,
     const enrolment = await startEnrolment(db, owner.id, 'recovery')
     // The rotated code is spent: a hook that throws must not keep the enrolment from the owner
     await tellApp('onRecovery', () => onRecovery?.({ stage: 'started', who: owner.email }, c))
+    enrolmentShownOnce(c)
     return c.json({ mode: 'recover' as const, enrolment, _links: links(c) }, 200, { 'cache-control': 'no-store' })
   }
 

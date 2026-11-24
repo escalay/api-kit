@@ -1,6 +1,6 @@
 ---
 name: api-kit-cli
-description: Use when giving an API built on the Escalay api-kit its command line, naming its MCP tools as commands, writing a job (one command for a playbook step), or fixing what cliGaps reports. Covers kit sdk / kit cli, names, examples, jobs, the snapshot and sign-in; and every command of the kit's own CLI (npx @escalay/kit - init and its presets, add, update, doctor, feature, guide, repo, button, brand, license), what each does and when to run it.
+description: Use when giving an API built on the Escalay api-kit its command line, naming its MCP tools as commands, writing a job (one command for a playbook step), or fixing what cliGaps reports. Covers kit sdk / kit cli, names, examples, jobs, the snapshot and sign-in; and every command of the kit's own CLI (npx @escalay/kit - init and its presets, add, update, upgrading, doctor, feature, guide, repo, button, brand, license), what each does and when to run it.
 ---
 
 # The app's command line
@@ -120,6 +120,7 @@ default; `--app` is the app's folder, `.` by default.
 | `kit list` | every part, what it needs, which are installed |
 | `kit diff [--patch]` | per file: unchanged, you edited, the kit changed, both |
 | `kit update [part…]` | takes the kit's changes, keeps your edits (`--force` takes the kit's) |
+| `kit upgrading` | what changed for the parts in `kit.json` since its version (or `--from`) and what to do: their notes from the kit's `docs/upgrading.md`; `doctor` and `update` print it when the app is behind |
 | `kit doctor` | missing, edited and behind files, `cliGaps`, notes (exits 1 with a fix per line) |
 | `kit adopt` | writes `kit.json` for parts the shadcn CLI copied |
 | `kit feature <plural-name>` | a feature folder; `--switch` lists it in the catalog so the owner can switch it off |

@@ -44,7 +44,7 @@ expect(cliGaps({ tools, resources, jobs })).toEqual([])
 | `toolsRun(tools, app, samples, { headers })` | | no headers | sample arguments per tool, and the credentials every call sends |
 | `cliGaps({ tools, resources, jobs }, { singular })` | string[] | none | nouns that end in s but are singular |
 | `cliSnapshot({ app, version, tools, resources, jobs })` | | `''` for `app` and `version` | the snapshot's app name and version |
-| `approveSignIn(app, query, { headers, decision })` | `'allow'` \| `'deny'` | `'allow'`, no headers | the owner's credentials (the app's `owner` reads them), and the answer |
+| `approveSignIn(app, query, { headers, decision, form })` | `'allow'` \| `'deny'`; `{ action, fields? }` | `'allow'`, no headers, the kit's page | the owner's credentials (the app's `owner` reads them), and the answer on the kit's page; `form`: the app's own page instead (`approve`), the one form that posts to `action` (a path), sent with its hidden inputs and `fields` |
 
 ## Exports
 
@@ -62,7 +62,7 @@ expect(cliGaps({ tools, resources, jobs })).toEqual([])
 | `cliSnapshot({ app, version, tools, resources, jobs })` | every command as the CLI package carries it (`sdk/cli/commands.json`): `scripts/openapi.ts` writes it as `JSON.stringify(snapshot, null, 2) + '\n'`, and `sdk/test/cli.test.ts` compares the file byte for byte, so a changed tool fails until `pnpm sdk:types` runs |
 | `flagsOf(schema)` | an input schema's properties as the CLI's flags (`{ name, key, type, description, required, multiple, enum?, default? }`), positional ones included |
 | `softAuthenticator()` | a software passkey: `register(options, origin)` and `login(options, origin)` answer the WebAuthn ceremonies the way a phone would, so claim → register → verify → login → verify runs in CI (the people and setup parts) |
-| `approveSignIn(app, query, { headers, decision })` | approves an OAuth sign-in on the kit's consent page the way a browser does: it opens `/oauth/authorize`, keeps the ticket cookie the page sets, and posts the answer same-origin with it, returning the 302 to the client |
+| `approveSignIn(app, query, { headers, decision, form })` | approves an OAuth sign-in the way a browser does: it opens `/oauth/authorize`, keeps the ticket cookie the page sets, and posts a form on it same-origin with that cookie: the kit's consent form with `decision`, or with `form` the app's own (`{ action: '/sharing/join', fields: { code: 'BDKM-QXTW' } }`). It returns the answer: the 302 to the client, or the app's page |
 
 | File | What |
 |---|---|
@@ -80,8 +80,13 @@ sequenceDiagram
   participant App as the app (in-process)
   Test->>App: GET /oauth/authorize?query, with the owner's headers
   App-->>Test: the consent page, and the ticket cookie
-  Test->>App: POST /oauth/authorize, the ticket, the cookie, Sec-Fetch-Site: same-origin, decision
-  App-->>Test: 302 to the client: code and state (or access_denied)
+  alt the kit's page
+    Test->>App: POST /oauth/authorize, the ticket, the cookie, Sec-Fetch-Site: same-origin, decision
+  else form, the app's own page
+    Test->>Test: the one form posting to form.action (none or two throw)
+    Test->>App: POST form.action, its hidden inputs and fields, the cookie, Sec-Fetch-Site: same-origin
+  end
+  App-->>Test: 302 to the client: code and state (or access_denied), or the app's page
 ```
 
 ## Rules
@@ -93,7 +98,8 @@ sequenceDiagram
   through their `/s/:space/mcp` mount instead.
 - Give the app an injectable embedder and data paths (`createApp(env, { embedder })`) so tests need no network or reload.
 - A hand-made approval POST without the ticket cookie and a same-origin header is refused (the oauth README): use
-  `approveSignIn`.
+  `approveSignIn`, with `form` for the app's own page. Give each form on that page its own `action`, so a test can
+  name one.
 - Standard: `docs/STANDARD.md` §13
 
 ## Failure modes
@@ -104,6 +110,9 @@ sequenceDiagram
 | `toolsRun`: "no sample arguments", or "sample arguments for a tool that doesn't exist" | the samples miss a tool, or name one the list doesn't have |
 | `toolsRun`: "its summary threw on the 202 answer (still working …)" | the route answered a run still working: give it a finished run, or summarize a 202 |
 | `approveSignIn` throws "/oauth/authorize answered N with no consent form" | no consent page was shown: the headers don't make the caller the app's `owner`, or the query fails the kit's checks (client, redirect, PKCE, resource) |
+| `approveSignIn` throws "no form posts to /join (the page's forms: …)" | with `form`, the page has no `<form method="post">` whose `action` is exactly `form.action`: the app showed another page (an error, the kit's), or the action is spelled otherwise |
+| `approveSignIn` throws "2 forms post to /join, so which one is ambiguous" | with `form`, more than one form posts there: give each its own action |
+| `approveSignIn` throws "form.action must be a path on the app" | `form.action` is a URL or `//host`: a browser's same-origin POST goes to a path |
 
 ## Limits
 
@@ -116,7 +125,7 @@ sequenceDiagram
 
 - `test/kit.test.ts` runs every check on a sample API; `test/cli.test.ts` runs `cliGaps` and `cliSnapshot` on the
   kit's own parts; `test/people.test.ts` signs in with `softAuthenticator`; `test/oauth.test.ts` approves with
-  `approveSignIn`.
+  `approveSignIn`, on the kit's page and an app's own.
 
 ## Upgrading
 

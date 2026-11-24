@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { serve } from '@hono/node-server'
 import { createRoute, z } from '@hono/zod-openapi'
 import { describe, expect, it } from 'vitest'
-import { createAgentApi, HAL_JSON, mintApiKey, parseApiKeys, problemResponses, serveAiCatalog, serveGuide } from '../src/index.js'
+import { createAgentApi, HAL_JSON, memoryGuardStore, mintApiKey, parseApiKeys, problemResponses, serveAiCatalog, serveGuide, showOnce, type GuardStore, type StoredAnswer } from '../src/index.js'
 import { inProcess, mcpResource, mcpServerFactory, mcpTool, mountedMcp, mountMcp, routeOf, type CallApi } from '../src/mcp/index.js'
 import { cliSnapshot, toolRoutes } from '../src/testing/index.js'
 
@@ -195,6 +195,40 @@ describe('a mount path’s parameters', () => {
       expect(after, path).toBe(before)
     }
     expect(await (await plain.request('/llms.txt', { headers: auth })).text()).toContain('`count_shelves`')
+  })
+
+  it('a space’s MCP never keeps a shown-once answer, and its route gets the per-call Idempotency-Key', async () => {
+    const store = memoryGuardStore()
+    // Every answer the guard keeps, as it handed it to the store
+    const kept: StoredAnswer[] = []
+    const recording: GuardStore = { ...store, save: (id, answer, expiresAt) => (kept.push(answer), store.save(id, answer, expiresAt)) }
+    const app = createAgentApi({ title: 'Shelves', version: '1.0.0', description: 'Shelves of recipes.', tags: [], auth: { realm: 'shelves', keys: parseApiKeys(`tester:${hash}`) }, guards: { store: recording } })
+    const heard: string[] = []
+    app.post('/api/shelves/:shelf/keys', (c) => {
+      heard.push(`${c.req.param('shelf')} ${c.req.header('idempotency-key')}`)
+      showOnce(c, `Made a key for ${c.req.param('shelf')}; it is never shown again.`)
+      return c.json({ key: `sk_shelf_${heard.length}` }, 201)
+    })
+    const makeKey = mcpTool({
+      name: 'make_key', title: 'Make a key', description: 'Makes a key for this space’s shelf.', input: z.object({}),
+      call: (_, at) => ({ method: 'POST', path: `/api/shelves/${encodeURIComponent(at?.params.space ?? '')}/keys`, body: {} }),
+      summarize: (json) => json.key,
+    })
+    mountMcp(app, { path: '/s/:space/mcp', factory: mcpServerFactory({ info: { name: 'shelves', version: '1.0.0' }, instructions: 'One shelf.', tools: [makeKey], callApi: inProcess(app) }), allowedHostnames: ['localhost'] })
+    const call = async () =>
+      (await app.request('/s/soups/mcp', {
+        method: 'POST',
+        headers: { ...auth, 'idempotency-key': 'k1', 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': 'make_key' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'make_key', arguments: {}, _meta: meta } }),
+      })).text()
+    expect(await call()).toContain('sk_shelf_1')
+    const again = await call()
+    expect(again).not.toContain('sk_shelf_1')
+    expect(again).toContain('Made a key for soups')
+    // The route ran once, for its space, under the caller's key with the call's JSON-RPC id
+    expect(heard).toEqual(['soups k1:7'])
+    // Only the route's marker is kept: the space's MCP answer, which showed the key, never is
+    expect(kept).toEqual([{ version: 2, bodyHash: expect.any(String), shownOnce: expect.stringContaining('Made a key for soups') }])
   })
 
   it('serves each space’s Server Card naming that space’s endpoint', async () => {

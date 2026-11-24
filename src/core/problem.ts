@@ -24,6 +24,7 @@ export const PROBLEMS = {
   not_found: { status: 404, title: 'Not found', description: 'Nothing at this path or with this id in the current snapshot. Find ids through search or a list, then follow `_links`.' },
   method_not_allowed: { status: 405, title: 'Method not allowed', description: 'This path exists but not with this method.' },
   conflict: { status: 409, title: 'Conflict', description: 'The change clashes with the current state (a name already taken, a stale If-Match).' },
+  shown_once: { status: 409, title: 'Shown once', description: 'A retry with the Idempotency-Key of a request that was done and answered a secret once (a new key, an enrolment, a session). The secret is never kept, so it is not shown again: `detail` says what was made and what to do if the first answer was lost. Send a new key only to make another.' },
   gone: { status: 410, title: 'Gone', description: 'This existed in an earlier snapshot and was removed.' },
   payload_too_large: { status: 413, title: 'Payload too large', description: 'The body is over the limit given in `detail`.' },
   unsupported_media_type: { status: 415, title: 'Unsupported media type', description: 'Send the content type the operation lists.' },

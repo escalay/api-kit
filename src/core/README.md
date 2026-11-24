@@ -87,8 +87,8 @@ app.use('/api/v1/products/:id/gaps', rateLimit({ policy: 'paid', limit: 120, win
 
 ### The caller's address
 
-A caller with no credentials is counted by its address: by `rateLimit`, by `Idempotency-Key` answers, and by the
-setup claim. Name the one place it comes from with `address`; every guard and part reads it from the request
+A caller with no credentials is counted by its address: by `rateLimit`, `Idempotency-Key` answers and the setup
+claim. Name the one place it comes from with `address`; every guard and part reads it from the request
 (`addressOf(c)`), and a `rateLimit({ address })` of its own wins.
 
 | In front of the app | `address` |
@@ -133,19 +133,19 @@ connect: MCP clients through OAuth (the 401 names the resource metadata), others
 
 | File | What |
 |---|---|
-| `api.ts` | `createAgentApi`: request ids, secure headers, CORS, auth, strict query parameters (unknown ones answer 400), `Idempotency-Key` replay, `/openapi.json`, `/docs`, `/problems/{code}`, `/api/health`, the discovery it can serve alone |
+| `api.ts` | `createAgentApi`: request ids, secure headers, CORS, auth, strict query parameters (unknown ones answer 400), `Idempotency-Key` replay, `/openapi.json`, `/docs`, `/problems/{code}`, `/api/health`, the discovery it can serve alone; `SECURITY_SCHEME` (the OpenAPI bearer-key scheme every route's `security` names), `hoistParameterDocs` (each parameter's description and example copied up to it, where OpenAPI readers look first) |
 | `auth.ts` | who is calling (below) |
-| `guards.ts` | idempotency and rate limits (below) |
-| `problem.ts` | RFC 9457: `ProblemError` (throw it), `PROBLEMS`, `problemResponses(400, 404…)` for a route's documented errors, `problemResponse`, `validationHook` (OpenAPIHono's `defaultHook`: a failed zod check as a 400 naming every bad field) |
-| `hal.ts` | `linksOf(origin, { self, next… })`, `originOf(c)` (the public origin behind proxies), `pathWith(path, query)`, `LinksSchema`, `HAL_JSON` |
+| `guards.ts` | idempotency and `showOnce`, rate limits (below) |
+| `problem.ts` | RFC 9457: `ProblemError` (throw it), `PROBLEMS`, `problemResponses(400, 404…)` for a route's documented errors, `problemResponse`; what `createAgentApi` wires: `validationHook` (OpenAPIHono's `defaultHook`: a failed zod check as a 400 naming every bad field), `errorHandler`, `notFoundHandler` (a wrong path says how to find the right one), `problemBody`, `ProblemSchema`, `PROBLEM_JSON`, `UPSTREAM_RETRY_AFTER` (the seconds an `upstream` problem asks a client to wait) |
+| `hal.ts` | `linksOf(origin, { self, next… })`, `originOf(c)` (the public origin behind proxies), `pathWith(path, query)`, `LinksSchema` (and one link's, `LinkSchema`), `HAL_JSON` |
 | `cache.ts` | `snapshotEtag` (on Workers pass `boot: env.CF_VERSION_METADATA.id`), `CACHE` presets, `cacheControl` |
-| `discovery.ts` | api-catalog, Link headers, robots.txt with Content Signals, Markdown for agents, skills index, Server Card, `serveAiCatalog`, `publicOriginOf(app, c)` (the origin a publicly cached document names: the OAuth server's `publicOrigin` when set, else the request's) |
-| `hooks.ts` | `tellApp(hook, call)`: tells one of the app's hooks (`onKeyChange`, `onSwitch`, `onTeamChange`, …) after the change it reports is made; a hook that throws is logged with `console.error`, never answered, so the request still succeeds |
+| `discovery.ts` | api-catalog, Link headers, robots.txt with Content Signals, Markdown for agents, skills index, Server Card, `serveAiCatalog`, `publicOriginOf(app, c)` (the origin a publicly cached document names: the OAuth server's `publicOrigin` when set, else the request's). The documents and their helpers, for an app that serves one itself: `apiCatalog`, `LINK_HEADER`, `WELL_KNOWN`, `robotsTxt`, `sitemapXml`, `poppyJson`, `skillsIndex`, `frontmatterOf`, `tarGz` (the same files always give the same bytes), `serverCard`, `reverseDnsName`, `aiCatalog`, `recordMounted` and `mountedOf` (what the guide and MCP serve, so the AI Catalog lists exactly that), `sendPublic` (open CORS, an hour's caching, a strong ETag), `wantsMarkdown`, `markdownTokens`, `sha256`, `MODERN_PROTOCOL_VERSION`, and the media types and schemas: `OPENAPI_TYPE`, `MARKDOWN_TYPE`, `API_CATALOG_TYPE`, `SKILLS_INDEX_SCHEMA`, `SERVER_CARD_SCHEMA`, `SERVER_CARD_TYPE`, `AI_CATALOG_TYPE` |
+| `hooks.ts` | `tellApp(hook, call)`: tells an app's hook (`onKeyChange`, `onSwitch`, `onTeamChange`, …) once its change is made; one that throws is logged with `console.error`, never answered, so the request still succeeds |
 | `kv.ts` | `KeyValueStore` (values with expiry) and `memoryStore`, what OAuth and A2A keep |
 | `ids.ts` | `newId(prefix)`: `<prefix>_<time><random>` ids that sort by when they were made; `randomLetters` |
-| `wait.ts` | `waitFor(look, timeoutSeconds)`: long polling for a route that waits for something to happen (keep it under ~25 s) |
-| `cli.ts` | the command line's names: `cliOf(tool)` and `resourceCli` (a tool's `<noun> <verb>`, positional arguments, examples), `fallbackCliName` (the route rule), `pathKeysOf` (the input keys a call puts in its path: the positional ones), `routeOf`, `hintsOf` (read-only only for a `GET`), `CallAt` (a call's mount parameters) and `PLACEHOLDER_AT` (each one as `{name}`, for the route readers), `CLI_BUILT_INS` and `CLI_AUTH_VERBS`, and the `_meta` keys `CLI_META`, `PROBLEM_META`, `PENDING_META`. In core because `mcp` publishes these names and `testing` audits them, so `testing` needs no `mcp` |
-| `jobs.ts` | `Jobs<Job>`: work done later at a delay. `queueJobs(env.JOBS)` on Workers (a Cloudflare Queue, delay capped at 12 h), `memoryJobs()` in tests. One message per attempt: a job that must run again sends itself again |
+| `wait.ts` | `waitFor(look, timeoutSeconds)`: long polling for a route that waits for something to happen (keep it under ~25 s); `POLL_MS`, how often it looks again |
+| `cli.ts` | the command line's names: `cliOf(tool)` and `resourceCli` (a tool's `<noun> <verb>`, positional arguments, examples), `fallbackCliName` (the route rule), `pathKeysOf` (the input keys a call puts in its path: the positional ones), `routeOf`, `hintsOf` (read-only only for a `GET`), `CallAt` (a call's mount parameters; `PLACEHOLDER_AT`, each as `{name}`, for the route readers), `CLI_BUILT_INS` and `CLI_AUTH_VERBS`, and the `_meta` keys `CLI_META`, `PROBLEM_META`, `PENDING_META`, `TOOLS_HASH_META`; the pieces of those names: `toolCli` (a tool's command and positional keys), `templateVariables` (an RFC 6570 template's path and query variables), `singularOf`, `CLI_GLOBAL_FLAGS` (the flags every command takes) and `CLI_RESOURCE_FLAGS` (the `--out` a resource's command adds). In core: `mcp` publishes these names and `testing` audits them without `mcp` |
+| `jobs.ts` | `Jobs<Job>`: work done later at a delay. `queueJobs(env.JOBS)` on Workers (a Cloudflare Queue, delay capped at 12 h), `memoryJobs()` in tests. One message per attempt: a job that must run again sends itself again. `MAX_DELAY_SECONDS`: the 12 h a Queue allows |
 
 ### Auth (`auth.ts`)
 
@@ -160,12 +160,11 @@ connect: MCP clients through OAuth (the 401 names the resource metadata), others
 
 ### Guards (`guards.ts`)
 
-- `idempotency` (wired by `createAgentApi`): `Idempotency-Key` on POST and PATCH. A retry with the same key and body
-  gets the stored answer (`Idempotent-Replayed: true`); the same key with another body is a 422; one still in flight a
-  409. Kept 24 hours, and only what `keep` passes: by default a success (below 400), so a refusal or a server error
-  frees the key and a retry after the cause is fixed runs again. It never keeps `/oauth/*` or `/agent/identity*`, whose
-  answers hold tokens; an app's own open routes that answer a secret (a redirect holding a code) belong in
-  `guards: { skip: ['/join/*'] }`, added to those.
+- `idempotency` (wired by `createAgentApi`): `Idempotency-Key` on POST and PATCH (the flow below). Kept 24 hours,
+  only what `keep` passes (a success: after a refusal or a server error a retry runs again). Never kept: `/oauth/*`,
+  `/agent/identity*`, a relay (`neverKeep`), and `guards.skip` (an open route answering a secret: `['/join/*']`).
+- `showOnce(c, replay)`: an answer showing a secret once keeps only `replay` (a retry's 409 `shown_once`) and
+  carries `SHOWN_ONCE_HEADER`. Keys, setup, `startSession` use it.
 - `rateLimit({ policy, limit, windowSeconds, store?, address?, key? })` for anything that spends money: the draft
   `RateLimit-Policy` / `RateLimit` headers, and a 429 with `Retry-After` past the limit.
 - Both keep state in a `GuardStore`: `memoryGuardStore({ maxEntries })` (the default, one Node process) or
@@ -211,9 +210,11 @@ stateDiagram-v2
   Running --> [*]: release (a refusal, a server error or a throw frees the key)
   Running --> Running: claim from a retry (409, still running)
   Running --> [*]: lockMs passes (a request that died, its key free again)
+  Running --> ShownOnce: save after showOnce (only its replay text)
   Answered --> Answered: claim with the same body (the stored answer, Idempotent-Replayed)
   Answered --> Answered: claim with another body (422)
   Answered --> [*]: 24 hours pass
+  ShownOnce --> ShownOnce: claim (409 shown_once, or 422 with another body)
 ```
 
 ## Rules
@@ -239,6 +240,7 @@ stateDiagram-v2
 | 400 naming the unknown query parameters | a parameter the operation doesn't declare |
 | 400 "Idempotency-Key is at most 255 characters" | a longer key |
 | 409 "still running" | the same Idempotency-Key while its first request is answering |
+| 409 `shown_once`, saying what was made | a retry of an answer that showed a secret once (`showOnce`) |
 | 422 "used with a different body" | the same Idempotency-Key with another body |
 | 429 with `RateLimit` and `Retry-After` | past a `rateLimit`; answers already computed are cached, so repeating one is not needed |
 
@@ -255,7 +257,7 @@ stateDiagram-v2
 - `lintOpenApi` (testing part) on `/openapi.json`; `test/kit.test.ts` runs a sample API through every rule, discovery
   and the guide.
 - `test/guards.test.ts` and `test/guard-store-contract.ts`: the contract above on memory, node:sqlite and D1
-  (`test/workers/guards.test.ts`).
+  (`test/workers/guards.test.ts`), with `showOnce`.
 - `test/core-parts.test.ts`: ids, waits, jobs.
 
 ## Upgrading
