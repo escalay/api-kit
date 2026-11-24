@@ -208,7 +208,7 @@ The idempotency contract a `GuardStore` keeps for one caller, method, path and k
 stateDiagram-v2
   [*] --> Running: claim (no answer, no live lock)
   Running --> Answered: save (the route answered what keep passes)
-  Running --> [*]: release (a refusal, a server error or a throw: the key is free)
+  Running --> [*]: release (a refusal, a server error or a throw frees the key)
   Running --> Running: claim from a retry (409, still running)
   Running --> [*]: lockMs passes (a request that died, its key free again)
   Answered --> Answered: claim with the same body (the stored answer, Idempotent-Replayed)

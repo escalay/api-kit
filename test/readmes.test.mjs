@@ -59,6 +59,9 @@ describe.each(folders)('src/%s/README.md has the one README shape', (folder) => 
     for (const kind of diagrams) expect(kind).toMatch(/^(sequenceDiagram|stateDiagram-v2|flowchart (LR|TD))$/)
     // A semicolon ends a Mermaid statement, so one inside a label cuts the diagram
     for (const [, body] of text.matchAll(/```mermaid\n([\s\S]*?)```/g)) expect(body).not.toContain(';')
+    // A state diagram's label runs from the first colon: a second one is a parse error
+    for (const [, body] of text.matchAll(/```mermaid\nstateDiagram-v2\n([\s\S]*?)```/g))
+      for (const line of body.split('\n').filter((one) => one.includes('-->'))) expect(line.split(':').length, line).toBeLessThanOrEqual(2)
   })
 
   it('names the STANDARD sections the registry gives its parts', () => {
