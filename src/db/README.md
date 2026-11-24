@@ -1,22 +1,50 @@
 # db
 
-The app's database through Drizzle: one `openDb` per app, and every feature's `repo.ts` queries through it. The same
-queries run on a local SQLite file today and on Turso or D1 later; only how the database is opened changes.
+The app's database through Drizzle: one `openDb` per app, and every feature's `repo.ts` queries through it. The same queries run on a local SQLite file today and on Turso or D1 later; only how the database is opened changes.
 
-Needs: `drizzle-orm` (0.45). On Node ≥ 22.16, `node:sqlite` (with `setReturnArrays`); on Cloudflare Workers, a D1
-binding. No native module. The module imports on both: `node:sqlite` loads only when a path asks for it.
+## Use it when
+
+- The app keeps state of its own: features, OAuth rows, boards, keys, the team, switches.
+- The guards (idempotency answers, rate limits) must be shared by every instance: `dbGuardStore(db)`, required on
+  Workers.
+
+## Don't use it when
+
+- The data is a read-only catalog (a built store, JSON in memory): it stays behind its own store module, not `db`.
+- The rows are OAuth state on Workers KV: KV is eventually consistent (the oauth README); keep them in SQLite or D1.
+
+## Add it
+
+```bash
+npx @escalay/kit add db
+```
+
+Needs `core` and `drizzle-orm` (0.45). On Node ≥ 22.16, `node:sqlite` (with `setReturnArrays`); on Cloudflare Workers, a
+D1 binding. No native module. The module imports on both: `node:sqlite` loads only when a path asks for it.
+
+## Wire it
 
 ```ts
-import { migrate, openDb, testDb } from './kit/index.js'
+import { dbGuardStore, migrate, openDb, testDb } from './kit/index.js'
 
 const db = await openDb(`file:${join(env.STATE_DIR, 'state.sqlite')}`)   // a path, ':memory:', or an open DatabaseSync
 await migrate(db, 'notes', NOTES_MIGRATIONS)                             // each feature brings its own steps
 const rows = await db.select().from(notes).where(eq(notes.id, id))       // in repo.ts only
+const app = createAgentApi({ …, guards: { store: await dbGuardStore(db) } })
 
 const db = await openDb(drizzle(createClient({ url, authToken })))       // Turso: any async Drizzle SQLite database
 const db = await openDb(drizzle(env.DB))                                 // Cloudflare D1 (drizzle-orm/d1), in worker.ts
 const db = await testDb()                                               // tests: empty, in memory
 ```
+
+## Options
+
+| Option | Type | Default | What it does |
+|---|---|---|---|
+| `openDb(source)` | path, `file:` URL, `':memory:'`, `DatabaseSync`, or a Drizzle database | required | a path or `DatabaseSync` opens node:sqlite through Drizzle's `sqlite-proxy` driver; a Drizzle database is used as it is |
+| `migrate(db, feature, steps)` | `Db`, string, string[] | required | the feature's name in `kit_migrations`, and its SQL steps in order |
+
+## Exports
 
 | Export | What |
 |---|---|
@@ -25,6 +53,26 @@ const db = await testDb()                                               // tests
 | `dbGuardStore(db)` | the guards' state (`core/guards.ts`) in table `kit_guards`, each check one atomic statement: rate windows and Idempotency-Key answers shared by every instance; expired rows go as it runs, at most once a minute per store. On Workers pass it to `createAgentApi({ guards: { store } })` and every `rateLimit` |
 | `testDb()` | Node: an empty in-memory database; workerd: the test Worker's `DB` binding (storage is kept apart per test file, not per test) |
 | `Db` | the type every repo takes |
+
+| File | What |
+|---|---|
+| `index.ts` | `openDb`, `migrate`, `testDb`, `Db` |
+| `guards.ts` | `dbGuardStore`, its `kit_guards` table and `GUARD_MIGRATIONS` |
+
+## Flows
+
+```mermaid
+sequenceDiagram
+  participant App
+  participant migrate
+  participant DB as SQLite / D1
+  App->>migrate: migrate(db, 'notes', steps)
+  migrate->>DB: create table if not exists kit_migrations
+  migrate->>DB: select step from kit_migrations where feature = 'notes'
+  loop each step not yet applied, in order
+    migrate->>DB: its statements and its record, in one transaction (a batch on D1)
+  end
+```
 
 ## Rules
 
@@ -37,3 +85,30 @@ const db = await testDb()                                               // tests
   node:sqlite and objects on D1: a repo uses `db.select()`, or names its columns and reads both shapes.
 - Read-only catalogs (a built store, JSON in memory) don't go through `db`; they stay behind their own store module.
 - Decision record: `docs/decisions/0001-features-drizzle-scaffold.md`.
+- Standard: `docs/STANDARD.md` §1
+
+## Failure modes
+
+| The caller sees | Why |
+|---|---|
+| `openDb` throws "… is not a file; open it with its Drizzle driver and pass the database in" | a URL such as `libsql://` was passed: open it with its own Drizzle driver and pass the database |
+| `testDb` throws "the Workers test project has no D1 binding named DB" | inside workerd with no `DB` binding in the test project's wrangler config |
+| `migrate` throws, and the step is not recorded | a statement in the step failed; its transaction (or D1 batch) rolled back, so the next run tries it again |
+| a repo reads `undefined` from a raw query on D1 | it read a raw `db.all(sql…)` row as an array (node:sqlite's shape); D1 answers objects |
+
+## Limits
+
+- One SQLite file per Node process is the local shape; several instances share state only on a shared database (Turso,
+  D1).
+- `dbGuardStore` prunes expired rows at most once a minute per store.
+- Node and Workers: `node:sqlite` on Node ≥ 22.16, D1 on Workers.
+
+## Tests
+
+- `testDb()` in the app's tests: an empty in-memory database on Node, the `DB` binding inside workerd.
+- `test/db.test.ts` (an older state file adopted, every source opened), `test/workers/smoke.test.ts` (D1 migrations and
+  `testDb`), `test/guard-store-contract.ts` (the guard stores, memory and database).
+
+## Upgrading
+
+What changed between kit versions, and what to do: [docs/upgrading.md#db](https://github.com/escalay/api-kit/blob/main/docs/upgrading.md#db).
