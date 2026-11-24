@@ -324,7 +324,7 @@ export const createOAuth = (config: OAuthConfig) => {
    * answer held, and none can be made without a real token.
    */
   const successorOf = (refresh: string, family: string, generation: number) => refreshTokenOf(family, generation, macOf(`successor\0${refresh}`))
-  /** The family and generation of a refresh token this server made; null for one from before generations, or a made-up one. */
+  /** The family and generation a refresh token carries under a valid MAC; null for one from before generations, or a made-up one. */
   const generationOf = (refresh: string) => {
     const [, family, generation, nonce, mac] = /^rt_([\w-]+)\.(\d+)\.([\w-]+)\.([\w-]+)$/.exec(refresh) ?? []
     if (!family || !generation || !nonce || !mac || !same(mac, macOf(`${family}.${generation}.${nonce}`))) return null
@@ -390,8 +390,8 @@ export const createOAuth = (config: OAuthConfig) => {
 
   /**
    * What a retry of a used refresh token gets: the successor the first answer gave, while the grace lasts and that
-   * successor is unused; null when the token came back as a replay. `nextGeneration` is the generation a token from
-   * before generations would get now, for a first answer still writing the one it gave.
+   * successor is unused; null when the token came back as a replay. `nextGeneration` is the token's own next one, or,
+   * for a token from before generations, the one it would get now: what a first answer still writing it gave.
    */
   const retriedSuccessor = async (refresh: string, family: string, nextGeneration: number) => {
     // Read again: the first answer writes its successor's generation on this row after marking it used
@@ -1293,8 +1293,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     })
 
     /**
-     * The sign-in a refresh token belongs to: by its row, or, for an earlier token this server made and keeps no row
-     * for, by its MAC and its family's row. null for anything else.
+     * The sign-in a refresh token belongs to: by its row, or, for an earlier token with a generation that keeps no row,
+     * by its MAC and its family's row. null for anything else.
      */
     const signInOf = async (refresh: string, row: Record<string, unknown> | null) => {
       if (row) return { family: String(row.family ?? sha(refresh)), client: String(row.client) }
