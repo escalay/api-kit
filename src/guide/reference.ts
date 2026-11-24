@@ -8,7 +8,7 @@
  * endpointsMarkdown(doc)             // ### Search … - `GET /api/v1/search/recipes?q=…` — Recipes for a description. …
  * toolRoute(tool, doc)               // { method: 'GET', path: '/api/v1/search/recipes', operationId: 'searchRecipes' }
  */
-import { cliOf, resourceCli, toolCli } from '../core/cli.js'
+import { cliOf, PLACEHOLDER_AT, resourceCli, toolCli } from '../core/cli.js'
 import type { ResourceLike, ToolLike } from '../core/discovery.js'
 
 type Schema = { type?: string | string[]; enum?: unknown[]; default?: unknown; example?: unknown; description?: string; items?: Schema; minimum?: number; maximum?: number; anyOf?: Schema[]; $ref?: string; properties?: Record<string, Schema>; additionalProperties?: unknown }
@@ -119,12 +119,11 @@ export const endpointsByTag = (doc: OpenApiDoc) =>
 
 // ---- MCP tools ----
 
-/** Runs a tool's `call` with placeholder arguments (`{name}`) to see the route it hits, then finds that operation. */
+/** Runs a tool's `call` with placeholder arguments and mount parameters (`{name}`) to see the route it hits, then finds that operation. */
 export const toolRoute = (tool: ToolLike, doc: OpenApiDoc) => {
-  const placeholders = new Proxy({}, { get: (_, key) => (typeof key === 'string' ? `{${key}}` : undefined) })
   let call: { method?: string; path: string }
   try {
-    call = tool.call(placeholders as never)
+    call = tool.call(PLACEHOLDER_AT.params as never, PLACEHOLDER_AT)
   } catch {
     return null
   }

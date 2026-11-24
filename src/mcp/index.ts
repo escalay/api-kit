@@ -19,7 +19,7 @@ import type { SkillCatalog } from '@modelcontextprotocol/server/ext/skills'
 import { createHash } from 'node:crypto'
 import { z } from '@hono/zod-openapi'
 import type { Context, Hono } from 'hono'
-import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, TOOLS_HASH_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
+import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, TOOLS_HASH_META, resourceCli, routeOf, templateVariables, type CallAt, type CliSpec } from '../core/cli.js'
 import { attachSkills, instructionsWithSkills } from './skills.js'
 import { MODERN_PROTOCOL_VERSION, mountedOf, publicOriginOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN, type AgentBrand, type ServerIcon } from '../core/discovery.js'
 import { neverKeep } from '../core/guards.js'
@@ -42,7 +42,8 @@ export type McpTool<Input extends z.ZodObject = z.ZodObject> = {
   /** The route's 200 schema, when its shape is fixed: the JSON (sent as `structuredContent`) must match it. */
   output?: z.ZodTypeAny
   annotations?: ToolAnnotations
-  call: (args: z.infer<Input>) => ApiCall
+  /** `at.params`: the mount path's parameters (`/s/:space/mcp` → `{ space }`), decoded; encode each one put in a path. */
+  call: (args: z.infer<Input>, at?: CallAt) => ApiCall
   /** The text an agent reads first: a few lines per result with ids and the links to follow. */
   summarize: (json: any, args: z.infer<Input>) => string
   /** Images or files worth attaching as `resource_link` blocks (at most a handful). */
@@ -71,7 +72,7 @@ export type McpResource = {
   /** RFC 6570, e.g. `cookbook://recipes/{id}`. */
   uriTemplate: string
   /** The calls whose answers make up the resource, in order; an `optional` one (an image) is left out when it fails. */
-  read: (variables: Record<string, string>) => (ApiCall & { optional?: boolean })[]
+  read: (variables: Record<string, string>, at?: CallAt) => (ApiCall & { optional?: boolean })[]
   /** Its command, noun then verb (`'mail headers'`); the template's path variables are its positional arguments. */
   cli?: CliSpec
 }
@@ -215,6 +216,9 @@ const resourceMeta = (resource: McpResource) => {
   return { name, positional, examples }
 }
 
+/** The mount path's parameters `mountMcp` put in `authInfo`; none over stdio. */
+const callAtOf = (auth: AuthInfo | undefined): CallAt => ({ params: (auth?.extra?.params ?? {}) as Record<string, string> })
+
 const hashes = new WeakMap<McpTool[], string>()
 /**
  * A short hash of what `tools/list` and `resources/templates/list` say: each tool's name, words, schemas, hints and
@@ -266,7 +270,7 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
       tool.name,
       { title: tool.title, description: tool.description, inputSchema: tool.input, ...(tool.output ? { outputSchema: tool.output } : {}), annotations: { title: tool.title, ...hintsOf(tool) }, _meta: { ...(route ? { [ROUTE_META]: route } : {}), [CLI_META]: { name: cli.name, positional: cli.positional, examples: cli.examples }, ...listed } },
       async (args: Record<string, unknown>, ctx): Promise<CallToolResult> => {
-        const { response, pending, location } = await callWaiting(callApi, tool.call(args as never), perCallAuth(ctx.http?.authInfo, ctx.mcpReq.id), waitMs)
+        const { response, pending, location } = await callWaiting(callApi, tool.call(args as never, callAtOf(ctx.http?.authInfo)), perCallAuth(ctx.http?.authInfo, ctx.mcpReq.id), waitMs)
         const json = await response.json().catch(() => null)
         if (pending) {
           const text = `Still working: run ${pending}. GET ${location} until its status is done (the run is also in _meta["${PENDING_META}"]), then call ${tool.name} again with the same arguments (it answers at once when done).`
@@ -296,7 +300,7 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
         const auth = ctx.http?.authInfo
         const values = Object.fromEntries(Object.entries(variables).map(([key, value]) => [key, Array.isArray(value) ? value[0]! : String(value)]))
         const parts = await Promise.all(
-          resource.read(values).map(async ({ optional, ...call }) => {
+          resource.read(values, callAtOf(auth)).map(async ({ optional, ...call }) => {
             const response = await callApi(call, auth)
             if (!response.ok && optional) return null
             if (!response.ok) throw new Error(problemText(await response.json().catch(() => null), response.status))
@@ -365,19 +369,34 @@ const modernInitialize = async (c: Context, factory: AgentMcpFactory, brand: Age
   return c.json({ jsonrpc: '2.0', id: message.id, result })
 }
 
+const SERVER_CARD_SUFFIX = '/server-card'
+
 /**
  * Serves MCP at `path` (POST; GET and DELETE answer 405 as the spec asks). Authentication has already run (the app's
  * `authenticate` guards this path like any other); the caller's credentials ride along in `authInfo` so tools reuse
- * them. Browsers' Origin is checked against `allowedHostnames`.
+ * them. Browsers' Origin is checked against `allowedHostnames`. A path with parameters (`/s/:space/mcp`) serves one
+ * MCP per value: each tool's call gets them as `at.params`, and the guide, catalogs and the well-known card keep
+ * describing the mount without parameters.
+ *
+ * @example
+ * mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools, callApi: inProcess(app) }), allowedHostnames })
+ * mountMcp(app, { path: '/s/:space/mcp', factory: mcpServerFactory({ info, instructions, tools: shelfTools, callApi: inProcess(app) }), allowedHostnames })
  */
 export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, allowedHostnames }: { path?: string; factory: AgentMcpFactory; allowedHostnames: string[] }) => {
   // The app's brand (`createAgentApi({ brand })`) unless the factory was given its own
   const brandOf = () => factory.brand ?? mountedOf(app).brand
   const handler = createMcpHandler((ctx) => factory({ ...ctx, brand: brandOf() } as McpRequestContext), { responseMode: 'auto' })
   // The Server Card (SEP-2127): at its reserved place beside the endpoint, and where domain scanners look
-  const card = (origin: string) => serverCard(origin, path, serverInfoOf(factory.info, brandOf(), origin), [MODERN_PROTOCOL_VERSION, ...SUPPORTED_PROTOCOL_VERSIONS])
-  recordMounted(app, { mcp: { path, card, tools: factory.tools, resources: factory.resources } })
-  for (const at of [`${path}/server-card`, WELL_KNOWN.serverCard]) app.get(at, (c: Context) => sendPublic(c, JSON.stringify(card(publicOriginOf(app, c)), null, 2), SERVER_CARD_TYPE))
+  const card = (origin: string, endpoint = path) => serverCard(origin, endpoint, serverInfoOf(factory.info, brandOf(), origin), [MODERN_PROTOCOL_VERSION, ...SUPPORTED_PROTOCOL_VERSIONS])
+  const sendCard = (c: Context, endpoint?: string) => sendPublic(c, JSON.stringify(card(publicOriginOf(app, c), endpoint), null, 2), SERVER_CARD_TYPE)
+  const hasParameters = path.includes('/:')
+  if (hasParameters) {
+    // One MCP per value: its card names the endpoint as asked (`/s/soups/mcp`), still encoded
+    app.get(path + SERVER_CARD_SUFFIX, (c: Context) => sendCard(c, new URL(c.req.url).pathname.slice(0, -SERVER_CARD_SUFFIX.length)))
+  } else {
+    recordMounted(app, { mcp: { path, card, tools: factory.tools, resources: factory.resources } })
+    for (const at of [path + SERVER_CARD_SUFFIX, WELL_KNOWN.serverCard]) app.get(at, (c: Context) => sendCard(c))
+  }
   app.all(path, async (c: Context) => {
     // A tool's route keeps its own answer under the same Idempotency-Key; this one, holding it, is never kept
     neverKeep(c)
@@ -397,6 +416,8 @@ export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, all
       extra: {
         ...(caller?.grant ? { grant: caller.grant } : {}),
         ...(caller?.name ? { name: caller.name } : {}),
+        // The mount path's parameters, read from the route: nothing a client sends can set them
+        params: c.req.param() as Record<string, string>,
         headers: {
           ...Object.fromEntries(FORWARDED.flatMap((name) => (c.req.header(name) ? [[name, c.req.header(name)!]] : []))),
           'x-forwarded-proto': new URL(originOf(c)).protocol.replace(':', ''),
@@ -410,4 +431,4 @@ export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, all
 }
 
 export { guideSkills } from './skills.js'
-export { CLI_META, cliOf, PENDING_META, PROBLEM_META, routeOf, TOOLS_HASH_META, type CliExample, type CliSpec } from '../core/cli.js'
+export { CLI_META, cliOf, PENDING_META, PROBLEM_META, routeOf, TOOLS_HASH_META, type CallAt, type CliExample, type CliSpec } from '../core/cli.js'

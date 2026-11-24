@@ -40,6 +40,17 @@ mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools: [getNote]
 A stdio entry on a laptop runs the same tools over HTTP with its own key: `callApi: overHttp(origin, key)`, served with
 the SDK's stdio transport.
 
+One MCP per space, beside the owner's `/mcp`: the mount path's parameters reach each call as `at.params`, decoded.
+
+```ts
+const listRecipes = mcpTool({
+  name: 'list_recipes', title: 'List recipes', description: 'The recipes on this shelf.', input: z.object({}),
+  call: (_, at) => ({ path: `/api/shelves/${encodeURIComponent(at?.params.space ?? '')}/recipes` }),
+  summarize: (shelf) => shelf.recipes.join(', '),
+})
+mountMcp(app, { path: '/s/:space/mcp', factory: mcpServerFactory({ info, instructions, tools: [listRecipes], callApi: inProcess(app) }), allowedHostnames: [host, 'localhost'] })
+```
+
 ## Options
 
 `mcpServerFactory(options)`:
@@ -60,12 +71,12 @@ the SDK's stdio transport.
 
 | Option | Type | Default | What it does |
 |---|---|---|---|
-| `path` | string | `/mcp` | where MCP is served; the Server Card is at `<path>/server-card` and `/.well-known/mcp/server-card.json`. Elsewhere, pass the same path to `createOAuth({ mcpPath })` |
+| `path` | string | `/mcp` | where MCP is served; the Server Card is at `<path>/server-card` and `/.well-known/mcp/server-card.json`. Elsewhere, pass the same path to `createOAuth({ mcpPath })`. With parameters (`/s/:space/mcp`) it serves one MCP per value, its card only at `<path>/server-card`, and it is left out of `mountedMcp` |
 | `factory` | `AgentMcpFactory` | required | `mcpServerFactory(…)` |
 | `allowedHostnames` | string[] | required | the hosts a browser's `Origin` may name |
 
 `mcpTool(tool)`: `name` (snake_case), `title`, `description` (when to use it), `input` (zod), `output` (the route's 200
-schema, when fixed), `annotations`, `call` (args → the route call), `summarize` (the text an agent reads first),
+schema, when fixed), `annotations`, `call` (args, and `at` with the mount path's `params` → the route call), `summarize` (the text an agent reads first),
 `links` (`resource_link`s), `route` (when `routeOf` can't read it from `call`), `cli` (its command, noun then verb).
 
 ## Exports
@@ -73,10 +84,11 @@ schema, when fixed), `annotations`, `call` (args → the route call), `summarize
 | Export | What |
 |---|---|
 | `mcpTool`, `mcpResource` | a tool (route call + summary) and an attachable resource |
+| `CallAt` | the second argument of a tool's `call` and a resource's `read`: `{ params }`, the mount path's parameters (`{}` at `/mcp`) |
 | `routeOf`, `ROUTE_META` | a tool's route (`GET /api/v1/recipes/{id}`), published in `tools/list` as `_meta["api-kit/route"]`; set `route` on a tool whose path is built in steps |
 | `cli` on a tool or resource, `cliOf`, `CLI_META` | its command on the app's CLI, noun then verb (`cli: { name: 'note view', examples: [{ run: 'note view n_1', about: 'One note' }] }`), published with its positional arguments (the route's path parameters) as `_meta["api-kit/cli"]` |
 | `PROBLEM_META`, `PENDING_META` | a failed call carries its problem (with `status`) in `_meta["api-kit/problem"]`; one still working names its run and the path to poll (`{ run, location }`) in `_meta["api-kit/pending"]`, and its text says to `GET` that path until the run is done, then call the tool again |
-| `mountedMcp(app)` | the tools and resources `mountMcp` serves, for `cliGaps` and `cliSnapshot` |
+| `mountedMcp(app)` | the tools and resources `mountMcp` serves at the path without parameters, for `cliGaps` and `cliSnapshot` |
 | `guideSkills({ files, fill })` | the guide's skill folders as the factory's `skills` and `prompts` (one prompt per playbook); `fill` renders a file first when a skill uses placeholders |
 | `mcpServerFactory` | the server: info, instructions, tools, resources, prompts, skills (options above) |
 | `mountMcp` | `/mcp` (Streamable HTTP, MCP 2026-07-28 with a fallback for older clients) and the Server Card |
@@ -132,7 +144,16 @@ sequenceDiagram
 - A tool's `authInfo.clientId` is an OAuth agent's client_id (never the name it registered), else the key's name or
   the person's email; `authInfo.extra` adds the agent's `grant` and `name` beside the forwarded `headers`
   (`FORWARDED`: the credentials and `Idempotency-Key`, given each call as `<key>:<JSON-RPC id>`, so a retried call
-  runs its route once; `mountMcp` never keeps its own answer).
+  runs its route once; `mountMcp` never keeps its own answer, on any path), and the mount path's `params`.
+- A mount path's parameters come from the route alone, decoded: arguments, `_meta` and the query string never set
+  them, and a dot segment (`/s/../mcp`, `/s/%2e%2e/mcp`) is resolved before routing, so it reaches `/mcp`. A tool
+  encodes a parameter when it builds a path (`encodeURIComponent`). A parameter names a space, it never grants it:
+  the route (and, with OAuth, `accepts`, which judges the tools' in-process calls too) decides whether the caller may
+  reach that space. A2A and `toolsRun` call a tool with no `at`: a space's tools belong on its mount only.
+- The route readers (`routeOf`, the guide, `cliGaps`) run a call with each parameter as `{name}`
+  (`POST /api/shelves/{space}/recipes`), so a space tool keeps its route and hints. A mount with parameters is never
+  what the guide, `mountedMcp`, the AI Catalog or `/.well-known/mcp/server-card.json` describe, whichever is mounted
+  first; its own card names the endpoint asked for (`/s/soups/mcp`).
 - Skills are findable from `resources/list` alone, without the extension's methods: each `SKILL.md` is listed as
   `<name> skill: start here` with its frontmatter description, and its `references/*.md` too while a skill has at
   most 20; the `skill://{+path}` template's description names the start URI; reading a folder (`skill://`, `skill://postbox`,
@@ -162,7 +183,7 @@ sequenceDiagram
 
 - `toolRoutes(tools, doc)` and `toolsRun(tools, app, samples)` (testing part): every tool lands on a route and runs.
 - `cliGaps(mountedMcp(app))` (testing part): every tool and resource has a command.
-- `test/kit.test.ts` (an MCP round trip), `test/cli.test.ts`.
+- `test/kit.test.ts` (an MCP round trip), `test/cli.test.ts`, `test/mcp-params.test.ts` (a mount path's parameters).
 
 ## Upgrading
 
