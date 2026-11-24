@@ -37,9 +37,8 @@ the version in `kit.json` up.
 - `StoredAnswer` is now `ReplayedAnswer | ShownOnceAnswer`, each with `version: 2`. An answer without a version was
   kept whole by 1.30.0 and is never replayed: its request runs again, so one an old instance writes during a rolling
   deploy, after the migration below, is never answered either (it still sits in `kit_guards` until it lapses, within
-  the day). A custom `GuardStore` that keeps the answer as JSON
-  needs no change; one that copies known fields keeps `version` and `shownOnce` too, and should delete the answers
-  it kept under 1.30.0 (they may hold a secret for a day).
+  the day). Any custom `GuardStore`: delete every answer it kept under 1.30.0 (one may hold a secret for a day), and
+  if it copies known fields, keep `version` and `shownOnce` too.
 - The answers kept under 1.30.0 are dropped for you: the database store's next start runs a new migration step that
   deletes them (the db part, below), and the memory store goes with the restart. The cost is one day of replay
   protection: a retry of a request made before the update runs again.
@@ -266,7 +265,8 @@ Nothing to do in any version recorded here.
 - `mountA2A` never keeps its own answer and passes the caller's `Idempotency-Key` to the route a skill runs, as MCP
   does: a retried `SendMessage` runs the route once.
 - A task whose route answered `Shown-Once: true` (core's `showOnce`: a new key) is kept without its artifacts: the
-  `SendMessage` reply shows the secret, and `GetTask` and `ListTasks` say it was shown once. Through 1.30.0 the task
+  reply that finished the task (`SendMessage`, or the first `GetTask` of a slow one) shows the secret once, and later
+  `GetTask` and `ListTasks` say it was shown once. Through 1.30.0 the task
   kept a made key for a day.
 
 ### 1.30.0

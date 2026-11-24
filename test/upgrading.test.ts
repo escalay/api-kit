@@ -127,7 +127,9 @@ describe('kit upgrading', () => {
     expect(told).toBe('What changed for these parts since kit 1.29.0: `kit upgrading --dir src/kit --from 1.29.0`')
     // kit.json now records this kit, so the printed --from is what still finds the notes: plain `upgrading` prints no
     // released version's notes, only Unreleased ones when the docs have them
-    expect(cli(app, 'upgrading').stdout).not.toMatch(/^### \d/m)
+    const current = cli(app, 'upgrading')
+    expect(current.status, current.stderr).toBe(0)
+    expect(current.stdout).not.toMatch(/^### \d/m)
     expect(runPrinted(app, told).stdout).toContain('### 1.30.0')
     // An app at this kit's version is told nothing
     expect(cli(app, 'doctor').stdout).not.toContain('kit upgrading')

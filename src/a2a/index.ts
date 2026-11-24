@@ -99,7 +99,7 @@ const agentMessage = (text: string, task: Pick<Task, 'id' | 'contextId'>): Messa
 
 /** A finished task as it is kept when its answer showed a secret once: no artifacts, and a message saying why. */
 const withoutArtifacts = (stored: Stored): Stored => {
-  const message = agentMessage('Done. Its answer held a secret, shown once in the reply to SendMessage and never kept, so it is not shown again.', stored.task)
+  const message = agentMessage('Done. Its answer held a secret, shown once in the reply that finished this task (SendMessage, or the first GetTask of a slow one) and never kept, so it is not shown again.', stored.task)
   return { ...stored, task: { ...stored.task, artifacts: undefined, status: { ...stored.task.status, message }, history: [...(stored.task.history ?? []), message] } }
 }
 
