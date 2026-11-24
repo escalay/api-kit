@@ -776,6 +776,8 @@ describe('the copy-in CLI', () => {
       const next = made.stdout.match(/^Next: cd demo-api && (.+) && pnpm dev$/m)?.[1]
       expect(next).toBe('pnpm install && pnpm format && pnpm migrations && pnpm test')
       expect(await readFile(join(import.meta.dirname, '..', 'skills/api-kit-build/SKILL.md'), 'utf8')).toContain(`\`cd my-api && ${next}\``)
+      // and the line after it gives the coding agent the kit's skills
+      expect(made.stdout).toMatch(/^Next: .*\nSkills: npx skills add escalay\/api-kit /m)
       const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
@@ -879,6 +881,12 @@ describe('the copy-in CLI', () => {
         expect(text).not.toMatch(/runtime:|__worker_dev__/)
         expect(text).toContain('`pnpm run deploy`')
       }
+      // AGENTS.md says how to add the kit's skills, naming only skills the kit has
+      const skillsLine = both.split('\n').find((line) => line.startsWith('- `npx skills add escalay/api-kit`'))
+      expect(skillsLine).toBeDefined()
+      const named = [...skillsLine!.matchAll(/`(api-kit-[a-z]+)`/g)].map(([, name]) => name!)
+      expect(named).toEqual(expect.arrayContaining(['api-kit-build', 'api-kit-feature', 'api-kit-review']))
+      for (const name of named) expect(existsSync(join(import.meta.dirname, '..', 'skills', name, 'SKILL.md')), name).toBe(true)
       // Prebuilt binaries need no build scripts, so `pnpm install` doesn't stop to ask
       expect(await readFile(join(parent, 'edge-api/pnpm-workspace.yaml'), 'utf8')).toContain('workerd: false')
       expect(cli(parent, 'init', 'box-api', '--runtime', 'node').status).toBe(0)

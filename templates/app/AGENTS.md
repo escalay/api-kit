@@ -14,6 +14,7 @@ an MCP tool.
 - `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:api --> <!-- runtime:workers -->
 - `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `vite build`, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:app -->
 - `pnpm run deploy:env`: the same for a real deployment whose settings live outside the repository: `CLOUDFLARE_ACCOUNT_ID`, `D1_<BINDING>_ID`, every `vars` entry left `""` in `wrangler.jsonc`, optional `PUBLIC_HOST`, from the environment (a secret store's `run`). It writes the git-ignored `wrangler.deploy.jsonc`, makes missing queues and deploys. A repository that may go public keeps no account id or real domain: deploy it this way <!-- runtime:workers -->
+- `npx skills add escalay/api-kit`: the kit's skills for your coding agent: `api-kit-build` (parts, who may see what, a newer kit), `api-kit-feature` (a feature, its switch), `api-kit-review` (is it ready for agents), `api-kit-cli` (the command line, every `kit` command), `api-kit-skills` (this product's own skills)
 
 A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 
