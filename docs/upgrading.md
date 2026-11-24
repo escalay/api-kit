@@ -293,6 +293,11 @@ Tokens, codes, refresh rows and claims from before grants keep working.
 
 ## guide
 
+### Unreleased (after 1.31.0)
+
+- `kit doctor` fails (a `starter` line) while a product skill's description still holds the starter's "Replace this
+  line with…": write when an agent should use the product, then `pnpm guide`.
+
 ### 1.30.0
 
 - `{{origin}}` is the app's `publicOrigin` (the OAuth server's) when it has one; without it, the request's origin, as
@@ -377,6 +382,11 @@ The part arrived in 1.28.0. In an app made before it, `npx @escalay/kit add bran
 ignore lists in `.oxfmtrc.json` and `.oxlintrc.json` and the allowlist in `.gitleaks.toml`, or prints the line to add
 where it can't read one. An app with its own Dockerfile adds `COPY brand brand` beside `COPY src src`.
 
+### Unreleased (after 1.31.0)
+
+- `kit doctor` fails (a `starter` line) while `brand/brand.ts`'s description is still the starter's
+  "<title>, an agent-ready API.": write what the product does, then `kit brand`.
+
 ## boards
 
 ### Unreleased (after 1.31.0)
@@ -459,6 +469,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - A new app's `src/features/switches/index.ts` lets an owner signed in by passkey (the people part) switch, beside
   the deployment's keys: `isOwner` is a key, or a person whose role is `owner`. An older app with the people part
   copies that line.
+- `kit doctor` fails (a `starter` line) while a feature's description in `src/features/catalog.ts` is still
+  "…: say here what switching it off stops.": write what switching it off stops.
 
 ### 1.30.0
 

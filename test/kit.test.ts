@@ -865,6 +865,21 @@ describe('the copy-in CLI', () => {
       expect(doctor.stdout).toContain('note     brand: src/brand.gen.ts has the SVG only')
       // server.ts and worker.ts each name where a caller's address comes from
       expect(doctor.stdout).not.toContain('names no source for the caller')
+      // The text the starter leaves for the app to write fails doctor until it is written
+      expect(doctor.status).toBe(1)
+      const starterLines = (text: string) => text.split('\n').filter((line) => line.startsWith('starter  '))
+      expect(starterLines(doctor.stdout)).toEqual([
+        'starter  guide/skills/demo-api/SKILL.md: its description is still the starter’s ("Replace this line with"): say when an agent should use the product, in its users’ words',
+        'starter  brand/brand.ts: its description is still the starter’s (", an agent-ready API."): say what the product does, in at most 100 characters',
+        'starter  src/features/catalog.ts: a description is still the starter’s ("say here what switching it off stops"): say what switching the feature off stops',
+      ])
+      const productSkill = join(app, 'guide/skills/demo-api/SKILL.md')
+      await writeFile(productSkill, (await readFile(productSkill, 'utf8')).replace(/Replace this line with[^\n]*/, 'For reading lists: making one, adding books.'))
+      await writeFile(join(app, 'brand/brand.ts'), (await readFile(join(app, 'brand/brand.ts'), 'utf8')).replace('Demo API, an agent-ready API.', 'Reading lists, shared with your agents.'))
+      const catalog = join(app, 'src/features/catalog.ts')
+      await writeFile(catalog, (await readFile(catalog, 'utf8')).replace('ReadingLists: say here what switching it off stops.', 'Reading lists: off, nobody can make or read one.'))
+      expect(starterLines(cli(app, 'doctor').stdout)).toEqual([])
+      cli(app, 'guide')
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
       // The product's own skill, the place for developer skills, and the link coding agents find them through
       for (const path of ['guide/skills/demo-api/SKILL.md', 'guide/skills/demo-api/references/find-your-way.md', '.agents/skills/README.md']) expect(existsSync(join(app, path)), path).toBe(true)

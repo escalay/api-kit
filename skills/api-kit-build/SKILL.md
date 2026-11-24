@@ -24,7 +24,8 @@ Each part's rules travel with it in `src/kit/<part>/README.md`; the full standar
 5. Write the guide in `guide/`: only what the code can't know (concepts, what scores mean, real-id examples,
    playbooks). Endpoint and tool lists stay as `{{api.endpoints}}` and `{{mcp.tools}}`. Run `pnpm guide` after.
 6. Write the product's own skill in `guide/skills/<name>/` with the `api-kit-skills` skill: one playbook per job
-   people bring to it, from a test of what agents get wrong.
+   people bring to it, from a test of what agents get wrong. `kit doctor` fails while its description, the one in
+   `brand/brand.ts` or one in `src/features/catalog.ts` is still the starter's text.
 7. Decide who may see what (below), then check it with the `api-kit-review` skill before anyone else uses it.
 
 ## Who may see what

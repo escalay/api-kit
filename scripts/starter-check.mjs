@@ -25,8 +25,13 @@ const check = (name, preset, more = [], { brand = false } = {}) => {
   const app = join(parent, name)
   // init installs, formats and writes migrations/ itself
   run(process.execPath, [create, name, '--preset', preset, '--yes'], parent)
-  // What init's Brand line says: the renderer, then the PNGs into src/brand.gen.ts
+  // The product's own words where the starter left its text (doctor fails on that), then what init's Brand line says:
+  // the renderer, then the PNGs into src/brand.gen.ts
   if (brand) {
+    const write = (path, from, to) => writeFileSync(join(app, path), readFileSync(join(app, path), 'utf8').replace(from, to))
+    write(`guide/skills/${name}/SKILL.md`, /Replace this line with[^\n]*/, 'For its notes: making, reading and changing them.')
+    write('brand/brand.ts', /, an agent-ready API\./, ': notes, kept for your agents.')
+    run('pnpm', ['guide'], app)
     run('pnpm', ['add', '-D', `@resvg/resvg-js@${RESVG}`], app)
     run(process.execPath, [cli, 'brand'], app)
   }
