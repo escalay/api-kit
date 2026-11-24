@@ -772,6 +772,12 @@ describe('the copy-in CLI', () => {
       const made = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'packages/create-escalay/index.mjs'), '--preset', 'api', '--yes', '--title', 'Demo API', 'demo-api'], { cwd: parent, encoding: 'utf8' })
       expect(made.status, made.stderr).toBe(0)
       expect(existsSync(join(parent, 'api'))).toBe(false)
+      // api-kit-build's first command is the one init prints, up to the dev server
+      const next = made.stdout.match(/^Next: cd demo-api && (.+) && pnpm dev$/m)?.[1]
+      expect(next).toBe('pnpm install && pnpm format && pnpm migrations && pnpm test')
+      expect(await readFile(join(import.meta.dirname, '..', 'skills/api-kit-build/SKILL.md'), 'utf8')).toContain(`\`cd my-api && ${next}\``)
+      // and the line after it gives the coding agent the kit's skills
+      expect(made.stdout).toMatch(/^Next: .*\nSkills: npx skills add escalay\/api-kit /m)
       const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
@@ -875,6 +881,12 @@ describe('the copy-in CLI', () => {
         expect(text).not.toMatch(/runtime:|__worker_dev__/)
         expect(text).toContain('`pnpm run deploy`')
       }
+      // AGENTS.md says how to add the kit's skills, naming only skills the kit has
+      const skillsLine = both.split('\n').find((line) => line.startsWith('- `npx skills add escalay/api-kit`'))
+      expect(skillsLine).toBeDefined()
+      const named = [...skillsLine!.matchAll(/`(api-kit-[a-z]+)`/g)].map(([, name]) => name!)
+      expect(named).toEqual(expect.arrayContaining(['api-kit-build', 'api-kit-feature', 'api-kit-review']))
+      for (const name of named) expect(existsSync(join(import.meta.dirname, '..', 'skills', name, 'SKILL.md')), name).toBe(true)
       // Prebuilt binaries need no build scripts, so `pnpm install` doesn't stop to ask
       expect(await readFile(join(parent, 'edge-api/pnpm-workspace.yaml'), 'utf8')).toContain('workerd: false')
       expect(cli(parent, 'init', 'box-api', '--runtime', 'node').status).toBe(0)
@@ -1048,6 +1060,15 @@ describe('the copy-in CLI', () => {
     expect(items.filter((item) => item.meta?.root).map((item) => item.name)).toEqual(['npm-release'])
     const block = items.find((item) => item.name === 'vector-search-ui')!
     expect(block.registryDependencies).toEqual(['button', 'input', 'escalay/api-kit/search-react'])
+  })
+
+  it('gives every browser file a browser part of its own', async () => {
+    const kitDir = join(import.meta.dirname, '..')
+    const items: { name: string; files: { path: string }[]; meta?: { web?: boolean } }[] = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8')).items
+    const browserFiles = (await readdir(join(kitDir, 'src/browser'))).filter((file) => file !== 'README.md').map((file) => `src/browser/${file}`)
+    const partsOf = (path: string) => items.filter((item) => item.meta?.web && item.files.some((file) => file.path === path)).map((item) => item.name)
+    // One meta.web item each: the CLI copies it to --web-dir, and `kit add <part>` names it
+    expect(browserFiles.filter((path) => partsOf(path).length !== 1).map((path) => `${path}: ${partsOf(path).join(', ') || 'no browser part'}`)).toEqual([])
   })
 })
 
@@ -1261,20 +1282,54 @@ describe('a guide\'s skills over MCP', () => {
 })
 
 describe('the skills', () => {
+  const kitDir = join(import.meta.dirname, '..')
+  const skillsDir = join(kitDir, 'skills')
+  const skillTexts = async () => Object.fromEntries(await Promise.all((await readdir(skillsDir)).sort().map(async (name) => [name, await readFile(join(skillsDir, name, 'SKILL.md'), 'utf8')] as const)))
+  /** What the kit's CLI says it has, from its own refusals: its commands, and its presets. */
+  const kitSays = (...args: string[]) => spawnSync(process.execPath, [join(kitDir, 'cli.mjs'), ...args], { cwd: tmpdir(), encoding: 'utf8' }).stderr
+  const KIT_COMMANDS = kitSays('no-such-command').match(/Commands: (.+)/)![1]!.split(', ')
+  const PRESETS = kitSays('init', 'no-such-app', '--preset', 'no-such-preset').match(/--preset is one of (.+)/)![1]!.split(', ')
+
   it('each has a name, says when to use it, stays short and names the command that checks its rule', async () => {
-    const dir = join(import.meta.dirname, '..', 'skills')
-    const names = (await readdir(dir)).sort()
-    expect(names).toEqual(['api-kit-build', 'api-kit-cli', 'api-kit-feature', 'api-kit-review', 'api-kit-skills', 'npm-release'])
-    for (const name of names) {
-      const text = await readFile(join(dir, name, 'SKILL.md'), 'utf8')
+    const skills = await skillTexts()
+    expect(Object.keys(skills)).toEqual(['api-kit-build', 'api-kit-cli', 'api-kit-feature', 'api-kit-part', 'api-kit-review', 'api-kit-skills', 'npm-release'])
+    for (const [name, text] of Object.entries(skills)) {
       const [, frontmatter = ''] = text.match(/^---\n([\s\S]*?)\n---\n/) ?? []
       expect(frontmatter, name).toContain(`name: ${name}\n`)
       expect(frontmatter, name).toMatch(/^description: Use when /m)
+      const description = frontmatter.match(/^description: (.*)$/m)![1]!
+      expect(description.length, name).toBeLessThanOrEqual(1024)
+      // A plain YAML scalar: a colon-space or a space-hash inside makes the frontmatter unreadable, and the skill never loads
+      expect(description, name).not.toMatch(/: | #/)
       expect(text.split('\n').length, name).toBeLessThanOrEqual(150)
       expect(text, name).toMatch(/`pnpm test|`npx @escalay\/kit doctor`|^pnpm release:check/m)
       // Only commands the CLI has
-      for (const [, command] of text.matchAll(/npx @escalay\/kit ([a-z]+)/g)) expect(['list', 'add', 'diff', 'update', 'doctor', 'adopt', 'init', 'feature', 'guide', 'sdk', 'cli'], `${name}: ${command}`).toContain(command)
+      for (const [, command] of text.matchAll(/npx @escalay\/kit ([a-z]+)/g)) expect(KIT_COMMANDS, `${name}: ${command}`).toContain(command)
     }
+  })
+
+  it('are each listed in the README\'s skills table and in AGENTS.md', async () => {
+    const [readme, agents] = await Promise.all(['README.md', 'AGENTS.md'].map((file) => readFile(join(kitDir, file), 'utf8')))
+    const agentsRow = agents!.split('\n').find((line) => line.startsWith('| `skills/` |'))!
+    for (const name of await readdir(skillsDir)) {
+      expect(readme, name).toContain(`| [\`${name}\`](skills/${name}/SKILL.md) |`)
+      expect(agentsRow, name).toContain(`\`${name}\``)
+    }
+  })
+
+  it('name every part between them', async () => {
+    const texts = Object.values(await skillTexts())
+    const parts: { name: string; meta?: { root?: boolean } }[] = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8')).items
+    const unnamed = parts.filter((part) => !part.meta?.root && !texts.some((text) => text.includes(`\`${part.name}\``))).map((part) => part.name)
+    expect(unnamed).toEqual([])
+  })
+
+  it('api-kit-cli names every command of the kit\'s CLI and every preset', async () => {
+    const text = (await skillTexts())['api-kit-cli']!
+    expect(KIT_COMMANDS).toEqual(expect.arrayContaining(['init', 'repo', 'button', 'brand', 'license']))
+    for (const command of KIT_COMMANDS.filter((command) => command !== 'help')) expect(text, command).toContain(`\`kit ${command}`)
+    expect(PRESETS).toEqual(expect.arrayContaining(['api', 'app', 'selfhosted']))
+    for (const preset of PRESETS) expect(text, preset).toContain(`\`--preset ${preset}\``)
   })
 })
 

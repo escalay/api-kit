@@ -1,6 +1,6 @@
 ---
 name: api-kit-review
-description: Use when checking whether an API built on the Escalay api-kit is ready for agents, before a release, after a refactor, or when an agent stalled on it. Lists the commands and tests to run and what each failure means.
+description: Use when checking whether an API built on the Escalay api-kit is ready for agents, before a release or a first deploy, after a refactor or a kit update, when an agent stalled on it, or when checking its sign-ins, invites, feature switches, usage report, repository settings, Deploy to Cloudflare button or brand. Lists the commands and tests to run and what each failure means.
 ---
 
 # Review an API for agent-readiness
@@ -51,8 +51,45 @@ If a check is absent from the tests, add it (`src/kit/testing/README.md`) before
 5. `POST /mcp` with `tools/list` returns every tool; each carries its route in `_meta["api-kit/route"]` (a tool without one needs `route` set) and its command in `_meta["api-kit/cli"]`.
 6. With `<APP>_URL` and `<APP>_API_KEY` set, the app's CLI (`sdk/cli/bin.ts`): `doctor` prints no `fail` and no drift,
    a missing id exits 3 with one line on stderr, and a destructive command without `--yes` exits 1.
+7. With `switches`: `GET /api/features` lists every catalog feature with `on` and `source`. Switch one off with
+   `PATCH /api/features/{key}` (`?dryRun=true` first: it names what else stops); each route it adds then answers
+   `403 feature_disabled` whose `detail` starts "This feature is disabled." and names `switchOn`, and its tools stay
+   listed. A feature nothing can run without has no switch.
+8. With `telemetry`: `GET /api/telemetry` shows `body`, exactly what is sent, with coarse values only (ranges,
+   booleans: no names, ids or addresses). `DO_NOT_TRACK=1` or the owner's `PATCH { "enabled": false }` turns it off,
+   and `why` says which. The README says the product reports and how to stop it.
 
-## 4. The agent test
+## 4. Repository and deploy
+
+Each exits 1 and names what to fix; run them in the app's folder.
+
+| Command | Fails when |
+|---|---|
+| `npx @escalay/kit repo check` | the GitHub repository drifted from §20: merges, the Actions token, alerts, the rules and required checks for `main` (`repo apply` sets them) |
+| `npx @escalay/kit button --check` | a stranger's Deploy to Cloudflare would fail: an id or account in `wrangler.jsonc`, a setting with no description under `cloudflare.bindings`, migrations the deploy skips |
+| `npx @escalay/kit brand --check` | `brand/` changed since `src/brand.gen.ts` was rendered: `npx @escalay/kit brand` again |
+
+`pnpm gate` (what CI and the pre-push hook run) passes on a clean checkout. A public repository keeps no account id
+or real domain: on Workers it deploys with `pnpm run deploy:env`.
+
+## 5. Who may sign in
+
+With the `oauth` part, a test per row in the app's tests. The owner approves through `approveSignIn(app, query,
+{ headers })` (`testing`): the kit's page, its ticket cookie, a same-origin POST. An app with an `approve` hook drives
+its own page the same way: `GET /oauth/authorize`, keep its `set-cookie`, post the page's `ticket` to the app's route
+with that cookie and `sec-fetch-site: same-origin`. Standard: §7 and §23.
+
+| Row | Passes when |
+|---|---|
+| Owner approval | `approveSignIn` answers 302 with a `code`; with `decision: 'deny'`, `access_denied`; without the owner signed in there is no consent page to approve |
+| Invite | a known app's return redeems a remembered invite in one click; any other return sees "This app returns to <host>" and needs the typed code; either way the token is bound to the invite's space (`aud`), and the invite again, a wrong code or an expired invite gets none |
+| Account line | every approval page says it connects the app signed in in this browser |
+| Ask to join | nothing is granted until the owner decides; the grant names the asker, not the owner, and works at that space only |
+| Revoke | after `revokeGrant`, `revokeClient` or a removed member, the next call with the token answers 401, and `onRevoke` dropped the app's row |
+| Another space | a space's token at another space answers 401; a root token is given only to the owner's own sign-ins |
+| Leaks nothing | an unknown space and a space the caller may not see answer the same 404 with the same body; no 403 confirms it exists |
+
+## 6. The agent test
 
 Give a fresh agent only the base URL, a key and one real task. Ask it for a log of every place it stalled or guessed.
 Fix the API or the guide for each one, then run it again with a new agent. Done when the log is empty.

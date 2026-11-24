@@ -183,9 +183,12 @@ npx skills add escalay/api-kit
 
 | Skill | Use it to |
 |---|---|
-| [`api-kit-build`](skills/api-kit-build/SKILL.md) | start a new API, move an app onto the kit, take a newer kit |
-| [`api-kit-feature`](skills/api-kit-feature/SKILL.md) | add a feature folder: schema, repo, routes, handlers, tools, tests |
+| [`api-kit-build`](skills/api-kit-build/SKILL.md) | start a new API, move an app onto the kit, add a part, decide who may see what, take a newer kit |
+| [`api-kit-feature`](skills/api-kit-feature/SKILL.md) | add a feature folder: schema, repo, routes, handlers, tools, tests, and its switch |
 | [`api-kit-review`](skills/api-kit-review/SKILL.md) | check an API is agent-ready: the commands to run and what a failure means |
+| [`api-kit-cli`](skills/api-kit-cli/SKILL.md) | give the app its command line, name its tools as commands, write jobs; every `kit` command |
+| [`api-kit-skills`](skills/api-kit-skills/SKILL.md) | write a product's own skills from a test of what agents get wrong |
+| [`api-kit-part`](skills/api-kit-part/SKILL.md) | for the kit's maintainers: add or change a part, its registry item, README and browser layers |
 | [`npm-release`](skills/npm-release/SKILL.md) | set up or run releases of any npm package from GitHub Actions, or find out why one failed |
 
 ## Releases

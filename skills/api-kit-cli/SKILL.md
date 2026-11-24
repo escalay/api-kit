@@ -1,6 +1,6 @@
 ---
 name: api-kit-cli
-description: Use when giving an API built on the Escalay api-kit its command line, naming its MCP tools as commands, writing a job (one command for a playbook step), or fixing what cliGaps reports. Covers kit sdk / kit cli, names, examples, jobs, the snapshot and sign-in.
+description: Use when giving an API built on the Escalay api-kit its command line, naming its MCP tools as commands, writing a job (one command for a playbook step), or fixing what cliGaps reports. Covers kit sdk / kit cli, names, examples, jobs, the snapshot and sign-in; and every command of the kit's own CLI (npx @escalay/kit - init and its presets, add, update, doctor, feature, guide, repo, button, brand, license), what each does and when to run it.
 ---
 
 # The app's command line
@@ -107,6 +107,32 @@ export APP_URL=http://localhost:8787 APP_API_KEY=…   # the bin's prefix: POSTB
 pnpm exec tsx sdk/cli/bin.ts                          # jobs, then nouns
 pnpm exec tsx sdk/cli/bin.ts help agents
 ```
+
+## The kit's own commands
+
+`npx @escalay/kit <command>` (`npx @escalay/kit help` prints the flags). `--dir` is the kit's folder, `src/kit` by
+default; `--app` is the app's folder, `.` by default.
+
+| Command | What it does |
+|---|---|
+| `kit init <dir>` | a new app (`npm create escalay <dir>` runs it): `--preset`, `--runtime both\|cloudflare\|node`, `--title`, `--bare` (no `notes`), `--no-git` |
+| `kit add <part…>` | copies parts and the parts they need; `--install`, `--web-dir` for browser parts |
+| `kit list` | every part, what it needs, which are installed |
+| `kit diff [--patch]` | per file: unchanged, you edited, the kit changed, both |
+| `kit update [part…]` | takes the kit's changes, keeps your edits (`--force` takes the kit's) |
+| `kit doctor` | missing, edited and behind files, `cliGaps`, notes (exits 1 with a fix per line) |
+| `kit adopt` | writes `kit.json` for parts the shadcn CLI copied |
+| `kit feature <plural-name>` | a feature folder; `--switch` lists it in the catalog so the owner can switch it off |
+| `kit guide` | `guide/` as `src/guide.gen.ts`, for Workers (an app made by `init` runs `pnpm guide`, which writes the same) |
+| `kit sdk`, `kit cli` | the client and the command line (above) |
+| `kit repo check\|apply` | the GitHub repository's settings and rules for `main` (§20), through `gh` |
+| `kit button` | the Deploy to Cloudflare button: `--check` what would stop a stranger's deploy, `--write` into the README, `--smoke` a real deploy |
+| `kit brand` | `brand/` rendered into `src/brand.gen.ts` (needs `@resvg/resvg-js`); `--check` when it is stale |
+| `kit license keys\|mint\|verify` | a product's signing pair and the license keys `licenseOf` accepts for paid features |
+
+Presets (`kit init --preset`): `--preset api` (the default: an API on Node and Workers, or `--runtime`),
+`--preset app` (that API with a browser app in `web/`; Cloudflare only, so `--runtime node` is refused), and
+`--preset selfhosted`, which is not available yet (it arrives with escalay/selfhost-kit; `init` refuses it).
 
 ## Done when
 
