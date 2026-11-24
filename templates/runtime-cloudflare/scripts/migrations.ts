@@ -11,11 +11,18 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { FEATURES } from '../src/features/index.js'
-import { GUARD_MIGRATIONS, OAUTH_MIGRATIONS } from '../src/kit/index.js'
+import * as kit from '../src/kit/index.js'
 
 const checking = process.argv.includes('--check')
 const dir = fileURLToPath(new URL('../migrations', import.meta.url))
-const sets: [string, readonly string[]][] = [['oauth', OAUTH_MIGRATIONS], ['guards', GUARD_MIGRATIONS], ...FEATURES.map((feature): [string, readonly string[]] => [feature.name, feature.migrations])]
+// The kit's parts that keep tables, by the name each migrates under: those copied into src/kit (`kit add people`) count
+const PARTS = { oauth: 'OAUTH_MIGRATIONS', guards: 'GUARD_MIGRATIONS', keys: 'KEYS_MIGRATIONS', people: 'PEOPLE_MIGRATIONS', setup: 'SETUP_MIGRATIONS', boards: 'BOARDS_MIGRATIONS', telemetry: 'TELEMETRY_MIGRATIONS' }
+const partSets = Object.entries(PARTS).flatMap(([name, key]): [string, readonly string[]][] => {
+  const steps = (kit as Record<string, unknown>)[key]
+  return Array.isArray(steps) ? [[name, steps]] : []
+})
+// Each name once: a feature that wraps a part (src/features/people/) brings the part's steps under the part's name
+const sets = new Map<string, readonly string[]>([...partSets, ...FEATURES.map((feature): [string, readonly string[]] => [feature.name, feature.migrations])])
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 const HEADER = /^-- kit: (\S+) step (\d+) sha256 ([0-9a-f]{64})$/m
 

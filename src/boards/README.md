@@ -31,8 +31,46 @@ await registerBoards(app, { db, item: RecipeCardSchema, refExample: 'recipe:soup
 const tools = boardTools({ noun: 'recipes', label: (recipe) => recipe.title, refExample: 'recipe:soup', suggestions: true })
 ```
 
-Routes: `GET|POST /api/boards` (`?item=<ref>`: the boards holding it), `GET|PATCH|DELETE /api/boards/{id}`,
-`PUT|DELETE /api/boards/{id}/items/{ref}` (idempotent), `GET /api/boards/{id}/suggestions`. Writes need `write`.
+### In an app made by `kit init`
+
+A feature of its own, over the cards of another feature (here `recipes`, its `cardOf` exported from its `handlers.ts`):
+
+```ts
+// src/features/boards/index.ts, listed in src/features/index.ts
+import { BOARDS_MIGRATIONS, boardTools, registerBoards } from '../../kit/index.js'
+import type { Feature } from '../index.js'
+import { cardOf } from '../recipes/handlers.js'
+import { recipesRepo } from '../recipes/repo.js'
+import { RecipeSchema } from '../recipes/routes.js'
+
+export const feature: Feature = {
+  name: 'boards', // the name its steps migrate under
+  tag: { name: 'Boards', description: 'Your boards of recipes, each with a note.' },
+  migrations: BOARDS_MIGRATIONS,
+  register: (app, { db }) =>
+    registerBoards(app, { db, item: RecipeSchema, refExample: 'recipe:soup', itemOf: async (ref, origin) => {
+      const row = await recipesRepo(db).get(ref.slice('recipe:'.length))
+      return row ? cardOf(origin, row) : null
+    } }),
+  tools: boardTools({ noun: 'recipes', label: (recipe) => recipe.name, refExample: 'recipe:soup' }),
+  samples: async (request) => {
+    const made = async (path: string, body: object) => ((await (await request(path, { method: 'POST', body: JSON.stringify(body) })).json()) as { id: string }).id
+    const [id, ref] = [await made('/api/boards', { name: 'A sample' }), `recipe:${await made('/api/recipes', { name: 'Soup' })}`]
+    return { list_boards: {}, create_board: { name: 'Made by a tool' }, get_board: { id }, save_to_board: { id, ref }, remove_from_board: { id, ref } }
+  },
+}
+```
+
+Routes, and what each answers:
+
+```
+GET|POST /api/boards                   { count, _embedded: { boards } } (?item=<ref>: the boards holding it) · { name } → 201, the board
+GET|PATCH|DELETE /api/boards/{id}      the board, with _embedded.items (each { ref, note, item: the card or null }) · 204
+PUT|DELETE /api/boards/{id}/items/{ref}  { note? } or no body → the board: 201 added, 200 already on it · 204
+GET /api/boards/{id}/suggestions       { count, _embedded: { items } }
+```
+
+Writes need `write`. A PUT that says `content-type: application/json` sends a body, `{}` at least: an empty one is a 400.
 
 ## Options
 

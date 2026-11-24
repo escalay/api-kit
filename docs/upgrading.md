@@ -27,6 +27,12 @@ the version in `kit.json` up.
 
 ## core
 
+### Unreleased (after 1.31.0)
+
+- A new app names where a caller's address comes from: `createApp({ db, env, address })`, `'socket'` in `server.ts`
+  and `{ header: 'cf-connecting-ip' }` in `worker.ts`, passed to `createAgentApi`. An older app that `kit doctor`
+  notes for it sets `createAgentApi({ address })` the same way (core README, The caller's address).
+
 ### 1.31.0
 
 - `core/cli.ts` gains `CallAt` (a tool call's mount parameters, the mcp part's) and `PLACEHOLDER_AT`, which `routeOf`,
@@ -392,6 +398,16 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## people
 
+### Unreleased (after 1.31.0)
+
+- Nothing changes in the part. Its README now shows it as a feature of its own in an app made by `kit init`, what
+  each route answers, and the whole sign-in as a test. A new app's `scripts/migrations.ts` writes the D1 files of
+  every part copied in; in an older app, `kit add people` prints the line its script lacks: add
+  `['people', PEOPLE_MIGRATIONS]` (and `['setup', SETUP_MIGRATIONS]`) to its sets, then `pnpm migrations`, or D1
+  never gets the tables.
+- A new app's list-route test in `test/workers/api.test.ts` leaves out `/api/session*` and `/api/setup*`, which answer
+  by who signs in; an older app whose test fails on them after adding the part does the same.
+
 ### 1.30.1
 
 - `startSession` marks its answer shown once (core's `showOnce`): Idempotency-Key never keeps the session cookie, and
@@ -427,6 +443,12 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - A `collect` that throws no longer fails `GET` and `PATCH /api/telemetry`.
 
 ## switches
+
+### Unreleased (after 1.31.0)
+
+- A new app's `src/features/switches/index.ts` lets an owner signed in by passkey (the people part) switch, beside
+  the deployment's keys: `isOwner` is a key, or a person whose role is `owner`. An older app with the people part
+  copies that line.
 
 ### 1.30.0
 

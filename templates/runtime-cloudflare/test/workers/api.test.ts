@@ -21,7 +21,9 @@ describe('__title__ on Workers', () => {
 
   it('answers every feature list route with a key, and refuses without one', async () => {
     const doc = (await (await exports.default.fetch('https://api.test/openapi.json', { headers })).json()) as { paths: Record<string, { get?: unknown }> }
-    const lists = Object.keys(doc.paths).filter((path) => path.startsWith('/api/') && path !== '/api/health' && !path.includes('{') && doc.paths[path]!.get)
+    // The people and setup parts' routes answer by who signs in, not by key: their own tests cover them
+    const bySignIn = /^\/api\/(session|setup)(\/|$)/
+    const lists = Object.keys(doc.paths).filter((path) => path.startsWith('/api/') && path !== '/api/health' && !bySignIn.test(path) && !path.includes('{') && doc.paths[path]!.get)
     expect(lists.length).toBeGreaterThan(0)
     for (const path of lists) {
       expect((await exports.default.fetch(`https://api.test${path}`, { headers })).status, path).toBe(200)

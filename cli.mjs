@@ -1302,6 +1302,29 @@ const usageOf = (name) => {
   return lines.join('\n')
 }
 
+/** The heading of a part README's section on wiring it into an app made by `init`, as a feature of its own. */
+const WRAPPER_HEADING = '### In an app made by `kit init`'
+
+/**
+ * What `add` tells an app to wire for parts that keep tables or bring routes: the feature that wraps one (its README),
+ * and the line `scripts/migrations.ts` lacks for its D1 files (an app made before the script found the parts itself).
+ */
+const wiringOf = (parts) => {
+  const root = appRootOf()
+  const migrations = root ? textOf(join(root, 'scripts/migrations.ts')) : null
+  const inFeatures = root !== null && existsSync(join(root, 'src/features/index.ts'))
+  return parts.flatMap((name) => {
+    const readme = REGISTRY[name].files.find((file) => file.endsWith('README.md'))
+    const constant = `${name.toUpperCase()}_MIGRATIONS`
+    const keepsTables = REGISTRY[name].files.some((file) => upstreamOf(file).includes(`export const ${constant} =`))
+    const wrapped = inFeatures && upstreamOf(readme).includes(WRAPPER_HEADING)
+    return [
+      ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}`] : []),
+      ...(keepsTables && migrations !== null && !migrations.includes(constant) ? [`scripts/migrations.ts: add ['${name}', ${constant}] to its sets, imported from its kit folder, so \`pnpm migrations\` writes ${name}'s D1 files`] : []),
+    ]
+  })
+}
+
 /** Runs each pnpm step in a new app until one fails; returns the steps left, that one first. Without pnpm, all of them. */
 const runFirst = (root, steps) => {
   if (spawnSync('pnpm', ['--version'], { encoding: 'utf8' }).status !== 0) {
@@ -1366,6 +1389,7 @@ const commands = {
       for (const line of ignored.todo) console.log(line)
       console.log(`Brand: ${RESVG_INSTALL} && \`kit brand\` renders ${BRAND_MODULE}, then createAgentApi({ …, brand: createBrand(BRAND, BRAND_ASSETS) }) (src/kit/brand/README.md)`)
     }
+    for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
     if (flags.has('--install')) install(modules)
     else console.log(`Dependencies: ${installCommand(modules)}`)
     const entries = modules.filter((name) => REGISTRY[name].entry).map((name) => keyOf(name, REGISTRY[name].files.find((file) => file.endsWith('/index.ts')) ?? REGISTRY[name].files[0], webDir))

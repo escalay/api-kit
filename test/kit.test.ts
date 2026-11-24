@@ -444,6 +444,16 @@ describe('the copy-in CLI', () => {
     expect(existsSync(join(app, 'src/kit/boards/index.ts'))).toBe(true)
   })
 
+  it('names the migrations line an older app’s scripts/migrations.ts lacks for a part with tables', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    await writeFile(join(app, 'package.json'), '{ "name": "older" }')
+    await mkdir(join(app, 'scripts'))
+    await writeFile(join(app, 'scripts/migrations.ts'), "const sets = [['oauth', OAUTH_MIGRATIONS], ['guards', GUARD_MIGRATIONS]]\n")
+    const added = cli(app, 'add', 'people', 'pagination')
+    expect(added.stdout).toContain("scripts/migrations.ts: add ['people', PEOPLE_MIGRATIONS] to its sets, imported from its kit folder, so `pnpm migrations` writes people's D1 files")
+    expect(added.stdout).not.toMatch(/'(pagination|db)'/)
+  })
+
   it('tells your edits from the kit’s and never overwrites an edit without --force', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     cli(app, 'add', 'core', '--dir', 'kit')
@@ -852,6 +862,8 @@ describe('the copy-in CLI', () => {
       expect(await readFile(join(app, 'src/brand.gen.ts'), 'utf8')).not.toContain('png:')
       const doctor = cli(app, 'doctor')
       expect(doctor.stdout).toContain('note     brand: src/brand.gen.ts has the SVG only')
+      // server.ts and worker.ts each name where a caller's address comes from
+      expect(doctor.stdout).not.toContain('names no source for the caller')
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
       // The product's own skill, the place for developer skills, and the link coding agents find them through
       for (const path of ['guide/skills/demo-api/SKILL.md', 'guide/skills/demo-api/references/find-your-way.md', '.agents/skills/README.md']) expect(existsSync(join(app, path)), path).toBe(true)
@@ -1015,6 +1027,62 @@ describe('the copy-in CLI', () => {
       // Nothing of the app preset reaches an API-only app
       for (const text of [edgeWrangler, await readFile(join(parent, 'edge-api/src/app.ts'), 'utf8'), await readFile(join(parent, 'edge-api/vitest.config.ts'), 'utf8'), await agentsOf('edge-api')]) expect(text).not.toMatch(/preset:|"assets"|home: 'app'|plugin-react|vite build/)
       expect(existsSync(join(parent, 'edge-api/web'))).toBe(false)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('takes people and setup the way their READMEs say, and passes its own tests on both runtimes', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-team-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'team-api', '--no-install').status).toBe(0)
+      const app = join(parent, 'team-api')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      const edit = async (path: string, from: string, to: string) => {
+        const text = await read(path)
+        expect(text, `${path}: ${from}`).toContain(from)
+        await writeFile(join(app, path), text.replace(from, to))
+      }
+      expect(cli(app, 'feature', 'things', '--switch').status).toBe(0)
+      const added = cli(app, 'add', 'people', 'setup')
+      expect(added.stdout).toContain('Wire people: a feature in src/features/people/ listed in src/features/index.ts, and the lines in src/app.ts: src/kit/people/README.md › In an app made by `kit init`')
+      // The starter's script finds the parts' tables itself
+      expect(added.stdout).not.toContain('scripts/migrations.ts: add')
+      // Each part's feature as its README writes it, listed in the order it says
+      for (const part of ['people', 'setup']) {
+        const readme = await read(`src/kit/${part}/README.md`)
+        const block = readme.slice(readme.indexOf('### In an app made by `kit init`')).match(/```ts\n([\s\S]*?)```/)![1]!
+        expect(block.split('\n')[0]).toMatch(new RegExp(`^// src/features/${part}/index\\.ts, listed in src/features/index\\.ts`))
+        await mkdir(join(app, 'src/features', part))
+        await writeFile(join(app, 'src/features', part, 'index.ts'), block)
+        await edit('src/features/index.ts', '// kit:imports', `import { feature as ${part} } from './${part}/index.js'\n// kit:imports`)
+        await edit('src/features/index.ts', '  // kit:features', `  ${part},\n  // kit:features`)
+      }
+      // src/app.ts as the READMEs say: the setup secret, the sign-in routes and the session, and the owner by passkey
+      await edit('src/app.ts', 'FEATURES_OFF?: string }', 'FEATURES_OFF?: string; SETUP_CODE?: string }')
+      await edit('src/app.ts', "auth: { realm: 'team-api', keys: parseApiKeys(env.API_KEYS), access },", "auth: { realm: 'team-api', keys: parseApiKeys(env.API_KEYS), access: access && { ...access, roleOf: roleOf(db) }, open: [...PEOPLE_OPEN_PATHS, ...SETUP_OPEN_PATHS], session: sessionOf(db) },")
+      await edit('src/app.ts', 'const owner = access ? accessOwner(access) : async () => null', "const owner = async (c: Context) => {\n    const person = await personOf(c, db)\n    return person?.role === 'owner' ? person.email : access ? accessOwner(access)(c) : null\n  }")
+      await edit('src/app.ts', 'featureTools, parseApiKeys,', 'featureTools, parseApiKeys, PEOPLE_OPEN_PATHS, personOf, roleOf, sessionOf, SETUP_OPEN_PATHS,')
+      await edit('src/app.ts', 'import BRAND from', "import type { Context } from 'hono'\nimport BRAND from")
+      // people's whole sign-in as a test, and the owner it signs in switches a feature, as a deployment key can
+      const people = await read('src/kit/people/README.md')
+      const flow = people.slice(people.indexOf('// test/owner.test.ts')).split('```')[0]!
+      const switched = "\nit('lets the owner signed in by passkey switch a feature off', async () => {\n  expect(await send('PATCH', '/api/features/things', { on: false })).toMatchObject({ key: 'things', on: false })\n})\n"
+      await writeFile(join(app, 'test/owner.test.ts'), flow + switched)
+      const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
+      expect(migrations.status, migrations.stderr).toBe(0)
+      const files = await readdir(join(app, 'migrations'))
+      for (const step of ['people_1', 'setup_1']) expect(files.filter((file) => file.endsWith(`_${step}.sql`)), step).toHaveLength(1)
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+      for (const name of ['claims the deployment, makes a passkey, signs in again, and approves an agent', 'lets the owner signed in by passkey switch a feature off', 'answers every feature list route with a key, and refuses without one', 'runs every MCP tool against its route']) expect(tests.stdout).toContain(name)
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
