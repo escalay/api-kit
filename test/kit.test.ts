@@ -1601,6 +1601,23 @@ describe('MCP (2026-07-28)', () => {
     expect((await rpc(app, 'tools/list', {}, {})).status).toBe(401)
   })
 
+  it('answers the request the mcp README writes by hand, and says what a request without its _meta lacks', async () => {
+    const { app } = await sampleApi()
+    const readme = readFileSync(join(import.meta.dirname, '..', 'src/mcp/README.md'), 'utf8')
+    const curl = readme.match(/```bash\n# By hand[^\n]*\n(curl [\s\S]*?)\ncurl /)![1]!.replaceAll('\\\n', ' ')
+    const headers = Object.fromEntries([...curl.matchAll(/-H ['"]([^:]+): ([^'"]+)['"]/g)].map(([, name, value]) => [name!, value!.replace('$KEY', auth.authorization.slice('Bearer '.length))]))
+    const body = curl.match(/-d '([^']+)'/)![1]!
+    const listed = await (await app.request('/mcp', { method: 'POST', headers, body })).json()
+    expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toContain('get_app')
+    const bare = await (await app.request('/mcp', { method: 'POST', headers, body: JSON.stringify({ ...JSON.parse(body), params: {} }) })).json()
+    expect(bare.error.code).toBe(-32602)
+    expect(readme).toContain('a request without it is a `-32602`')
+    // Without the header, as a 2025-era server: an event stream here, since the request accepts one
+    const { 'mcp-protocol-version': _version, 'mcp-method': _method, ...older } = headers
+    const streamed = await (await app.request('/mcp', { method: 'POST', headers: older, body: JSON.stringify({ ...JSON.parse(body), params: {} }) })).text()
+    expect(JSON.parse(streamed.split('\n').find((line) => line.startsWith('data: '))!.slice('data: '.length)).result.tools.length).toBeGreaterThan(0)
+  })
+
   it('reads a tool’s route from its call, or takes the one it gives', () => {
     const base = { title: 'T', description: 'D', summarize: () => '' }
     expect(routeOf(mcpTool({ ...base, name: 'find', input: z.object({ q: z.string() }), call: ({ q }) => ({ path: '/api/v1/search', query: { q } }) }))).toBe('GET /api/v1/search')

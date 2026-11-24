@@ -61,7 +61,7 @@ expect(cliGaps({ tools, resources, jobs })).toEqual([])
 |---|---|
 | `cliSnapshot({ app, version, tools, resources, jobs })` | every command as the CLI package carries it (`sdk/cli/commands.json`): `scripts/openapi.ts` writes it as `JSON.stringify(snapshot, null, 2) + '\n'`, and `sdk/test/cli.test.ts` compares the file byte for byte, so a changed tool fails until `pnpm sdk:types` runs |
 | `flagsOf(schema)` | an input schema's properties as the CLI's flags (`{ name, key, type, description, required, multiple, enum?, default? }`), positional ones included |
-| `softAuthenticator()` | a software passkey: `register(options, origin)` and `login(options, origin)` answer the WebAuthn ceremonies the way a phone would, so claim → register → verify → login → verify runs in CI (the people and setup parts) |
+| `softAuthenticator()` | a software passkey: `register(options, origin)` and `login(options, origin)` answer the WebAuthn ceremonies the way a phone would, so claim → register → verify → login → verify runs in CI (the people and setup parts). `options` is the one inside the options route's `{ challengeId, options }`; `challengeId` goes back with the answer (the people README's test) |
 | `approveSignIn(app, query, { headers, decision, form })` | approves an OAuth sign-in the way a browser does: it opens `/oauth/authorize`, keeps the ticket cookie the page sets, and posts a form on it same-origin with that cookie: the kit's consent form with `decision`, or with `form` the app's own (`{ action: '/sharing/join', fields: { code: 'BDKM-QXTW' } }`). It returns the answer: the 302 to the client, or the app's page |
 
 | File | What |
