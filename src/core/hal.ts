@@ -18,12 +18,38 @@ export type Link = { href: string; title?: string; templated?: boolean; type?: s
 export type Links = Record<string, Link>
 export type LinkTarget = string | { path: string; title?: string; templated?: boolean; type?: string } | null | undefined
 
-// Behind Traefik and Cloudflare the socket is plain http: trust the forwarded proto and host for absolute URLs
-export const originOf = (c: Context) => {
-  const url = new URL(c.req.url)
-  const proto = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim()
-  return `${proto ?? url.protocol.replace(':', '')}://${c.req.header('x-forwarded-host') ?? url.host}`
+/** A bare host and optional port: a name of unreserved characters (RFC 3986), an IPv4 address or a bracketed IPv6 one. */
+const BARE_HOST = /^(?:[\w.~-]+|\[[\da-f:.]+\])(?::\d{1,5})?$/i
+/** The first item of a forwarded header, which a client can set when proxies append: set `publicOrigin`. */
+const firstOf = (value: string | null) => value?.split(',')[0]?.trim()
+
+/**
+ * The public origin of a raw request: behind Traefik and Cloudflare the socket is plain http, so it takes the first
+ * `X-Forwarded-Proto` when it is `http` or `https` and the first `X-Forwarded-Host` when it is a bare host[:port]. Any
+ * other value (a path, query, fragment or user in it) is ignored for the request URL's own, so a forged host never
+ * names a path. A caller can still forward any bare host: an app behind a proxy or on more than one host sets
+ * `publicOrigin`.
+ *
+ * @example
+ * originOfRequest(new Request('http://10.0.0.2/x', { headers: { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'cookbook.example.com' } })) // 'https://cookbook.example.com'
+ * originOfRequest(new Request('http://localhost/x', { headers: { 'x-forwarded-host': 'localhost/s/soups' } }))                                // 'http://localhost'
+ */
+export const originOfRequest = (request: Request) => {
+  const url = new URL(request.url)
+  const proto = firstOf(request.headers.get('x-forwarded-proto'))?.toLowerCase()
+  const scheme = proto === 'http' || proto === 'https' ? proto : url.protocol.slice(0, -1)
+  const host = firstOf(request.headers.get('x-forwarded-host'))
+  const forwarded = host && BARE_HOST.test(host) && URL.canParse(`${scheme}://${host}`)
+  return `${scheme}://${forwarded ? host : url.host}`
 }
+
+/**
+ * The public origin of the request a handler serves, for absolute links: `originOfRequest(c.req.raw)`.
+ *
+ * @example
+ * linksOf(originOf(c), { self: '/api/v1/cooks/123' })
+ */
+export const originOf = (c: Context) => originOfRequest(c.req.raw)
 
 /** A path with its query, leaving out empty values; arrays repeat the key (`platform=ios&platform=web`). */
 export const pathWith = (path: string, query: Record<string, string | number | boolean | string[] | null | undefined> = {}) => {

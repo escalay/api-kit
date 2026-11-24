@@ -112,8 +112,6 @@ claim. Name the one place it comes from with `address`; every guard and part rea
 - The default, `'headers'`, reads `cf-connecting-ip`, else the whole `X-Forwarded-For`, as sent. A caller who can reach
   the app directly can send either, so set `address` on Node. `kit doctor` notes an app on `@hono/node-server` that
   names none.
-- `rateLimit({ key })` replaces the caller in the bucket (`(c) => \`pack:${…}\``: per pack, per grant, per anything);
-  `null` lets the call through uncounted.
 
 ### Path patterns
 
@@ -137,7 +135,7 @@ connect: MCP clients through OAuth (the 401 names the resource metadata), others
 | `auth.ts` | who is calling (below) |
 | `guards.ts` | idempotency and `showOnce`, rate limits (below) |
 | `problem.ts` | RFC 9457: `ProblemError` (throw it), `PROBLEMS`, `problemResponses(400, 404…)` for a route's documented errors, `problemResponse`; what `createAgentApi` wires: `validationHook` (OpenAPIHono's `defaultHook`: a failed zod check as a 400 naming every bad field), `errorHandler`, `notFoundHandler` (a wrong path says how to find the right one), `problemBody`, `ProblemSchema`, `PROBLEM_JSON`, `UPSTREAM_RETRY_AFTER` (the seconds an `upstream` problem asks a client to wait) |
-| `hal.ts` | `linksOf(origin, { self, next… })`, `originOf(c)` (the public origin behind proxies), `pathWith(path, query)`, `LinksSchema` (and one link's, `LinkSchema`), `HAL_JSON` |
+| `hal.ts` | `linksOf(origin, { self, next… })`, `originOf(c)` and `originOfRequest(request)` (the public origin behind proxies; a forwarded host only when bare), `pathWith(path, query)`, `LinksSchema` (and one link's, `LinkSchema`), `HAL_JSON` |
 | `cache.ts` | `snapshotEtag` (on Workers pass `boot: env.CF_VERSION_METADATA.id`), `CACHE` presets, `cacheControl` |
 | `discovery.ts` | api-catalog, Link headers, robots.txt with Content Signals, Markdown for agents, skills index, Server Card, `serveAiCatalog`, `publicOriginOf(app, c)` (the origin a publicly cached document names: the OAuth server's `publicOrigin` when set, else the request's). The documents and their helpers, for an app that serves one itself: `apiCatalog`, `LINK_HEADER`, `WELL_KNOWN`, `robotsTxt`, `sitemapXml`, `poppyJson`, `skillsIndex`, `frontmatterOf`, `tarGz` (the same files always give the same bytes), `serverCard`, `reverseDnsName`, `aiCatalog`, `recordMounted` and `mountedOf` (what the guide and MCP serve, so the AI Catalog lists exactly that), `sendPublic` (open CORS, an hour's caching, a strong ETag), `wantsMarkdown`, `markdownTokens`, `sha256`, `MODERN_PROTOCOL_VERSION`, and the media types and schemas: `OPENAPI_TYPE`, `MARKDOWN_TYPE`, `API_CATALOG_TYPE`, `SKILLS_INDEX_SCHEMA`, `SERVER_CARD_SCHEMA`, `SERVER_CARD_TYPE`, `AI_CATALOG_TYPE` |
 | `hooks.ts` | `tellApp(hook, call)`: tells an app's hook (`onKeyChange`, `onSwitch`, `onTeamChange`, …) once its change is made; one that throws is logged with `console.error`, never answered, so the request still succeeds |
@@ -246,8 +244,9 @@ stateDiagram-v2
 
 ## Limits
 
-- `memoryGuardStore` is one process: on Workers every isolate has its own, so pass `dbGuardStore(db)` there. It keeps
-  at most `maxEntries` (2000) windows and answers.
+- `memoryGuardStore` is one process: on Workers every isolate has its own, so pass `dbGuardStore(db)` there.
+- `originOf` takes any bare host a caller forwards: behind a proxy or on more than one host, set the oauth part's
+  `publicOrigin`.
 - Idempotency answers are kept 24 hours; a lock lapses after 60 seconds (a request that died frees its key then).
 - `Jobs` on Workers: a Cloudflare Queue, delay capped at 12 hours. `waitFor`: keep a wait under ~25 seconds.
 - Node and Workers: the core imports on both (the `workers` test project imports the whole kit at global scope).
@@ -258,7 +257,7 @@ stateDiagram-v2
   and the guide.
 - `test/guards.test.ts` and `test/guard-store-contract.ts`: the contract above on memory, node:sqlite and D1
   (`test/workers/guards.test.ts`), with `showOnce`.
-- `test/core-parts.test.ts`: ids, waits, jobs.
+- `test/core-parts.test.ts`: ids, waits, jobs, forwarded origins.
 
 ## Upgrading
 

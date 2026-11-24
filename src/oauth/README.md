@@ -378,7 +378,7 @@ sequenceDiagram
 | a double-clicked Allow, or two tabs | a ticket, a claim attempt and a typed device code are each taken once |
 | a stored approval standing in for a click | none exists: the same client and approver signing in again see the page again |
 | a redirect before anything is checked | with `approve`, `/oauth/authorize` never redirects before a person acts; redirect URIs are https, http only on this machine, or an app's own scheme |
-| a forged `X-Forwarded-Host` in a cached document or a token's `iss` | `publicOrigin`: the one origin every document, token and check names |
+| a forged `X-Forwarded-Host` in a cached document, a token's `iss` or its audience | `publicOrigin`: the one origin every document, token and check names; unset, only a bare host counts, so a path in it never makes a space's token a root one |
 | a flood of registrations, tickets or device codes | every row written without auth is capped per kind, unused registrations lapse in a week, and `limits` counts per address |
 | guessing a device code or a claim code | 8 letters from 20, 10 minutes, 5 wrong codes in 10 minutes per signed-in person; a claim code dies after 5 wrong tries |
 | a space's token used at another space | the grant's audience (RFC 8707) and `accepts`; an invite binds its space with `complete`'s `resource` |
@@ -496,7 +496,7 @@ Every grant is bound to one resource, signed as its tokens' `aud` and on the cal
 - The resource the client sends at `/oauth/authorize` (or `/oauth/device_authorization`), when this server issues for
   it: the origin, `mcpPath` (default `/mcp`), and with `resources` set, what it approves.
 - Else the **root**, the issuer's origin: a client that sends no `resource`, or (without `resources`) one the app does
-  not describe. The default `accepts` takes a root token everywhere on the origin, so nothing changes for it.
+  not describe.
 - An agent registered at `/agent/identity` (auth.md) names no resource: its grant gets the root when it registers,
   and its claim, refresh and jwt-bearer tokens carry it. One registered before audiences stays without, even if
   claimed after.
@@ -541,8 +541,7 @@ for them, or otherwise verify they are the intended recipient):
   agent registration from before audiences has none, and none ever gains one. Connections made before keep working.
 - **A root token is accepted at a space's resource:** the default `accepts` takes it everywhere on the origin, so a
   client that sends no `resource`, or a connection made before the app had spaces, keeps working there. The app, with
-  one issuer and a row per grant, is then what verifies the token is meant for it. An app that wants a space to take
-  only its own tokens refuses the root there in its own `accepts`.
+  one issuer and a row per grant, is then what verifies the token is meant for it.
 - **A token whose `aud` is the origin plus `mcpPath` is accepted everywhere on the origin** by the default `accepts`:
   MCP tools call `/api` in-process with the same bearer, so the token for the single MCP must fit the whole origin,
   spaces included. An app that wants otherwise refuses it in its own `accepts`, as for the root.
@@ -556,7 +555,7 @@ for them, or otherwise verify they are the intended recipient):
   `sitemap.xml`, `poppy.json` (organization, APIs and issuer), and with their parts the Server Card, the Agent Card,
   the skills index and archives, and the AI Catalog. A forged `X-Forwarded-Host` then reaches no shared cache, and the
   metadata and auth.md are cached publicly (`public, max-age=300`). Unset, each request's own origin is used,
-  forwarded host included, and the metadata and auth.md are `no-store`; the other discovery documents stay
+  a bare forwarded host included, and the metadata and auth.md are `no-store`; the other discovery documents stay
   `public, max-age=3600`, so behind a proxy that passes a caller's `X-Forwarded-Host` through, they can be
   poisoned. Not covered either way: what is never cached publicly (HAL links, `/openapi.json`, the guide, problem
   `type` URLs) keeps the request's origin. It must be an origin with no path (`createOAuth` throws otherwise), and it
@@ -716,7 +715,8 @@ The requests are the Flows diagram (Device authorization). Nothing to wire: `mou
 - OAuth rows live in SQLite or D1, never Workers KV: KV is eventually consistent, so a new code reads as unknown and a
   revoke can be undone.
 - Keep the OAuth paths open (`OAUTH_OPEN_PATHS`); `createAgentApi` does it when `oauth` is set, private mode included.
-- An app whose sign-in is reachable outside Access passes `publicOrigin` and `limits`.
+- An app whose sign-in is reachable outside Access passes `publicOrigin` and `limits`; one behind a proxy or
+  reachable by more than one host, `publicOrigin`.
 - Rules after cloudflare/workers-oauth-provider and better-auth (both MIT).
 - Standard: `docs/STANDARD.md` §7, §11
 

@@ -32,6 +32,12 @@ the version in `kit.json` up.
 - A new app names where a caller's address comes from: `createApp({ db, env, address })`, `'socket'` in `server.ts`
   and `{ header: 'cf-connecting-ip' }` in `worker.ts`, passed to `createAgentApi`. An older app that `kit doctor`
   notes for it sets `createAgentApi({ address })` the same way (core README, The caller's address).
+- **`originOf(c)` takes a forwarded host only when it is a bare host[:port]**, and a forwarded proto only when `http`
+  or `https`: any other value (`localhost/s/soups`, a query, a fragment, a user, an empty one) gives the request URL's
+  own origin. Of a list, the first item is taken, as for the proto. New: `originOfRequest(request)`, the same for a raw
+  `Request`, which the mcp part now uses for its server identity, so update core and mcp together. Nothing to change
+  in the app unless it relied on a forwarded host with a path in it; an app behind a proxy or reachable by more than
+  one host sets the oauth part's `publicOrigin`.
 
 ### 1.31.0
 
@@ -108,6 +114,16 @@ the version in `kit.json` up.
   file in `migrations/` (`pnpm check` and CI fail until it is there), and the deploy applies it.
 
 ## oauth
+
+### Unreleased (after 1.31.0)
+
+- **Fixed: a forwarded host with a path in it no longer widens a token.** Without `publicOrigin`, the root (`rootOf`)
+  and every audience check followed `X-Forwarded-Host` as sent, so a client refreshing a token for `/s/soups/mcp`
+  with `X-Forwarded-Host: localhost/s/soups` got one whose audience was the forged root plus `mcpPath`, which the
+  default `accepts` took everywhere: a space's token became a root token. `originOf` (core) now takes only a bare
+  host, so the root never has a path. Update core with it. An app reachable by more than one host or behind a proxy
+  sets `publicOrigin`: a caller can still forward any bare host, which moves the root to that origin but never puts
+  a path in it, so no token widens.
 
 ### 1.31.0
 

@@ -801,6 +801,38 @@ describe('OAuth audiences: each token bound to the resource it was asked for (RF
     expect(await (await app.request('/s/beta/mcp', { method: 'POST', headers: { authorization: `Bearer ${mcp.access_token}` } })).json()).toEqual({ api: 200 })
   })
 
+  it('never widens a token to the root for a forwarded host with a path in it, on refresh, issuing or use', async () => {
+    const resourceOf = (c: Context) => `${originOf(c)}${/^\/s\/[a-z]+\/mcp/.exec(c.req.path)?.[0] ?? ''}`
+    const { app } = await oauthApp(memoryOAuthStore(), { resources: (path) => /^\/s\/[a-z]+\/mcp$/.test(path), resourceOf })
+    app.post('/s/:name/mcp', (c) => c.json({ ok: true }))
+    const refusedElsewhere = async (accessToken: string, headers: Record<string, string>) => {
+      for (const [path, method] of [['/s/beta/mcp', 'POST'], ['/api/v1/things', 'GET'], ['/mcp', 'POST']] as const)
+        expect((await app.request(path, { method, headers: { ...headers, authorization: `Bearer ${accessToken}` } })).status, `${path} ${JSON.stringify(headers)}`).toBe(401)
+    }
+    const { tokens } = await signedIn(app, { resource: ALPHA })
+    let refreshToken = tokens.refresh_token
+    // Each forged host, if taken, makes the root `http://localhost/s/alpha`, and ALPHA its root + mcpPath
+    for (const host of ['localhost/s/alpha', 'localhost/s/alpha?', 'localhost/s/alpha#', 'x@localhost/s/alpha', 'localhost\\s\\alpha']) {
+      const forged = { 'x-forwarded-host': host }
+      const refreshed = await app.request('/oauth/token', { ...form({ grant_type: 'refresh_token', refresh_token: refreshToken }), headers: { 'content-type': 'application/x-www-form-urlencoded', ...forged } })
+      const next = (await refreshed.json()) as { access_token: string; refresh_token: string }
+      refreshToken = next.refresh_token
+      expect([decodeJwt(next.access_token).iss, audOf(next.access_token)], host).toEqual([ORIGIN, ALPHA])
+      await refusedElsewhere(next.access_token, forged)
+      expect((await app.request('/s/alpha/mcp', { method: 'POST', headers: { ...forged, authorization: `Bearer ${next.access_token}` } })).status, host).toBe(200)
+      // Issued under the forged host from the start: the resource it asks for stays one space's, and the forged root is no resource
+      const query = new URLSearchParams({ response_type: 'code', client_id: await registered(app), redirect_uri: 'http://localhost:7777/cb', code_challenge: createHash('sha256').update('v'.repeat(43)).digest('base64url'), code_challenge_method: 'S256', resource: ALPHA })
+      const approved = await approveSignIn(app, query, { headers: { 'x-test-owner': OWNER, ...forged } })
+      const code = new URL(approved.headers.get('location')!).searchParams.get('code')!
+      const exchanged = await app.request('/oauth/token', { ...form({ grant_type: 'authorization_code', code, client_id: query.get('client_id')!, code_verifier: 'v'.repeat(43) }), headers: { 'content-type': 'application/x-www-form-urlencoded', ...forged } })
+      const issued = ((await exchanged.json()) as { access_token: string }).access_token
+      expect([decodeJwt(issued).iss, audOf(issued)], host).toEqual([ORIGIN, ALPHA])
+      await refusedElsewhere(issued, forged)
+      const asked = await app.request(`/oauth/authorize?${new URLSearchParams({ ...Object.fromEntries(query), resource: `${ORIGIN}/s/alpha` })}`, { headers: { 'x-test-owner': OWNER, ...forged } })
+      expect(asked.status, host).toBe(400)
+    }
+  })
+
   it('refuses a resource the server does not issue for with invalid_target: a page at authorize, JSON at the token endpoints', async () => {
     const { app } = await spacesApi()
     await refusedAtAuthorize(app, `${ORIGIN}/s/alpha/files`)
