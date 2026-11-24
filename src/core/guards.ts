@@ -217,7 +217,10 @@ const NEVER_KEPT = 'kit:never-kept'
  */
 export const neverKeep = (c: Context) => c.set(NEVER_KEPT as never, true as never)
 
-/** The header on an answer that shows a secret once, for whatever relays it (A2A keeps its task without it). */
+/**
+ * The header on an answer that shows a secret once, for whatever relays it (A2A keeps its task without it). `showOnce`
+ * sets it on the answer `c.json` builds, and `idempotency` on any answer, a `Response` the route built itself too.
+ */
 export const SHOWN_ONCE_HEADER = 'shown-once'
 
 /**
@@ -242,6 +245,17 @@ const storedAnswerOf = async (c: Context, bodyHash: string): Promise<StoredAnswe
   if (shownOnce !== undefined) return { version: ANSWER_VERSION, bodyHash, shownOnce }
   const body = Buffer.from(await c.res.clone().arrayBuffer()).toString('base64')
   return { version: ANSWER_VERSION, bodyHash, status: c.res.status, headers: [...c.res.headers.entries()], body }
+}
+
+/** Sets `Shown-Once: true` on an answer `showOnce` marked, also one a route built itself as a `Response`. */
+const markShownOnce = (c: Context) => {
+  if (c.get(SHOWN_ONCE as never) !== undefined) c.res.headers.set(SHOWN_ONCE_HEADER, 'true')
+}
+
+/** A request the guard keeps nothing of: only its answer marked, when `showOnce` was called. */
+const answerUnkept = async (c: Context, next: () => Promise<void>) => {
+  await next()
+  markShownOnce(c)
 }
 
 /** A stored answer this version may replay; one kept whole by 1.30.0 (no version) counts as none. */
@@ -280,8 +294,8 @@ export type IdempotencyOptions = {
 export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, store = memoryGuardStore(), keep = keepSuccess, skip = [] }: IdempotencyOptions = {}): MiddlewareHandler =>
   async (c, next) => {
     const key = c.req.header('idempotency-key')
-    if (!key || (c.req.method !== 'POST' && c.req.method !== 'PATCH')) return next()
-    if ([...NEVER_KEPT_PATHS, ...skip].some((pattern) => matches(c.req.path, pattern))) return next()
+    if (!key || (c.req.method !== 'POST' && c.req.method !== 'PATCH')) return answerUnkept(c, next)
+    if ([...NEVER_KEPT_PATHS, ...skip].some((pattern) => matches(c.req.path, pattern))) return answerUnkept(c, next)
     if (key.length > 255) return problemResponse(c, 'bad_request', { detail: 'Idempotency-Key is at most 255 characters.', errors: [{ in: 'header', path: 'Idempotency-Key', message: 'too long' }] })
     const id = `${callerOf(c)} ${c.req.method} ${c.req.path} ${key}`
     const bodyHash = createHash('sha256').update(new Uint8Array(await c.req.raw.clone().arrayBuffer())).digest('hex')
@@ -299,6 +313,7 @@ export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, stor
       await store.release(id)
       throw error
     }
+    markShownOnce(c)
     // What isn't kept (a refusal, a server error, a relay's answer) frees the key: a retry with it runs again
     if (c.get(NEVER_KEPT as never) || !keep(c.res.status)) return void (await store.release(id))
     await store.save(id, await storedAnswerOf(c, bodyHash), now + ttlMs)

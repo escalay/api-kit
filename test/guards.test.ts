@@ -296,6 +296,22 @@ describe('idempotency', () => {
       expect(runs).toBe(2)
     })
 
+    it('marks an answer shown once that a route built itself, so A2A keeps its task without it', async () => {
+      const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`tester:${hashApiKey(KEY)}`) } })
+      app.post('/api/secrets', (c) => {
+        showOnce(c, 'Made a secret; it is never shown again.')
+        return new Response(JSON.stringify({ secret: 'sk_built_by_hand' }), { status: 201, headers: { 'content-type': 'application/json' } })
+      })
+      relays(app, '/api/secrets')
+      const direct = await app.request('/api/secrets', { method: 'POST', headers: { authorization: `Bearer ${KEY}` } })
+      expect(direct.headers.get('shown-once')).toBe('true')
+      const rpc = async (method: string, params: unknown) =>
+        (await app.request('/a2a', { method: 'POST', headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json', 'a2a-version': '1.0' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })).json() as Promise<any>
+      const sent = await rpc('SendMessage', { message: { messageId: 'm1', role: 'ROLE_USER', parts: [{ text: 'hi' }] } })
+      expect(JSON.stringify(sent)).toContain('sk_built_by_hand')
+      expect(JSON.stringify(await rpc('GetTask', { id: sent.result.task.id }))).not.toContain('sk_built_by_hand')
+    })
+
     it('keeps no secret when idempotency is wired by hand: the relay marks its own answer', async () => {
       const app = new Hono()
       const store = memoryGuardStore()
