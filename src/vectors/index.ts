@@ -32,7 +32,7 @@ const TEXTS_PER_REQUEST = 100
 const IMAGES_PER_REQUEST = 32
 const RETRY_ON = /\b(408|429|5\d\d)\b|fetch failed|ECONNRESET|ETIMEDOUT|terminated/
 
-/** OpenRouter refused for money: the key's own cap or the account's credit ran out. Stops a build; a route answers 503. */
+/** OpenRouter refused for money: the key's own cap or the account's credit ran out. Stops a build; a search route answers 429 `spend_cap`. */
 export class SpendCapError extends Error {}
 
 /** A text, or an image as a data URL (`imageDataUrl`). */
