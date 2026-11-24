@@ -176,32 +176,24 @@ describe('onGrant', () => {
     expect((await chained.join(invite)).status).toBe(200)
   })
 
-  it('opens the invite again when the exchange throws after the claim: on the client’s retry, or once its first token goes unused for an hour', async () => {
+  it('opens the invite again at once when the exchange throws after the claim: the kit withdraws the grant', async () => {
     let broken = true
-    // The app chained the wrong way round, and its hook threw: the kit issues nothing and tells no one
+    // The app chained the wrong way round, and its hook threw: the kit withdraws the grant before the 500
     const chained: Awaited<ReturnType<typeof grantsApp>> = await box({
       oauth: { onGrant: async (grant, c) => (await chained.sharing.oauth.onGrant(grant, c)) && (broken ? Promise.reject(new Error('the app’s store is down')) : true) },
     })
     const invite = await chained.makeInvite()
     const { exchange } = await chained.signIn({ resource: SOUPS, decision: chained.inviteDecision(invite) })
     expect((await exchange()).status).toBe(500)
-    const [member] = await chained.membersOfInvite(invite.id)
-    expect([await chained.inviteState(invite.id), member?.firstUsedAt, chained.revoked]).toEqual(['redeemed', null, []])
-    // The code is spent, so the client's retry is a replay: the kit ends the grant, and the part deletes the row whose token was never used
+    expect([await chained.inviteState(invite.id), await chained.membersOfInvite(invite.id), chained.revoked.map((told) => told.reason)]).toEqual(['open', [], ['withdrawn']])
+    // The spent code's retry gives nothing and changes nothing; a new sign-in with the invite joins
     expect((await exchange()).status).toBe(400)
-    expect([await chained.inviteState(invite.id), await chained.membersOfInvite(invite.id), chained.revoked.map((told) => told.reason)]).toEqual(['open', [], ['replayed']])
-
-    // No retry: aging deletes the row once its first token has gone unused for an hour
-    const unretried = await chained.makeInvite()
-    expect((await (await chained.signIn({ resource: SOUPS, decision: chained.inviteDecision(unretried) })).exchange()).status).toBe(500)
-    const [stuck] = await chained.membersOfInvite(unretried.id)
-    expect(await chained.repo.deleteUnusedMembers(new Date(Date.now() - FIRST_USE_WITHIN))).toEqual([])
-    expect(await chained.repo.deleteUnusedMembers(new Date())).toEqual([stuck!.grantId])
+    expect(await chained.inviteState(invite.id)).toBe('open')
     broken = false
-    for (const reopened of [invite, unretried]) expect((await chained.join(reopened)).status).toBe(200)
+    expect((await chained.join(invite)).status).toBe(200)
   })
 
-  it('opens the invite again when the token issue throws after the claim, and holds it from a fresh sign-in until then', async () => {
+  it('opens the invite again at once when the token issue throws after the claim', async () => {
     let broken = true
     const memory = memoryOAuthStore()
     // The store fails as the kit writes the access token, after onGrant said yes
@@ -210,20 +202,12 @@ describe('onGrant', () => {
     const invite = await makeInvite()
     const { exchange } = await signIn({ resource: SOUPS, decision: inviteDecision(invite) })
     expect((await exchange()).status).toBe(500)
-    const [member] = await membersOfInvite(invite.id)
-    expect([await inviteState(invite.id), member?.firstUsedAt, revoked]).toEqual(['redeemed', null, []])
-    // A fresh sign-in with the same invite finds it held by the pending member: withdrawn, and the pending row kept
+    expect([await inviteState(invite.id), await membersOfInvite(invite.id), revoked.map((told) => told.reason)]).toEqual(['open', [], ['withdrawn']])
     broken = false
-    const fresh = await join(invite)
-    expect([fresh.status, fresh.tokens.error]).toEqual([400, 'invalid_grant'])
-    expect((await membersOfInvite(invite.id)).map((row) => row.grantId)).toEqual([member!.grantId])
-    // The retry of the spent code is a replay: the pending row goes, and the invite works again
-    expect((await exchange()).status).toBe(400)
-    expect(await inviteState(invite.id)).toBe('open')
     expect((await join(invite)).status).toBe(200)
   })
 
-  it('never reopens an invite whose member was used, or ended by a revoke while onGrant ran (K1’s re-check)', async () => {
+  it('opens the invite again when its grant is revoked while onGrant runs (K1’s re-check withdraws it), never once its member has a token', async () => {
     let during: (grant: SignInGrant) => Promise<unknown> = async () => undefined
     const chained: Awaited<ReturnType<typeof grantsApp>> = await box({
       oauth: { onGrant: async (grant, c) => {
@@ -237,10 +221,9 @@ describe('onGrant', () => {
       during = end
       const invite = await chained.makeInvite()
       expect([reason, (await chained.join(invite)).status]).toEqual([reason, 400])
-      const [member] = await chained.membersOfInvite(invite.id)
-      expect([member?.endedReason, await chained.inviteState(invite.id)]).toEqual([reason, 'redeemed'])
+      expect([reason, await chained.membersOfInvite(invite.id), await chained.inviteState(invite.id)]).toEqual([reason, [], 'open'])
     }
-    // A member whose token was used: a later replay ends it, and the invite stays spent
+    // A member with its tokens: a later replay ends it, and the invite stays spent
     during = async () => undefined
     const used = await chained.makeInvite()
     const token = (await chained.join(used)).tokens.access_token
@@ -257,10 +240,10 @@ describe('onGrant', () => {
     await new Promise((done) => setTimeout(done, 10))
     const answers = await Promise.all([first, exchange()])
     expect(answers.map((answer) => answer.status)).toEqual([400, 400])
-    // Neither exchange got a token: the replay ends the grant, told twice, and the row it never used is deleted
+    // Neither exchange got a token: the retry ends the grant as replayed, then the kit withdraws it, so the row goes
     expect([await membersOfInvite(invite.id), await inviteState(invite.id)]).toEqual([[], 'open'])
-    const told = revoked.filter((one) => one.reason === 'replayed')
-    expect([told.length, new Set(told.map((one) => one.grant)).size]).toEqual([2, 1])
+    expect(revoked.map((one) => one.reason)).toEqual(['replayed', 'withdrawn'])
+    expect(new Set(revoked.map((one) => one.grant)).size).toBe(1)
   })
 
   it('races revokeInvite either way round to one outcome: joined and not revoked, or revoked and not joined', async () => {

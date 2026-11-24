@@ -272,7 +272,7 @@ sequenceDiagram
   alt first use
     Token->>Token: client, redirect, verifier, the client not revoked
     Token->>Token: onGrant (false withdraws it: invalid_grant)
-    Token->>Store: the revoke markers again: ended meanwhile, invalid_grant (onRevoke told again)
+    Token->>Store: the revoke markers again: ended meanwhile, invalid_grant (withdrawn)
     Token-->>Client: access token (an hour) and refresh token (generation 0)
   else used already, sent again with the right client and verifier
     Token->>Store: end the grant the first exchange got (onRevoke: replayed)
@@ -315,7 +315,7 @@ flowchart LR
   revokeGrant["revokeGrant(grant)"] --> marker["a revoked marker for the grant, kept 30 days and 20 minutes"]
   revokeEndpoint["/oauth/revoke with a refresh token"] --> marker
   replay["a used code or refresh token sent again"] --> marker
-  withdrawn["onGrant said false"] --> marker
+  withdrawn["onGrant said false, or failed after yes"] --> marker
   marker --> told["onRevoke: grant, client, reason (a throw is logged)"]
   revokeClient["revokeClient(client)"] --> clientMarker["a revoked marker for the client, the registration dropped"]
   clientMarker --> toldClient["onRevoke: client, client_revoked"]
@@ -374,9 +374,9 @@ sequenceDiagram
 | a stolen refresh token | rotation on every use; any earlier token of a live family, sent again or revoked at `/oauth/revoke`, ends the grant; the grace only ever gives the same successor |
 | a refresh token made up from a grant id (every access token carries its grant) | its MAC under a secret derived from the signing key: a made-up one ends nothing |
 | an approval posted from another site | the same-origin rule on every approval POST: `Sec-Fetch-Site: same-origin`, or with no such header an `Origin` equal to the issuer's; `same-site` and `Origin: null` are refused |
-| a ticket opened in one browser approved in another | an HttpOnly, SameSite=Lax nonce cookie binds the ticket to the browser that opened it; the ticket keeps only its SHA-256 |
+| a ticket opened in one browser approved in another | the nonce cookie (Rules) binds it to the browser that opened it |
 | a double-clicked Allow, or two tabs | a ticket, a claim attempt and a typed device code are each taken once |
-| a stored approval standing in for a click | none exists: the same client and approver signing in again see the page again |
+| a stored approval standing in for a click | none exists (Rules) |
 | a redirect before anything is checked | with `approve`, `/oauth/authorize` never redirects before a person acts; redirect URIs are https, http only on this machine, or an app's own scheme |
 | a forged `X-Forwarded-Host` in a cached document, a token's `iss` or its audience | `publicOrigin`: the one origin every document, token and check names; unset, only a bare host counts, so a path in it never makes a space's token a root one |
 | a flood of registrations, tickets or device codes | every row written without auth is capped per kind, unused registrations lapse in a week, and `limits` counts per address |
@@ -410,17 +410,17 @@ every first token in `onGrant`:
 - `onGrant(grant, c)` hears the first token of every grant. It runs after the kit's own checks (client, redirect and
   verifier for a code; the owner's answer for a device; the collected claim token for a claim), once per grant however
   many polls race. false withdraws it: `invalid_grant` ("This sign-in was withdrawn: start again"), the code or device
-  code spent, the grant ended (`onRevoke` hears `withdrawn`). A grant ended while it ran (a replayed code, a revoke)
-  gets no token either ("This sign-in was revoked"), and `onRevoke` hears it again after. It is not asked on refresh
+  code spent, the grant ended (`onRevoke` hears `withdrawn`). After its yes, whatever stops the tokens withdraws the
+  grant once, `onRevoke` told, before the error: a throw in it or in the tokens' writes (500), or a grant ended while
+  it ran (a replayed code, a revoke: "This sign-in was revoked"). It is not asked on refresh
   or jwt-bearer: judge later requests in `accepts`. An app that keeps its own rows per grant makes them here and
   refuses a token whose grant has none.
 - `onRevoke(revoked)` hears every grant the kit ends, after it has ended it. A grant that lapses (its refresh token
   unused for 30 days) is not told: nothing ends it, its tokens just expire. `revoked`: `revokeGrant` (no `client`: the
   kit keeps no grant-to-client index) or a refresh token at `/oauth/revoke`. `replayed`: a used code or refresh token
-  sent again, its row kept or not. `withdrawn`: `onGrant` said no. `client_revoked`: `revokeClient`, naming the client
+  sent again, its row kept or not. `withdrawn`: `onGrant` said no, or its yes got no token. `client_revoked`: `revokeClient`, naming the client
   and no grant, since it ends every grant of the client. Revoking an access token alone ends no grant and is not told.
-  It is told at least once: a grant ended again (a code sent a third time) is told again, so the app's handler is
-  idempotent. A throw is logged (`onRevoke failed: …`), never answered: the revoke has happened and the request
+  It is told at least once (a code sent a third time is told again): keep the handler idempotent. A throw is logged (`onRevoke failed: …`), never answered: the revoke has happened and the request
   answers as it would have.
 
 **Mirror grants with `onGrant` and `onRevoke`.** An app that lists who holds access (a space's members, their agents)
@@ -428,8 +428,7 @@ makes its row when `onGrant` says yes and drops it when `onRevoke` names its gra
 `client_revoked`. Its `accepts` refuses a token whose grant has no row, so a row the app dropped stops the token on its
 next request, whatever the kit's markers say. A lapsed grant is never named, so the app ages its own rows: `accepts`
 writes the row's last-seen time (every request with the grant's tokens passes there), and a row with none for 30 days
-is dropped with `revokeGrant(grant)`. A grant that refreshed but made no request in those 30 days is ended that way
-too, so its client signs in again rather than holding tokens no row backs.
+is dropped with `revokeGrant(grant)`, even one that refreshed in those 30 days but made no request.
 
 - **Nothing is granted without a click.** There is no approve-at-once answer: a grant follows only `complete`, from a
   same-origin POST, by the browser that opened the ticket, once. A stored approval never stands in for one: the same
@@ -459,7 +458,7 @@ too, so its client signs in again rather than holding tokens no row backs.
   passes `publicOrigin` and `limits` (below): `oauth.mount` runs inside `createAgentApi`, before any middleware the
   app adds, so the app can't limit these endpoints itself.
 - Every page the kit shows (consent, device, claim, errors) carries the app's brand when it has one
-  (`createAgentApi({ brand })`, or `brand` here): its head tags, icon, title and accent. Without one, the plain look.
+  (`createAgentApi({ brand })`, or `brand` here): head tags, icon, title, accent; else the plain look.
 - The consent page names what is asked for, `Sample: /s/alpha/mcp` (all of Sample for the root), and where it
   returns: a host, a custom scheme (any app may claim one), or "an app on this computer" for an http loopback redirect.
 - Rules after cloudflare/workers-oauth-provider (the browser-bound, single-use consent ticket; never redirect before
@@ -763,7 +762,8 @@ The token endpoint and the API:
 | `invalid_grant` "This code is used, expired or unknown." | a code sent twice, too late, or made up |
 | `invalid_grant` "already used, so every refresh token from this sign-in is revoked" | a refresh token replayed: the grant is ended |
 | `invalid_grant` "This sign-in was withdrawn: start again." | `onGrant` said false |
-| `invalid_grant` "This sign-in was revoked: start again." | the grant ended while `onGrant` ran |
+| `invalid_grant` "This sign-in was revoked: start again." | the grant ended while `onGrant` ran: withdrawn |
+| 500 at `/oauth/token`, `onRevoke` told `withdrawn` | a throw in `onGrant` or in the tokens' writes |
 | `invalid_grant` "This client was revoked" / "This sign-in is revoked" | `revokeClient` or `revokeGrant` ended it |
 | `invalid_target` | a second resource, or one other than the authorization request's |
 | `authorization_pending`, `slow_down`, `expired_token`, `access_denied` | a device or a claim still waiting, polled too fast, expired, or refused |

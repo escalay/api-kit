@@ -187,8 +187,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   `<meta name="referrer" content="same-origin">` over the `no-referrer` header); `same-site` is refused, since a
   sibling host is same-site. The approval only narrows scopes, and sets the resource only where the client named none (an invite binds its space; checked as a client's resource would be, the client's own never changed). `onGrant` hears
   the first token of every grant (code, device, claim) after the kit's checks, once, and false withdraws it
-  (`invalid_grant`); a grant ended while it ran (a replayed code, a revoke) gets no token either, and `onRevoke` hears
-  it again, so no row the app wrote outlives its grant; an app that keeps its own client rows makes them in `onGrant`,
+  (`invalid_grant`); after its yes, whatever stops the tokens (a throw in it or in their writes, a grant ended while it
+  ran) withdraws the grant once and `onRevoke` hears `withdrawn`, so no row the app wrote outlives a grant with no token; an app that keeps its own client rows makes them in `onGrant`,
   drops them in `onRevoke`, which hears every grant the kit ends (revoked, replayed, withdrawn, its client revoked; a
   throw there never fails the revoke), and refuses a token whose grant has none. A grant that lapses (its refresh token
   unused for 30 days) is not told, since nothing ends it: the app ages its own rows (a last-seen time written in

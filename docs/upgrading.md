@@ -126,6 +126,11 @@ the version in `kit.json` up.
   a path in it, so no token widens.
 - New: `oauth.publicOrigin`, the origin the server is pinned to (canonical), or undefined when the app set none.
   Nothing to do.
+- **A grant `onGrant` said yes to that gets no token is withdrawn, once.** A throw in `onGrant` (a hook chained
+  after another) or in the token writes now ends the grant and tells `onRevoke` `withdrawn` before the 500; before,
+  nothing was told and a row the app wrote in `onGrant` stayed. A grant ended while `onGrant` ran is also told
+  `withdrawn` now, where 1.31.0 told the marker's reason (`replayed`, `revoked`, `client_revoked`) again. An app whose
+  `onRevoke` treats `withdrawn` as "never became a member" (deletes the row) needs nothing else.
 
 ### 1.31.0
 

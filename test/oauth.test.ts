@@ -1882,7 +1882,7 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     const [a, b] = await Promise.all([first, second])
     expect([a.status, b.status]).toEqual([400, 400])
     expect([(await a.json()).access_token, (await b.json()).access_token]).toEqual([undefined, undefined])
-    expect(events).toEqual(['onGrant starts', 'onRevoke replayed: row not found', 'member row written active', 'onRevoke replayed: row found, ended'])
+    expect(events).toEqual(['onGrant starts', 'onRevoke replayed: row not found', 'member row written active', 'onRevoke withdrawn: row found, ended'])
     expect([...members.values()]).toEqual(['ended'])
   })
 
