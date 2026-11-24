@@ -132,14 +132,18 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   Admin checks use `isAdmin(caller, fixedKeys)`: the owner or a key from `API_KEYS`. The last owner cannot be demoted
   or removed, and an owner cannot remove their last passkey (409). Passkeys work only on the host they were made on.
   A new passkey is named after the device and browser it was made in unless the person names it, and no two of a
-  person's passkeys share a name.
+  person's passkeys share a name. A challenge is taken in one statement (two verifies of it sign in once), and expired
+  challenges and sessions are swept from the writes that add them, at most once a minute. The options routes store a
+  challenge for anyone who asks: an app whose sign-in is open to anyone passes `registerPeople({ limits })` (30 a
+  minute per caller, an anonymous one by address).
 - **Who changed access is on the record:** `registerPeople` takes `onTeamChange` (each person or domain added, its
   role changed, or removed: `who`, the role `from` and `to`, `by`, and for a person added `notify`, false when the
   caller asked that they not be told), `onPasskeyChange` (each passkey added or removed: whose, its id and name, `by`,
   and for one added `via`: `session`, `claim` or `recovery`), `registerSetup` takes `onRecovery` (an owner's recovery
   `started` with a rotated code and `completed` with the passkey it made) and `registerKeys` takes `onKeyChange` (each key
   made or deleted: its id, name and `by`, never its value). An app logs them where it logs the rest, so an owner can
-  see who was let in, and alerts the person whose way in changed.
+  see who was let in, and alerts the person whose way in changed. Every hook is told after its change is made, and a
+  hook that throws is logged, never answered (`tellApp`): the change stands and the request succeeds.
 - **Open without auth:** `/api/health`, `/openapi.json`, `/docs`, `/llms*.txt`, `/agents/*`, `/skills/*`,
   `/problems/*` (no data), and with a brand (§22) its files: `/favicon.ico`, `/icon.svg`, `/icon-192.png`,
   `/icon-512.png`, `/apple-touch-icon.png`, `/og.png`, `/site.webmanifest`, and `/icon-dark.svg`,
@@ -269,7 +273,9 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
 
 ## 10. The agent guide
 
-Templates in `apps/api/guide/`, served live with `{{origin}}`, `{{snapshot}}`, `{{counts.*}}` filled. On Workers the
+Templates in `apps/api/guide/`, served live with `{{origin}}`, `{{snapshot}}`, `{{counts.*}}` filled. `{{origin}}` is
+the app's `publicOrigin` when it has one, so a forwarded host never changes what the guide names; what is kept per
+origin (the spec, the skills discovery renders) is bounded. On Workers the
 folder is shipped as a module (`kit guide` → `src/guide.gen.ts`, served with `serveGuide({ files })`), and
 a test fails when the module is older than the folder. **Anything the
 code already knows is generated, never written by hand**, so the guide cannot drift from the API:
@@ -463,7 +469,9 @@ Where items have pictures or prose worth searching by sense, not by keyword (`ve
 - **Never pay twice.** One append-only JSONL ledger per space, keyed by item, with the hash of model, size and content;
   `embedMissing` embeds only stale items and appends each batch as it returns. Builds run off the request path (a job,
   or a larger machine for big sets), keep ledgers in object storage, start with a pilot (`limit: 200`) and carry a `budget`; a
-  402/403 is a `SpendCapError` that stops the run, and a rerun resumes.
+  402/403 is a `SpendCapError` that stops the run, and a rerun resumes. One run writes a ledger at a time
+  (`<file>.lock`); a torn last line (a crash mid-append) is skipped with a warning and dropped by the next run, and
+  any other line that isn't JSON is damage that stops the read.
 - **Routes.** `GET {path}?q=&by=look|meaning|both` (words), `POST {path}` (a picture: multipart `image` or JSON
   `{ image }`, filters in the query), `GET {item}/similar?by=` (likeness, free). Results are HAL,
   `_embedded.results[]` of `{ score, z, space, item }`. Every filter is declared on all three.
