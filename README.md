@@ -20,7 +20,7 @@ the practices travel with the copy into `src/kit/<part>/README.md`.
 ```bash
 npm create escalay my-api                        # the `api` preset, with an example `notes` feature, installed, formatted, migrations written
 cd my-api && pnpm test && pnpm dev               # http://localhost:4400/docs, /llms.txt, /mcp
-npx @escalay/kit feature reading-lists           # a new feature folder, listed and tested
+npx @escalay/kit feature recipes --fields "name:string minutes:int tags:string[]"   # a new feature folder, its own fields, listed and tested
 npx @escalay/kit sdk                             # a typed TypeScript client in sdk/, a method per operation
 gh repo create my-api --private --source . --push && npx @escalay/kit repo apply   # CI runs; the repository set up as §20 says
 npx @escalay/kit button --check && npx @escalay/kit button --write                 # the Deploy to Cloudflare button, ready and in the README
@@ -31,7 +31,8 @@ Every new app is a git repository with CI (`.github/workflows/ci.yml`), monthly 
 pre-push hook running `pnpm gate` (what CI runs), and Node and pnpm pinned; its `AGENTS.md` says how changes ship.
 
 `npm create escalay my-api -- --runtime node --title "My API"` passes flags on: `--runtime both|cloudflare|node`
-(default `both`), `--preset api`, `--bare` (no example feature), `--yes` (it never asks; accepted for scripts).
+(default `both`), `--preset api`, `--bare` (no example feature), `--no-git`, `--no-install` (leaves `pnpm install`,
+`format` and `migrations` to you), `--yes` (it never asks; accepted for scripts); `-- --help` lists them.
 `--preset selfhosted` is not built yet: it arrives with `escalay/selfhost-kit`.
 
 On Workers, `pnpm run deploy:env` deploys with the account id, database ids and settings taken from the environment
@@ -139,6 +140,7 @@ the parts depend on each other, and which parts a goal takes, in the order they 
 npx @escalay/kit add core db oauth guide mcp testing --dir apps/api/src/kit --install
 npx @escalay/kit list                                # parts, what they need, what's installed
 npx @escalay/kit doctor --dir apps/api/src/kit       # missing, edited, behind: one line each with its fix; exits 1
+npx @escalay/kit doctor --keep core/guards.ts        # an edit the team keeps: noted, no longer failing
 npx @escalay/kit upgrading --dir apps/api/src/kit   # what changed for your parts since kit.json's version
 npx @escalay/kit diff --dir apps/api/src/kit --patch # before upgrading
 npx @escalay/kit update --dir apps/api/src/kit       # never overwrites your edits without --force

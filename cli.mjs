@@ -692,7 +692,7 @@ const oauthNotes = (texts, modules) => {
 const productSkills = (root) => (existsSync(join(root, 'guide/skills')) ? readdirSync(join(root, 'guide/skills'), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => `guide/skills/${entry.name}/SKILL.md`) : [])
 const STARTER_TEXT = [
   { files: productSkills, text: 'Replace this line with', what: 'its description', instead: 'say when an agent should use the product, in its users’ words' },
-  { files: () => ['brand/brand.ts'], text: ', an agent-ready API.', what: 'its description', instead: 'say what the product does, in at most 100 characters' },
+  { files: () => ['brand/brand.ts'], text: ', an agent-ready API.', what: 'its description', instead: 'say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`' },
   { files: () => ['src/features/catalog.ts'], text: 'say here what switching it off stops', what: 'a description', instead: 'say what switching the feature off stops' },
 ]
 
@@ -1403,7 +1403,7 @@ const wiringOf = (parts) => {
     const wrapped = inFeatures && upstreamOf(readme).includes(WRAPPER_HEADING)
     return [
       ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}`] : []),
-      ...(keepsTables && migrations !== null && !migrations.includes(constant) ? [`scripts/migrations.ts: add ['${name}', ${constant}] to its sets, imported from its kit folder, so \`pnpm migrations\` writes ${name}'s D1 files`] : []),
+      ...(keepsTables && migrations !== null && !migrations.includes(constant) ? [`scripts/migrations.ts lacks ${name}'s tables: \`import { ${constant} } from '../${relative(root, dir).split('\\').join('/')}/index.js'\` and \`['${name}', ${constant}]\` in its sets, then \`pnpm migrations\` writes their D1 files`] : []),
     ]
   })
 }

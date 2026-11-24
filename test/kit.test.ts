@@ -450,7 +450,7 @@ describe('the copy-in CLI', () => {
     await mkdir(join(app, 'scripts'))
     await writeFile(join(app, 'scripts/migrations.ts'), "const sets = [['oauth', OAUTH_MIGRATIONS], ['guards', GUARD_MIGRATIONS]]\n")
     const added = cli(app, 'add', 'people', 'pagination')
-    expect(added.stdout).toContain("scripts/migrations.ts: add ['people', PEOPLE_MIGRATIONS] to its sets, imported from its kit folder, so `pnpm migrations` writes people's D1 files")
+    expect(added.stdout).toContain("scripts/migrations.ts lacks people's tables: `import { PEOPLE_MIGRATIONS } from '../src/kit/index.js'` and `['people', PEOPLE_MIGRATIONS]` in its sets, then `pnpm migrations` writes their D1 files")
     expect(added.stdout).not.toMatch(/'(pagination|db)'/)
   })
 
@@ -871,7 +871,7 @@ describe('the copy-in CLI', () => {
       const starterLines = (text: string) => text.split('\n').filter((line) => line.startsWith('starter  '))
       expect(starterLines(doctor.stdout)).toEqual([
         'starter  guide/skills/demo-api/SKILL.md: its description is still the starter’s ("Replace this line with"): say when an agent should use the product, in its users’ words',
-        'starter  brand/brand.ts: its description is still the starter’s (", an agent-ready API."): say what the product does, in at most 100 characters',
+        'starter  brand/brand.ts: its description is still the starter’s (", an agent-ready API."): say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`',
         'starter  src/features/catalog.ts: a description is still the starter’s ("say here what switching it off stops"): say what switching the feature off stops',
       ])
       const productSkill = join(app, 'guide/skills/demo-api/SKILL.md')
@@ -1072,7 +1072,7 @@ describe('the copy-in CLI', () => {
     }
   }, 120_000)
 
-  it('takes people and setup the way their READMEs say, and passes its own tests on both runtimes', async () => {
+  it('takes people, setup and boards the way their READMEs say, and passes its own tests on both runtimes', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-team-${process.pid}`)
     await rm(parent, { recursive: true, force: true })
     await mkdir(parent, { recursive: true })
@@ -1087,12 +1087,13 @@ describe('the copy-in CLI', () => {
         await writeFile(join(app, path), text.replace(from, to))
       }
       expect(cli(app, 'feature', 'things', '--switch').status).toBe(0)
-      const added = cli(app, 'add', 'people', 'setup')
+      expect(cli(app, 'feature', 'recipes', '--fields', 'name:string').status).toBe(0)
+      const added = cli(app, 'add', 'people', 'setup', 'boards')
       expect(added.stdout).toContain('Wire people: a feature in src/features/people/ listed in src/features/index.ts, and the lines in src/app.ts: src/kit/people/README.md › In an app made by `kit init`')
       // The starter's script finds the parts' tables itself
-      expect(added.stdout).not.toContain('scripts/migrations.ts: add')
+      expect(added.stdout).not.toContain('scripts/migrations.ts lacks')
       // Each part's feature as its README writes it, listed in the order it says
-      for (const part of ['people', 'setup']) {
+      for (const part of ['people', 'setup', 'boards']) {
         const readme = await read(`src/kit/${part}/README.md`)
         const block = readme.slice(readme.indexOf('### In an app made by `kit init`')).match(/```ts\n([\s\S]*?)```/)![1]!
         expect(block.split('\n')[0]).toMatch(new RegExp(`^// src/features/${part}/index\\.ts, listed in src/features/index\\.ts`))
@@ -1101,21 +1102,24 @@ describe('the copy-in CLI', () => {
         await edit('src/features/index.ts', '// kit:imports', `import { feature as ${part} } from './${part}/index.js'\n// kit:imports`)
         await edit('src/features/index.ts', '  // kit:features', `  ${part},\n  // kit:features`)
       }
-      // src/app.ts as the READMEs say: the setup secret, the sign-in routes and the session, and the owner by passkey
+      // src/app.ts as the READMEs say: the setup secret, and people's owner and auth lines with the imports they name
+      const people = await read('src/kit/people/README.md')
+      const wiring = people.slice(people.indexOf('Then in `src/app.ts`')).match(/```ts\n([\s\S]*?)```/)![1]!.split('\n')
+      const owner = wiring.slice(0, wiring.indexOf('  }') + 1).join('\n')
+      const auth = wiring.find((line) => line.startsWith('    auth: '))!.replace("realm: 'postbox'", "realm: 'team-api'")
       await edit('src/app.ts', 'FEATURES_OFF?: string }', 'FEATURES_OFF?: string; SETUP_CODE?: string }')
-      await edit('src/app.ts', "auth: { realm: 'team-api', keys: parseApiKeys(env.API_KEYS), access },", "auth: { realm: 'team-api', keys: parseApiKeys(env.API_KEYS), access: access && { ...access, roleOf: roleOf(db) }, open: [...PEOPLE_OPEN_PATHS, ...SETUP_OPEN_PATHS], session: sessionOf(db) },")
-      await edit('src/app.ts', 'const owner = access ? accessOwner(access) : async () => null', "const owner = async (c: Context) => {\n    const person = await personOf(c, db)\n    return person?.role === 'owner' ? person.email : access ? accessOwner(access)(c) : null\n  }")
+      await edit('src/app.ts', "    auth: { realm: 'team-api', keys: parseApiKeys(env.API_KEYS), access },", auth)
+      await edit('src/app.ts', '  const owner = access ? accessOwner(access) : async () => null', owner)
       await edit('src/app.ts', 'featureTools, parseApiKeys,', 'featureTools, parseApiKeys, PEOPLE_OPEN_PATHS, personOf, roleOf, sessionOf, SETUP_OPEN_PATHS,')
       await edit('src/app.ts', 'import BRAND from', "import type { Context } from 'hono'\nimport BRAND from")
       // people's whole sign-in as a test, and the owner it signs in switches a feature, as a deployment key can
-      const people = await read('src/kit/people/README.md')
       const flow = people.slice(people.indexOf('// test/owner.test.ts')).split('```')[0]!
       const switched = "\nit('lets the owner signed in by passkey switch a feature off', async () => {\n  expect(await send('PATCH', '/api/features/things', { on: false })).toMatchObject({ key: 'things', on: false })\n})\n"
       await writeFile(join(app, 'test/owner.test.ts'), flow + switched)
       const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
       expect(migrations.status, migrations.stderr).toBe(0)
       const files = await readdir(join(app, 'migrations'))
-      for (const step of ['people_1', 'setup_1']) expect(files.filter((file) => file.endsWith(`_${step}.sql`)), step).toHaveLength(1)
+      for (const step of ['people_1', 'setup_1', 'boards_1']) expect(files.filter((file) => file.endsWith(`_${step}.sql`)), step).toHaveLength(1)
       for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
         const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
         expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
@@ -1123,6 +1127,8 @@ describe('the copy-in CLI', () => {
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
       for (const name of ['claims the deployment, makes a passkey, signs in again, and approves an agent', 'lets the owner signed in by passkey switch a feature off', 'answers every feature list route with a key, and refuses without one', 'runs every MCP tool against its route']) expect(tests.stdout).toContain(name)
+      // The boards' tools are on MCP, so toolsRun ran them with the README's samples
+      expect(await read('src/features/boards/index.ts')).toContain('save_to_board: { id, ref }')
     } finally {
       await rm(parent, { recursive: true, force: true })
     }

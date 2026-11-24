@@ -33,13 +33,13 @@ const tools = boardTools({ noun: 'recipes', label: (recipe) => recipe.title, ref
 
 ### In an app made by `kit init`
 
-A feature of its own, over the cards of another feature (here `recipes`, its `cardOf` exported from its `handlers.ts`):
+A feature of its own, over the rows of another feature (here `recipes`, made with `kit feature recipes --fields
+"name:string"`):
 
 ```ts
 // src/features/boards/index.ts, listed in src/features/index.ts
-import { BOARDS_MIGRATIONS, boardTools, registerBoards } from '../../kit/index.js'
+import { BOARDS_MIGRATIONS, boardTools, linksOf, registerBoards } from '../../kit/index.js'
 import type { Feature } from '../index.js'
-import { cardOf } from '../recipes/handlers.js'
 import { recipesRepo } from '../recipes/repo.js'
 import { RecipeSchema } from '../recipes/routes.js'
 
@@ -50,7 +50,7 @@ export const feature: Feature = {
   register: (app, { db }) =>
     registerBoards(app, { db, item: RecipeSchema, refExample: 'recipe:soup', itemOf: async (ref, origin) => {
       const row = await recipesRepo(db).get(ref.slice('recipe:'.length))
-      return row ? cardOf(origin, row) : null
+      return row ? { ...row, _links: linksOf(origin, { self: `/api/recipes/${row.id}` }) } : null
     } }),
   tools: boardTools({ noun: 'recipes', label: (recipe) => recipe.name, refExample: 'recipe:soup' }),
   samples: async (request) => {

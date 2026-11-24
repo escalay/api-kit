@@ -26,7 +26,7 @@ export const TOOLS = FEATURES.flatMap((feature) => (feature.switch ? featureTool
 export const createApp = async ({ db, env, address }: { db: Db; env: Env; address?: AddressTrust }) => {
   const access = env.ACCESS_TEAM && env.ACCESS_AUD ? { team: env.ACCESS_TEAM, audience: env.ACCESS_AUD } : undefined
   // Who may approve a sign-in on the kit's pages: the person Access proved. With the people part (`kit add people`),
-  // ask its session too, or a deploy signed in by passkey alone can never approve:
+  // ask its session too, or a deploy signed in by passkey alone can never approve (its README's owner asks Access too):
   // async (c) => { const person = await personOf(c, db); return person?.role === 'owner' ? person.email : null }
   const owner = access ? accessOwner(access) : async () => null
   // A refresh sent twice within 30 seconds (two tabs, a retry) gets the same successor instead of ending the sign-in

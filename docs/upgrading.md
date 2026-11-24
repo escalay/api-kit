@@ -422,7 +422,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 - Nothing changes in the part. Its README now shows it as a feature of its own in an app made by `kit init`, what
   each route answers, and the whole sign-in as a test. A new app's `scripts/migrations.ts` writes the D1 files of
-  every part copied in; in an older app, `kit add people` prints the line its script lacks: add
+  every part copied in; in an older app, `kit add people` prints the import and the line its script lacks:
   `['people', PEOPLE_MIGRATIONS]` (and `['setup', SETUP_MIGRATIONS]`) to its sets, then `pnpm migrations`, or D1
   never gets the tables.
 - A new app's list-route test in `test/workers/api.test.ts` leaves out `/api/session*` and `/api/setup*`, which answer

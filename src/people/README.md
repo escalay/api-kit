@@ -62,8 +62,16 @@ export const feature: Feature = {
 }
 ```
 
-Then in `src/app.ts`: `auth: { realm, keys, access: access && { ...access, roleOf: roleOf(db) }, open:
-[...PEOPLE_OPEN_PATHS, ...SETUP_OPEN_PATHS], session: sessionOf(db) }`, and the `owner` the comment there gives.
+Then in `src/app.ts`, in place of its `owner` and `auth` lines (the realm stays the app's), with `PEOPLE_OPEN_PATHS`,
+`personOf`, `roleOf`, `sessionOf` and `SETUP_OPEN_PATHS` from `./kit/index.js` and `type Context` from `hono`:
+
+```ts
+  const owner = async (c: Context) => {
+    const person = await personOf(c, db)
+    return person?.role === 'owner' ? person.email : access ? accessOwner(access)(c) : null
+  }
+    auth: { realm: 'postbox', keys: parseApiKeys(env.API_KEYS), access: access && { ...access, roleOf: roleOf(db) }, open: [...PEOPLE_OPEN_PATHS, ...SETUP_OPEN_PATHS], session: sessionOf(db) },
+```
 
 Routes, and what each answers:
 
