@@ -1,7 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { GOALS, orderOf, partsMarkdown, starterParts } from '../scripts/parts.mjs'
+import { GOALS, orderOf, partsMarkdown, skillsIn, starterParts, withReadmeTables } from '../scripts/parts.mjs'
 
 const root = join(import.meta.dirname, '..')
 const read = (path) => readFileSync(join(root, path), 'utf8')
@@ -52,5 +52,29 @@ describe('the root README', () => {
     const table = readme.slice(readme.indexOf('## Parts'), readme.indexOf('\n## ', readme.indexOf('## Parts') + 1))
     for (const name of names) expect(table, name).toContain(`\`${name}\``)
     expect(table).toContain('](docs/PARTS.md)')
+  })
+
+  it('has the parts and skills tables `pnpm parts` writes, so neither is stale', () => {
+    expect(read('README.md'), 'README.md is stale: run `pnpm parts`').toBe(withReadmeTables(read('README.md'), registry, skillsIn(root)))
+  })
+
+  it('gives each part its registry description and its README', () => {
+    const readme = read('README.md')
+    for (const item of parts) {
+      const path = item.files.find((file) => file.path.endsWith('/README.md')).path
+      expect(readme, item.name).toContain(`| \`${item.name}\` | ${item.description.replace(/\s+/g, ' ').trim()} | [${path.split('/')[1]}](${path}) |`)
+    }
+  })
+
+  it('gives each skill folder a row, saying when to use it from its frontmatter', () => {
+    const skills = skillsIn(root)
+    expect(skills.map((skill) => skill.name)).toEqual(readdirSync(join(root, 'skills')).sort())
+    for (const { name, description } of skills) expect(read('README.md'), name).toContain(`| [\`${name}\`](skills/${name}/SKILL.md) | ${description.replace(/^Use when /, '')} |`)
+  })
+
+  it('refuses a README that lost a table’s markers, rather than dropping the table', () => {
+    const readme = read('README.md')
+    expect(() => withReadmeTables(readme.replace('<!-- skills:end -->', ''), registry, skillsIn(root))).toThrow('skills:end')
+    expect(() => withReadmeTables(readme.replace(/<!-- parts:start[^\n]*\n/, ''), registry, skillsIn(root))).toThrow('parts:start')
   })
 })

@@ -83,8 +83,9 @@ A browser part is one file in `src/browser/`, with `meta: { "entry": true, "web"
 - **New apps.** Does every new app need it? Then it joins `APP_MODULES` in `cli.mjs` (`WEB_APP_MODULES` for the
   `app` preset's browser), the generator test's `kit.json` modules, and the starter's wiring in `templates/app`.
   Most parts do not: an app adds them with `kit add`.
-- **The map.** `docs/PARTS.md` is generated from `registry.json`: run `pnpm parts` after changing a part's
-  registry item (`test/parts.test.mjs` fails while it is stale), and give the part a row in its goal table in
+- **The map.** `docs/PARTS.md` and the root README's parts and skills tables are generated from `registry.json`
+  and each skill's frontmatter: run `pnpm parts` after changing a part's registry item or a skill's `description`
+  (`test/parts.test.mjs` fails while either is stale), and give the part a row in its goal table in
   `scripts/parts.mjs` when it serves a new goal. The `api-kit-build` skill names every part by goal: add the new one there
   (a test checks every part is named in some skill), and the `AGENTS.md` layout table gets its row.
 - **The release note.** The pull request's title is the line in the release notes: `feat(reminders): …` for a new

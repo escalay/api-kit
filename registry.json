@@ -888,7 +888,7 @@
       "name": "switches-react",
       "type": "registry:item",
       "title": "Feature hooks",
-      "description": "Browser, React: FeaturesProvider, useFeature, <Feature> (children while on, `off` while not), useFeatures, useSwitchFeature (preview and apply), useFeatureDisabled, featureHooks typed by the app's keys; headless",
+      "description": "Browser, React: FeaturesProvider, useFeature, `<Feature>` (children while on, `off` while not), useFeatures, useSwitchFeature (preview and apply), useFeatureDisabled, featureHooks typed by the app's keys; headless",
       "dependencies": [
         "react"
       ],
