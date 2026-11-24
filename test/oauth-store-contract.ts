@@ -373,7 +373,8 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       const rotated = await (await refreshWith(app, tokens.refresh_token)).json()
       const { caller } = await (await callerWith(app, rotated.access_token)).json()
       // The grant is no secret: every access token carries it
-      for (const forged of [`rt_${caller.grant}.0.${'A'.repeat(43)}`, `rt_${caller.grant}.0.${tokens.refresh_token.split('.').at(-1)}x`, `rt_${caller.grant}.0`]) {
+      const [, nonce, mac] = tokens.refresh_token.split('.')
+      for (const forged of [`rt_${caller.grant}.0.${'A'.repeat(32)}.${'B'.repeat(43)}`, `rt_${caller.grant}.0.${nonce}.${mac}x`, `rt_${caller.grant}.0.${'A'.repeat(43)}`, `rt_${caller.grant}.0`]) {
         expect((await (await refreshWith(app, forged)).json()).error_description, forged).not.toContain('already used')
         await app.request('/oauth/revoke', form({ token: forged }))
       }

@@ -13,7 +13,7 @@
  *   polls the token endpoint.
  * Access tokens are ES256 JWTs (one hour) signed with the app's key and checked against a revocation list on every
  * request; refresh tokens (30 days, rotated on each use; a used one sent again revokes every refresh token of that
- * sign-in), codes and registrations live in the app's store as hashes. Nothing is granted before a person approves: an
+ * sign-in, known by its MAC and its family's generation once its row is gone), codes and registrations live in the app's store as hashes. Nothing is granted before a person approves: an
  * unclaimed registration can't get a token.
  * A caller is known by its client (the client_id) and its grant (one approval: every token from one sign-in, rotated
  * or not, shares it), never by the name it registered, which is for display. Revoking a grant ends its access tokens
@@ -23,8 +23,8 @@
  * this server issues for it, else the root (the issuer's origin). It never changes on refresh, and a grant from before
  * audiences never gains one. `accepts` judges whether a token's audience fits a request.
  * The endpoints anyone may call stay bounded: `publicOrigin` fixes the one origin every document, token and check
- * names; a registration no sign-in has used lives a week and unused ones are capped, as are open consent tickets; and
- * `limits` counts registrations and claims, device authorizations, sign-in pages and token misses per address. Rules
+ * names; a registration no sign-in has used lives a week, every kind of row anyone may write is capped (a client a
+ * live consent ticket holds stays); and `limits` counts registrations and claims, device authorizations, sign-in pages and token misses per address. Rules
  * after cloudflare/workers-oauth-provider (MIT): a registration's life starts again when it is first used.
  *
  * @example
@@ -138,9 +138,15 @@ export type OAuthConfig = {
    * limits: { store: await dbGuardStore(db), address: { header: 'cf-connecting-ip' } }
    */
   limits?: { store: GuardStore; address?: AddressTrust } | false
-  /** Registrations no sign-in has used yet, kept at most (a whole number, default 10 000): past it a new one evicts the oldest. */
+  /**
+   * Registrations no sign-in has used yet (clients, agent registrations, their claim tokens), kept at most of each (a
+   * whole number, default 10 000): past it a new one evicts the oldest. Never a client a live consent ticket holds.
+   */
   maxUnusedClients?: number
-  /** Consent tickets stored and not yet answered, kept at most (a whole number, default 10 000): past it a new one evicts the oldest. */
+  /**
+   * Codes waiting for a person (consent tickets, claim attempts, device codes and their user codes), kept at most of
+   * each (a whole number, default 10 000): past it a new one evicts the oldest.
+   */
   maxUnusedTickets?: number
   /**
    * Seconds a consent ticket lives, and its browser's nonce cookie: whole, from 60 to a week (default 600). Longer for
@@ -303,16 +309,21 @@ export const createOAuth = (config: OAuthConfig) => {
   /** The issuer's origin: `publicOrigin`, else the request's own. */
   const issuerOf = (c: Context) => publicOrigin ?? originOf(c)
   const jwk = JSON.parse(config.signingKey) as JWK
-  // A secret of its own, from the signing key: a refresh token ends in a MAC of its family and generation, so the
-  // server knows an earlier token of a family it keeps no row for, and no one can make one without the key
+  // A secret of its own, from the signing key: a refresh token ends in a MAC of its family, generation and nonce, so
+  // the server knows an earlier token of a family it keeps no row for, and no one can make one without the key
   const refreshSecret = createHash('sha256').update(`api-kit refresh token\0${jwk.d ?? config.signingKey}`).digest()
-  const macOf = (family: string, generation: number) => createHmac('sha256', refreshSecret).update(`${family}.${generation}`).digest('base64url')
-  /** A family's refresh token of one generation: the same each time, so a retry in the grace gets the one the first answer held. */
-  const refreshTokenOf = (family: string, generation: number) => `rt_${family}.${generation}.${macOf(family, generation)}`
+  const macOf = (text: string) => createHmac('sha256', refreshSecret).update(text).digest('base64url')
+  /** A refresh token: its family, generation and nonce, and their MAC. */
+  const refreshTokenOf = (family: string, generation: number, nonce: string) => `rt_${family}.${generation}.${nonce}.${macOf(`${family}.${generation}.${nonce}`)}`
+  /**
+   * The next generation's token: its nonce a MAC of the token before it, so a retry in the grace gets the one the first
+   * answer held, and none can be made without a real token.
+   */
+  const successorOf = (refresh: string, family: string, generation: number) => refreshTokenOf(family, generation, macOf(`successor\0${refresh}`))
   /** The family and generation of a refresh token this server made; null for one from before generations, or a made-up one. */
   const generationOf = (refresh: string) => {
-    const [, family, generation, mac] = /^rt_([\w-]+)\.(\d+)\.([\w-]+)$/.exec(refresh) ?? []
-    if (!family || !generation || !mac || !same(mac, macOf(family, Number(generation)))) return null
+    const [, family, generation, nonce, mac] = /^rt_([\w-]+)\.(\d+)\.([\w-]+)\.([\w-]+)$/.exec(refresh) ?? []
+    if (!family || !generation || !nonce || !mac || !same(mac, macOf(`${family}.${generation}.${nonce}`))) return null
     return { family, generation: Number(generation) }
   }
   const reuseGrace = config.reuseGraceSeconds ?? 0
@@ -337,9 +348,8 @@ export const createOAuth = (config: OAuthConfig) => {
     return { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL, scope: grant.scopes.join(' ') }
   }
 
-  /** A refresh token in its grant's family: every token rotated from one sign-in shares it, so a replay can revoke them all. */
-  const refreshFor = async ({ grant, ...rest }: Grant, generation = 0) => {
-    const refresh = refreshTokenOf(grant, generation)
+  /** A refresh token in its grant's family: every token rotated from one sign-in shares it, so a replay can revoke them all. The first has a random nonce. */
+  const refreshFor = async ({ grant, ...rest }: Grant, refresh = refreshTokenOf(grant, 0, newNonce())) => {
     await store.put('refresh', sha(refresh), { ...rest, family: grant, used: false }, now() + REFRESH_TTL)
     return refresh
   }
@@ -1130,7 +1140,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const issued = { client: String(held.client), name: String(held.name), owner: String(held.owner), scopes: held.scopes as string[], grant, ...boundOf(held) }
           // A token from before generations starts its family's count
           const next = (made?.generation ?? 0) + 1
-          const successor = refreshTokenOf(grant, next)
+          const successor = successorOf(refresh, grant, next)
           // Marked used, not deleted, so a retry in the grace can read when; a token from before generations is known
           // as used by this row alone, so it keeps it 30 days
           const marked = await markUsed('refresh', key, now() + REFRESH_TTL)
@@ -1145,7 +1155,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const access = await issue(origin, issued)
           // The family moves on before its new token exists: from here an earlier token is a replay, row or not
           await store.put('refresh-family', grant, { generation: next, client: issued.client }, now() + REFRESH_TTL)
-          await refreshFor(issued, next)
+          await refreshFor(issued, successor)
           // One this server made is known by its family from now on: its row stays only while a retry may read it
           if (made) await store.put('refresh', key, marked, now() + reuseGrace)
           return c.json({ ...access, refresh_token: successor }, 200, { 'cache-control': 'no-store' })
@@ -1234,16 +1244,25 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       }
     })
 
+    /**
+     * The sign-in a refresh token belongs to: by its row, or, for an earlier token this server made and keeps no row
+     * for, by its MAC and its family's row. null for anything else.
+     */
+    const signInOf = async (refresh: string, row: Record<string, unknown> | null) => {
+      if (row) return { family: String(row.family ?? sha(refresh)), client: String(row.client) }
+      const made = generationOf(refresh)
+      if (!made) return null
+      const family = await store.get('refresh-family', made.family)
+      return { family: made.family, ...(typeof family?.client === 'string' ? { client: family.client } : {}) }
+    }
+
     // RFC 7009: always 200, whatever the token was
     app.post('/oauth/revoke', async (c) => {
       const body = await bodyOf(c)
       const value = body.token ?? ''
       const refresh = await store.get('refresh', sha(value))
-      // Any token of a sign-in ends it, an earlier one too: this server knows its family by its MAC when it keeps no row
-      const made = refresh ? null : generationOf(value)
-      const family = refresh ? String(refresh.family ?? sha(value)) : made?.family
-      const client = refresh ? refresh.client : made && (await store.get('refresh-family', made.family))?.client
-      if (family) await endGrant(family, 'revoked', typeof client === 'string' ? client : undefined)
+      const signIn = await signInOf(value, refresh)
+      if (signIn) await endGrant(signIn.family, 'revoked', signIn.client)
       if (refresh) await store.delete('refresh', sha(value))
       const { publicKey } = await ready
       const { payload } = await jwtVerify(value, publicKey, { issuer: issuerOf(c), algorithms: ['ES256'] }).catch(() => ({ payload: null }))

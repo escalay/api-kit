@@ -550,6 +550,45 @@ describe('OAuth callers: the client and the grant, not the name', () => {
     expect(heard()).toEqual([{ client: code.client_id, reason: 'client_revoked' }])
   })
 
+  it('tells onRevoke of a code or device grant onGrant withdraws, and of an earlier refresh token revoked with no row', async () => {
+    const told: unknown[] = []
+    const { app } = await oauthApp(memoryOAuthStore(), { onRevoke: async (revoked) => void told.push(revoked), onGrant: async () => false })
+    const code = await approvedCode(app)
+    expect((await (await code.exchange()).json()).error_description).toContain('withdrawn')
+    expect(told.splice(0)).toEqual([{ grant: expect.any(String), client: code.client_id, reason: 'withdrawn' }])
+
+    const device = 'urn:ietf:params:oauth:grant-type:device_code'
+    const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+    const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+    await app.request('/oauth/device', { ...form({ user_code, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+    expect((await (await app.request('/oauth/token', form({ grant_type: device, device_code, client_id }))).json()).error_description).toContain('withdrawn')
+    expect(told.splice(0)).toEqual([{ grant: expect.any(String), client: client_id, reason: 'withdrawn' }])
+
+    const { app: plain } = await oauthApp(memoryOAuthStore(), { onRevoke: async (revoked) => void told.push(revoked) })
+    const signed = await signedIn(plain)
+    const grant = (await callerOf(plain, signed.tokens.access_token)).grant
+    await refreshWith(plain, signed.tokens.refresh_token)
+    await plain.request('/oauth/revoke', form({ token: signed.tokens.refresh_token }))
+    expect(told.splice(0)).toEqual([{ grant, client: signed.client_id, reason: 'revoked' }])
+  })
+
+  it('with the starter’s 30 seconds of grace, drops a used refresh row after it and still ends the sign-in when the token comes back', async () => {
+    let at = Date.now()
+    vi.useFakeTimers({ toFake: ['Date'], now: at })
+    const store = memoryOAuthStore()
+    const { app } = await oauthApp(store, { reuseGraceSeconds: 30 })
+    const { tokens } = await signedIn(app)
+    const rotated = await (await refreshWith(app, tokens.refresh_token)).json()
+    // Inside the grace, a retry gets the same successor
+    expect((await (await refreshWith(app, tokens.refresh_token)).json()).refresh_token).toBe(rotated.refresh_token)
+    vi.setSystemTime((at += 31 * 1000))
+    expect(await store.get('refresh', createHash('sha256').update(tokens.refresh_token).digest('hex'))).toBeNull()
+    expect(await (await refreshWith(app, tokens.refresh_token)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+    expect((await (await refreshWith(app, rotated.refresh_token)).json()).error).toBe('invalid_grant')
+    expect((await callerWith(app, rotated.access_token)).status).toBe(401)
+    vi.useRealTimers()
+  })
+
   it('revokes, and answers as ever, when onRevoke throws', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { app, oauth } = await oauthApp(memoryOAuthStore(), { onRevoke: async () => { throw new Error('the log is down') } })
