@@ -3,7 +3,8 @@
 ```bash
 npm create escalay my-api            # the `api` preset: an agent-ready API with one example feature
 npm create escalay my-api -- --runtime node --title "My API"
-npm create escalay@1.30.0 my-api     # an app on kit 1.30.0: each version depends on its own kit, exactly
+npm create escalay@<version> my-api  # an app on that kit: each release after 1.31.0 depends on its own kit, exactly
+                                     # (1.31.0 and older take the newest 1.x kit)
 npm create escalay -- --help         # the options
 ```
 

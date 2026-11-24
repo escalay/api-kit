@@ -1339,6 +1339,11 @@ describe('the npm-release item', () => {
 
   it('pins create-escalay to its own kit version: pnpm writes `workspace:*` as the exact version, never a range', async () => {
     expect(JSON.parse(await read('packages/create-escalay/package.json')).dependencies).toEqual({ '@escalay/kit': 'workspace:*' })
+    // 1.31.0 and older were published with `^`, so the README's pinned example names no version of theirs
+    const readme = await read('packages/create-escalay/README.md')
+    const pinned = [...readme.matchAll(/create escalay@(\d+)\.(\d+)\.(\d+)/g)].map((match) => match.slice(1).map(Number))
+    for (const [major, minor, patch] of pinned) expect(major! * 1e6 + minor! * 1e3 + patch!, 'a version published with a caret range').toBeGreaterThan(1_031_000)
+    expect(readme).toContain('after 1.31.0')
   })
 
   it('answers --help from create-escalay and from every kit command without making anything', async () => {
