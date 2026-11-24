@@ -330,6 +330,11 @@ export const createOAuth = (config: OAuthConfig) => {
     if (!family || !generation || !nonce || !mac || !same(mac, macOf(`${family}.${generation}.${nonce}`))) return null
     return { family, generation: Number(generation) }
   }
+  // 1.29.0 named a successor `rt_` and an HMAC of the token before it, under a secret of its own: a retry this version
+  // answers finds the successor 1.29.0 gave first by that name
+  const successorSecretOf1290 = createHash('sha256').update(`api-kit refresh successor\0${jwk.d ?? config.signingKey}`).digest()
+  /** The successor 1.29.0 gave a refresh token. */
+  const successorOf1290 = (refresh: string) => `rt_${createHmac('sha256', successorSecretOf1290).update(refresh).digest('base64url')}`
   const reuseGrace = config.reuseGraceSeconds ?? 0
   const ready = (async () => {
     const privateKey = await importJWK(jwk, 'ES256')
@@ -374,7 +379,17 @@ export const createOAuth = (config: OAuthConfig) => {
   const withinGrace = (usedAt: number) => reuseGrace > 0 && usedAt > 0 && now() - usedAt < reuseGrace
 
   /**
-   * What a retry of a used refresh token gets: the successor the first answer held, while the grace lasts and that
+   * The successor the first answer to a used refresh token gave: 1.29.0's when 1.29.0 answered (its successor has a
+   * row), else this version's, at the generation the used row names or `nextGeneration`.
+   */
+  const firstSuccessorOf = async (refresh: string, used: Record<string, unknown>, family: string, nextGeneration: number) => {
+    const from1290 = successorOf1290(refresh)
+    if (await store.get('refresh', sha(from1290))) return from1290
+    return successorOf(refresh, family, Number(used.successorGeneration ?? nextGeneration))
+  }
+
+  /**
+   * What a retry of a used refresh token gets: the successor the first answer gave, while the grace lasts and that
    * successor is unused; null when the token came back as a replay. `nextGeneration` is the generation a token from
    * before generations would get now, for a first answer still writing the one it gave.
    */
@@ -382,7 +397,7 @@ export const createOAuth = (config: OAuthConfig) => {
     // Read again: the first answer writes its successor's generation on this row after marking it used
     const used = await store.get('refresh', sha(refresh))
     if (!used || !withinGrace(Number(used.usedAt ?? 0))) return null
-    const successor = successorOf(refresh, family, Number(used.successorGeneration ?? nextGeneration))
+    const successor = await firstSuccessorOf(refresh, used, family, nextGeneration)
     // No row yet is a first answer still writing it, so only a used successor ends the retry
     return (await store.get('refresh', sha(successor)))?.used ? null : successor
   }

@@ -1,7 +1,7 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { decodeJwt } from 'jose'
 import { describe, expect, it, vi } from 'vitest'
-import { createAgentApi, createOAuth, generateOAuthKey, parseApiKeys, type OAuthConfig, type OAuthStore } from '../src/index.js'
+import { createAgentApi, createOAuth, generateOAuthKey, parseApiKeys, type OAuthConfig, type OAuthStore, type SignInRevoked } from '../src/index.js'
 import { approveSignIn } from '../src/testing/index.js'
 
 /**
@@ -15,6 +15,12 @@ const ORIGIN = 'http://localhost'
 const REDIRECT = 'http://localhost:7777/cb'
 const now = () => Math.floor(Date.now() / 1000)
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
+/** The successor 1.29.0 gave a refresh token: `rt_` and an HMAC of the token under a secret from the signing key, as v1.29.0 wrote it. */
+const successorIn1290 = (signingKey: string, refresh: string) => {
+  const { d } = JSON.parse(signingKey) as { d?: string }
+  const secret = createHash('sha256').update(`api-kit refresh successor\0${d ?? signingKey}`).digest()
+  return `rt_${createHmac('sha256', secret).update(refresh).digest('base64url')}`
+}
 /** A typed device code as the server keys it. */
 const userCodeKey = (typed: string) => sha(typed.toUpperCase().replace(/[^A-Z]/g, ''))
 
@@ -457,17 +463,18 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect((await (await refreshWith(again, next.refresh_token)).json()).error).toBe('invalid_grant')
     })
 
-    /** A sign-in rotated to generation 4 whose newest token 1.29.0 then refreshed (a rollback): an `rt_<random>` successor in the same family. */
+    /** A sign-in rotated to generation 4 whose newest token 1.29.0 then refreshed (a rollback): the successor 1.29.0 names, in the same family. */
     const rolledBack = async (store: OAuthStore, options: Partial<OAuthConfig> = {}) => {
-      const { app } = await oauthApp(store, options)
+      const signingKey = await generateOAuthKey()
+      const { app } = await oauthApp(store, { signingKey, ...options })
       const { tokens } = await signedIn(app)
       const chain = [tokens.refresh_token]
       for (let n = 0; n < 4; n++) chain.push((await (await refreshWith(app, chain.at(-1)!)).json()).refresh_token)
       const newest = (await store.get('refresh', sha(chain[4]!)))!
-      const successor = `rt_${randomBytes(24).toString('base64url')}`
+      const successor = successorIn1290(signingKey, chain[4]!)
       await store.put('refresh', sha(chain[4]!), { ...newest, used: true, usedAt: now() }, now() + 3600)
       await store.put('refresh', sha(successor), { ...newest, used: false }, now() + 3600)
-      return { app, chain, successor }
+      return { app, store, signingKey, chain, successor }
     }
 
     it('keeps a family’s generation when a 1.29.0 successor is refreshed after a rollback, so an earlier token still ends it', async () => {
@@ -493,6 +500,33 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       const second = await (await refreshWith(app, first.refresh_token)).json()
       expect(await (await refreshWith(app, successor)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
       expect((await callerWith(app, second.access_token)).status).toBe(401)
+    })
+
+    it('with reuseGraceSeconds, gives a token 1.29.0 answered first, sent again in the window, the successor 1.29.0 gave', async () => {
+      const { app, store, signingKey, chain, successor } = await rolledBack(await make(), { reuseGraceSeconds: 30 })
+      const again = await (await refreshWith(app, chain[4]!)).json()
+      expect(again.refresh_token).toBe(successor)
+      expect((await refreshWith(app, again.refresh_token)).status).toBe(200)
+
+      // A 1.29.0 token, 1.29.0 answering first: the same
+      const row = { client: 'client_old', name: 'Old', owner: OWNER, scopes: ['read'], family: `g-${crypto.randomUUID()}` }
+      const legacy = `rt_${randomBytes(24).toString('base64url')}`
+      const legacySuccessor = successorIn1290(signingKey, legacy)
+      await store.put('refresh', sha(legacy), { ...row, used: true, usedAt: now() }, now() + 3600)
+      await store.put('refresh', sha(legacySuccessor), { ...row, used: false }, now() + 3600)
+      const retried = await (await refreshWith(app, legacy)).json()
+      expect(retried.refresh_token).toBe(legacySuccessor)
+      expect((await refreshWith(app, retried.refresh_token)).status).toBe(200)
+    })
+
+    it('with reuseGraceSeconds, ends the sign-in when a token 1.29.0 answered first comes back in the window after that successor was used', async () => {
+      const told: SignInRevoked[] = []
+      const { app, chain, successor } = await rolledBack(await make(), { reuseGraceSeconds: 30, onRevoke: async (revoked) => void told.push(revoked) })
+      const rotated = await (await refreshWith(app, successor)).json()
+      expect(await (await refreshWith(app, chain[4]!)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+      expect((await callerWith(app, rotated.access_token)).status).toBe(401)
+      expect((await (await refreshWith(app, rotated.refresh_token)).json()).error).toBe('invalid_grant')
+      expect(told).toEqual([expect.objectContaining({ reason: 'replayed' })])
     })
 
     // workers-oauth-provider #428

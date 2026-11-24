@@ -433,6 +433,10 @@ Replay detection is unchanged:
   generation 4, the family goes on at 5 and every earlier token still ends it. It and the used 1.29.0 tokens before
   it are still known by their rows; its row also keeps the generation its successor got, so a retry in the grace gets
   that same successor.
+- A retry in the grace of a token 1.29.0 answered first (1.29.0 still serving during an update, or after a rollback)
+  gets the successor 1.29.0 gave: 1.29.0 named it `rt_` and an HMAC of the token under a secret from the signing key,
+  so this version names it the same way and finds its row. Once that successor is used, the retry is reuse and ends
+  the grant, as any other.
 
 Revocation reads stay uncached: `verify` reads the issued row and the markers on every request, so a revoke stops a
 client on its next request. Rotating the signing key also changes the MAC, so earlier tokens of the old key are no
@@ -611,4 +615,5 @@ when an app takes this version:
   grant and generation, and a grant keeps one `refresh-family` row. Replays are found as before, 1.29.0 tokens
   included. An app's own test that reads a used refresh row by its hash finds none once the grace has passed. With
   `reuseGraceSeconds` set, a retry that lands across the update (the first refresh answered by 1.29.0, the retry by
-  this version) gets a successor no row backs: its next refresh is `invalid_grant` and the client signs in again.
+  this version) gets the successor 1.29.0 gave, which goes on working; once that successor is used, the retry ends
+  the grant, as any replay does.
