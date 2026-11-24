@@ -10,41 +10,13 @@ the set in this repo, a **preset** is a starting combination (`init --preset`).
 
 ## Layout
 
-Every part is a folder under `src/`. A feature with routes and data keeps one shape (`boards/` is the model, and
-what `feature` generates): `schema.ts` (Drizzle tables + migration steps) · `repo.ts` (the only queries) ·
-`routes.ts` (createRoute contracts) · `handlers.ts` (request → repo → HAL) · `tools.ts` (MCP tools) · `index.ts`
-(`registerX` wiring them, and the part's exports).
+Every part is a folder under `src/`. A feature with routes and data keeps the one shape in `docs/STANDARD.md` §1
+(`boards/` is the model, and what `feature` generates).
 
 
 | Path | What |
 |---|---|
-| `src/core/api.ts` | `createAgentApi`: OpenAPIHono with request ids, secure headers, auth, problem handlers, `/openapi.json` (3.1), `/docs` (Scalar), `/problems/{code}`, `/api/health`, and the discovery it can serve alone |
-| `src/core/discovery.ts` | api-catalog, Link headers, robots.txt with Content Signals, Markdown for agents, skills index + archives, Server Card, AI Catalog (`serveAiCatalog`); `publicOriginOf` (what a publicly cached document names: the OAuth server's `publicOrigin`, else the request's) |
-| `src/core/guards.ts` | `idempotency` (Idempotency-Key on POST/PATCH, wired by `createAgentApi`) and `rateLimit` (per caller or a custom `key`, RateLimit headers); `addressOf` (the caller's address from the one source the app names, `AddressTrust`) |
-| `src/core/hooks.ts` | `tellApp`: the app's hooks are told after the change, and a throw is logged, never answered |
-| `src/core/hal.ts` | HAL links: `originOf`, `linksOf`, `pathWith`, `LinksSchema` |
-| `src/core/problem.ts` | RFC 9457 problems: `PROBLEMS`, `ProblemError`, `problemResponses`, `validationHook` |
-| `src/pagination/index.ts` | cursor pages: `limitQuery`, `cursorQuery`, `pageOf`, `pageSchema` |
-| `src/core/auth.ts` | API keys (hash-only), Access JWT check, `authenticate` |
-| `src/db/index.ts` | the database through Drizzle: `openDb` (node:sqlite via the `sqlite-proxy` driver, rows as arrays; or a Drizzle database passed in), `migrate` (per-feature steps in `kit_migrations`, each in a transaction), `testDb` |
-| `src/core/cli.ts` | the command line's names: `cliOf` / `resourceCli` (`<noun> <verb>`, positional arguments, examples), `fallbackCliName` (the route rule), `routeOf`, `hintsOf`, the `_meta` keys; shared by `mcp` (publishes) and `testing` (audits), so `testing` needs no `mcp` |
-| `src/core/kv.ts` | `KeyValueStore` + `memoryStore`: what OAuth and A2A keep |
-| `src/oauth/` | the app as its own OAuth server: metadata, `/oauth/*`, `/agent/identity*` (auth.md), ES256 tokens bound to an audience (RFC 8707: the resource asked, else the root; `mcpPath`, `resources`, `resourceOf`, `accepts`, `listResources`); who approves a sign-in (`approve`, `onGrant`, `onRevoke`, `ticketOf`, `answeredOf`, `complete`, `ticketTtl` for an app that decides later; `approval.ts`: `SignInAsk`, the browser-bound ticket cookie, the same-origin rule); its pages carry the app's brand; the open endpoints bounded (`publicOrigin`: the one origin every document, token and check names; unused registrations a week, every row written without auth capped (`maxUnusedClients`, `maxUnusedTickets`, the store's `trim` with `heldBy`: a client a live ticket holds stays); `limits`: per address through `addressOf`, never the owner); refresh tokens by generation (`rt_<grant>.<generation>.<nonce>.<MAC>`: a row for the newest only, one `refresh-family` row per grant, an earlier token known by its MAC); `createOAuth`, `memoryOAuthStore`, `dbOAuthStore` (prunes on a write, at most once a minute, by its `expires_at` index), `generateOAuthKey`; its own part (core only needs `OAuthServer`, `SCOPES`, `OAUTH_OPEN_PATHS` from `auth.ts`) |
-| `src/core/cache.ts` | snapshot ETags, `Cache-Control` presets |
-| `src/guide/guide.ts` | `/llms.txt`, `/llms-full.txt`, `/agents/*`, `/skills/*` from templates, filled per request |
-| `src/guide/reference.ts` | the generated guide parts: endpoints from the spec, tools with their routes, playbooks, how to get unstuck |
-| `src/a2a/index.ts` | A2A 1.0 over the MCP tools: `mountA2A` (Agent Card + JSON-RPC `/a2a`), `agentCard` |
-| `src/mcp/index.ts` | MCP 2026-07-28 over the routes: `mcpTool`, `mcpResource`, `mcpServerFactory`, `inProcess`, `overHttp`, `mountMcp` (+ Server Card), `mountedMcp`; `_meta["api-kit/cli"]` on each tool and template, `_meta["api-kit/problem"]` on a failed call |
-| `src/mcp/skills.ts` | `guideSkills`: the guide's skill folders as the factory's skills and prompts, one prompt per playbook; `attachSkills` (the factory calls it): the extension plus what a plain client needs (listed files, a described template, folder reads as lists) |
-| `src/testing/index.ts` | `lintOpenApi`, `guideRoutes`, `guideGaps`, `toolRoutes`, `toolsRun`, `approveSignIn` (an OAuth approval as a browser makes it: the ticket cookie, same-origin); `src/testing/cli.ts`: `cliGaps`, `cliSnapshot` |
-| `src/vectors/index.ts` | Gemini Embedding 2 via OpenRouter: `createEmbedder`, ledgers (`embedMissing`, `readLedger`), `vectorSpace`, `nearest`, `standouts`; `hashOf` must stay byte-compatible with the ledgers already paid for (test pins it) |
-| `src/vector-search/index.ts` | `registerVectorSearch` (words, picture, likeness routes), `vectorSearchTools` |
-| `src/telemetry/` | `telemetry({ product, schemaVersion, version, url, collect })` → `register` (`GET`/`PATCH /api/telemetry`), `sendDaily` (for the scheduled handler), `bodyOf`; `countRange`, `dayRange`, `coarseReport`; `telemetryTools` |
-| `src/switches/` | feature switches: `defineFeatures` (the catalog, `catalog.ts`), providers (`providers.ts`: `FlagProvider`, `contextOf`, `memoryProvider`, `fromSdk`; `repo.ts`: `databaseProvider`), `license.ts` (`verifyLicense`, `licenseOf`: paid features by `requires`), `switches({ catalog, providers, off })` → `isOn`, `assertOn`, `gate`, `gated`, `set`, `stateOf`, `register` (`GET /api/features`, `GET`/`PATCH /api/features/{key}`); `switchTools` |
-| `src/web/index.ts` | the front door: `serveFrontDoor`, `frontDoorOpen` |
-| `src/brand/` | one brand on every surface: `defineBrand` (the app's `brand/brand.ts`), `createBrand` (what `createAgentApi({ brand })` takes, core's `AgentBrand` in `discovery.ts`: its files served, `x-logo`, the docs' head tags), `brandIcons` (inline 96 PNG first, SVG last), `headTags`, `webManifest`, `icoOf`. `mountMcp` (`serverInfoOf`: the inline icon only on `server/discover` and 2025's `initialize`), `mountA2A` (`iconUrl`), `serveGuide` (`{{brand.*}}`) and `serveFrontDoor` read it from the app; the PNGs come from `kit brand`, committed in the app's `src/brand.gen.ts` |
-| `src/boards/` | `registerBoards` (the owner's collections in SQLite), `boardTools`; browser: `src/browser/boards-client.ts`, `src/browser/boards-react.ts`; `src/boards/refs.ts` (`boardRef`, `parseBoardRef`) is copied with both `boards` and `boards-client` |
-| `src/browser/search-client.ts`, `src/browser/search-react.ts`, `src/browser/vector-search-block.tsx` | browser parts (`meta.web` in `registry.json`): headless client and controller, React hooks, the optional shadcn block. Typechecked by `tsconfig.web.json` (bundler resolution, `erasableSyntaxOnly`); the block's shadcn imports resolve to `test/shadcn/` stand-ins |
+| `src/<part>/` | one folder per part (a browser part is one file in `src/browser/`), each with a README in one shape that ships with it. What each part is, needs and exports, and where an app imports it from: [docs/PARTS.md](docs/PARTS.md) (generated) and the part's README |
 | `registry.json` | the parts, as a shadcn registry read straight from GitHub (no build step): one `registry:item` per part, each file a `registry:file` with its `target` under `~/src/kit/`, npm `dependencies` as `name@range` (a bare name is a peer), other parts as `registryDependencies` (`escalay/api-kit/<part>`), `meta.entry` / `meta.web` for the CLI, `meta.standard` (its STANDARD sections) and `meta.layerOf` (a browser layer's server part) for `docs/PARTS.md`, which `pnpm parts` (`scripts/parts.mjs`) writes from it and `test/parts.test.mjs` keeps current. A **root item** (`meta.root`, today `npm-release`) is repo setup, not a part: its files come from outside `src/`, go to the repo root, and only the shadcn CLI installs it (`list` names it, `add` refuses it, `adopt` and `doctor` never see it) |
 | `cli.mjs` | `add`, `list`, `diff`, `update`, `doctor` (also `cliGaps` when the kit folder sits in an installed app, and notes from the app's source: no `address` on Node, `createOAuth` with `approve` but without `limits` and `publicOrigin`, the people part with no `personOf` owner), `adopt`, `init`, `feature`, `guide` (the guide folder as a module for Workers; must write exactly `guideModuleSource`), `sdk` (the client and the CLI), `cli` (the CLI for an app with `sdk/`; `--update` replaces only `sdk/cli/engine`), `button` (the Deploy to Cloudflare button: link and snippets, `--check` that a stranger's deploy would work, `--write` into the README, `--smoke` a real deploy and cleanup; `test/button.test.ts`), `license` (`keys`, `mint`, `verify`: a product's ES256 signing pair and the license keys `licenseOf` accepts, made with `node:crypto`; `test/license.test.ts` checks them against the kit's `verifyLicense`), `repo` (the GitHub repository's settings and rules through `gh`, `check`/`apply`; `test/repo.test.ts` runs it against `test/fixtures/fake-gh.mjs`), `brand` (the app's `brand/` rendered into `src/brand.gen.ts` with the app's own `@resvg/resvg-js`, loaded by dynamic import and never a dependency of the CLI, and `brand.ts` run by the app's tsx; `--check`, and the brand lines of `doctor` (only in an app with the brand part or a `src/brand.gen.ts`): stale by the inputs' hash, an inline icon over 10 KB, notes for a never-rendered brand and a subdomain host; `add brand` and `init` scaffold a monogram from `templates/brand/`, and `add brand` adds `src/brand.gen.ts` to an older app's oxfmt, oxlint and gitleaks ignores (or prints the line); the checks read the module in either quote style; `test/brand-cli.test.ts`) (plain JS: it runs from `npx` without a build). Reads the parts from `registry.json`. Copies mirror `src/`'s folders; `--web-dir` puts the browser files in their own folder under the same `kit.json`. `kit.json` is the lock: a sha256 per file as the kit wrote it; `doctor` reports missing, edited and behind, `adopt` writes it for parts the shadcn CLI copied |
 | `packages/create-escalay` | `npm create escalay <name>`: hands its arguments to `init` |
@@ -64,7 +36,6 @@ what `feature` generates): `schema.ts` (Drizzle tables + migration steps) · `re
 | `templates/app`, `templates/feature` | what `init` and `feature` copy, `__placeholders__` filled from the name (`namesOf` in `cli.mjs`). Never typechecked or tested in place: the generator test in `test/kit.test.ts` makes an app under `test/.generated/`, typechecks it and runs its tests |
 | `test/cli.test.ts` | the CLI engine run in-process against a sample app (its `fetch` is `app.request`): snapshot equals the live commands, help, `--json`, exit codes, `--yes`, `--input`, resources, jobs, device sign-in with refresh, `cliGaps` on the kit's own parts |
 | `test/a2a.test.ts`, `test/oauth.test.ts` | the A2A card and methods; OAuth flows (code + PKCE, refresh families, agent claim, device grant), callers by client and grant, audiences (resources, the canonical form, `accepts`, rows from before audiences), approvals (`approve`, `complete` and its `resource`, `onGrant`, `onRevoke` on every path, deciding later with `ticketTtl` (and after the client lapsed), the ticket cookie, the origin rule, the brand on the pages, the README's invite example), the open endpoints (a forged host under `publicOrigin`, in the OAuth documents and every public discovery file, `no-store` without it, a week for an unused registration, the caps, pruning, the limits and the owner outside them), scopes and metadata. `test/oauth-store-contract.ts` is what every OAuth store must pass (`take`, `markUsed`, `trim` and its `heldBy`, expiry, the caps on every row written without auth with an open invite's client kept and a waiting ticket evicted by newer ones, refresh rows by generation: replays of any earlier token, made-up tokens, 1.29.0 tokens, a 1.29.0 successor after a rollback, a retry of a token 1.29.0 answered first) with the attacks on the token endpoint (codes and refresh tokens raced and replayed, revokes racing refreshes, device approvals and claims polled at once, codes, device approvals and claim tokens collected after `revokeClient`, a claim token collected after `revokeGrant`, consent, claim and device forms posted twice at once, a completed ticket posted again, a stored approval never standing in for a click, the device page for the owner only); `oauth.test.ts` runs it on memory and node:sqlite, `test/workers/oauth.test.ts` on D1 |
-| `src/browser/switches-client.ts`, `switches-react.tsx`, `switches-block.tsx` | the switches in the browser: the headless client (list, refresh on focus and after a 403, switch, `watchFetch`), the React hooks and `<Feature>`, the shadcn panel and notice; `test/switches-ui.test.tsx` runs them in happy-dom against the real routes |
 | `test/license.test.ts` | license keys: made, minted and verified by `kit license`, checked by `verifyLicense` (tampered, expired, foreign product, another deployment), paid features off without one, their 403 and 409 |
 | `test/switches.test.ts` | feature switches: the catalog's checks, the 403 and its order after auth and before validation, needs and dry runs, per person and key, `FEATURES_OFF`, old names, the cache, a flag service in front of the database, routes and tools |
 | `test/telemetry.test.ts` | the usage report: the body sent, the daily schedule, every switch, coarse values only, routes and tool |
@@ -87,10 +58,9 @@ for a look at the kit on Workers by hand)
   `./kit/index.js` and each entry part's folder (`./kit/mcp/index.js`, `./kit/boards/index.js`,
   `./kit/testing/index.js`); its container build needs nothing from this repo.
 - A new app: `npm create escalay <name>` (`init <dir>`); a new feature in it: `feature <plural-name>`.
-- The app owns the copy. Before taking a new kit version: `doctor`, `diff --patch`, then `update`; edits are kept unless
-  `--force`. When a kept file was changed by the kit since the version `kit.json` records, `update` exits 1 and leaves
-  `kit.json` at that version: `--force`, then make the edits again. A fix that belongs to every app goes back into
-  the kit, with a test.
+- The app owns the copy. Before taking a new kit version: `doctor`, `diff --patch`, then `update`; how `update` treats
+  the app's edits is in [docs/upgrading.md › Taking a new version](docs/upgrading.md#taking-a-new-version). A fix
+  that belongs to every app goes back into the kit, with a test.
 
 ## Releasing
 
@@ -117,11 +87,20 @@ for a look at the kit on Workers by hand)
 
 ## Rules
 
-- Every part's folder has a `README.md` in one shape (`README_SHAPE` in `scripts/parts.mjs`, checked by
-  `test/readmes.test.mjs`: use and don't use, add, wire, options, exports, flows, rules with the STANDARD line,
-  failure modes, limits, tests, upgrading). It ships with the part, so change it with the code; a part without one is
-  unfinished. History goes in `docs/upgrading.md`, never in the README.
+- Every part's folder has a `README.md` in one shape: `README_SHAPE` in `scripts/parts.mjs`, listed in
+  [docs/PARTS.md](docs/PARTS.md#every-readme-has-one-shape) and checked by `test/readmes.test.mjs`. It ships with the
+  part, so change it with the code; a part without one is unfinished. History goes in `docs/upgrading.md`, never in
+  the README.
 
 - A rule lives in `docs/STANDARD.md` and the code that enforces it, never only in one of them.
 - Every export has a JSDoc with an example; every rule has a test in `test/`.
 - Keep app-specific things (schemas, routes, guides) in the apps.
+
+## Decisions
+
+Why the kit is built as it is, one line each; a new record takes the next number in `docs/decisions/` and a line here.
+What shipped when is in the changelog.
+
+- [0001](docs/decisions/0001-features-drizzle-scaffold.md): feature folders, Drizzle for write state, a scaffolder
+- [0002](docs/decisions/0002-node-and-workers.md): one kit, two runtimes, Node and Cloudflare Workers
+- [0003](docs/decisions/0003-the-command-line.md): every app's MCP tools as a command line, for agents first and people too

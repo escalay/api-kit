@@ -10,9 +10,8 @@ apps copy in and own. Read the repository's `AGENTS.md` and `docs/STANDARD.md` f
 
 ## 1. The files
 
-1. `src/<part>/`, named as the part. A part with routes and data keeps `boards`' shape: `schema.ts` (tables and
-   migration steps) · `repo.ts` (the only queries) · `routes.ts` · `handlers.ts` · `tools.ts` · `index.ts` (the
-   `register…` function and the exports).
+1. `src/<part>/`, named as the part. A part with routes and data keeps the feature shape of `docs/STANDARD.md` §1;
+   `boards` is the model.
 2. Every export has a JSDoc with an example; every rule has a test in `test/<part>.test.ts`.
 3. It runs on Node and Workers: nothing at global scope that workerd refuses (random values, I/O, timers). A part
    apps import through `./kit/index.js` (no `meta.entry`) goes into `src/index.ts`, which the Workers probe
@@ -23,12 +22,10 @@ apps copy in and own. Read the repository's `AGENTS.md` and `docs/STANDARD.md` f
 ## 2. The README
 
 `src/<part>/README.md` ships with the part, so it changes with the code in the same pull request. Its shape is
-`README_SHAPE` in `scripts/parts.mjs`, checked by `test/readmes.test.mjs`: what it is (one paragraph), then
-**Use it when** · **Don't use it when** · **Add it** · **Wire it** (the copy-paste block) · **Options** (option,
-type, default, what it does) · **Exports** · **Flows** (a Mermaid diagram for any flow of more than two steps) ·
-**Rules** (with the `Standard:` line, equal to the registry's `meta.standard`) · **Failure modes** · **Limits**
-(Node only, Workers, one writer, ceilings) · **Tests** · **Upgrading** (a link to its section of
-`docs/upgrading.md`; history never inline). Every option and hook is in it.
+`README_SHAPE` in `scripts/parts.mjs` (listed in `docs/PARTS.md`, Every README has one shape), checked by
+`test/readmes.test.mjs`. The `Standard:` line under its rules equals the registry's `meta.standard`, history stays in
+`docs/upgrading.md`, and every option and hook is in it. Each `###` heading is given once, and a README stays under
+20 KB (`test/one-source.test.mjs`; oauth has its own cap, which only goes down: cut or move text, never raise it).
 
 ## 3. The registry item
 
@@ -86,7 +83,8 @@ A browser part is one file in `src/browser/`, with `meta: { "entry": true, "web"
 - **The map.** `docs/PARTS.md` is generated from `registry.json`: run `pnpm parts` after changing a part's
   registry item (`test/parts.test.mjs` fails while it is stale), and give the part a row in its goal table in
   `scripts/parts.mjs` when it serves a new goal. The `api-kit-build` skill names every part by goal: add the new one there
-  (a test checks every part is named in some skill), and the `AGENTS.md` layout table gets its row.
+  (a test checks every part is named in some skill). `AGENTS.md`'s layout table has no row per part: it points at
+  `docs/PARTS.md`.
 - **The release note.** The pull request's title is the line in the release notes: `feat(reminders): …` for a new
   part or option, `fix(<part>): …` for a fix. A change an app must act on (a new migration step, a renamed export, a
   changed default) gets its entry in `docs/upgrading.md` and says so in the part's README. Existing apps keep

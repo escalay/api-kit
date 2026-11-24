@@ -250,7 +250,7 @@ sequenceDiagram
   loop until there is a decision, within ticketTtl
     Asker->>App: GET the decision for the ticket
   end
-  Owner->>App: decide on the app's own screen, hours later
+  Owner->>App: decide on the app's own screen, hours later (the app writes it against the ticket)
   Asker->>App: submit the form: a same-origin POST from the browser that opened the ticket
   App->>Kit: complete(c, ticket, decision)
   Kit-->>Asker: 302 back to the client
@@ -325,13 +325,15 @@ sequenceDiagram
   participant Device
   participant Kit
   participant Owner as the owner's browser
-  Device->>Kit: POST /oauth/register (device grant, no redirect_uris)
+  Device->>Kit: POST /oauth/register (client_name, grant_types the device_code grant, no redirect_uris)
   Device->>Kit: POST /oauth/device_authorization: client_id, scope
-  Kit-->>Device: device_code, user_code BDKM-QXTW, verification_uri, expires_in 600, interval 5
-  Owner->>Kit: GET /oauth/device (signed in), types the code
-  Owner->>Kit: POST /oauth/device allow or deny (same-origin)
+  Kit-->>Device: device_code, user_code BDKM-QXTW, verification_uri, verification_uri_complete, expires_in 600, interval 5
+  Owner->>Kit: GET /oauth/device or /oauth/device?user_code= (signed in, a page like /oauth/authorize), types the code
+  Owner->>Kit: POST /oauth/device user_code (same-origin)
+  Kit-->>Owner: which device asks, with Allow and Deny
+  Owner->>Kit: POST /oauth/device user_code, decision allow or deny (same-origin)
   loop every interval
-    Device->>Kit: POST /oauth/token device_code
+    Device->>Kit: POST /oauth/token grant_type urn:ietf:params:oauth:grant-type:device_code, device_code, client_id
     Kit-->>Device: authorization_pending, slow_down (+5 s), expired_token, access_denied
   end
   Kit-->>Device: tokens, once (onGrant first)
@@ -457,22 +459,16 @@ too, so its client signs in again rather than holding tokens no row backs.
 - Rules after cloudflare/workers-oauth-provider (the browser-bound, single-use consent ticket; never redirect before
   the redirect is checked) and oidc-provider (the grant is saved before the code exists), both MIT.
 
-### Deciding later (`ticketTtl`)
+### Deciding later: the ticket's life
 
 An ask to join waits for the owner, who may answer in hours. A ticket lives `ticketTtl` seconds (default 600, whole,
-from 60 to a week; `createOAuth` throws otherwise), and so does the nonce cookie that binds it to the asker's browser:
-
-1. `approve` records the ask in the app's own table (`ask.ticket`, the client, who is asking) and answers a waiting
-   page holding the ticket in a form, as any approval page does.
-2. The owner decides on the app's own screen, later; the app writes the decision against the ticket.
-3. The waiting page polls an app route for the decision (a GET with the ticket), and once there is one it submits its
-   form: a same-origin POST from the browser that opened the ticket, which the app answers with
-   `oauth.complete(c, ticket, decision)`, and the browser follows the 302 back to the client.
-
-Nothing else changes: `complete` still needs the browser that opened the ticket, a same-origin POST, once. A fetch
-that follows the 302 itself would not take the browser back to the client, so the page submits the form. A decision
-made after the ticket's life finds it expired (the page says to start again from the app). `test/oauth.test.ts` runs
-this pattern. Two ways a waiting ask ends before its life does:
+from 60 to a week; `createOAuth` throws otherwise), and so does the nonce cookie that binds it to the asker's browser.
+The steps are the Flows diagram (Deciding later): `approve` records the ask (`ask.ticket`, the client, who is asking)
+and answers a waiting page holding the ticket in a form; the page polls an app route and submits the form once there is
+a decision. Nothing else changes: `complete` still needs the browser that opened the ticket, a same-origin POST, once.
+A fetch that follows the 302 itself would not take the browser back to the client, so the page submits the form. A
+decision made after the ticket's life finds it expired (the page says to start again from the app).
+`test/oauth.test.ts` runs this pattern. Two ways a waiting ask ends before its life does:
 
 - **Its client lapses.** A ticket does not renew its client's life: a registration no sign-in has used lapses a week
   after it was made, so a ticket opened by a client older than a week minus `ticketTtl` outlives it. A decision after
@@ -586,7 +582,7 @@ for them, or otherwise verify they are the intended recipient):
   consent ticket holds (a page is waiting on a person: an invite, an ask to join), the claim token of a live
   registration, an answered ticket, and a row from before the caps (no `used` flag). The waiting ticket itself is not
   protected: `maxUnusedTickets` newer tickets evict it, and its client with it on a later registration (Deciding
-  later). So the unused rows are at most
+  later: the ticket's life). So the unused rows are at most
   `maxUnusedClients` clients plus one per open ticket, `maxUnusedClients` registrations and as many claim tokens, and
   `maxUnusedTickets` of each of the four waiting kinds; the rest follow an approval (claimed registrations, tokens,
   refresh rows) or a signed-in person (device answers and tries). An approved device not yet collected (one poll,
@@ -676,19 +672,10 @@ written by the first request, after it marks the used token. If that request die
 gets a successor no row backs, and its next refresh is `invalid_grant` (with 0 the retry would have revoked the grant
 instead). The retry never writes the row itself, since a write there could reset a successor already used.
 
-### Device authorization (RFC 8628)
+### Device authorization: codes and Access
 
-```
-POST /oauth/register              { client_name, grant_types: ["urn:ietf:params:oauth:grant-type:device_code"] }  (no redirect_uris)
-POST /oauth/device_authorization  client_id, scope → { device_code, user_code: "BDKM-QXTW", verification_uri,
-                                                       verification_uri_complete, expires_in: 600, interval: 5 }
-GET  /oauth/device[?user_code=]   the page where the signed-in owner types the code (HTML, like /oauth/authorize)
-POST /oauth/device                user_code [, decision=allow|deny]   (same-origin only)
-POST /oauth/token                 grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=…&client_id=…
-                                  → authorization_pending | slow_down (+ interval) | expired_token | access_denied | tokens
-```
-
-Nothing to wire: `mount` adds it, and the metadata names `device_authorization_endpoint`.
+The requests are the Flows diagram (Device authorization). Nothing to wire: `mount` adds it, and the metadata names
+`device_authorization_endpoint`.
 
 - Device codes: 8 letters from `BCDFGHJKLMNPQRSTVWXZ` (no vowels), shown as `XXXX-XXXX`, case and dashes ignored;
   10 minutes; single use; only hashes kept. A signed-in person may type 5 wrong codes in 10 minutes, then 429. When
