@@ -359,10 +359,34 @@ the revoke. The claim grant reads both markers after it takes the claim token, s
 counts. Both markers (`revokeGrant`'s and `revokeClient`'s) are kept 30 days and 20 minutes, longer than a refresh
 token issued from a code or device approval collected at the last moment.
 
-`createOAuth({ …, reuseGraceSeconds: 30 })`: a used refresh token sent again inside the window (a client that lost the
-answer and retried) gets the same successor, an HMAC of the used token under a secret derived from the signing key, so
-none is stored. Never a second branch: once that successor is used, or the window has passed, it is reuse. The default
-is 0: any replay revokes the grant. The successor is written by the first request, after it marks the used token: if
+### Refresh tokens: rotation, replay and the rows it leaves
+
+A refresh token is `rt_<grant>.<generation>.<MAC>`: the MAC is an HMAC of the grant and the generation under a secret
+derived from the signing key. Each refresh marks the token used, moves the grant's one `refresh-family` row to the
+next generation, and writes that generation's token row; the used token's row stays only for `reuseGraceSeconds` (0,
+the default: it goes at once). So a sign-in keeps two rows however often it refreshes, its newest token's and its
+family's, where 1.29.0 kept every used token 30 days (about 720 a month for a client refreshing hourly).
+
+Replay detection is unchanged:
+
+- A used token sent again while its row is kept is reuse, as before.
+- One whose row is gone is still known: its MAC shows this server made it, and its family has moved past its
+  generation, so it was used. Sending it ends the grant ("already used"), and so does revoking it at `/oauth/revoke`.
+- A made-up token that names a grant (every access token carries its grant) has no valid MAC and ends nothing.
+- A token issued by 1.29.0 (`rt_` and 32 random characters) carries no family. Its first refresh after the update marks
+  it used and keeps its row 30 days, as before, and gives a generation-1 token. It and the used 1.29.0 tokens before
+  it are still known by their rows.
+
+Revocation reads stay uncached: `verify` reads the issued row and the markers on every request, so a revoke stops a
+client on its next request. Rotating the signing key also changes the MAC, so earlier tokens of the old key are no
+longer recognised as replays: they are only unknown.
+
+**Refresh storms** happen when one client refreshes the same token twice at once: two tabs sharing a sign-in, a CLI and
+its background job, or a refresh retried after a dropped answer. With the default 0, the second refresh is reuse and
+ends the sign-in, so the person signs in again. `createOAuth({ …, reuseGraceSeconds: 30 })` (the starter sets it)
+gives a used refresh token sent again inside the window the same successor: the next generation's token, which is the
+same each time it is made, so none is stored for it. It never makes a second branch: once that successor is used, or
+the window has passed, it is reuse. The successor is written by the first request, after it marks the used token. If
 that request dies in between, a retry in the window gets a successor no row backs, and its next refresh is
 `invalid_grant` (with 0 the retry would have revoked the grant instead). The retry never writes the row itself, since
 a write there could reset a successor already used.
@@ -381,8 +405,8 @@ a write there could reset a successor already used.
 - `owner` decides who may approve on the kit's pages: behind Cloudflare Access, `accessOwner(access)` (the signed-in
   email). `approve` lets the app decide at `/oauth/authorize` instead (above).
 - Refresh tokens last 30 days and rotate on each use; MCP clients and claimed agents both get one. Only their hashes
-  are kept. A used token sent again revokes its grant (every refresh token of that sign-in, and its access tokens at
-  once), as does revoking any one of them. Two refreshes of one token at once rotate once: the second is that replay,
+  are kept, and only the newest token's row (above). A used token sent again revokes its grant (every refresh token of
+  that sign-in, and its access tokens at once), as does revoking any one of them. Two refreshes of one token at once rotate once: the second is that replay,
   unless `reuseGraceSeconds` covers it.
 - A code is used once, even by a failed exchange, and kept until its 10 minutes end. Sent again with the right client
   and verifier, it revokes the grant the first exchange got (OAuth 2.1 §4.1.3); with a wrong verifier it revokes
@@ -519,3 +543,8 @@ New, off unless set: `ticketTtl` (default 600, as before), `complete`'s `resourc
 - **`OAUTH_MIGRATIONS` has a step 2**, an index on `expires_at`: `dbOAuthStore` applies it when made; a Workers app
   runs `pnpm migrations` (`scripts/migrations.ts`) to write its D1 file. It is `create index if not exists`, so a
   database `migrate()` already brought up takes the file cleanly.
+- **A refresh leaves no used row behind** (before, each kept 30 days): refresh tokens issued from now on name their
+  grant and generation, and a grant keeps one `refresh-family` row. Replays are found as before, 1.29.0 tokens
+  included. An app's own test that reads a used refresh row by its hash finds none once the grace has passed. With `reuseGraceSeconds` set, a retry
+  that lands across the update (the first refresh answered by 1.29.0, the retry by this version) gets a successor no
+  row backs: its next refresh is `invalid_grant` and the client signs in again.

@@ -291,9 +291,18 @@ export const createOAuth = (config: OAuthConfig) => {
   /** The issuer's origin: `publicOrigin`, else the request's own. */
   const issuerOf = (c: Context) => publicOrigin ?? originOf(c)
   const jwk = JSON.parse(config.signingKey) as JWK
-  // A secret of its own, from the signing key: successors are derived, so a retry gets the same one and none is stored
-  const successorSecret = createHash('sha256').update(`api-kit refresh successor\0${jwk.d ?? config.signingKey}`).digest()
-  const successorOf = (refresh: string) => `rt_${createHmac('sha256', successorSecret).update(refresh).digest('base64url')}`
+  // A secret of its own, from the signing key: a refresh token ends in a MAC of its family and generation, so the
+  // server knows an earlier token of a family it keeps no row for, and no one can make one without the key
+  const refreshSecret = createHash('sha256').update(`api-kit refresh token\0${jwk.d ?? config.signingKey}`).digest()
+  const macOf = (family: string, generation: number) => createHmac('sha256', refreshSecret).update(`${family}.${generation}`).digest('base64url')
+  /** A family's refresh token of one generation: the same each time, so a retry in the grace gets the one the first answer held. */
+  const refreshTokenOf = (family: string, generation: number) => `rt_${family}.${generation}.${macOf(family, generation)}`
+  /** The family and generation of a refresh token this server made; null for one from before generations, or a made-up one. */
+  const generationOf = (refresh: string) => {
+    const [, family, generation, mac] = /^rt_([\w-]+)\.(\d+)\.([\w-]+)$/.exec(refresh) ?? []
+    if (!family || !generation || !mac || !same(mac, macOf(family, Number(generation)))) return null
+    return { family, generation: Number(generation) }
+  }
   const reuseGrace = config.reuseGraceSeconds ?? 0
   const ready = (async () => {
     const privateKey = await importJWK(jwk, 'ES256')
@@ -317,10 +326,14 @@ export const createOAuth = (config: OAuthConfig) => {
   }
 
   /** A refresh token in its grant's family: every token rotated from one sign-in shares it, so a replay can revoke them all. */
-  const refreshFor = async ({ grant, ...rest }: Grant, refresh = token('rt')) => {
+  const refreshFor = async ({ grant, ...rest }: Grant, generation = 0) => {
+    const refresh = refreshTokenOf(grant, generation)
     await store.put('refresh', sha(refresh), { ...rest, family: grant, used: false }, now() + REFRESH_TTL)
     return refresh
   }
+
+  /** Whether a family has moved past this generation: a later token was issued, so this one was used. */
+  const isBehind = async ({ family, generation }: { family: string; generation: number }) => Number((await store.get('refresh-family', family))?.generation ?? -1) > generation
 
   /** The store's own `markUsed`, or a read then a write: safe only one request at a time. */
   const markUsed = (kind: string, id: string, keepUntil?: number) =>
@@ -1057,8 +1070,17 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         case 'refresh_token': {
           const refresh = body.refresh_token ?? ''
           const key = sha(refresh)
+          const made = generationOf(refresh)
           const held = refresh ? await store.get('refresh', key) : null
-          if (!held) return oauthError(c, 400, 'invalid_grant', 'This refresh token is expired, revoked or unknown: authorize again.')
+          const alreadyUsed = () => oauthError(c, 400, 'invalid_grant', 'This refresh token was already used, so every refresh token from this sign-in is revoked: authorize again.')
+          if (!held) {
+            // No row: a token this server made, of a family that has moved past it, is a replay
+            if (made && (await isBehind(made))) {
+              await revokeGrant(made.family)
+              return alreadyUsed()
+            }
+            return oauthError(c, 400, 'invalid_grant', 'This refresh token is expired, revoked or unknown: authorize again.')
+          }
           // A refresh keeps its grant's audience and can't retarget it; a row from before audiences stays without one
           if (await manyFor(held)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
           if (otherTarget(held, body.resource)) return oauthError(c, 400, 'invalid_target', 'resource differs from the one this sign-in was granted for.')
@@ -1066,17 +1088,27 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const grant = String(held.family ?? key)
           if ((await store.get('revoked-family', grant)) || (await store.get('revoked-client', String(held.client)))) return oauthError(c, 400, 'invalid_grant', 'This refresh token is revoked: authorize again.')
           const issued = { client: String(held.client), name: String(held.name), owner: String(held.owner), scopes: held.scopes as string[], grant, ...boundOf(held) }
-          const successor = successorOf(refresh)
-          // Kept as used, not deleted, so a replay is recognised for as long as the newest token of its family lives
-          if (!(await markUsed('refresh', key, now() + REFRESH_TTL))) {
+          // A token from before generations starts its family's count
+          const next = (made?.generation ?? 0) + 1
+          const successor = refreshTokenOf(grant, next)
+          // Marked used, not deleted, so a retry in the grace can read when; a token from before generations is known
+          // as used by this row alone, so it keeps it 30 days
+          const marked = await markUsed('refresh', key, now() + REFRESH_TTL)
+          if (!marked) {
             // A retry inside the window gets the successor the first answer held, while it is unused: never a second branch
             const usedAt = Number((await store.get('refresh', key))?.usedAt ?? 0)
             if (reuseGrace > 0 && usedAt && now() - usedAt <= reuseGrace && !(await store.get('refresh', sha(successor)))?.used)
               return c.json({ ...(await issue(origin, issued)), refresh_token: successor }, 200, { 'cache-control': 'no-store' })
             await revokeGrant(grant)
-            return oauthError(c, 400, 'invalid_grant', 'This refresh token was already used, so every refresh token from this sign-in is revoked: authorize again.')
+            return alreadyUsed()
           }
-          return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued, successor) }, 200, { 'cache-control': 'no-store' })
+          const access = await issue(origin, issued)
+          // The family moves on before its new token exists: from here an earlier token is a replay, row or not
+          await store.put('refresh-family', grant, { generation: next, client: issued.client }, now() + REFRESH_TTL)
+          await refreshFor(issued, next)
+          // One this server made is known by its family from now on: its row stays only while a retry may read it
+          if (made) await store.put('refresh', key, marked, now() + reuseGrace)
+          return c.json({ ...access, refresh_token: successor }, 200, { 'cache-control': 'no-store' })
         }
         case CLAIM_GRANT: {
           const held = body.claim_token ? await store.get('claim-token', sha(body.claim_token)) : null
@@ -1170,10 +1202,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const body = await bodyOf(c)
       const value = body.token ?? ''
       const refresh = await store.get('refresh', sha(value))
-      if (refresh) {
-        await revokeGrant(String(refresh.family ?? sha(value)))
-        await store.delete('refresh', sha(value))
-      }
+      // Any token of a sign-in ends it, an earlier one too: this server knows its family by its MAC when it keeps no row
+      const family = refresh ? String(refresh.family ?? sha(value)) : generationOf(value)?.family
+      if (family) await revokeGrant(family)
+      if (refresh) await store.delete('refresh', sha(value))
       const { publicKey } = await ready
       const { payload } = await jwtVerify(value, publicKey, { issuer: issuerOf(c), algorithms: ['ES256'] }).catch(() => ({ payload: null }))
       if (typeof payload?.jti === 'string') await store.delete('access', payload.jti)

@@ -158,7 +158,8 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   signed-in person again; **nothing is granted before a person approves** (an unclaimed registration has no scopes).
   Tokens: ES256 JWTs for an hour (`OAUTH_SIGNING_KEY`, a private JWK in your secret store), checked against a revocation list
   on every request. Refresh tokens (30 days, MCP clients and claimed agents alike) rotate on each use and are kept only as
-  hashes; a used one sent again revokes every refresh token of that sign-in, and so does revoking any of them. **An
+  hashes, a row for the newest token of each sign-in only (an earlier one is known by its MAC and its family's
+  generation); a used one sent again revokes every refresh token of that sign-in, and so does revoking any of them. **An
   OAuth caller is known by its client_id and its grant (one approval, every token of one sign-in), never by the name it
   registered; the name is for display.** Rate limits, idempotency, MCP and A2A task ownership key on them, and revoking a grant ends its
   access tokens at once (`revokeGrant`), and a claimed agent's identity assertion with them; `revokeClient` also drops the registration and refuses a code, device approval or claim token not yet collected, and a claim token collected after its grant was revoked is refused too (the revoke markers outlive anything issued behind them, so nothing may be issued into a revoked grant or client). A code, a refresh token, a device code and a claim token are
