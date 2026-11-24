@@ -65,6 +65,7 @@ describe('the size of a part’s README', () => {
   })
 
   it('lists only READMEs over the ceiling, each with a cap close above it', () => {
+    expect(Object.keys(OVER), 'a README over the ceiling is cut or split, never added here').toEqual(['oauth'])
     for (const [folder, cap] of Object.entries(OVER)) {
       expect(sizes[folder], `${folder}: under the ceiling now, so drop it from OVER`).toBeGreaterThan(CEILING)
       expect(cap - sizes[folder], `${folder}: shrank, so lower its cap`).toBeLessThanOrEqual(2 * 1024)
