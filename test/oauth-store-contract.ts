@@ -437,6 +437,44 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect((await (await refreshWith(again, next.refresh_token)).json()).error).toBe('invalid_grant')
     })
 
+    /** A sign-in rotated to generation 4 whose newest token 1.29.0 then refreshed (a rollback): an `rt_<random>` successor in the same family. */
+    const rolledBack = async (store: OAuthStore, options: Partial<OAuthConfig> = {}) => {
+      const { app } = await oauthApp(store, options)
+      const { tokens } = await signedIn(app)
+      const chain = [tokens.refresh_token]
+      for (let n = 0; n < 4; n++) chain.push((await (await refreshWith(app, chain.at(-1)!)).json()).refresh_token)
+      const newest = (await store.get('refresh', sha(chain[4]!)))!
+      const successor = `rt_${randomBytes(24).toString('base64url')}`
+      await store.put('refresh', sha(chain[4]!), { ...newest, used: true, usedAt: now() }, now() + 3600)
+      await store.put('refresh', sha(successor), { ...newest, used: false }, now() + 3600)
+      return { app, chain, successor }
+    }
+
+    it('keeps a family’s generation when a 1.29.0 successor is refreshed after a rollback, so an earlier token still ends it', async () => {
+      const { app, chain, successor } = await rolledBack(await make())
+      const rotated = await (await refreshWith(app, successor)).json()
+      expect(rotated).toMatchObject({ refresh_token: expect.stringMatching(/^rt_/) })
+      expect(await (await refreshWith(app, chain[2]!)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+      expect((await callerWith(app, rotated.access_token)).status).toBe(401)
+      expect((await (await refreshWith(app, rotated.refresh_token)).json()).error).toBe('invalid_grant')
+    })
+
+    it('with reuseGraceSeconds, gives a 1.29.0 successor sent again in the window the same successor after a rollback', async () => {
+      const { app, successor } = await rolledBack(await make(), { reuseGraceSeconds: 30 })
+      const first = await (await refreshWith(app, successor)).json()
+      const again = await (await refreshWith(app, successor)).json()
+      expect(again.refresh_token).toBe(first.refresh_token)
+      expect((await refreshWith(app, again.refresh_token)).status).toBe(200)
+    })
+
+    it('with reuseGraceSeconds, ends the sign-in when a 1.29.0 successor comes back after its own successor was used', async () => {
+      const { app, successor } = await rolledBack(await make(), { reuseGraceSeconds: 30 })
+      const first = await (await refreshWith(app, successor)).json()
+      const second = await (await refreshWith(app, first.refresh_token)).json()
+      expect(await (await refreshWith(app, successor)).json()).toMatchObject({ error: 'invalid_grant', error_description: expect.stringContaining('already used') })
+      expect((await callerWith(app, second.access_token)).status).toBe(401)
+    })
+
     // workers-oauth-provider #428
     it('keeps a sign-in revoked when the revoke lands in the middle of a refresh', async () => {
       const inner = await make()

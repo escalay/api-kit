@@ -424,8 +424,11 @@ Replay detection is unchanged:
   generation, so it was used. Sending it ends the grant ("already used"), and so does revoking it at `/oauth/revoke`.
 - A made-up token that names a grant (every access token carries its grant) has no valid MAC and ends nothing.
 - A token issued by 1.29.0 (`rt_` and 32 random characters) carries no family. Its first refresh after the update marks
-  it used and keeps its row 30 days, as before, and gives a generation-1 token. It and the used 1.29.0 tokens before
-  it are still known by their rows.
+  it used and keeps its row 30 days, as before, and gives a token one generation past its family's newest (generation
+  1 for a family with no row). So after a rollback, when 1.29.0 refreshed a token of a family this version had moved to
+  generation 4, the family goes on at 5 and every earlier token still ends it. It and the used 1.29.0 tokens before
+  it are still known by their rows; its row also keeps the generation its successor got, so a retry in the grace gets
+  that same successor.
 
 Revocation reads stay uncached: `verify` reads the issued row and the markers on every request, so a revoke stops a
 client on its next request. Rotating the signing key also changes the MAC, so earlier tokens of the old key are no

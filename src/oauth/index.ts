@@ -363,6 +363,9 @@ export const createOAuth = (config: OAuthConfig) => {
     return row && Number(row.generation) > generation ? row : null
   }
 
+  /** How far a family has rotated: its row's generation, 0 when it has none. */
+  const generationOfFamily = async (family: string) => Number((await store.get('refresh-family', family))?.generation ?? 0)
+
   /** The store's own `markUsed`, or a read then a write: safe only one request at a time. */
   const markUsed = (kind: string, id: string, keepUntil?: number) =>
     store.markUsed
@@ -1141,20 +1144,27 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const grant = String(held.family ?? key)
           if ((await store.get('revoked-family', grant)) || (await store.get('revoked-client', String(held.client)))) return oauthError(c, 400, 'invalid_grant', 'This refresh token is revoked: authorize again.')
           const issued = { client: String(held.client), name: String(held.name), owner: String(held.owner), scopes: held.scopes as string[], grant, ...boundOf(held) }
-          // A token from before generations starts its family's count
-          const next = (made?.generation ?? 0) + 1
-          const successor = successorOf(refresh, grant, next)
+          // A token from before generations has none of its own (1.29.0 may have made it after this code rotated the
+          // family): it follows the family's newest, so an earlier token of the family still reads as a replay
+          const next = (made ? made.generation : await generationOfFamily(grant)) + 1
           // Marked used, not deleted, so a retry in the grace can read when; a token from before generations is known
           // as used by this row alone, so it keeps it 30 days
           const marked = await markUsed('refresh', key, now() + REFRESH_TTL)
           if (!marked) {
+            const used = await store.get('refresh', key)
+            const usedAt = Number(used?.usedAt ?? 0)
+            // The first answer's successor: for a token from before generations, at the generation written on its row
+            const successor = successorOf(refresh, grant, Number(used?.successorGeneration ?? next))
             // A retry inside the window gets the successor the first answer held, while it is unused: never a second branch
-            const usedAt = Number((await store.get('refresh', key))?.usedAt ?? 0)
             if (reuseGrace > 0 && usedAt && now() - usedAt <= reuseGrace && !(await store.get('refresh', sha(successor)))?.used)
               return c.json({ ...(await issue(origin, issued)), refresh_token: successor }, 200, { 'cache-control': 'no-store' })
             await endGrant(grant, 'replayed', issued.client)
             return alreadyUsed()
           }
+          const successor = successorOf(refresh, grant, next)
+          // Before the family moves on: a retry of a token from before generations finds its successor's generation
+          // here, not from the family, which this answer is about to move
+          if (!made) await store.put('refresh', key, { ...marked, successorGeneration: next }, now() + REFRESH_TTL)
           const access = await issue(origin, issued)
           // The family moves on before its new token exists: from here an earlier token is a replay, row or not
           await store.put('refresh-family', grant, { generation: next, client: issued.client }, now() + REFRESH_TTL)
