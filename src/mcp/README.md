@@ -30,7 +30,7 @@ mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools: [getNote]
 | `mountMcp` | `/mcp` (Streamable HTTP, MCP 2026-07-28 with a fallback for older clients) and the Server Card; the app's brand (`createAgentApi({ brand })`) fills `title`, `description`, `websiteUrl` and `icons` where `info` leaves them out |
 | `serverInfoOf(info, brand, origin, { inline })` | that identity: the inline PNG icon first (2025's `initialize`, `server/discover`, the card), left out of the serverInfo 2026-07-28 stamps on every other answer; a stdio factory takes `brand` itself |
 | `inProcess(app)` / `overHttp(origin, key)` | how tools reach the routes: in the same process, or over HTTP for a stdio entry |
-| `callWaiting`, `pollRun` | `callWaiting` makes the call and follows a 202 run until it finishes, so a slow route still answers the tool; past the wait it names the run (`pending`) and its path (`location`). `pollRun` polls a run already started (looking at least once) and never makes the call again until the run is done, then once for its cached answer |
+| `callWaiting`, `pollRun` | `callWaiting` makes the call and follows a 202 run until it finishes, so a slow route still answers the tool; past the wait it names the run (`pending`) and its path (`location`). `pollRun` polls a run already started (looking at least once) and never makes the call again while it works; once done, the answer is the run's `_links.result` (in the tool route's shape) when it names one, else the call made once more for its cached answer, and a 202 to that is a new run, still pending |
 
 ## Rules
 

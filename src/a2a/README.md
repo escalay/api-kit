@@ -27,9 +27,12 @@ With `createAgentApi({ brand })` the card's `iconUrl` is the brand's 512 PNG (el
   grant (`agent:<client_id>/<grant>`, as the guards key it), never the name it registered, so two clients that call
   themselves the same are two owners. An API key is its key name.
 - A slow route (202 and a run) leaves the task working and keeps the run's `Location` on the task: `GetTask` polls
-  that run and never calls the tool again while it works, so a tool with side effects (an order, a payment) runs once.
-  When the run is done the tool is called once more for its cached answer, as the standard's 202 rule says. A task
-  stored by 1.29.0 has no run kept: `GetTask` calls its tool again, as it did then.
+  that run and never calls the tool again while it works. When the run is done, the answer is the run's
+  `_links.result` when it has one (it must answer in the tool route's shape, which the skill summarizes), else the
+  tool called once more for its cached answer, as the standard's 202 rule says. A route that keeps no cache (an
+  order, a payment) links its result, or that repeat call starts the work again: a 202 is never taken for an answer,
+  so the task then stays working on the new run. A task stored by 1.29.0 has no run kept: `GetTask` calls its tool
+  again, as it did then.
 - A task that ended stays ended: a `GetTask` in flight when `CancelTask` lands finds the task canceled when it saves,
   and answers it canceled. The check reads the store before writing (`KeyValueStore` has no conditional write), so on
   a database store two instances can still cross within one read and write.

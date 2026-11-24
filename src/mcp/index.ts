@@ -123,10 +123,23 @@ export type Waited = { response: Response; pending: string | null; location: str
 
 const POLL_MS = 3000
 
+/** A call's answer, or the run it started when it answered 202 with a `Location`. */
+const waitedOf = (response: Response): Waited => {
+  const location = response.headers.get('location')
+  return response.status === 202 && location ? { response, pending: location.split('/').pop()!, location } : { response, pending: null, location: null }
+}
+
+/** A path for `callApi` from a link's absolute `href`. */
+const pathOf = (href: string) => {
+  const url = new URL(href, 'http://localhost')
+  return url.pathname + url.search
+}
+
 /**
- * Polls a slow call's run (its `Location`) until `waitMs` has passed, looking at least once. Done: the call is made
- * once more for its cached answer (the standard's 202 contract). Failed: the run's answer. Else the run is pending.
- * It never makes the call again while the run works, so a call with side effects is never repeated.
+ * Polls a slow call's run (its `Location`) until `waitMs` has passed, looking at least once. Done: the answer is the
+ * run's `_links.result` when it names one, else the call made once more (a slow route caches its answer: the
+ * standard's 202 rule); a call that answers 202 again started another run, which is pending in turn. Failed: the
+ * run's answer. It never makes the call again while the run works, so a call with side effects isn't repeated.
  *
  * @example
  * const { response, location } = await pollRun(callApi, tool.call(args), stored.location, auth, 0)
@@ -135,8 +148,11 @@ export const pollRun = async (callApi: CallApi, call: ApiCall, location: string,
   const until = Date.now() + waitMs
   for (;;) {
     const run = await callApi({ path: location }, auth)
-    const { status } = ((await run.clone().json().catch(() => null)) ?? {}) as { status?: string }
-    if (status === 'done') return { response: await callApi(call, auth), pending: null, location: null }
+    const { status, _links } = ((await run.clone().json().catch(() => null)) ?? {}) as { status?: string; _links?: { result?: { href?: string } } }
+    if (status === 'done') {
+      const result = _links?.result?.href
+      return waitedOf(await callApi(result ? { path: pathOf(result) } : call, auth))
+    }
     if (status === 'failed') return { response: run, pending: null, location: null }
     if (Date.now() >= until) return { response: run, pending: location.split('/').pop()!, location }
     await new Promise((resolve) => setTimeout(resolve, POLL_MS))
@@ -151,10 +167,8 @@ export const pollRun = async (callApi: CallApi, call: ApiCall, location: string,
  * const { response, pending, location } = await callWaiting(callApi, tool.call(args), auth, 60_000)
  */
 export const callWaiting = async (callApi: CallApi, call: ApiCall, auth: AuthInfo | undefined, waitMs: number): Promise<Waited> => {
-  const response = await callApi(call, auth)
-  const location = response.headers.get('location')
-  if (response.status !== 202 || !location) return { response, pending: null, location: null }
-  return pollRun(callApi, call, location, auth, waitMs)
+  const answered = waitedOf(await callApi(call, auth))
+  return answered.location ? pollRun(callApi, call, answered.location, auth, waitMs) : answered
 }
 
 /**

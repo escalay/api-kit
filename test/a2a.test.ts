@@ -33,9 +33,12 @@ const sampleApi = async ({ slow = false } = {}) => {
 
 /**
  * An app whose one tool is not idempotent: each call that finds no finished order starts a new run (202), so calling
- * it again while the run works would place a second order. A finished run's order answers the call at once.
+ * it again while the run works would place a second order. How a finished run answers (`finished`):
+ *   cached   the call made again answers the finished order at once
+ *   linked   every call starts a run; a finished run links its order (`_links.result`)
+ *   none     every call starts a run, and a finished run says no more than done
  */
-const ordersApi = async ({ waitMs = 0 } = {}) => {
+const ordersApi = async ({ waitMs = 0, finished = 'cached' as 'cached' | 'linked' | 'none' } = {}) => {
   const store = memoryOAuthStore()
   const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`agent:${hashApiKey(KEY)}`) } })
   const runs: { status: 'running' | 'done' }[] = []
@@ -44,15 +47,18 @@ const ordersApi = async ({ waitMs = 0 } = {}) => {
   app.post('/api/v1/orders', (c) => {
     seen.calls += 1
     const done = runs.findIndex((run) => run.status === 'done')
-    if (done >= 0) return c.json({ order: done + 1 })
+    if (finished === 'cached' && done >= 0) return c.json({ order: done + 1 })
     runs.push({ status: 'running' })
     return c.json({ status: 'running' }, 202, { location: `/api/v1/runs/${runs.length}` })
   })
   app.get('/api/v1/runs/:n', async (c) => {
     seen.looks += 1
     await slowLook
-    return c.json({ status: runs[Number(c.req.param('n')) - 1]!.status })
+    const n = Number(c.req.param('n'))
+    const { status } = runs[n - 1]!
+    return c.json({ status, ...(finished === 'linked' && status === 'done' ? { _links: { result: { href: `http://localhost/api/v1/orders/${n}` } } } : {}) })
   })
+  app.get('/api/v1/orders/:n', (c) => c.json({ order: Number(c.req.param('n')) }))
   const tool = mcpTool({ name: 'place_order', title: 'Place an order', description: 'Orders one thing.', input: z.object({ item: z.string() }), call: ({ item }) => ({ method: 'POST', path: '/api/v1/orders', body: { item } }), summarize: (json) => `order ${json.order}` })
   mountA2A(app, { info: { name: 'Sample', description: 'One tool.', version: '1.0.0' }, skills: [{ tool, text: 'item', tags: ['orders'] }], callApi: inProcess(app), store, waitMs })
   const call = async (method: string, params: unknown) => (await (await app.request('/a2a', rpc(method, params))).json()).result
@@ -149,6 +155,30 @@ describe('A2A', () => {
     expect(done.artifacts[0].parts[0].text).toBe('order 1')
     // One more call reads the finished order; no second order was placed
     expect({ calls: seen.calls, runs: runs.length }).toEqual({ calls: 2, runs: 1 })
+  })
+
+  it('reads a finished run\'s result link instead of calling a tool with no cache again', async () => {
+    const { runs, seen, call } = await ordersApi({ finished: 'linked' })
+    const task = (await call('SendMessage', send('a lamp'))).task
+    runs[0]!.status = 'done'
+    const done = await call('GetTask', { id: task.id })
+    expect(done.status.state).toBe('TASK_STATE_COMPLETED')
+    expect(done.artifacts[0].parts[0].text).toBe('order 1')
+    expect({ calls: seen.calls, runs: runs.length }).toEqual({ calls: 1, runs: 1 })
+  })
+
+  it('never calls a 202 an answer: a call that starts another run leaves the task working on it', async () => {
+    const { runs, call } = await ordersApi({ finished: 'none' })
+    const task = (await call('SendMessage', send('a lamp'))).task
+    runs[0]!.status = 'done'
+    const still = await call('GetTask', { id: task.id })
+    expect(still.status.state).toBe('TASK_STATE_WORKING')
+    expect(still.status.message.parts[0].text).toBe('Still working (run 2). Ask again with GetTask.')
+    expect(still.artifacts).toBeUndefined()
+    // The new run is the one polled now
+    runs[1]!.status = 'running'
+    expect((await call('GetTask', { id: task.id })).status.state).toBe('TASK_STATE_WORKING')
+    expect(runs).toHaveLength(2)
   })
 
   it('finishes a run that ends inside the wait with one more call, not a new run', async () => {
