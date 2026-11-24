@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 const root = join(import.meta.dirname, '..')
 const read = (path) => readFileSync(join(root, path), 'utf8')
 const folders = readdirSync(join(root, 'src'), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+const skills = readdirSync(join(root, 'skills')).map((name) => `skills/${name}/SKILL.md`)
 const agents = read('AGENTS.md')
 
 /** The lines outside code fences. */
@@ -52,5 +53,21 @@ describe('the size of a part’s README', () => {
       expect(sizes[folder], folder).toBeGreaterThan(CEILING)
       expect(cap - sizes[folder], folder).toBeLessThanOrEqual(2 * 1024)
     }
+  })
+})
+
+describe('what `update` does with your edits', () => {
+  const copies = ['README.md', 'AGENTS.md', 'skills/api-kit-build/SKILL.md']
+
+  it('is written in docs/upgrading.md › Taking a new version only', () => {
+    const upgrading = read('docs/upgrading.md')
+    const section = upgrading.slice(upgrading.indexOf('## Taking a new version'), upgrading.indexOf('\n## ', upgrading.indexOf('## Taking a new version')))
+    expect(section).toMatch(/leaves `kit\.json` at that\s+version/)
+    for (const path of ['README.md', 'AGENTS.md', 'docs/STANDARD.md', 'docs/PARTS.md', ...skills, ...folders.map((folder) => `src/${folder}/README.md`)])
+      expect(read(path), path).not.toMatch(/leaves `kit\.json` at that/)
+  })
+
+  it.each(copies)('%s links it', (path) => {
+    expect(read(path)).toContain('upgrading.md#taking-a-new-version')
   })
 })

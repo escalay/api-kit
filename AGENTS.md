@@ -60,10 +60,9 @@ for a look at the kit on Workers by hand)
   `./kit/index.js` and each entry part's folder (`./kit/mcp/index.js`, `./kit/boards/index.js`,
   `./kit/testing/index.js`); its container build needs nothing from this repo.
 - A new app: `npm create escalay <name>` (`init <dir>`); a new feature in it: `feature <plural-name>`.
-- The app owns the copy. Before taking a new kit version: `doctor`, `diff --patch`, then `update`; edits are kept unless
-  `--force`. When a kept file was changed by the kit since the version `kit.json` records, `update` exits 1 and leaves
-  `kit.json` at that version: `--force`, then make the edits again. A fix that belongs to every app goes back into
-  the kit, with a test.
+- The app owns the copy. Before taking a new kit version: `doctor`, `diff --patch`, then `update`; how `update` treats
+  the app's edits is in [docs/upgrading.md › Taking a new version](docs/upgrading.md#taking-a-new-version). A fix
+  that belongs to every app goes back into the kit, with a test.
 
 ## Releasing
 
