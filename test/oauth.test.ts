@@ -1453,6 +1453,22 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
       expect(await (await browser.post('/join', { ticket: unheld, invite: 'garden-42' })).text()).toContain('This sign-in expired')
     })
 
+    it('keeps a held ask through 10 000 newer tickets under the default cap, and an unheld one goes', async () => {
+      const store = memoryOAuthStore()
+      const { app } = await joinApp(store)
+      const client_id = await registered(app)
+      const browser = browserOf(app)
+      // Held a minute: by expiry the oldest of all, so only the hold keeps it
+      const waiting = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      expect((await browser.post('/join/hold', { ticket: waiting, seconds: '60' })).status).toBe(200)
+      const unheld = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+      // 10 000 newer waiting tickets written straight to the store, then a few real sign-ins trim past the cap
+      for (let n = 0; n < 10_000; n++) await store.put('consent', `consent_newer-${n}`, { used: false }, Math.floor(Date.now() / 1000) + 600)
+      for (let n = 0; n < 3; n++) await app.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+      expect(await store.get('consent', unheld)).toBeNull()
+      expect((await browser.post('/join', { ticket: waiting, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+    })
+
     it('holds tickets outside the cap: as many as the app holds stay, and an ordinary sign-in still opens and completes', async () => {
       const store = memoryOAuthStore()
       const { app } = await joinApp(store, { maxUnusedTickets: 2 })
