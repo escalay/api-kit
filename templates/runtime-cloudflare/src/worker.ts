@@ -12,7 +12,8 @@ let ready: ReturnType<typeof createApp> | undefined
 
 export default {
   fetch: (request, env, ctx) =>
-    (ready ??= openDb(drizzle(env.DB) as unknown as Db).then((db) => createApp({ db, env })).catch((error) => {
+    // Cloudflare writes the caller's address into cf-connecting-ip, and nothing reaches a Worker any other way
+    (ready ??= openDb(drizzle(env.DB) as unknown as Db).then((db) => createApp({ db, env, address: { header: 'cf-connecting-ip' } })).catch((error) => {
       ready = undefined
       throw error
     })).then((app) => app.fetch(request, env, ctx)),

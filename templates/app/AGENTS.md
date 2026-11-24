@@ -14,9 +14,12 @@ an MCP tool.
 - `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:api --> <!-- runtime:workers -->
 - `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `vite build`, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:app -->
 - `pnpm run deploy:env`: the same for a real deployment whose settings live outside the repository: `CLOUDFLARE_ACCOUNT_ID`, `D1_<BINDING>_ID`, every `vars` entry left `""` in `wrangler.jsonc`, optional `PUBLIC_HOST`, from the environment (a secret store's `run`). It writes the git-ignored `wrangler.deploy.jsonc`, makes missing queues and deploys. A repository that may go public keeps no account id or real domain: deploy it this way <!-- runtime:workers -->
-- `npx skills add escalay/api-kit`: the kit's skills for your coding agent: `api-kit-build` (parts, who may see what, a newer kit), `api-kit-feature` (a feature, its switch), `api-kit-review` (is it ready for agents), `api-kit-cli` (the command line, every `kit` command), `api-kit-skills` (this product's own skills)
+- `npx skills add escalay/api-kit -y` (`-y`, or the installer stops to ask): the kit's skills for your coding agent: `api-kit-build` (parts, who may see what, a newer kit), `api-kit-feature` (a feature, its switch), `api-kit-review` (is it ready for agents), `api-kit-cli` (the command line, every `kit` command), `api-kit-skills` (this product's own skills). It installs `api-kit-part` and `npm-release` too, which are for the kit's own repository: leave them be
 
-A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
+A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string minutes:int tags:string[] notes:text?"`
+(its own fields in every file; `kit feature --help` lists the types), then fill in what is its own. Removing one (the
+`notes` sample): delete `src/features/<name>/` and its lines in `src/features/index.ts` (and `catalog.ts`), then
+`pnpm guide`, and on Workers `pnpm migrations` (it removes the feature's files). A PATCH schema never takes `.default()`: it would overwrite what a PATCH leaves out.
 
 ## How changes ship
 
@@ -56,9 +59,9 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 | `guide/` | the agent guide: templates whose `{{api.endpoints}}` and `{{mcp.tools}}` are generated from the code |
 | `brand/` | the brand: `brand.ts` (name, title, a description of at most 100 characters, the accent) and `icon.svg` (add `icon-dark.svg` for dark backgrounds); MCP, the Server Card, the docs, the A2A card, the guide's `{{brand.*}}` and the favicon all read it |
 | `src/brand.gen.ts` | `brand/` rendered (`npx @escalay/kit brand`): the favicon, PNG icons and OG card as base64, committed so nothing renders at runtime; the SVG alone until the first render. `npx @escalay/kit doctor` says when it is stale |
-| `guide/skills/__name__/` | the skill this product ships to the agents that use it: `SKILL.md` routes, `references/<job>.md` is one playbook per job. Served at `/skills/*`, offered over MCP as skills and prompts, and installed with `npx skills add <this deployment's address>` or from the repository |
+| `guide/skills/__name__/` | the skill this product ships to the agents that use it: `SKILL.md` routes, `references/<job>.md` is one playbook per job. Served at `/skills/*`, offered over MCP as skills and prompts, and installed with `npx skills add <this deployment's address> -y` or from the repository |
 | `.agents/skills/` | skills for developing this repository (`.claude/skills` links here). Never served, and marked `metadata.internal: true` so installing from the repository does not offer them |
-| `skills.sh.json` | tells `npx skills add <this repository>` that the product's skill is in `guide/skills/` |
+| `skills.sh.json` | tells `npx skills add <this repository> -y` that the product's skill is in `guide/skills/` |
 | `test/api.test.ts` | every route linted, every MCP tool run (`toolsRun`), every guide placeholder filled |
 | `container/entrypoint.sh` | the env allowlist: the API sees only the variables it reads | <!-- runtime:node -->
 
@@ -74,4 +77,5 @@ A new feature: `npx @escalay/kit feature <plural-name>`, then fill in its files.
 - A new env var the API reads goes into `container/entrypoint.sh` too. <!-- runtime:node -->
 - The browser app owns `/app` and nothing else: `wrangler.jsonc` sends every other path to the Worker. It calls the API with same-origin `fetch` and holds no key. Import images and fonts from code (there is no `public/` folder), so they are built under `/app/assets/`. <!-- preset:app -->
 - `src/kit/` and generated files are left out of `pnpm lint` and `pnpm format`: the kit's copy must stay as the kit wrote it for `doctor` and `update`. What `init` and `feature` write is in the kit's long-line style, so run `pnpm format` after either.
-- A product skill holds no `{{placeholder}}`: the copy in the repository is the copy people install. Run `pnpm guide` after editing one. The kit's `api-kit-skills` skill (`npx skills add escalay/api-kit`) is how to write them: from a test of what agents get wrong, never from the route list.
+- The starter's text is the product's to replace: the product skill's description, `brand/brand.ts`'s description, and each feature's in `src/features/catalog.ts`. `npx @escalay/kit doctor` fails while any is left.
+- A product skill holds no `{{placeholder}}`: the copy in the repository is the copy people install. Run `pnpm guide` after editing one. The kit's `api-kit-skills` skill (`npx skills add escalay/api-kit -y`) is how to write them: from a test of what agents get wrong, never from the route list.

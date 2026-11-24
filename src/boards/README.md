@@ -19,20 +19,58 @@ The owner's own collections of the app's items for a project, with a note per it
 npx @escalay/kit add boards
 ```
 
-Needs `db` and `mcp` (and through them `core`). Imported from `./kit/boards/index.js`. The browser side is
+Needs `db` and `mcp` (and through them `core`). Imported from `./kit/index.js`, like `people` and `setup`. The browser side is
 `boards-client` and `boards-react` (browser README).
 
 ## Wire it
 
 ```ts
-import { boardTools, registerBoards } from './kit/boards/index.js'
+import { boardTools, registerBoards } from './kit/index.js'
 
 await registerBoards(app, { db, item: RecipeCardSchema, refExample: 'recipe:soup', itemOf: (ref, origin) => cardOfRef(ref, origin), suggestions })
 const tools = boardTools({ noun: 'recipes', label: (recipe) => recipe.title, refExample: 'recipe:soup', suggestions: true })
 ```
 
-Routes: `GET|POST /api/boards` (`?item=<ref>`: the boards holding it), `GET|PATCH|DELETE /api/boards/{id}`,
-`PUT|DELETE /api/boards/{id}/items/{ref}` (idempotent), `GET /api/boards/{id}/suggestions`. Writes need `write`.
+### In an app made by `kit init`
+
+A feature of its own, over the rows of another feature (here `recipes`, made with `kit feature recipes --fields
+"name:string"`):
+
+```ts
+// src/features/boards/index.ts, listed in src/features/index.ts
+import { BOARDS_MIGRATIONS, boardTools, linksOf, registerBoards } from '../../kit/index.js'
+import type { Feature } from '../index.js'
+import { recipesRepo } from '../recipes/repo.js'
+import { RecipeSchema } from '../recipes/routes.js'
+
+export const feature: Feature = {
+  name: 'boards', // the name its steps migrate under
+  tag: { name: 'Boards', description: 'Your boards of recipes, each with a note.' },
+  migrations: BOARDS_MIGRATIONS,
+  register: (app, { db }) =>
+    registerBoards(app, { db, item: RecipeSchema, refExample: 'recipe:soup', itemOf: async (ref, origin) => {
+      const row = await recipesRepo(db).get(ref.slice('recipe:'.length))
+      return row ? { ...row, _links: linksOf(origin, { self: `/api/recipes/${row.id}` }) } : null
+    } }),
+  tools: boardTools({ noun: 'recipes', label: (recipe) => recipe.name, refExample: 'recipe:soup' }),
+  samples: async (request) => {
+    const made = async (path: string, body: object) => ((await (await request(path, { method: 'POST', body: JSON.stringify(body) })).json()) as { id: string }).id
+    const [id, ref] = [await made('/api/boards', { name: 'A sample' }), `recipe:${await made('/api/recipes', { name: 'Soup' })}`]
+    return { list_boards: {}, create_board: { name: 'Made by a tool' }, get_board: { id }, save_to_board: { id, ref }, remove_from_board: { id, ref } }
+  },
+}
+```
+
+Routes, and what each answers:
+
+```
+GET|POST /api/boards                   { count, _embedded: { boards } } (?item=<ref>: the boards holding it) · { name } → 201, the board
+GET|PATCH|DELETE /api/boards/{id}      the board, with _embedded.items (each { ref, note, item: the card or null }) · 204
+PUT|DELETE /api/boards/{id}/items/{ref}  { note? } or no body → the board: 201 added, 200 already on it · 204
+GET /api/boards/{id}/suggestions       { count, _embedded: { items } }
+```
+
+Writes need `write`. A PUT that says `content-type: application/json` sends a body, `{}` at least: an empty one is a 400.
 
 ## Options
 
@@ -42,7 +80,7 @@ Routes: `GET|POST /api/boards` (`?item=<ref>`: the boards holding it), `GET|PATC
 |---|---|---|---|
 | `db` | `Db` | required | the app's database; the boards tables are migrated into it |
 | `item` | zod schema | required | the OpenAPI schema of an item's card |
-| `itemOf` | `(ref, origin) => card \| null` | required | a ref → the app's card, or null when it left the catalog (a save of it is a 404) |
+| `itemOf` | `(ref, origin) => card \| null`, or a promise of it | required | a ref → the app's card, or null when it left the catalog (a save of it is a 404); awaited, so it may look the ref up in the database |
 | `refExample` | string | required | the app's own ref (`recipe:soup`), shown in the routes' parameters |
 | `refPattern` | RegExp | `BOARD_REF` (`<type>:<id>`) | what a ref looks like; another is a 400 |
 | `suggestions` | `(refs, limit, origin) => cards` | none | cards like those on a board, best first, without what is on it; set, the suggestions route exists |

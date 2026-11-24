@@ -22,12 +22,12 @@ export const feature: Feature = {
   },
   tools: __camel__Tools,
   samples: async (request) => {
-    const { id } = (await (await request(PATH, { method: 'POST', body: JSON.stringify({ title: 'A sample __label__' }) })).json()) as { id: string }
+    const { id } = (await (await request(PATH, { method: 'POST', body: JSON.stringify(__sample__) })).json()) as { id: string }
     return {
       list___snake__: {},
       get___snake_singular__: { id },
-      create___snake_singular__: { title: 'Made by a tool' },
-      update___snake_singular__: { id, body: 'Changed by a tool' },
+      create___snake_singular__: __sample__,
+      update___snake_singular__: { id, __patch_entries__ },
       delete___snake_singular__: { id },
     }
   },

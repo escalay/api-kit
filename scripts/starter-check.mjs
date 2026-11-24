@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Makes one app per preset with `create-escalay` in the OS temp folder, installs it and runs its own CI's checks: format,
+ * Makes one app per preset with `create-escalay` in the OS temp folder (which installs it) and runs its own CI's checks:
  * typecheck, lint, format check and tests for both, and for `api` a client made with `kit sdk` and its command line, built and run. For the `app` preset also the build (its files must land under /app/assets/, the one prefix
  * the Worker leaves to files, its brand's at the root), a dry-run deploy, and that a formatted app still takes a new feature and passes. The
  * `api` starter's brand is rendered with `kit brand` (its PNGs then served on Node and in workerd); the `app` starter
@@ -23,15 +23,20 @@ const cli = fileURLToPath(new URL('../cli.mjs', import.meta.url))
 const RESVG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).devDependencies['@resvg/resvg-js']
 const check = (name, preset, more = [], { brand = false } = {}) => {
   const app = join(parent, name)
+  // init installs, formats and writes migrations/ itself
   run(process.execPath, [create, name, '--preset', preset, '--yes'], parent)
-  run('pnpm', ['install'], app)
-  // What init's Brand line says: the renderer, then the PNGs into src/brand.gen.ts
+  // The product's own words where the starter left its text (doctor fails on that), then what init's Brand line says:
+  // the renderer, then the PNGs into src/brand.gen.ts
   if (brand) {
+    const write = (path, from, to) => writeFileSync(join(app, path), readFileSync(join(app, path), 'utf8').replace(from, to))
+    write(`guide/skills/${name}/SKILL.md`, /Replace this line with[^\n]*/, 'For its notes: making, reading and changing them.')
+    write('brand/brand.ts', /, an agent-ready API\./, ': notes, kept for your agents.')
+    run('pnpm', ['guide'], app)
     run('pnpm', ['add', '-D', `@resvg/resvg-js@${RESVG}`], app)
     run(process.execPath, [cli, 'brand'], app)
   }
-  // init's last line, then what the app's CI and its pre-push hook run: `pnpm gate`
-  for (const args of [['format'], ['migrations'], ['gate'], ...more]) run('pnpm', args, app)
+  // With no format or migrations run by hand: what the app's CI and its pre-push hook run, `pnpm gate`
+  for (const args of [['gate'], ...more]) run('pnpm', args, app)
   // A feature that names Cloudflare is refused by lint; the same import in a binding is allowed
   const probe = (path) => join(app, path)
   writeFileSync(probe('src/features/provider-probe.ts'), "import { env } from 'cloudflare:workers'\nexport const probe = env\n")

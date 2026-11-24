@@ -1,35 +1,48 @@
 /**
  * Writes migrations/ for D1 from the kit's tables and every feature's steps, one file per step with its kit_migrations
  * record, so `wrangler d1 migrations apply DB --remote` brings the database up at deploy and `migrate()` finds every
- * step done at runtime. Files are only added; a step that changed after it was written stops the script (a change is a
- * new step at the end of the feature's list). Run `wrangler d1 migrations apply` before the first `wrangler dev`: a step
- * `migrate()` already ran is replayed, and only `create … if not exists` steps replay cleanly. `--check` writes nothing and
- * exits 1 when a file is missing (what `pnpm check` and CI run).
+ * step done at runtime. Files are only added, but for those of a feature no longer in the app, which go; a step that
+ * changed after it was written stops the script (a change is a new step at the end of the feature's list). Run
+ * `wrangler d1 migrations apply` before the first `wrangler dev`: a step `migrate()` already ran is replayed, and only
+ * `create … if not exists` steps replay cleanly. `--check` writes nothing and exits 1 when a file is missing or left
+ * from a feature taken out (what `pnpm check` and CI run).
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { FEATURES } from '../src/features/index.js'
-import { GUARD_MIGRATIONS, OAUTH_MIGRATIONS } from '../src/kit/index.js'
+import * as kit from '../src/kit/index.js'
 
 const checking = process.argv.includes('--check')
 const dir = fileURLToPath(new URL('../migrations', import.meta.url))
-const sets: [string, readonly string[]][] = [['oauth', OAUTH_MIGRATIONS], ['guards', GUARD_MIGRATIONS], ...FEATURES.map((feature): [string, readonly string[]] => [feature.name, feature.migrations])]
+// The kit's parts that keep tables, by the name each migrates under: those copied into src/kit (`kit add people`) count
+const PARTS = { oauth: 'OAUTH_MIGRATIONS', guards: 'GUARD_MIGRATIONS', keys: 'KEYS_MIGRATIONS', people: 'PEOPLE_MIGRATIONS', setup: 'SETUP_MIGRATIONS', boards: 'BOARDS_MIGRATIONS', telemetry: 'TELEMETRY_MIGRATIONS' }
+const partSets = Object.entries(PARTS).flatMap(([name, key]): [string, readonly string[]][] => {
+  const steps = (kit as Record<string, unknown>)[key]
+  return Array.isArray(steps) ? [[name, steps]] : []
+})
+// Each name once: a feature that wraps a part (src/features/people/) brings the part's steps under the part's name
+const sets = new Map<string, readonly string[]>([...partSets, ...FEATURES.map((feature): [string, readonly string[]] => [feature.name, feature.migrations])])
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 const HEADER = /^-- kit: (\S+) step (\d+) sha256 ([0-9a-f]{64})$/m
 
 mkdirSync(dir, { recursive: true })
 const files = readdirSync(dir).filter((file) => file.endsWith('.sql')).sort()
-const written = new Map(files.flatMap((file) => {
+const headers = files.flatMap((file) => {
   const match = readFileSync(join(dir, file), 'utf8').match(HEADER)
-  return match ? [[`${match[1]} ${match[2]}`, { file, hash: match[3] }] as const] : []
-}))
-let next = files.length
+  return match ? [{ file, feature: match[1]!, step: Number(match[2]), hash: match[3]! }] : []
+})
+// A feature taken out of the app leaves its files behind: they go, so a new database never gets its tables
+const orphans = headers.filter(({ feature }) => !sets.has(feature))
+const written = new Map(headers.filter(({ feature }) => sets.has(feature)).map(({ file, feature, step, hash }) => [`${feature} ${step}`, { file, hash }]))
+const kept = files.filter((file) => !orphans.some((orphan) => orphan.file === file))
+// After the highest number: a file removed by hand never makes two files share one
+let next = Math.max(-1, ...kept.map((file) => Number(file.match(/^(\d+)_/)?.[1] ?? -1))) + 1
 const missing: string[] = []
 const write = (name: string, text: string) => checking ? missing.push(name) : writeFileSync(join(dir, `${String(next++).padStart(4, '0')}_${name}.sql`), text)
 
-if (!files.length) write('kit_migrations', 'create table if not exists kit_migrations (feature text not null, step integer not null, applied_at text not null, primary key (feature, step));\n')
+if (!kept.length) write('kit_migrations', 'create table if not exists kit_migrations (feature text not null, step integer not null, applied_at text not null, primary key (feature, step));\n')
 let added = 0
 for (const [feature, steps] of sets)
   for (const [index, step] of steps.entries()) {
@@ -43,7 +56,15 @@ for (const [feature, steps] of sets)
     write(`${feature}_${index + 1}`, `-- kit: ${feature} step ${index + 1} sha256 ${sha(step)}\n${step.trim().replace(/;?$/, ';')}\n${record}\n`)
     added++
   }
-if (checking && missing.length) {
-  console.error(`migrations/ is behind by ${missing.length} (${missing.join(', ')}): run pnpm migrations`)
-  process.exitCode = 1
-} else console.log(added ? `Wrote ${added} migration files to migrations/` : 'migrations/ is current')
+if (checking) {
+  for (const { file, feature } of orphans) console.error(`migrations/${file} is for ${feature}, which nothing here migrates: run pnpm migrations`)
+  if (missing.length) console.error(`migrations/ is behind by ${missing.length} (${missing.join(', ')}): run pnpm migrations`)
+  if (orphans.length || missing.length) process.exitCode = 1
+  else console.log('migrations/ is current')
+} else {
+  for (const { file, feature } of orphans) {
+    rmSync(join(dir, file))
+    console.log(`Removed ${file}: ${feature} is no longer in the app`)
+  }
+  console.log(added ? `Wrote ${added} migration files to migrations/` : 'migrations/ is current')
+}

@@ -6,21 +6,28 @@
  * `--web-dir` (relative to `--dir`, remembered in kit.json) puts the browser parts in their own folder, still
  * tracked by the one kit.json (as `@web/<file>`).
  *
+ *   kit <command> --help                      that command's lines from this list (-h too)
  *   kit list                                  parts, what they need, which are installed; then the root items
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
  *   kit update [part…] [--dir src/kit] [--force]
  *   kit upgrading [--dir src/kit] [--from <version>]
- *                                             what changed for the parts in kit.json since its version (or --from), and
- *                                             what to do: their notes from the kit's docs/upgrading.md, part by part
- *   kit doctor [--dir src/kit] [--adopt]      missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it)
+ *                                             what changed for the parts in kit.json since its version (or --from), up to
+ *                                             this kit, and what to do: their notes from the kit's docs/upgrading.md, part by part
+ *   kit doctor [--dir src/kit] [--adopt] [--keep <file…>]
+ *                                             missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it);
+ *                                             --keep records those edited files as kept in kit.json: a note while they stay so
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
- *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--yes]
+ *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--no-install] [--yes]
  *                                             a new app: features/, the kit in src/kit, tests; Node (server.ts, a
- *                                             container) and/or Workers (worker.ts, D1). It never asks; --yes is accepted
- *   kit feature <plural-name> [--app .] [--switch]
+ *                                             container) and/or Workers (worker.ts, D1); then pnpm install, format and
+ *                                             migrations, so its gate passes as made (--no-install leaves them to you).
+ *                                             It never asks; --yes is accepted
+ *   kit feature <plural-name> [--app .] [--switch] [--fields "name:string minutes:int tags:string[] notes:text?"]
  *                                             a new feature folder (schema, repo, routes, handlers, tools), listed;
- *                                             --switch lists it in src/features/catalog.ts so an owner can switch it off
+ *                                             --switch lists it in src/features/catalog.ts so an owner can switch it off;
+ *                                             --fields gives its own fields (string, text, int, number, bool, string[];
+ *                                             ? when it may be left out) instead of a title and a body
  *   kit guide [--from guide] [--out src/guide.gen.ts]  the guide folder as a module (GUIDE_FILES), for Workers
  *   kit sdk [--app .] [--package name] [--bin name]
  *                                             a typed TypeScript client in sdk/: generated types, a fetch-only core,
@@ -100,7 +107,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set(['--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
+const VALUE_FLAGS = new Set(['--fields', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 /** The app the kit folder belongs to: `--app`, else the nearest folder at or above `--dir` with a package.json; null when none. */
@@ -168,17 +175,41 @@ const readLock = () => {
   const keyFor = (key) => (flat[key] ? `${WEB}${flat[key]}` : key.startsWith('web/') && WEB_FILES.has(key.slice(4)) ? WEB + key.slice(4) : key)
   return { ...lock, files: Object.fromEntries(Object.entries(lock.files).map(([key, hash]) => [keyFor(key), flat[key] ? null : hash]).filter(([, hash]) => hash !== null)) }
 }
-const writeLock = (modules, hashes, webDir, version = VERSION) =>
-  writeFileSync(lockPath, JSON.stringify({ $comment: 'Written by @escalay/kit; hashes are of the files as the kit last wrote them.', source: SOURCE, version, modules, ...(webDir ? { webDir } : {}), files: Object.fromEntries(Object.entries(hashes).sort()) }, null, 2) + '\n')
+/** `kept` is the edits `doctor --keep` recorded: each file's hash as it was kept. */
+const writeLock = (modules, hashes, webDir, version = VERSION, kept = {}) =>
+  writeFileSync(lockPath, JSON.stringify({ $comment: 'Written by @escalay/kit; hashes are of the files as the kit last wrote them.', source: SOURCE, version, modules, ...(webDir ? { webDir } : {}), files: Object.fromEntries(Object.entries(hashes).sort()), ...(Object.keys(kept).length ? { kept: Object.fromEntries(Object.entries(kept).sort()) } : {}) }, null, 2) + '\n')
+
+const localHash = (key, webDir) => (existsSync(pathOf(key, webDir)) ? sha(readFileSync(pathOf(key, webDir), 'utf8')) : null)
+/** The kept edits still on disk as they were kept: one taken from the kit, or changed since, is no longer kept. */
+const keptOf = (lock) => Object.fromEntries(Object.entries(lock?.kept ?? {}).filter(([file, hash]) => localHash(file, lock.webDir) === hash))
 
 const dependenciesOf = (modules) => Object.assign({}, ...modules.map((name) => REGISTRY[name].dependencies ?? {}))
+
+/** A declared spec (`^4.13.20`, `4.14.0`) whose lowest version a range (`^4.13.18`) takes; another range is met only by itself. */
+const meetsRange = (spec, range) => {
+  if (spec === range) return true
+  const version = spec?.replace(/^[\^~]/, '')
+  if (!range.startsWith('^') || !isVersion(version ?? '')) return false
+  const [floor, [major, minor]] = [range.slice(1), version.split('.').map(Number)]
+  const [floorMajor, floorMinor] = floor.split('.').map(Number)
+  return major === floorMajor && (major > 0 || minor === floorMinor) && compareVersions(version, floor) >= 0
+}
+
+/** The parts' dependencies the app's package.json lacks, or declares at a version their range doesn't take. */
+const missingDependencies = (modules) => {
+  const manifestPath = join(appRootOf() ?? dir, 'package.json')
+  const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) : {}
+  const declared = { ...manifest.dependencies, ...manifest.devDependencies }
+  return Object.entries(dependenciesOf(modules)).filter(([name, range]) => !meetsRange(declared[name], range))
+}
+
 const installCommand = (modules) => {
-  const deps = Object.entries(dependenciesOf(modules)).map(([name, range]) => `${name}@${range}`)
-  return deps.length ? `pnpm add ${deps.join(' ')}` : 'none'
+  const deps = missingDependencies(modules).map(([name, range]) => `${name}@${range}`)
+  return deps.length ? `pnpm add ${deps.join(' ')}` : Object.keys(dependenciesOf(modules)).length ? 'package.json has them' : 'none'
 }
 
 const install = (modules) => {
-  if (installCommand(modules) === 'none') return
+  if (!installCommand(modules).startsWith('pnpm add')) return
   const result = spawnSync('pnpm', installCommand(modules).split(' ').slice(1), { stdio: 'inherit', cwd: process.cwd() })
   if (result.status !== 0) fail('pnpm add failed; run it yourself: ' + installCommand(modules))
 }
@@ -204,9 +235,16 @@ const keptFix = () => `\`kit diff --dir ${dirArg} --patch\` shows both; \`kit up
 /** The part a recorded file came with (`index.ts` is the kit's own). */
 const partOf = (key, modules) => modules.find((name) => REGISTRY[name].files.includes(sourceOf(key))) ?? 'kit'
 
+/** The edits kit.json records as kept, still as they were: notes, never findings, until the kit changes the file too. */
+const keptEditsOf = (lock) => {
+  const kept = keptOf(lock)
+  return statusOf(lock, expectedFiles(lock.modules, lock.webDir)).filter(({ file, state }) => state === 'you edited' && kept[file] !== undefined).map(({ file }) => file)
+}
+
 /** One line per thing wrong with the copy, each saying how to fix it. */
 const findingsOf = (lock) => {
-  const statuses = statusOf(lock, expectedFiles(lock.modules, lock.webDir))
+  const keptEdits = keptEditsOf(lock)
+  const statuses = statusOf(lock, expectedFiles(lock.modules, lock.webDir)).filter(({ file }) => !keptEdits.includes(file))
   const behind = [...new Set(statuses.filter(({ state }) => ['kit changed', 'new in kit', 'dropped by kit'].includes(state)).map(({ file }) => partOf(file, lock.modules)))]
   const kept = statuses.filter(({ state }) => state === 'both changed')
   return [
@@ -217,6 +255,15 @@ const findingsOf = (lock) => {
     ...behind.map((part) => `behind   ${part} was copied from kit ${lock.version} and kit ${VERSION} changed it: \`kit diff --dir ${dirArg} --patch\`, then \`kit update --dir ${dirArg}\``),
     ...(lock.version !== VERSION && !behind.length && !kept.length ? [`behind   kit.json says kit ${lock.version}, this is ${VERSION} with the same files: \`kit update --dir ${dirArg}\` records it`] : []),
   ]
+}
+
+/** `doctor --keep <file…>`: records each edited file's hash as kept, so doctor counts it no more while it stays so. */
+const keepEdits = (lock) => {
+  if (!names.length) fail(`name the edited files to keep, as doctor names them: \`kit doctor --dir ${dirArg} --keep core/guards.ts\``)
+  const edited = statusOf(lock, expectedFiles(lock.modules, lock.webDir)).filter(({ state }) => state === 'you edited').map(({ file }) => file)
+  for (const file of names) if (!edited.includes(file)) fail(`${file} is not an edit doctor can keep (only "edited … yours to keep" lines): ${edited.join(', ') || 'none here'}`)
+  writeLock(lock.modules, lock.files, lock.webDir, lock.version, { ...keptOf(lock), ...Object.fromEntries(names.map((file) => [file, localHash(file, lock.webDir)])) })
+  console.log(`Kept ${names.join(', ')} in kit.json: doctor notes ${names.length === 1 ? 'it' : 'them'} until ${names.length === 1 ? 'it changes' : 'they change'} or the kit changes ${names.length === 1 ? 'it' : 'them'} too`)
 }
 
 // ---- Upgrade notes: docs/upgrading.md, which the npm package ships ----
@@ -233,7 +280,10 @@ const NOTE_HEADING = /^### (?:(\d+\.\d+\.\d+)|Unreleased \(after (\d+\.\d+\.\d+)
 /** The folder a part's notes are under: its README's (every browser part's is `browser`). */
 const notesFolderOf = (name) => REGISTRY[name].files.find((file) => file.endsWith('README.md')).split('/')[0]
 
-/** A part folder's notes in docs/upgrading.md newer than `since`, each its `###` heading and text; Unreleased is newer than the version it follows, an unknown heading always shown. */
+/**
+ * A part folder's notes in docs/upgrading.md newer than `since` and no newer than this kit, each its `###` heading and
+ * text; Unreleased is newer than the version it follows, an unknown heading always shown.
+ */
 const notesSince = (markdown, folder, since) => {
   const notes = []
   let inSection = false
@@ -247,7 +297,8 @@ const notesSince = (markdown, folder, since) => {
     if (!inSection) continue
     if (!fenced && line.startsWith('### ')) {
       const [, version, after] = NOTE_HEADING.exec(line) ?? []
-      notes.push({ newer: version ? compareVersions(version, since) > 0 : after ? compareVersions(after, since) >= 0 : true, lines: [line] })
+      const newer = version ? compareVersions(version, since) > 0 && compareVersions(version, VERSION) <= 0 : after ? compareVersions(after, since) >= 0 && compareVersions(after, VERSION) <= 0 : true
+      notes.push({ newer, lines: [line] })
     } else notes.at(-1)?.lines.push(line)
   }
   return notes.filter(({ newer }) => newer).map(({ lines }) => lines.join('\n').trim())
@@ -275,7 +326,7 @@ const adopt = () => {
 // ---- Generators: a new app, a new feature ----
 
 /** The modules a new app starts with. */
-const APP_MODULES = ['core', 'db', 'oauth', 'guide', 'mcp', 'brand', 'switches', 'testing']
+const APP_MODULES = ['core', 'db', 'oauth', 'pagination', 'guide', 'mcp', 'brand', 'switches', 'testing']
 /** The browser parts the app preset's web/ starts with. */
 const WEB_APP_MODULES = ['switches-client', 'switches-react']
 const RUNTIME = { '@hono/node-server': '^2.1.8', tsx: '^4.23.15' }
@@ -317,7 +368,8 @@ const scriptsFor = (runtime, preset) => {
   const gateOf = (...more) => ({
     lint: 'oxlint',
     format: 'oxfmt',
-    check: ['pnpm typecheck', 'pnpm lint', 'oxfmt --check', ...more].join(' && '),
+    // Each failure names its fix: oxfmt's own message doesn't, and the migrations check does
+    check: ['pnpm typecheck', 'pnpm lint', "(oxfmt --check || (echo 'Not formatted: run pnpm format' >&2 && exit 1))", ...more].join(' && '),
     gate: 'pnpm check && pnpm test',
     prepare: 'tsx scripts/hooks.ts',
   })
@@ -405,14 +457,83 @@ export const namesOf = (name) => {
   }
 }
 
-const addFeature = (root, name, switchable = false) => {
-  const vars = namesOf(name)
+/**
+ * The types `feature --fields` takes: the Drizzle column, its SQL, the answer's and the input's zod, the TypeScript
+ * type, a value to make one with and another to change it to.
+ */
+const FIELD_TYPES = {
+  string: { column: (name) => `text('${name}')`, sql: 'text', out: 'z.string()', input: 'z.string().trim().min(1).max(200)', type: 'string', made: 'First', changed: 'Changed' },
+  text: { column: (name) => `text('${name}')`, sql: 'text', out: 'z.string()', input: 'z.string().max(10_000)', type: 'string', made: 'Some text', changed: 'Changed text' },
+  int: { column: (name) => `integer('${name}')`, sql: 'integer', out: 'z.number().int()', input: 'z.number().int()', type: 'number', made: 3, changed: 4 },
+  number: { column: (name) => `real('${name}')`, sql: 'real', out: 'z.number()', input: 'z.number()', type: 'number', made: 1.5, changed: 2.5 },
+  bool: { column: (name) => `integer('${name}', { mode: 'boolean' })`, sql: 'integer', out: 'z.boolean()', input: 'z.boolean()', type: 'boolean', made: true, changed: false },
+  'string[]': { column: (name) => `text('${name}', { mode: 'json' }).$type<string[]>()`, sql: 'text', out: 'z.array(z.string())', input: 'z.array(z.string().trim().min(1).max(200)).max(100)', type: 'string[]', made: ['one'], changed: ['two'] },
+}
+/** What the sample feature has when no --fields are given. */
+const SAMPLE_FIELDS = 'title:string body:text?'
+/** Names a feature's own fields can't take: the kit's, and the list's and the command line's flags. */
+const OWN_FIELDS = ['id', 'createdAt', 'updatedAt', 'limit', 'cursor', 'json', 'yes', 'dryRun', 'input', 'timeout', 'profile', 'help']
+
+/** `name:string minutes:int tags:string[] notes:text?`, read: each field's name, type, and whether it may be left out. */
+const fieldsOf = (spec) =>
+  spec.trim().split(/\s+/).map((field) => {
+    const [, name, type, optional] = field.match(/^([a-z][a-zA-Z0-9]*):([a-z]+(?:\[\])?)(\?)?$/) ?? []
+    if (!FIELD_TYPES[type]) fail(`${field}: a field is <name>:<type>, the type one of ${Object.keys(FIELD_TYPES).join(', ')}, and ? after it when it may be left out (notes:text?)`)
+    if (OWN_FIELDS.includes(name)) fail(`${name} is the kit’s own field or flag: name it something else`)
+    return { name, type, optional: Boolean(optional), ...FIELD_TYPES[type] }
+  }).map((field, index, fields) => {
+    if (fields.findIndex((other) => other.name === field.name) !== index) fail(`${field.name} is named twice: give each field its own name`)
+    return field
+  })
+
+const snakeOf = (name) => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
+const literal = (value) => JSON.stringify(value).replaceAll('"', "'")
+const flagOf = ({ name, made }, value = made) => {
+  const flag = `--${name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`
+  return typeof value === 'boolean' ? (value ? flag : `--no-${flag.slice(2)}`) : `${flag} ${JSON.stringify([value].flat()[0])}`
+}
+
+/** The template's field placeholders, from the fields: columns, SQL, schemas, the tools' inputs, samples. */
+const fieldVarsOf = (fields) => {
+  const described = (field, zod) => `${field.name}: ${zod}.describe('Its ${snakeOf(field.name).replaceAll('_', ' ')}.')`
+  const [first, last] = [fields[0], fields.at(-1)]
+  return {
+    __column_imports__: [...new Set(['sqliteTable', 'text', ...fields.map((field) => field.column('').split('(')[0])])].sort().join(', '),
+    __columns__: fields.map((field) => `  ${field.name}: ${field.column(snakeOf(field.name))}${field.optional ? '' : '.notNull()'},`).join('\n'),
+    __sql_columns__: fields.map((field) => `"${snakeOf(field.name)}" ${field.sql}${field.optional ? '' : ' not null'}`).join(', '),
+    __out_fields__: fields.map((field) => `${field.name}: ${field.out}${field.optional ? '.nullable()' : ''},`).join(' '),
+    __in_fields__: fields.map((field) => `${field.name}: ${field.input}${field.optional ? '.optional()' : ''}.openapi({ description: 'Its ${snakeOf(field.name).replaceAll('_', ' ')}.', example: ${literal(field.made)} })`).join(', '),
+    __tool_create_fields__: fields.map((field) => described(field, `${field.input}${field.optional ? '.optional()' : ''}`)).join(', '),
+    __tool_update_fields__: fields.map((field) => described(field, `${field.input}.optional()`)).join(', '),
+    __card_fields__: fields.map((field) => `${field.name}: ${field.type}${field.optional ? ' | null' : ''}`).join('; '),
+    __detail_lines__: fields.map((field) => `\`${field.name}: \${row.${field.name}${field.type === 'string[]' ? `${field.optional ? '?' : ''}.join(', ')` : ''}${field.optional ? " ?? '–'" : ''}}\``).join(', '),
+    __first__: first.name,
+    __sample__: `{ ${fields.map((field) => `${field.name}: ${literal(field.made)}`).join(', ')} }`,
+    __patch_entries__: `${last.name}: ${literal(last.changed)}`,
+    __create_flags__: fields.filter((field) => !field.optional).map((field) => flagOf(field)).join(' '),
+    __edit_flags__: flagOf(last, last.changed),
+  }
+}
+
+const addFeature = (root, name, switchable = false, fieldSpec = SAMPLE_FIELDS) => {
+  const vars = { ...namesOf(name), ...fieldVarsOf(fieldsOf(fieldSpec)) }
   const list = join(root, 'src/features/index.ts')
   if (!existsSync(list)) fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
   const folder = join(root, 'src/features', name)
   if (existsSync(folder)) fail(`src/features/${name} already exists`)
   const text = readFileSync(list, 'utf8')
   if (!text.includes('// kit:imports') || !text.includes('  // kit:features')) fail('src/features/index.ts lost its `// kit:imports` or `// kit:features` line; add the feature there by hand')
+  // The list pages by cursor with the pagination part, which an older app may not have. `add` would also move every
+  // part to this kit, so an app at another version is told the command for its own instead
+  const lockFile = join(root, 'src/kit/kit.json')
+  const kit = existsSync(lockFile) ? JSON.parse(readFileSync(lockFile, 'utf8')) : null
+  if (kit && !kit.modules.includes('pagination') && kit.version !== VERSION)
+    fail(`a feature's list pages with the pagination part, which src/kit lacks: \`npx @escalay/kit@${kit.version} add pagination --dir src/kit\` adds it at your kit's version (or take kit ${VERSION} first: \`kit upgrading\`, then \`kit update\`), then run this again`)
+  if (kit && !kit.modules.includes('pagination')) {
+    const added = spawnSync(process.execPath, [fileURLToPath(import.meta.url), 'add', 'pagination', '--dir', 'src/kit'], { cwd: root, encoding: 'utf8' })
+    if (added.status !== 0) fail(`a feature's list pages with the pagination part, and copying it failed: ${added.stderr}`)
+    console.log('Copied the pagination part into src/kit: the new list pages by cursor')
+  }
   copyTemplate(join(KIT, 'templates/feature'), folder, vars, (file) => (file === 'feature.test.ts' ? `${name}.test.ts` : file))
   writeFileSync(list, text.replace('// kit:imports', `import { feature as ${vars.__camel__} } from './${name}/index.js'\n// kit:imports`).replace('  // kit:features', `  ${vars.__camel__},\n  // kit:features`))
   if (switchable) {
@@ -566,6 +687,21 @@ const oauthNotes = (texts, modules) => {
     ...(ownerless ? ['note     the app has the people part, but no createOAuth owner asks personOf: a deploy signed in by passkey alone can never approve a sign-in (oauth README)'] : []),
   ]
 }
+
+/**
+ * Text `init`, `feature --switch` and `add brand` write for the app to replace, each with what to write instead. Agents
+ * read it as the product's own, so it fails `doctor` until it is replaced; every check of the app passes with it.
+ */
+const productSkills = (root) => (existsSync(join(root, 'guide/skills')) ? readdirSync(join(root, 'guide/skills'), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => `guide/skills/${entry.name}/SKILL.md`) : [])
+const STARTER_TEXT = [
+  { files: productSkills, text: 'Replace this line with', what: 'its description', instead: 'say when an agent should use the product, in its users’ words' },
+  { files: () => ['brand/brand.ts'], text: ', an agent-ready API.', what: 'its description', instead: 'say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`' },
+  { files: () => ['src/features/catalog.ts'], text: 'say here what switching it off stops', what: 'a description', instead: 'say what switching the feature off stops' },
+]
+
+/** One line for each file that still holds the starter's text. */
+const starterFindings = (root) =>
+  STARTER_TEXT.flatMap(({ files, text, what, instead }) => files(root).filter((path) => textOf(join(root, path))?.includes(text)).map((path) => `starter  ${path}: ${what} is still the starter’s ("${text}"): ${instead}`))
 
 // ---- The brand ----
 
@@ -1237,8 +1373,63 @@ const licenseCommand = () => {
   fail('kit license keys|mint|verify')
 }
 
+/** This file's header: every command, its flags and what it does. */
+const HELP = readFileSync(fileURLToPath(import.meta.url), 'utf8').match(/\/\*\*([\s\S]*?)\*\//)[1].replace(/^ \* ?/gm, '').trim()
+
+/** One command's lines of the header: its `kit <name>` lines and the lines indented under them. */
+const usageOf = (name) => {
+  let inside = false
+  const lines = []
+  for (const line of HELP.split('\n')) {
+    if (line.startsWith('  kit ')) inside = line === `  kit ${name}` || line.startsWith(`  kit ${name} `)
+    else if (!line.startsWith('      ')) inside = false
+    if (inside) lines.push(line.slice(2))
+  }
+  return lines.join('\n')
+}
+
+/** The heading of a part README's section on wiring it into an app made by `init`, as a feature of its own. */
+const WRAPPER_HEADING = '### In an app made by `kit init`'
+
+/**
+ * What `add` tells an app to wire for parts that keep tables or bring routes: the feature that wraps one (its README),
+ * and the line `scripts/migrations.ts` lacks for its D1 files (an app made before the script found the parts itself).
+ */
+const wiringOf = (parts) => {
+  const root = appRootOf()
+  const migrations = root ? textOf(join(root, 'scripts/migrations.ts')) : null
+  const inFeatures = root !== null && existsSync(join(root, 'src/features/index.ts'))
+  return parts.flatMap((name) => {
+    const readme = REGISTRY[name].files.find((file) => file.endsWith('README.md'))
+    const constant = `${name.toUpperCase()}_MIGRATIONS`
+    const keepsTables = REGISTRY[name].files.some((file) => upstreamOf(file).includes(`export const ${constant} =`))
+    const wrapped = inFeatures && upstreamOf(readme).includes(WRAPPER_HEADING)
+    return [
+      ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}`] : []),
+      ...(keepsTables && migrations !== null && !migrations.includes(constant) ? [`scripts/migrations.ts lacks ${name}'s tables: \`import { ${constant} } from '../${relative(root, dir).split('\\').join('/')}/index.js'\` and \`['${name}', ${constant}]\` in its sets, then \`pnpm migrations\` writes their D1 files`] : []),
+    ]
+  })
+}
+
+/** Runs each pnpm step in a new app until one fails; returns the steps left, that one first. Without pnpm, all of them. */
+const runFirst = (root, steps) => {
+  if (spawnSync('pnpm', ['--version'], { encoding: 'utf8' }).status !== 0) {
+    console.log('pnpm is not on the PATH (`corepack enable` gives you the one package.json names), so nothing was installed')
+    return steps
+  }
+  for (const [at, args] of steps.entries()) {
+    console.log(`$ pnpm ${args.join(' ')}`)
+    // Never waits on a prompt: stdin is closed
+    if (spawnSync('pnpm', args, { cwd: root, stdio: ['ignore', 'inherit', 'inherit'] }).status !== 0) {
+      console.log(`pnpm ${args.join(' ')} failed: run it again from the Next line`)
+      return steps.slice(at)
+    }
+  }
+  return []
+}
+
 const commands = {
-  help: () => console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').match(/\/\*\*([\s\S]*?)\*\//)[1].replace(/^ \* ?/gm, '').trim()),
+  help: () => console.log(HELP),
 
   list: () => {
     const installed = new Set(readLock()?.modules ?? [])
@@ -1269,7 +1460,7 @@ const commands = {
       writeFileSync(path, text)
       hashes[file] = sha(text)
     }
-    writeLock(modules, hashes, webDir)
+    writeLock(modules, hashes, webDir, VERSION, keptOf(lock))
     console.log(`Copied ${modules.join(', ')} (kit ${VERSION}) into ${relative(process.cwd(), dir) || '.'}`)
     if (skipped.length) console.log(`Kept your version of ${skipped.join(', ')} (it differs from the kit); --force overwrites`)
     const root = names.includes('brand') ? appRootOf() : null
@@ -1284,6 +1475,7 @@ const commands = {
       for (const line of ignored.todo) console.log(line)
       console.log(`Brand: ${RESVG_INSTALL} && \`kit brand\` renders ${BRAND_MODULE}, then createAgentApi({ …, brand: createBrand(BRAND, BRAND_ASSETS) }) (src/kit/brand/README.md)`)
     }
+    for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
     if (flags.has('--install')) install(modules)
     else console.log(`Dependencies: ${installCommand(modules)}`)
     const entries = modules.filter((name) => REGISTRY[name].entry).map((name) => keyOf(name, REGISTRY[name].files.find((file) => file.endsWith('/index.ts')) ?? REGISTRY[name].files[0], webDir))
@@ -1373,8 +1565,12 @@ const commands = {
     writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', packageManager: KIT_PACKAGE_MANAGER, engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps), ...cloudflare }, null, 2) + '\n')
     if (!flags.has('--bare')) addFeature(root, 'notes')
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
-    console.log(`Next: cd ${relative(process.cwd(), root)} && pnpm install && pnpm format${runtime === 'node' ? '' : ' && pnpm migrations'} && pnpm test && pnpm dev`)
-    console.log(`Skills: npx skills add ${REPO} gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
+    // What makes the app pass its own gate as made: what init writes is in the kit's long-line style, and D1 needs migrations/
+    const firstRun = [['install'], ['format'], ...(runtime === 'node' ? [] : [['migrations']])]
+    const left = flags.has('--no-install') ? firstRun : runFirst(root, firstRun)
+    console.log(`Next: cd ${relative(process.cwd(), root)} && ${[...left.map((args) => `pnpm ${args.join(' ')}`), 'pnpm test', 'pnpm dev'].join(' && ')}`)
+    // -y: the installer otherwise stops to ask which skills and agents, and an agent's shell never answers
+    console.log(`Skills: npx skills add ${REPO} -y gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
     console.log(`Brand: make brand/ yours, then ${RESVG_INSTALL} && \`npx @escalay/kit brand\` renders the favicon, PNG icons and OG card into ${BRAND_MODULE}`)
   },
 
@@ -1382,14 +1578,18 @@ const commands = {
 
   doctor: () => {
     if (flags.has('--adopt') && !existsSync(lockPath)) adopt()
+    if (flags.has('--keep')) keepEdits(readLock() ?? fail(`no kit.json in ${dirArg}; add modules first`))
     const lock = readLock()
     const root = lock ? appRootOf() : null
     const brand = root ? brandFindings(root, lock.modules.includes('brand')) : { findings: [], notes: lock?.modules.includes('brand') ? [`note     brand: no package.json above ${dirArg}: \`--app <app>\` names the app whose brand/ to check`] : [] }
-    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
+    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...(root ? starterFindings(root) : [])] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
     const texts = lock ? appTexts() : []
     const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
-    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules)] : []), ...brand.notes, ...behindNotes, ...findings]) console.log(line)
-    console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}: ${lock.modules.join(', ')}`)
+    const kept = lock ? keptEditsOf(lock) : []
+    const keptLines = kept.map((file) => `kept     ${file}: an edit kit.json records as kept; \`kit diff --dir ${dirArg} --patch\` shows it`)
+    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules)] : []), ...brand.notes, ...behindNotes, ...keptLines, ...findings]) console.log(line)
+    const withKept = kept.length ? `, with ${kept.length} kept ${kept.length === 1 ? 'edit' : 'edits'}` : ''
+    console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
   },
 
@@ -1544,7 +1744,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
   feature: () => {
     const [name] = names
     if (!name) fail('name the feature, plural and kebab-case: feature reading-lists')
-    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, flags.has('--switch'))
+    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, flags.has('--switch'), valueOf('--fields'))
   },
 
   update: () => {
@@ -1575,7 +1775,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
       console.log(`  updated       ${file}`)
     }
     // A kept file still holds the older kit's code, so kit.json keeps the older version until none is left
-    writeLock(modules, hashes, lock.webDir, kept.length ? lock.version : VERSION)
+    writeLock(modules, hashes, lock.webDir, kept.length ? lock.version : VERSION, keptOf(lock))
     // kit.json may now record this kit, so the command names the version the app came from
     if (isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0) console.log(`What changed for these parts since kit ${lock.version}: ${upgradingCommand(lock.version, true)}`)
     if (kept.length) {
@@ -1600,4 +1800,5 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
   },
 }
 
-;(commands[command] ?? (() => fail(`unknown command "${command}". Commands: ${Object.keys(commands).join(', ')}`)))()
+if (commands[command] && (flags.has('--help') || rest.includes('-h'))) console.log(usageOf(command) || HELP)
+else (commands[command] ?? (() => fail(`unknown command "${command}". Commands: ${Object.keys(commands).join(', ')}`)))()

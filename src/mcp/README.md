@@ -40,6 +40,36 @@ mountMcp(app, { factory: mcpServerFactory({ info, instructions, tools: [getNote]
 A stdio entry on a laptop runs the same tools over HTTP with its own key: `callApi: overHttp(origin, key)`, served with
 the SDK's stdio transport.
 
+A list that pages: the cursor goes in as an argument and comes back in the summary, from `_links.next` (pagination
+part), so an agent asks for the next page with it:
+
+```ts
+const listNotes = mcpTool({
+  name: 'list_notes', title: 'Notes', description: 'The notes, newest first, a page at a time. Start here.',
+  input: z.object({ cursor: z.string().optional().describe('From the last page’s summary, for the next page.') }),
+  annotations: { readOnlyHint: true, openWorldHint: false },
+  cli: { name: 'note list', examples: [{ run: 'note list', about: 'The newest notes' }] },
+  call: (args) => ({ path: '/api/notes', query: args }),
+  summarize: (page) => {
+    const cursor = page._links.next && new URL(page._links.next.href).searchParams.get('cursor')
+    return [...page._embedded.notes.map((note) => `${note.title} · id ${note.id}`), ...(cursor ? [`More: list_notes with cursor ${cursor}`] : [])].join('\n')
+  },
+})
+```
+
+By hand, a request on spec 2026-07-28 names its version twice, in `mcp-protocol-version` and in the body's `_meta`
+(a request without it is a `-32602`), and its method (and a call's tool) in headers; without the header, the server
+answers as a 2025-era one would (an event stream, when the request accepts one):
+
+```bash
+# By hand: the tools, then one call
+curl https://api.example.com/mcp -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' -H 'mcp-method: tools/list' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+curl https://api.example.com/mcp …the same headers, but -H 'mcp-method: tools/call' -H 'mcp-name: get_note' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_note","arguments":{"slug":"fox"},"_meta":{…the same…}}}'
+```
+
 One MCP per space, beside the owner's `/mcp`: the mount path's parameters reach each call as `at.params`, decoded.
 
 ```ts

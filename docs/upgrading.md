@@ -1,13 +1,13 @@
 # Upgrading
 
 What changes for an app when it takes a newer kit, part by part, newest first. Each part's README says what the part
-does now; this page says what changed between versions and what to do about it. The [changelog](../CHANGELOG.md)
+does now; this page says what changed between versions and what to do about it. The [changelog](https://github.com/escalay/api-kit/blob/main/CHANGELOG.md)
 lists every release.
 
 ## Taking a new version
 
 ```bash
-npx @escalay/kit upgrading --dir src/kit      # this page's notes for your parts since kit.json's version
+npx @escalay/kit upgrading --dir src/kit      # this page's notes for your parts since kit.json's version, up to the kit's
 npx @escalay/kit doctor --dir src/kit         # missing, edited, behind: one line each with its fix
 npx @escalay/kit diff --dir src/kit --patch   # your edits next to the kit's changes
 npx @escalay/kit update --dir src/kit         # never overwrites your edits without --force
@@ -19,10 +19,19 @@ When `kit.json` records an older kit, `doctor` prints a `note` line naming `kit 
 The app owns the copy, and nothing follows `main`: a version is taken on purpose. A file equal to the kit's counts as
 unchanged, whatever `kit.json` recorded. `update` keeps a file you edited; when the kit also changed that file since
 the version `kit.json` records, it exits 1 and leaves `kit.json` at that version, so `doctor` still names the file:
-`update --force` takes the kit's, then make your edits again. Read the sections below for every part the app has, from
+`update --force` takes the kit's, then make your edits again. An edit the team keeps is recorded with
+`doctor --keep <file>` (`kept` in `kit.json`, the file's hash): `doctor` then notes it instead of failing, until the
+file changes again, the kit changes it too, or `update --force` takes the kit's. `add` and `update` print `pnpm add`
+only for what `package.json` lacks. Read the sections below for every part the app has, from
 the version in `kit.json` up.
 
 ## core
+
+### Unreleased (after 1.31.0)
+
+- A new app names where a caller's address comes from: `createApp({ db, env, address })`, `'socket'` in `server.ts`
+  and `{ header: 'cf-connecting-ip' }` in `worker.ts`, passed to `createAgentApi`. An older app that `kit doctor`
+  notes for it sets `createAgentApi({ address })` the same way (core README, The caller's address).
 
 ### 1.31.0
 
@@ -83,6 +92,12 @@ the version in `kit.json` up.
   clients stop sharing a bucket.
 
 ## db
+
+### Unreleased (after 1.31.0)
+
+- A new app's `scripts/migrations.ts` removes the files of a feature taken out of the app (`--check` fails on them)
+  and numbers a new file after the highest, so a file deleted by hand never makes two share a number. An older app
+  can take the script from the kit's `templates/runtime-cloudflare/scripts/migrations.ts`.
 
 ### 1.30.1
 
@@ -270,9 +285,18 @@ Tokens, codes, refresh rows and claims from before grants keep working.
 
 ## pagination
 
-Nothing to do in any version recorded here.
+### Unreleased (after 1.31.0)
+
+- A new app has the part, and `kit feature` writes a list paged by cursor with it (`limitQuery`, `cursorQuery`,
+  `pageOf`); in an app without it, `kit feature` copies it into `src/kit` first. Features made before keep their
+  `limit`-only lists until you page them.
 
 ## guide
+
+### Unreleased (after 1.31.0)
+
+- `kit doctor` fails (a `starter` line) while a product skill's description still holds the starter's "Replace this
+  line with…": write when an agent should use the product, then `pnpm guide`.
 
 ### 1.30.0
 
@@ -358,7 +382,19 @@ The part arrived in 1.28.0. In an app made before it, `npx @escalay/kit add bran
 ignore lists in `.oxfmtrc.json` and `.oxlintrc.json` and the allowlist in `.gitleaks.toml`, or prints the line to add
 where it can't read one. An app with its own Dockerfile adds `COPY brand brand` beside `COPY src src`.
 
+### Unreleased (after 1.31.0)
+
+- `kit doctor` fails (a `starter` line) while `brand/brand.ts`'s description is still the starter's
+  "<title>, an agent-ready API.": write what the product does, then `kit brand`.
+
 ## boards
+
+### Unreleased (after 1.31.0)
+
+- `itemOf` may return a promise: the routes await it, so a card looked up in the database answers a ref that is not
+  there with a 404 on save and `item: null` on the board. A synchronous `itemOf` works as before.
+- `kit/index.ts` re-exports boards, like `people` and `setup`: `import { registerBoards } from './kit/index.js'`.
+  `update` rewrites `index.ts`; imports from `./kit/boards/index.js` keep working.
 
 ### 1.30.0
 
@@ -381,6 +417,16 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
   its 201.
 
 ## people
+
+### Unreleased (after 1.31.0)
+
+- Nothing changes in the part. Its README now shows it as a feature of its own in an app made by `kit init`, what
+  each route answers, and the whole sign-in as a test. A new app's `scripts/migrations.ts` writes the D1 files of
+  every part copied in; in an older app, `kit add people` prints the import and the line its script lacks:
+  `['people', PEOPLE_MIGRATIONS]` (and `['setup', SETUP_MIGRATIONS]`) to its sets, then `pnpm migrations`, or D1
+  never gets the tables.
+- A new app's list-route test in `test/workers/api.test.ts` leaves out `/api/session*` and `/api/setup*`, which answer
+  by who signs in; an older app whose test fails on them after adding the part does the same.
 
 ### 1.30.1
 
@@ -417,6 +463,14 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - A `collect` that throws no longer fails `GET` and `PATCH /api/telemetry`.
 
 ## switches
+
+### Unreleased (after 1.31.0)
+
+- A new app's `src/features/switches/index.ts` lets an owner signed in by passkey (the people part) switch, beside
+  the deployment's keys: `isOwner` is a key, or a person whose role is `owner`. An older app with the people part
+  copies that line.
+- `kit doctor` fails (a `starter` line) while a feature's description in `src/features/catalog.ts` is still
+  "…: say here what switching it off stops.": write what switching it off stops.
 
 ### 1.30.0
 

@@ -111,6 +111,24 @@ describe('kit upgrading', () => {
     )
   })
 
+  it('prints nothing newer than the kit it runs as', async () => {
+    const [major, minor, patch] = KIT_VERSION.split('.').map(Number) as [number, number, number]
+    const newer = `${major}.${minor}.${patch + 1}`
+    const kit = await kitWithNotes(
+      ['# Upgrading', '', '## core', '', `### Unreleased (after ${newer})`, '', '- after the next', '', `### ${newer}`, '', '- the next', '', `### Unreleased (after ${KIT_VERSION})`, '', '- unreleased here', '', `### ${KIT_VERSION}`, '', '- this one', ''].join('\n'),
+    )
+    const printed = run(join(kit, 'cli.mjs'), await appAt('1.0.0', 'core'), 'upgrading').stdout
+    expect(printed).toContain('- this one')
+    expect(printed).toContain('- unreleased here')
+    for (const later of ['- the next', '- after the next']) expect(printed, later).not.toContain(later)
+  })
+
+  it('links the changelog where an app can open it: the npm package ships docs/ without CHANGELOG.md', () => {
+    const links = [...UPGRADING.matchAll(/\]\(([^)#]*CHANGELOG[^)]*)\)/g)].map(([, link]) => link)
+    expect(links.length).toBeGreaterThan(0)
+    for (const link of links) expect(link).toMatch(/^https:\/\/github\.com\/escalay\/api-kit\//)
+  })
+
   it('is what doctor and update tell an app behind the kit to run, and what they print gives the notes', async () => {
     const app = await appAt('1.29.0', 'core')
     const doctor = cli(app, 'doctor')

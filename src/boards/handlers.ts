@@ -35,7 +35,7 @@ export const boardHandlers = (config: BoardsConfig, repo: BoardsRepo) => {
       item: { path: `${path}/${row.id}/items/{ref}`, templated: true, title: 'PUT to add, DELETE to remove' },
       suggestions: config.suggestions ? { path: `${path}/${row.id}/suggestions`, title: 'More like what is on it' } : null,
     }),
-    ...(withItems ? { _embedded: { items: (await repo.items(row.id)).map((item) => ({ ...item, item: config.itemOf(item.ref, origin) ?? null })) } } : {}),
+    ...(withItems ? { _embedded: { items: await Promise.all((await repo.items(row.id)).map(async (item) => ({ ...item, item: (await config.itemOf(item.ref, origin)) ?? null }))) } } : {}),
   })
 
   const list: RouteHandler<BoardRoutes['list']> = async (c) => {
@@ -72,7 +72,7 @@ export const boardHandlers = (config: BoardsConfig, repo: BoardsRepo) => {
     const { id: boardId, ref: itemRef } = c.req.valid('param')
     const { note } = ((await c.req.json().catch(() => ({}))) ?? {}) as { note?: string | null }
     await rowOf(boardId)
-    if (config.itemOf(itemRef, originOf(c)) == null) throw new ProblemError('not_found', { detail: `No item ${itemRef} in the catalog. Add items by the ref their search results and links give.` })
+    if ((await config.itemOf(itemRef, originOf(c))) == null) throw new ProblemError('not_found', { detail: `No item ${itemRef} in the catalog. Add items by the ref their search results and links give.` })
     const change = noteChangeOf(note)
     const saved = await repo.save(boardId, itemRef, typeof change === 'object' ? change.text : null)
     if (change === 'clear') await repo.clearNote(boardId, itemRef)

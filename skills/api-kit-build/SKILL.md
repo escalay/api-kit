@@ -13,16 +13,19 @@ Each part's rules travel with it in `src/kit/<part>/README.md`; the full standar
 
 1. `npm create escalay my-api` (add `-- --runtime node` or `cloudflare`; the default is both). For a tool people
    also open in a browser: `-- --preset app` (Cloudflare only; `web/` served under `/app` by the same Worker).
-   Then run what its `Next:` line prints, up to `pnpm dev`: `cd my-api && pnpm install && pnpm format && pnpm migrations && pnpm test`
-   (with `--runtime node` there is no `pnpm migrations`). Done when it passes. Give your coding agent the kit's
-   skills with `npx skills add escalay/api-kit`.
+   It installs the app, formats it and writes its migrations, so its gate passes as made. Then run what its `Next:`
+   line prints, up to `pnpm dev`: `cd my-api && pnpm test`; with `-- --no-install`, or without pnpm, it is
+   `cd my-api && pnpm install && pnpm format && pnpm migrations && pnpm test` (with `--runtime node` there is no
+   `pnpm migrations`). Done when it passes. Give your coding agent the kit's
+   skills with `npx skills add escalay/api-kit -y` (without `-y` the installer stops to ask).
 2. Read `AGENTS.md` in the new app, then `src/kit/core/README.md`, `db`, `mcp` and `testing`.
 3. `pnpm dev`, then open `/docs`, `/llms.txt` and `/mcp`. The example `notes` feature shows the shape.
 4. Replace `notes` with real features: the `api-kit-feature` skill, one feature at a time.
 5. Write the guide in `guide/`: only what the code can't know (concepts, what scores mean, real-id examples,
    playbooks). Endpoint and tool lists stay as `{{api.endpoints}}` and `{{mcp.tools}}`. Run `pnpm guide` after.
 6. Write the product's own skill in `guide/skills/<name>/` with the `api-kit-skills` skill: one playbook per job
-   people bring to it, from a test of what agents get wrong.
+   people bring to it, from a test of what agents get wrong. `kit doctor` fails while its description, the one in
+   `brand/brand.ts` or one in `src/features/catalog.ts` is still the starter's text.
 7. Decide who may see what (below), then check it with the `api-kit-review` skill before anyone else uses it.
 
 ## Who may see what
@@ -40,7 +43,7 @@ In this order; stop at the first that fits.
 
 ## Parts beyond the core
 
-`init` copies `core`, `db`, `oauth`, `guide`, `mcp`, `brand`, `switches` and `testing`. The rest, by goal (every
+`init` copies `core`, `db`, `oauth`, `pagination`, `guide`, `mcp`, `brand`, `switches` and `testing`. The rest, by goal (every
 part, what it needs and the order to add them: the kit's `docs/PARTS.md`):
 
 | Goal | Parts |
@@ -82,7 +85,7 @@ Add one with `npx @escalay/kit add <part> --dir src/kit --install` (browser part
 4. `npx @escalay/kit update`: writes what the kit changed and keeps every file you edited. When it exits 1, the
    kit's [Taking a new version](https://github.com/escalay/api-kit/blob/main/docs/upgrading.md#taking-a-new-version)
    says what to do.
-5. Done when `doctor` exits 0, or lists only the edits you mean to keep, and `pnpm test` passes.
+5. Record each edit you mean to keep with `doctor --keep <file>`. Done when `doctor` exits 0 and `pnpm test` passes.
 
 ## Shipping
 

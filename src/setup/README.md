@@ -31,12 +31,32 @@ await registerSetup(app, { db, code: env.SETUP_CODE, guards: await dbGuardStore(
 ] })
 ```
 
+### In an app made by `kit init`
+
+A feature of its own, listed in `src/features/index.ts` after `people` (whose README has its feature and the lines in
+`src/app.ts`); `Env` in `src/app.ts` gains `SETUP_CODE?: string`, a secret like the others:
+
+```ts
+// src/features/setup/index.ts, listed in src/features/index.ts after people
+import { dbGuardStore, parseApiKeys, registerSetup, SETUP_MIGRATIONS, SETUP_TAG } from '../../kit/index.js'
+import type { Feature } from '../index.js'
+
+export const feature: Feature = {
+  name: 'setup', // the name its steps migrate under
+  tag: SETUP_TAG,
+  migrations: SETUP_MIGRATIONS,
+  register: async (app, { db, env }) => registerSetup(app, { db, code: env.SETUP_CODE, guards: await dbGuardStore(db), fixedKeys: [...parseApiKeys(env.API_KEYS).values()], steps: [] }),
+  tools: [],
+  samples: async () => ({}),
+}
+```
+
 Then post the enrolment to `/api/session/passkeys/register/options` and `/verify` (see `people`). Routes:
 
 ```
-GET  /api/setup            claimed? code set? recovery open? (never needs a key)
-POST /api/setup/claim      { code, email } → { mode: claim|recover, enrolment }
-GET  /api/setup/checklist  every step, checked now (admin only)
+GET  /api/setup            { claimed, codeSet, recovery } (never needs a key)
+POST /api/setup/claim      { code, email } → { mode: claim|recover, enrolment }: the enrolment goes to people's register/options
+GET  /api/setup/checklist  { done, total, _embedded: { steps } }: every step, checked now (admin only)
 ```
 
 ### A step for a feature that can be switched off

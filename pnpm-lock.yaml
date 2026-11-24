@@ -216,7 +216,7 @@ importers:
   packages/create-escalay:
     dependencies:
       '@escalay/kit':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../..
 
 packages:

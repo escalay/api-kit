@@ -36,8 +36,8 @@ export type BoardsConfig = {
   db: Db
   /** The OpenAPI schema of an item's card. */
   item: z.ZodTypeAny
-  /** A ref → the app's card for it, or null when it left the catalog. */
-  itemOf: (ref: string, origin: string) => unknown
+  /** A ref → the app's card for it, or null when it left the catalog; a promise of either when it is looked up. */
+  itemOf: (ref: string, origin: string) => unknown | Promise<unknown>
   /** What a ref looks like (default `BOARD_REF`, `<type>:<id>`). */
   refPattern?: RegExp
   refExample: string

@@ -10,7 +10,7 @@ server at `/mcp`, and a guide for agents at `/llms.txt`.
 ## Start
 
 ```bash
-pnpm install && pnpm format && pnpm test && pnpm dev
+pnpm install && pnpm test && pnpm dev
 ```
 
 On Workers, `pnpm migrations` writes `migrations/` first, and again after a feature gains a migration step. <!-- runtime:workers -->

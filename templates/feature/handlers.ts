@@ -1,11 +1,13 @@
 /** The __labels__ routes' handlers: request → repo → HAL answer; a missing __label__ is a problem. No queries here. */
-import type { RouteHandler } from '@hono/zod-openapi'
-import { linksOf, originOf, ProblemError } from '../../kit/index.js'
+import { z, type RouteHandler } from '@hono/zod-openapi'
+import { decodeCursor, linksOf, originOf, pageOf, ProblemError } from '../../kit/index.js'
 import type { __Pascal__Repo } from './repo.js'
 import { PATH, type routes } from './routes.js'
 import type { __Singular__Row } from './schema.js'
 
 type Routes = typeof routes
+
+const PositionSchema = z.object({ createdAt: z.string(), id: z.string() })
 
 export const __camel__Handlers = (repo: __Pascal__Repo) => {
   const rowOf = async (id: string) => {
@@ -16,21 +18,22 @@ export const __camel__Handlers = (repo: __Pascal__Repo) => {
   const cardOf = (origin: string, row: __Singular__Row) => ({ ...row, _links: linksOf(origin, { self: `${PATH}/${row.id}`, list: PATH }) })
 
   const list: RouteHandler<Routes['list']> = async (c) => {
-    const rows = await repo.list(c.req.valid('query').limit)
+    const query = c.req.valid('query')
+    const rows = await repo.list({ after: decodeCursor(query.cursor, PositionSchema), limit: query.limit })
+    const last = rows[query.limit - 1]
     const origin = originOf(c)
-    return c.json({ count: rows.length, _links: linksOf(origin, { self: PATH }), _embedded: { __camel__: rows.map((row) => cardOf(origin, row)) } }, 200)
+    const next = rows.length > query.limit && last ? { createdAt: last.createdAt, id: last.id } : null
+    return c.json(pageOf({ origin, path: PATH, query, name: '__camel__', items: rows.slice(0, query.limit).map((row) => cardOf(origin, row)), next }), 200)
   }
   const get: RouteHandler<Routes['get']> = async (c) => c.json(cardOf(originOf(c), await rowOf(c.req.valid('param').id)), 200)
   const create: RouteHandler<Routes['create']> = async (c) => {
-    const { title, body } = c.req.valid('json')
-    const id = await repo.create({ title: title.trim(), body: body ?? null })
+    const id = await repo.create(c.req.valid('json'))
     return c.json(cardOf(originOf(c), await rowOf(id)), 201, { location: `${PATH}/${id}` })
   }
   const update: RouteHandler<Routes['update']> = async (c) => {
     const { id } = c.req.valid('param')
     await rowOf(id)
-    const { title, body } = c.req.valid('json')
-    await repo.update(id, { ...(title === undefined ? {} : { title: title.trim() }), ...(body === undefined ? {} : { body }) })
+    await repo.update(id, c.req.valid('json'))
     return c.json(cardOf(originOf(c), await rowOf(id)), 200)
   }
   const remove: RouteHandler<Routes['remove']> = async (c) => {

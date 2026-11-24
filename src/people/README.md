@@ -38,16 +38,57 @@ await registerSetup(app, { db, code: env.SETUP_CODE, guards, fixedKeys, steps })
 // OAuth: owner: async (c) => { const person = await personOf(c, db); return person?.role === 'owner' ? person.email : null }
 ```
 
-Routes:
+### In an app made by `kit init`
+
+A feature of its own, so its tools reach MCP and `toolsRun` (its tables reach `migrations/` either way):
+
+```ts
+// src/features/people/index.ts, listed in src/features/index.ts before setup
+import { parseApiKeys, PEOPLE_MIGRATIONS, PEOPLE_TAG, registerPeople, teamTools } from '../../kit/index.js'
+import type { Feature } from '../index.js'
+
+export const feature: Feature = {
+  name: 'people', // the name its steps migrate under
+  tag: PEOPLE_TAG,
+  migrations: PEOPLE_MIGRATIONS,
+  register: (app, { db, env }) => registerPeople(app, { db, rpName: 'Postbox', fixedKeys: [...parseApiKeys(env.API_KEYS).values()] }),
+  tools: teamTools(),
+  samples: async (request) => {
+    // POST /api/team answers the whole team, not the person added
+    const { people } = (await (await request('/api/team', { method: 'POST', body: JSON.stringify({ email: 'sample@example.com' }) })).json()) as { people: { id: string; email: string }[] }
+    const { id } = people.find((person) => person.email === 'sample@example.com')!
+    return { list_team: {}, add_to_team: { domain: 'example.org' }, change_team_role: { id, role: 'member' }, remove_from_team: { id } }
+  },
+}
+```
+
+Then in `src/app.ts`, in place of its `owner` and `auth` lines (the realm stays the app's), with `PEOPLE_OPEN_PATHS`,
+`personOf`, `roleOf`, `sessionOf` and `SETUP_OPEN_PATHS` from `./kit/index.js` and `type Context` from `hono`:
+
+```ts
+  const owner = async (c: Context) => {
+    const person = await personOf(c, db)
+    return person?.role === 'owner' ? person.email : access ? accessOwner(access)(c) : null
+  }
+    auth: { realm: 'postbox', keys: parseApiKeys(env.API_KEYS), access: access && { ...access, roleOf: roleOf(db) }, open: [...PEOPLE_OPEN_PATHS, ...SETUP_OPEN_PATHS], session: sessionOf(db) },
+```
+
+Routes, and what each answers:
 
 ```
-GET    /api/session                                   who this browser is signed in as (never needs a key)
-DELETE /api/session                                   sign out
-POST   /api/session/passkeys/register/options|verify  add a passkey: signed in, or with an enrolment from setup
-POST   /api/session/passkeys/login/options|verify     sign in with a passkey, for 30 days
+GET    /api/session                                   { signedIn, person: { id, email, role, … } | null, passkeys } (never needs a key)
+DELETE /api/session                                   204: signed out
+POST   /api/session/passkeys/register/options         { enrolment? } → { challengeId, options }
+POST   /api/session/passkeys/register/verify          { challengeId, response, enrolment?, name? } → the session, and its cookie
+POST   /api/session/passkeys/login/options            → { challengeId, options }
+POST   /api/session/passkeys/login/verify             { challengeId, response } → the session, and its cookie
 GET    /api/session/passkeys · DELETE …/{id}          your passkeys
-GET    /api/team · POST · PATCH|DELETE …/people/{id} · DELETE …/domains/{domain}   the team (writes: admin only)
+GET    /api/team · POST { email | domain, role? }     { people, domains }: the whole team, after a POST too (writes: admin only)
+PATCH  /api/team/people/{id} { role }                 the person · DELETE …/people/{id}, …/domains/{domain}: 204
 ```
+
+`options` is what the browser hands to `startRegistration` / `startAuthentication` (and a test to
+`softAuthenticator`); `challengeId` goes back with the answer.
 
 ## Options
 
@@ -174,7 +215,44 @@ flowchart TD
 ## Tests
 
 - `softAuthenticator()` (testing part) answers the ceremonies the way a phone would, so the whole flow runs in CI:
-  claim → `register(options, origin)` → verify → `login(options, origin)` → verify.
+  claim → `register(options, origin)` → verify → `login(options, origin)` → verify. In an app made by `kit init`,
+  with this part and `setup` wired as above:
+
+```ts
+// test/owner.test.ts: the first visit, a later sign-in, and an agent the owner approves
+import { createHash, randomBytes } from 'node:crypto'
+import { expect, it } from 'vitest'
+import { createApp } from '../src/app.js'
+import { generateOAuthKey, testDb } from '../src/kit/index.js'
+import { approveSignIn, softAuthenticator } from '../src/kit/testing/index.js'
+
+const ORIGIN = 'http://localhost'
+const app = await createApp({ db: await testDb(), env: { SETUP_CODE: 'K7Q2-9XMD', OAUTH_SIGNING_KEY: await generateOAuthKey() } })
+let cookie = ''
+/** A same-site browser: keeps the session cookie. */
+const send = async (method: string, path: string, body?: unknown) => {
+  const answer = await app.request(`${ORIGIN}${path}`, { method, headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', cookie }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+  cookie = answer.headers.get('set-cookie')?.split(';')[0] ?? cookie
+  return answer.status === 204 ? null : answer.json()
+}
+const device = await softAuthenticator()
+
+it('claims the deployment, makes a passkey, signs in again, and approves an agent', async () => {
+  const { enrolment } = await send('POST', '/api/setup/claim', { code: 'K7Q2-9XMD', email: 'owner@example.com' })
+  const made = await send('POST', '/api/session/passkeys/register/options', { enrolment })
+  await send('POST', '/api/session/passkeys/register/verify', { challengeId: made.challengeId, enrolment, response: await device.register(made.options, ORIGIN) })
+  await send('DELETE', '/api/session')
+  const login = await send('POST', '/api/session/passkeys/login/options')
+  await send('POST', '/api/session/passkeys/login/verify', { challengeId: login.challengeId, response: await device.login(login.options, ORIGIN) })
+  expect(await send('GET', '/api/session')).toMatchObject({ signedIn: true, person: { email: 'owner@example.com', role: 'owner' } })
+  const redirect_uri = 'http://127.0.0.1:8976/callback'
+  const { client_id } = await send('POST', '/oauth/register', { client_name: 'An agent', redirect_uris: [redirect_uri] })
+  const code_challenge = createHash('sha256').update(randomBytes(32).toString('base64url')).digest('base64url')
+  const approved = await approveSignIn(app, { response_type: 'code', client_id, redirect_uri, code_challenge, code_challenge_method: 'S256' }, { headers: { cookie } })
+  expect(new URL(approved.headers.get('location')!).searchParams.get('code')).toBeTruthy()
+})
+```
+
 - `toolsRun` (testing part) runs the team tools.
 - `test/people.test.ts`: the claim, passkeys, sessions, races, sweeping, limits, the team, the hooks, a retried
   verify that never answers or stores the session;

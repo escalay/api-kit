@@ -435,6 +435,25 @@ describe('the copy-in CLI', () => {
     expect(await readFile(join(app, 'src/kit/core/api.ts'), 'utf8')).toBe(await readFile(join(import.meta.dirname, '..', 'src/core/api.ts'), 'utf8'))
   })
 
+  it('re-exports boards from the kit’s index like people and setup, and keeps its own folder importable', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    const added = cli(app, 'add', 'boards', 'people', '--dir', 'src/kit')
+    expect(added.status, added.stderr).toBe(0)
+    const index = await readFile(join(app, 'src/kit/index.ts'), 'utf8')
+    for (const part of ['boards', 'people']) expect(index).toContain(`export * from './${part}/index.js'`)
+    expect(existsSync(join(app, 'src/kit/boards/index.ts'))).toBe(true)
+  })
+
+  it('names the migrations line an older app’s scripts/migrations.ts lacks for a part with tables', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    await writeFile(join(app, 'package.json'), '{ "name": "older" }')
+    await mkdir(join(app, 'scripts'))
+    await writeFile(join(app, 'scripts/migrations.ts'), "const sets = [['oauth', OAUTH_MIGRATIONS], ['guards', GUARD_MIGRATIONS]]\n")
+    const added = cli(app, 'add', 'people', 'pagination')
+    expect(added.stdout).toContain("scripts/migrations.ts lacks people's tables: `import { PEOPLE_MIGRATIONS } from '../src/kit/index.js'` and `['people', PEOPLE_MIGRATIONS]` in its sets, then `pnpm migrations` writes their D1 files")
+    expect(added.stdout).not.toMatch(/'(pagination|db)'/)
+  })
+
   it('tells your edits from the kit’s and never overwrites an edit without --force', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     cli(app, 'add', 'core', '--dir', 'kit')
@@ -484,6 +503,43 @@ describe('the copy-in CLI', () => {
     // Only the version is behind: update records it
     await writeFile(join(app, 'src/kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1' }))
     expect(cli(app, 'doctor').stdout).toContain(`behind   kit.json says kit 0.0.1, this is ${KIT_VERSION} with the same files`)
+  })
+
+  it('doctor --keep records an edit the team keeps: exit 0 while the file stays as kept, an edit again once it changes', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'pagination')
+    await writeFile(join(app, 'src/kit/core/hal.ts'), '// ours\n')
+    expect(cli(app, 'doctor').status).toBe(1)
+    expect(cli(app, 'doctor', '--keep', 'core/kv.ts').stderr).toContain('core/kv.ts is not an edit')
+    const kept = cli(app, 'doctor', '--keep', 'core/hal.ts')
+    expect(kept.status, kept.stdout).toBe(0)
+    expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).kept).toEqual({ 'core/hal.ts': hashOfText('// ours\n') })
+    const again = cli(app, 'doctor')
+    expect([again.status, again.stdout.trim().split('\n')]).toEqual([0, ["kept     core/hal.ts: an edit kit.json records as kept; `kit diff --dir src/kit --patch` shows it", `src/kit matches kit ${KIT_VERSION}, with 1 kept edit: core, pagination`]])
+    // add and update carry the record
+    cli(app, 'add', 'db')
+    cli(app, 'update')
+    expect(cli(app, 'doctor').status).toBe(0)
+    await writeFile(join(app, 'src/kit/core/hal.ts'), '// ours, changed\n')
+    expect(cli(app, 'doctor').stdout).toContain('edited   core/hal.ts')
+    expect(cli(app, 'doctor').status).toBe(1)
+    // Taking the kit's file drops the record
+    cli(app, 'update', '--force')
+    expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).kept).toBeUndefined()
+  })
+
+  it('prints no pnpm add for what package.json already has', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    await writeFile(join(app, 'package.json'), JSON.stringify({ name: 'app', dependencies: { hono: '^4.13.18' } }))
+    const added = cli(app, 'add', 'core')
+    expect(added.stdout).toContain('Dependencies: pnpm add @hono/zod-openapi@')
+    expect(added.stdout).not.toContain('hono@^4')
+    const manifest = JSON.parse(await readFile(join(app, 'package.json'), 'utf8'))
+    const ranges = Object.fromEntries((added.stdout.match(/pnpm add (.+)/)![1]!.split(' ')).map((spec) => [spec.slice(0, spec.lastIndexOf('@')), spec.slice(spec.lastIndexOf('@') + 1)]))
+    await writeFile(join(app, 'package.json'), JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, ...ranges } }))
+    const updated = cli(app, 'update')
+    expect(updated.stdout).not.toContain('pnpm add')
+    expect(updated.stdout).toContain('Dependencies: package.json has them')
   })
 
   it('a file equal to the kit’s is unchanged even when kit.json recorded another hash', async () => {
@@ -774,15 +830,17 @@ describe('the copy-in CLI', () => {
     await mkdir(parent, { recursive: true })
     try {
       // The way `npm create escalay demo-api` starts: create-escalay hands its arguments to `init`; flags may come first
-      const made = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'packages/create-escalay/index.mjs'), '--preset', 'api', '--yes', '--title', 'Demo API', 'demo-api'], { cwd: parent, encoding: 'utf8' })
+      // --no-install: the kit's own packages resolve the app here, without a download
+      const made = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'packages/create-escalay/index.mjs'), '--preset', 'api', '--yes', '--no-install', '--title', 'Demo API', 'demo-api'], { cwd: parent, encoding: 'utf8' })
       expect(made.status, made.stderr).toBe(0)
       expect(existsSync(join(parent, 'api'))).toBe(false)
-      // api-kit-build's first command is the one init prints, up to the dev server
+      // Without the install, init's Next line names what it would have run; api-kit-build gives it for that case
       const next = made.stdout.match(/^Next: cd demo-api && (.+) && pnpm dev$/m)?.[1]
       expect(next).toBe('pnpm install && pnpm format && pnpm migrations && pnpm test')
       expect(await readFile(join(import.meta.dirname, '..', 'skills/api-kit-build/SKILL.md'), 'utf8')).toContain(`\`cd my-api && ${next}\``)
       // and the line after it gives the coding agent the kit's skills
-      expect(made.stdout).toMatch(/^Next: .*\nSkills: npx skills add escalay\/api-kit /m)
+      // -y: without it the installer stops to ask, which an agent's shell never answers
+      expect(made.stdout).toMatch(/^Next: .*\nSkills: npx skills add escalay\/api-kit -y /m)
       const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
@@ -798,13 +856,31 @@ describe('the copy-in CLI', () => {
       // --switch: listed in the catalog, so an owner can switch it off, and the feature names its switch
       expect(await readFile(join(app, 'src/features/catalog.ts'), 'utf8')).toContain("  'reading-lists': { title: 'ReadingLists', description: 'ReadingLists: say here what switching it off stops.' },\n  // kit:catalog")
       expect(await readFile(join(app, 'src/features/reading-lists/index.ts'), 'utf8')).toContain("  name: 'reading-lists',\n  switch: 'reading-lists',")
-      expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'guide', 'mcp', 'brand', 'switches', 'testing'])
+      // pagination too: a feature's list pages by cursor
+      expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).modules).toEqual(['core', 'db', 'oauth', 'pagination', 'guide', 'mcp', 'brand', 'switches', 'testing'])
       // The starter brand: a monogram of the title, served as SVG until `kit brand` renders it
       expect(await readFile(join(app, 'brand/brand.ts'), 'utf8')).toContain("  name: 'demo-api',\n  title: 'Demo API',")
       expect(await readFile(join(app, 'brand/icon.svg'), 'utf8')).toContain('>D</text>')
       expect(await readFile(join(app, 'src/brand.gen.ts'), 'utf8')).not.toContain('png:')
       const doctor = cli(app, 'doctor')
       expect(doctor.stdout).toContain('note     brand: src/brand.gen.ts has the SVG only')
+      // server.ts and worker.ts each name where a caller's address comes from
+      expect(doctor.stdout).not.toContain('names no source for the caller')
+      // The text the starter leaves for the app to write fails doctor until it is written
+      expect(doctor.status).toBe(1)
+      const starterLines = (text: string) => text.split('\n').filter((line) => line.startsWith('starter  '))
+      expect(starterLines(doctor.stdout)).toEqual([
+        'starter  guide/skills/demo-api/SKILL.md: its description is still the starter’s ("Replace this line with"): say when an agent should use the product, in its users’ words',
+        'starter  brand/brand.ts: its description is still the starter’s (", an agent-ready API."): say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`',
+        'starter  src/features/catalog.ts: a description is still the starter’s ("say here what switching it off stops"): say what switching the feature off stops',
+      ])
+      const productSkill = join(app, 'guide/skills/demo-api/SKILL.md')
+      await writeFile(productSkill, (await readFile(productSkill, 'utf8')).replace(/Replace this line with[^\n]*/, 'For reading lists: making one, adding books.'))
+      await writeFile(join(app, 'brand/brand.ts'), (await readFile(join(app, 'brand/brand.ts'), 'utf8')).replace('Demo API, an agent-ready API.', 'Reading lists, shared with your agents.'))
+      const catalog = join(app, 'src/features/catalog.ts')
+      await writeFile(catalog, (await readFile(catalog, 'utf8')).replace('ReadingLists: say here what switching it off stops.', 'Reading lists: off, nobody can make or read one.'))
+      expect(starterLines(cli(app, 'doctor').stdout)).toEqual([])
+      cli(app, 'guide')
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
       // The product's own skill, the place for developer skills, and the link coding agents find them through
       for (const path of ['guide/skills/demo-api/SKILL.md', 'guide/skills/demo-api/references/find-your-way.md', '.agents/skills/README.md']) expect(existsSync(join(app, path)), path).toBe(true)
@@ -837,6 +913,30 @@ describe('the copy-in CLI', () => {
       await migrate(await openDb(sqlite), 'oauth', OAUTH_MIGRATIONS)
       for (const file of ['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_oauth_2.sql']) sqlite.exec(await readFile(join(app, 'migrations', file), 'utf8'))
       expect(sqlite.prepare("select count(*) as n from kit_migrations where feature = 'oauth'").get()).toEqual({ n: 2 })
+      // A feature with its own fields, not the sample's title and body
+      const fields = 'name:string minutes:int tags:string[] vegan:bool? rating:number? story:text?'
+      const recipes = cli(parent, 'feature', 'recipes', '--app', 'demo-api', '--fields', fields)
+      expect(recipes.status, recipes.stderr).toBe(0)
+      const recipeSchema = await readFile(join(app, 'src/features/recipes/schema.ts'), 'utf8')
+      for (const column of ["name: text('name').notNull(),", "minutes: integer('minutes').notNull(),", "tags: text('tags', { mode: 'json' }).$type<string[]>().notNull(),", "vegan: integer('vegan', { mode: 'boolean' }),", "rating: real('rating'),", "story: text('story'),"]) expect(recipeSchema).toContain(column)
+      expect(recipeSchema).toContain('create table if not exists recipes (id text primary key, "name" text not null, "minutes" integer not null, "tags" text not null, "vegan" integer, "rating" real, "story" text, created_at text not null, updated_at text not null)')
+      expect(recipeSchema).not.toMatch(/title|body/)
+      expect(await readFile(join(app, 'src/features/recipes/routes.ts'), 'utf8')).toContain('never .default()')
+      expect(cli(parent, 'feature', 'meals', '--app', 'demo-api', '--fields', 'name:strin').stderr).toContain('name:strin: a field is <name>:<type>, the type one of string, text, int, number, bool, string[]')
+      expect(cli(parent, 'feature', 'meals', '--app', 'demo-api', '--fields', 'id:string').stderr).toContain('id is the kit’s own field')
+      expect(cli(parent, 'feature', 'meals', '--app', 'demo-api', '--fields', 'a:string a:int').stderr).toContain('a is named twice')
+      expect(existsSync(join(app, 'src/features/meals'))).toBe(false)
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      expect((await readdir(current)).sort().at(-1)).toBe('0008_recipes_1.sql')
+      // A feature taken out leaves its files behind: --check names them, `pnpm migrations` removes them, and numbering goes on from the highest
+      await writeFile(join(current, '0009_gone_1.sql'), `-- kit: gone step 1 sha256 ${'0'.repeat(64)}\ncreate table if not exists gone (id text primary key);\n`)
+      const orphaned = spawnSync(bin('tsx'), ['scripts/migrations.ts', '--check'], { cwd: app, encoding: 'utf8' })
+      expect([orphaned.status, orphaned.stderr]).toEqual([1, expect.stringContaining('0009_gone_1.sql is for gone, which nothing here migrates: run pnpm migrations')])
+      const pruned = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
+      expect(pruned.stdout).toContain('Removed 0009_gone_1.sql')
+      await rm(join(current, '0005_notes_1.sql'))
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      expect((await readdir(current)).sort().slice(-2)).toEqual(['0008_recipes_1.sql', '0009_notes_1.sql'])
       for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
         const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
         expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
@@ -845,7 +945,7 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+13 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+17 passed/)
 
       // The client and its command line: `kit sdk` makes both; the CLI compiles on its own and offers the app's tools
       const sdk = cli(parent, 'sdk', '--app', 'demo-api')
@@ -881,7 +981,7 @@ describe('the copy-in CLI', () => {
       expect(await readFile(join(app, 'sdk/cli/engine/index.ts'), 'utf8')).toBe(await readFile(join(import.meta.dirname, '..', 'templates/sdk/sdk/cli/engine/index.ts'), 'utf8'))
       expect(cli(parent, 'cli', '--app', 'edge-none').stderr).toContain('no sdk/package.json')
 
-      expect(cli(parent, 'init', 'edge-api', '--runtime', 'cloudflare').status).toBe(0)
+      expect(cli(parent, 'init', 'edge-api', '--runtime', 'cloudflare', '--no-install').status).toBe(0)
       for (const path of ['src/server.ts', 'Dockerfile', 'container']) expect(existsSync(join(parent, 'edge-api', path)), path).toBe(false)
       expect(JSON.parse(await readFile(join(parent, 'edge-api/package.json'), 'utf8')).scripts.dev).toBe('wrangler dev')
       // AGENTS.md speaks only of the runtimes the app has, and never of pnpm's own `deploy`
@@ -896,14 +996,14 @@ describe('the copy-in CLI', () => {
         expect(text).toContain('`pnpm run deploy`')
       }
       // AGENTS.md says how to add the kit's skills, naming only skills the kit has
-      const skillsLine = both.split('\n').find((line) => line.startsWith('- `npx skills add escalay/api-kit`'))
+      const skillsLine = both.split('\n').find((line) => line.startsWith('- `npx skills add escalay/api-kit -y`'))
       expect(skillsLine).toBeDefined()
       const named = [...skillsLine!.matchAll(/`(api-kit-[a-z]+)`/g)].map(([, name]) => name!)
       expect(named).toEqual(expect.arrayContaining(['api-kit-build', 'api-kit-feature', 'api-kit-review']))
       for (const name of named) expect(existsSync(join(import.meta.dirname, '..', 'skills', name, 'SKILL.md')), name).toBe(true)
       // Prebuilt binaries need no build scripts, so `pnpm install` doesn't stop to ask
       expect(await readFile(join(parent, 'edge-api/pnpm-workspace.yaml'), 'utf8')).toContain('workerd: false')
-      expect(cli(parent, 'init', 'box-api', '--runtime', 'node').status).toBe(0)
+      expect(cli(parent, 'init', 'box-api', '--runtime', 'node', '--no-install').status).toBe(0)
       for (const path of ['src/worker.ts', 'wrangler.jsonc', 'test/workers']) expect(existsSync(join(parent, 'box-api', path)), path).toBe(false)
       const box = await readFile(join(parent, 'box-api/AGENTS.md'), 'utf8')
       expect(box).not.toMatch(/wrangler|worker\.ts|runtime:/)
@@ -943,7 +1043,7 @@ describe('the copy-in CLI', () => {
         for (const line of ['      - run: pnpm check\n', '      - run: pnpm test\n']) expect(ci).toContain(line)
         const scripts = JSON.parse(await readFile(join(parent, name, 'package.json'), 'utf8')).scripts
         expect(scripts).toMatchObject({ gate: 'pnpm check && pnpm test', prepare: 'tsx scripts/hooks.ts' })
-        expect(scripts.check).toMatch(/^pnpm typecheck && pnpm lint && oxfmt --check/)
+        expect(scripts.check).toMatch(/^pnpm typecheck && pnpm lint && \(oxfmt --check \|\| \(echo 'Not formatted: run pnpm format' >&2 && exit 1\)\)/)
         expect(scripts.check.includes('scripts/migrations.ts --check'), name).toBe(name !== 'box-api')
         expect(scripts.check).not.toContain('vite build')
         expect(await readFile(join(parent, name, '.githooks/pre-push'), 'utf8')).toContain('exec pnpm gate')
@@ -973,6 +1073,112 @@ describe('the copy-in CLI', () => {
     }
   }, 120_000)
 
+  it('takes people, setup and boards the way their READMEs say, and passes its own tests on both runtimes', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-team-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'team-api', '--no-install').status).toBe(0)
+      const app = join(parent, 'team-api')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      const edit = async (path: string, from: string, to: string) => {
+        const text = await read(path)
+        expect(text, `${path}: ${from}`).toContain(from)
+        await writeFile(join(app, path), text.replace(from, to))
+      }
+      expect(cli(app, 'feature', 'things', '--switch').status).toBe(0)
+      expect(cli(app, 'feature', 'recipes', '--fields', 'name:string').status).toBe(0)
+      const added = cli(app, 'add', 'people', 'setup', 'boards')
+      expect(added.stdout).toContain('Wire people: a feature in src/features/people/ listed in src/features/index.ts, and the lines in src/app.ts: src/kit/people/README.md › In an app made by `kit init`')
+      // The starter's script finds the parts' tables itself
+      expect(added.stdout).not.toContain('scripts/migrations.ts lacks')
+      // Each part's feature as its README writes it, listed in the order it says
+      for (const part of ['people', 'setup', 'boards']) {
+        const readme = await read(`src/kit/${part}/README.md`)
+        const block = readme.slice(readme.indexOf('### In an app made by `kit init`')).match(/```ts\n([\s\S]*?)```/)![1]!
+        expect(block.split('\n')[0]).toMatch(new RegExp(`^// src/features/${part}/index\\.ts, listed in src/features/index\\.ts`))
+        await mkdir(join(app, 'src/features', part))
+        await writeFile(join(app, 'src/features', part, 'index.ts'), block)
+        await edit('src/features/index.ts', '// kit:imports', `import { feature as ${part} } from './${part}/index.js'\n// kit:imports`)
+        await edit('src/features/index.ts', '  // kit:features', `  ${part},\n  // kit:features`)
+      }
+      // src/app.ts as the READMEs say: the setup secret, and people's owner and auth lines with the imports they name
+      const people = await read('src/kit/people/README.md')
+      const wiring = people.slice(people.indexOf('Then in `src/app.ts`')).match(/```ts\n([\s\S]*?)```/)![1]!.split('\n')
+      const owner = wiring.slice(0, wiring.indexOf('  }') + 1).join('\n')
+      const auth = wiring.find((line) => line.startsWith('    auth: '))!.replace("realm: 'postbox'", "realm: 'team-api'")
+      await edit('src/app.ts', 'FEATURES_OFF?: string }', 'FEATURES_OFF?: string; SETUP_CODE?: string }')
+      await edit('src/app.ts', "    auth: { realm: 'team-api', keys: parseApiKeys(env.API_KEYS), access },", auth)
+      await edit('src/app.ts', '  const owner = access ? accessOwner(access) : async () => null', owner)
+      await edit('src/app.ts', 'featureTools, parseApiKeys,', 'featureTools, parseApiKeys, PEOPLE_OPEN_PATHS, personOf, roleOf, sessionOf, SETUP_OPEN_PATHS,')
+      await edit('src/app.ts', 'import BRAND from', "import type { Context } from 'hono'\nimport BRAND from")
+      // people's whole sign-in as a test, and the owner it signs in switches a feature, as a deployment key can
+      const flow = people.slice(people.indexOf('// test/owner.test.ts')).split('```')[0]!
+      const switched = "\nit('lets the owner signed in by passkey switch a feature off', async () => {\n  expect(await send('PATCH', '/api/features/things', { on: false })).toMatchObject({ key: 'things', on: false })\n})\n"
+      await writeFile(join(app, 'test/owner.test.ts'), flow + switched)
+      const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
+      expect(migrations.status, migrations.stderr).toBe(0)
+      const files = await readdir(join(app, 'migrations'))
+      for (const step of ['people_1', 'setup_1', 'boards_1']) expect(files.filter((file) => file.endsWith(`_${step}.sql`)), step).toHaveLength(1)
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+      for (const name of ['claims the deployment, makes a passkey, signs in again, and approves an agent', 'lets the owner signed in by passkey switch a feature off', 'answers every feature list route with a key, and refuses without one', 'runs every MCP tool against its route']) expect(tests.stdout).toContain(name)
+      // The boards' tools are on MCP, so toolsRun ran them with the README's samples
+      expect(await read('src/features/boards/index.ts')).toContain('save_to_board: { id, ref }')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('gives a feature the pagination part an app lacks, never moving an older kit copy to this version', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-feature-'))
+    expect(cli(parent, 'init', 'old-api', '--no-install', '--no-git').status).toBe(0)
+    const app = join(parent, 'old-api')
+    const lockPath = join(app, 'src/kit/kit.json')
+    const lock = JSON.parse(await readFile(lockPath, 'utf8'))
+    const withoutPagination = { ...lock, modules: lock.modules.filter((name: string) => name !== 'pagination'), files: Object.fromEntries(Object.entries(lock.files).filter(([file]) => !file.startsWith('pagination/'))) }
+    await rm(join(app, 'src/kit/pagination'), { recursive: true })
+    // An app at an older kit: nothing written, and the command that adds the part at its own version
+    await writeFile(lockPath, JSON.stringify({ ...withoutPagination, version: '1.30.0' }))
+    const older = cli(app, 'feature', 'things')
+    expect([older.status, older.stderr]).toEqual([1, expect.stringContaining('`npx @escalay/kit@1.30.0 add pagination --dir src/kit`')])
+    expect(existsSync(join(app, 'src/features/things'))).toBe(false)
+    expect(JSON.parse(await readFile(lockPath, 'utf8')).version).toBe('1.30.0')
+    // At this kit's version, the part is copied in first
+    await writeFile(lockPath, JSON.stringify(withoutPagination))
+    const current = cli(app, 'feature', 'things')
+    expect(current.status, current.stderr).toBe(0)
+    expect(current.stdout).toContain('Copied the pagination part into src/kit')
+    expect(JSON.parse(await readFile(lockPath, 'utf8')).modules).toContain('pagination')
+    await rm(parent, { recursive: true, force: true })
+  })
+
+  it('installs a new app and runs its format and migrations, so its gate passes as made', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-init-'))
+    const bin = join(parent, 'bin')
+    await mkdir(bin)
+    const log = join(parent, 'pnpm.log')
+    // A stand-in pnpm: logs where and what it ran
+    await writeFile(join(bin, 'pnpm'), `#!/bin/sh\n[ "$1" = --version ] && echo 12.3.4 && exit 0\necho "$(basename "$PWD") $*" >> "${log}"\n`, { mode: 0o755 })
+    const init = (...args: string[]) => spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), 'init', ...args], { cwd: parent, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })
+    const both = init('ran-api', '--no-git')
+    expect(both.status, both.stderr).toBe(0)
+    const node = init('box-api', '--runtime', 'node', '--no-git')
+    expect(node.status, node.stderr).toBe(0)
+    expect((await readFile(log, 'utf8')).trim().split('\n')).toEqual(['ran-api install', 'ran-api format', 'ran-api migrations', 'box-api install', 'box-api format'])
+    expect(both.stdout).toMatch(/^Next: cd ran-api && pnpm test && pnpm dev$/m)
+    // No pnpm: the app is made, and the Next line names every step
+    const without = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), 'init', 'plain-api', '--no-git'], { cwd: parent, encoding: 'utf8', env: { ...process.env, PATH: '/nowhere' } })
+    expect(without.status, without.stderr).toBe(0)
+    expect(without.stdout).toMatch(/^Next: cd plain-api && pnpm install && pnpm format && pnpm migrations && pnpm test && pnpm dev$/m)
+    await rm(parent, { recursive: true, force: true })
+  })
+
   it('makes an app with a browser side that typechecks and passes its tests on all three sides', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-app-${process.pid}`)
     await rm(parent, { recursive: true, force: true })
@@ -981,7 +1187,7 @@ describe('the copy-in CLI', () => {
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
       const refused = cli(parent, 'init', 'box', '--preset', 'app', '--runtime', 'node')
       expect([refused.status, refused.stderr]).toEqual([1, 'kit: the app preset runs on Cloudflare Workers; leave --runtime out or use --runtime cloudflare\n'])
-      const made = cli(parent, 'init', 'desk', '--preset', 'app', '--title', 'Desk')
+      const made = cli(parent, 'init', 'desk', '--preset', 'app', '--title', 'Desk', '--no-install')
       expect(made.status, made.stderr).toBe(0)
       expect(made.stdout).toContain('for Cloudflare Workers, with a browser app in web/,')
       const app = join(parent, 'desk')
@@ -1130,6 +1336,31 @@ describe('the npm-release item', () => {
     // The manifest and every published package agree, or the release pull request would bump them apart
     const manifest = JSON.parse(await read('.release-please-manifest.json'))
     for (const path of ['package.json', 'packages/create-escalay/package.json']) expect(JSON.parse(await read(path)).version, path).toBe(manifest['.'])
+  })
+
+  it('pins create-escalay to its own kit version: pnpm writes `workspace:*` as the exact version, never a range', async () => {
+    expect(JSON.parse(await read('packages/create-escalay/package.json')).dependencies).toEqual({ '@escalay/kit': 'workspace:*' })
+    // 1.31.0 and older were published with `^`, so the README's pinned example names no version of theirs
+    const readme = await read('packages/create-escalay/README.md')
+    const pinned = [...readme.matchAll(/create escalay@(\d+)\.(\d+)\.(\d+)/g)].map((match) => match.slice(1).map(Number))
+    for (const [major, minor, patch] of pinned) expect(major! * 1e6 + minor! * 1e3 + patch!, 'a version published with a caret range').toBeGreaterThan(1_031_000)
+    expect(readme).toContain('after 1.31.0')
+  })
+
+  it('answers --help from create-escalay and from every kit command without making anything', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-help-'))
+    for (const flag of ['--help', '-h']) {
+      const created = spawnSync(process.execPath, [join(kitDir, 'packages/create-escalay/index.mjs'), flag], { cwd: parent, encoding: 'utf8' })
+      expect([created.status, created.stderr], flag).toEqual([0, ''])
+      expect(created.stdout).toMatch(/^Usage: npm create escalay <dir> \[-- options\]$/m)
+      expect(created.stdout).toContain('--preset api|app')
+    }
+    expect(await readdir(parent)).toEqual([])
+    const kit = (...args: string[]) => spawnSync(process.execPath, [join(kitDir, 'cli.mjs'), ...args], { cwd: parent, encoding: 'utf8' })
+    const add = kit('add', '--help')
+    expect([add.status, add.stdout.split('\n')[0]]).toEqual([0, 'kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]'])
+    expect(kit('feature', '-h').stdout).toContain('kit feature <plural-name>')
+    expect(await readdir(parent)).toEqual([])
   })
 })
 
@@ -1304,6 +1535,15 @@ describe('the skills', () => {
   const KIT_COMMANDS = kitSays('no-such-command').match(/Commands: (.+)/)![1]!.split(', ')
   const PRESETS = kitSays('init', 'no-such-app', '--preset', 'no-such-preset').match(/--preset is one of (.+)/)![1]!.split(', ')
 
+  it('gives every `npx skills add` it names `-y`: without it the installer stops to ask, which an agent never answers', async () => {
+    const markdownUnder = async (dir: string) => (await readdir(join(kitDir, dir), { recursive: true })).filter((path) => path.endsWith('.md')).map((path) => join(dir, path))
+    const files = ['README.md', 'AGENTS.md', 'docs/STANDARD.md', ...(await markdownUnder('skills')), ...(await markdownUnder('templates'))]
+    const commands = (await Promise.all(files.map(async (file) => [...(await readFile(join(kitDir, file), 'utf8')).matchAll(/`(npx skills add [^`]*)`/g)].map(([, command]) => `${file}: ${command}`)))).flat()
+    expect(commands.length).toBeGreaterThan(5)
+    // `--list` only lists, so it never asks
+    expect(commands.filter((line) => !/ (-y|--list)\b/.test(line))).toEqual([])
+  })
+
   it('each has a name, says when to use it, stays short and names the command that checks its rule', async () => {
     // Every folder in skills/ is a skill: skillTexts reads each one's SKILL.md, so a folder without one fails here
     const skills = await skillTexts()
@@ -1419,6 +1659,23 @@ describe('MCP (2026-07-28)', () => {
   it('needs a key like every other route', async () => {
     const { app } = await sampleApi()
     expect((await rpc(app, 'tools/list', {}, {})).status).toBe(401)
+  })
+
+  it('answers the request the mcp README writes by hand, and says what a request without its _meta lacks', async () => {
+    const { app } = await sampleApi()
+    const readme = readFileSync(join(import.meta.dirname, '..', 'src/mcp/README.md'), 'utf8')
+    const curl = readme.match(/```bash\n# By hand[^\n]*\n(curl [\s\S]*?)\ncurl /)![1]!.replaceAll('\\\n', ' ')
+    const headers = Object.fromEntries([...curl.matchAll(/-H ['"]([^:]+): ([^'"]+)['"]/g)].map(([, name, value]) => [name!, value!.replace('$KEY', auth.authorization.slice('Bearer '.length))]))
+    const body = curl.match(/-d '([^']+)'/)![1]!
+    const listed = await (await app.request('/mcp', { method: 'POST', headers, body })).json()
+    expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toContain('get_app')
+    const bare = await (await app.request('/mcp', { method: 'POST', headers, body: JSON.stringify({ ...JSON.parse(body), params: {} }) })).json()
+    expect(bare.error.code).toBe(-32602)
+    expect(readme).toContain('a request without it is a `-32602`')
+    // Without the header, as a 2025-era server: an event stream here, since the request accepts one
+    const { 'mcp-protocol-version': _version, 'mcp-method': _method, ...older } = headers
+    const streamed = await (await app.request('/mcp', { method: 'POST', headers: older, body: JSON.stringify({ ...JSON.parse(body), params: {} }) })).text()
+    expect(JSON.parse(streamed.split('\n').find((line) => line.startsWith('data: '))!.slice('data: '.length)).result.tools.length).toBeGreaterThan(0)
   })
 
   it('reads a tool’s route from its call, or takes the one it gives', () => {
