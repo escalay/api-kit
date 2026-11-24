@@ -136,6 +136,12 @@ const pathOf = (href: string) => {
   return url.pathname + url.search
 }
 
+/** The caller's auth without its Idempotency-Key: a call made again after its run is done wants the result, not the 202 kept for that key. */
+const freshCallOf = (auth: AuthInfo | undefined): AuthInfo | undefined => {
+  const { 'idempotency-key': _key, ...headers } = (auth?.extra?.headers ?? {}) as Record<string, string>
+  return auth && { ...auth, extra: { ...auth.extra, headers } }
+}
+
 /**
  * Polls a slow call's run (its `Location`) until `waitMs` has passed, looking at least once. Done: the answer is the
  * run's `_links.result` when it names one, else the call made once more (a slow route caches its answer: the
@@ -152,7 +158,7 @@ export const pollRun = async (callApi: CallApi, call: ApiCall, location: string,
     const { status, _links } = ((await run.clone().json().catch(() => null)) ?? {}) as { status?: string; _links?: { result?: { href?: string } } }
     if (status === 'done') {
       const result = _links?.result?.href
-      return waitedOf(await callApi(result ? { path: pathOf(result) } : call, auth))
+      return waitedOf(await callApi(result ? { path: pathOf(result) } : call, freshCallOf(auth)))
     }
     if (status === 'failed') return { response: run, pending: null, location: null }
     if (Date.now() >= until) return { response: run, pending: location.split('/').pop()!, location }

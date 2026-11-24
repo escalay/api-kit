@@ -264,6 +264,19 @@ describe('idempotency', () => {
       }
     })
 
+    it('gets a slow route\'s result once its run is done, not the 202 kept under the same key', async () => {
+      for (const kind of ['mcp', 'a2a'] as const) {
+        const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`tester:${hashApiKey(KEY)}`) } })
+        let started = 0
+        // The first call starts a run; once it is done (and names no result), calling the route again answers it
+        app.post('/api/reports', (c) => (started++ ? c.json({ report: 'ready' }, 200) : c.json({ status: 'running' }, 202, { location: '/api/runs/r1' })))
+        app.get('/api/runs/r1', (c) => c.json({ status: 'done' }))
+        const answer = await relays(app, '/api/reports')[kind]('k1')
+        expect(answer, kind).toContain('ready')
+        expect(started, kind).toBe(2)
+      }
+    })
+
     it('keeps no secret when idempotency is wired by hand: the relay marks its own answer', async () => {
       const app = new Hono()
       const store = memoryGuardStore()

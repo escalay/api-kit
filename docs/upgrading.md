@@ -36,7 +36,8 @@ the version in `kit.json` up.
   once, and a key made by a tool is never answered twice. A relay of the app's own calls `neverKeep(c)` too.
 - `StoredAnswer` is now `ReplayedAnswer | ShownOnceAnswer`, each with `version: 2`. An answer without a version was
   kept whole by 1.30.0 and is never replayed: its request runs again, so one an old instance writes during a rolling
-  deploy, after the migration below, is never answered either. A custom `GuardStore` that keeps the answer as JSON
+  deploy, after the migration below, is never answered either (it still sits in `kit_guards` until it lapses, within
+  the day). A custom `GuardStore` that keeps the answer as JSON
   needs no change; one that copies known fields keeps `version` and `shownOnce` too, and should delete the answers
   it kept under 1.30.0 (they may hold a secret for a day).
 - The answers kept under 1.30.0 are dropped for you: the database store's next start runs a new migration step that
@@ -245,7 +246,8 @@ Nothing to do in any version recorded here.
 
 - `FORWARDED` adds `idempotency-key`: a tool's route gets the caller's key, so a retried `tools/call` runs the route
   once (through 1.30.0 a retry replayed the whole `/mcp` answer, a key made by a tool included). `mountMcp` never keeps
-  its own answer, on any path.
+  its own answer, on any path. `pollRun`'s call made again once a run is done goes without the key, so it gets the
+  result, not the 202 kept for it.
 
 ### 1.30.0
 
