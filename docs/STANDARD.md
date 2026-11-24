@@ -720,8 +720,10 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
   asker's page polls the app, then posts `complete` from the same browser: `ticketTtl`). The grant names the person let
   in as `approver` and binds the space with `complete`'s `resource`, even when the client asked for none. The default
   `accepts` takes a root token at every space, so only the owner's own sign-ins get the root.
-- **The browser's account is shown.** When the browser is already signed in to the app, the page names that account,
-  so nobody joins a space as whoever used the browser last.
+- **The app's page names who is signed in.** The kit passes `approve` the request and no account (`SignInAsk` has
+  none), so the app's page reads its own session from `c` and names the account this browser is signed in to, so
+  nobody joins a space as whoever used the browser last. The kit's own pages do the same: its consent page says
+  "as you (…)" and its claim page "You are signed in as …", both from `owner(c)`.
 - **Revocation is mirrored.** The app keeps a row per grant (who is in a space, their agents): made when `onGrant`
   says yes, dropped when `onRevoke` names the grant (every grant of a client on `client_revoked`), aged out by its
   last use (`revokeGrant` after 30 days). `accepts` refuses a token whose grant has no row, so removing a member
