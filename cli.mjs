@@ -481,6 +481,9 @@ const fieldsOf = (spec) =>
     if (!FIELD_TYPES[type]) fail(`${field}: a field is <name>:<type>, the type one of ${Object.keys(FIELD_TYPES).join(', ')}, and ? after it when it may be left out (notes:text?)`)
     if (OWN_FIELDS.includes(name)) fail(`${name} is the kit’s own field or flag: name it something else`)
     return { name, type, optional: Boolean(optional), ...FIELD_TYPES[type] }
+  }).map((field, index, fields) => {
+    if (fields.findIndex((other) => other.name === field.name) !== index) fail(`${field.name} is named twice: give each field its own name`)
+    return field
   })
 
 const snakeOf = (name) => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
@@ -497,7 +500,7 @@ const fieldVarsOf = (fields) => {
   return {
     __column_imports__: [...new Set(['sqliteTable', 'text', ...fields.map((field) => field.column('').split('(')[0])])].sort().join(', '),
     __columns__: fields.map((field) => `  ${field.name}: ${field.column(snakeOf(field.name))}${field.optional ? '' : '.notNull()'},`).join('\n'),
-    __sql_columns__: fields.map((field) => `${snakeOf(field.name)} ${field.sql}${field.optional ? '' : ' not null'}`).join(', '),
+    __sql_columns__: fields.map((field) => `"${snakeOf(field.name)}" ${field.sql}${field.optional ? '' : ' not null'}`).join(', '),
     __out_fields__: fields.map((field) => `${field.name}: ${field.out}${field.optional ? '.nullable()' : ''},`).join(' '),
     __in_fields__: fields.map((field) => `${field.name}: ${field.input}${field.optional ? '.optional()' : ''}.openapi({ description: 'Its ${snakeOf(field.name).replaceAll('_', ' ')}.', example: ${literal(field.made)} })`).join(', '),
     __tool_create_fields__: fields.map((field) => described(field, `${field.input}${field.optional ? '.optional()' : ''}`)).join(', '),
