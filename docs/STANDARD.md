@@ -221,9 +221,10 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   discovery documents keep the request's origin and an hour's public caching, as before. What is never cached publicly
   (HAL links, OpenAPI, the guide) keeps the request's origin either way.
   A registration no sign-in has used lives a week (its first code exchanged or device token collected gives it a
-  year), and unused registrations and open consent tickets are capped (10 000 each by default; past it the oldest
-  goes), so rows written without auth stay bounded; the database store prunes expired rows on a write, at most once a
-  minute. `limits` counts per address, read as §9 says: a named source counts IPv6 by its /64, while the default
+  year), and every kind of row written without auth is capped (registrations, client or agent, and claim tokens; open
+  consent tickets, claim attempts and device codes; 10 000 of each by default; past it the oldest unused goes, never a
+  client a live consent ticket waits on), so rows written without auth stay bounded; the database store prunes
+  expired rows on a write, at most once a minute, through an index on their expiry. `limits` counts per address, read as §9 says: a named source counts IPv6 by its /64, while the default
   `'headers'` read takes the address as sent, so a Workers app passes `address: { header: 'cf-connecting-ip' }`.
   Registration, `/agent/identity` and `/agent/identity/claim` (each call writes a claim attempt) 20 an hour
   together, device authorization 20 an hour, the sign-in page 60 a minute, token-endpoint misses 30 a minute,

@@ -765,14 +765,14 @@ describe('the copy-in CLI', () => {
       expect(JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).scripts).toMatchObject({ dev: 'tsx watch src/server.ts', 'dev:worker': 'wrangler dev', deploy: expect.stringContaining('wrangler d1 migrations apply DB --remote') })
       const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
       expect(migrations.status, migrations.stderr).toBe(0)
-      expect((await readdir(join(app, 'migrations'))).sort()).toEqual(['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_guards_1.sql', '0003_switches_1.sql', '0004_notes_1.sql', '0005_reading-lists_1.sql'])
+      expect((await readdir(join(app, 'migrations'))).sort()).toEqual(['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_oauth_2.sql', '0003_guards_1.sql', '0004_switches_1.sql', '0005_notes_1.sql', '0006_reading-lists_1.sql'])
       expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).stdout).toContain('current')
       // A database `migrate()` already brought up (local dev) takes the files without a duplicate record
       const { DatabaseSync } = await import('node:sqlite')
       const sqlite = new DatabaseSync(':memory:')
       await migrate(await openDb(sqlite), 'oauth', OAUTH_MIGRATIONS)
-      for (const file of ['0000_kit_migrations.sql', '0001_oauth_1.sql']) sqlite.exec(await readFile(join(app, 'migrations', file), 'utf8'))
-      expect(sqlite.prepare("select count(*) as n from kit_migrations where feature = 'oauth'").get()).toEqual({ n: 1 })
+      for (const file of ['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_oauth_2.sql']) sqlite.exec(await readFile(join(app, 'migrations', file), 'utf8'))
+      expect(sqlite.prepare("select count(*) as n from kit_migrations where feature = 'oauth'").get()).toEqual({ n: 2 })
       for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
         const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
         expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)

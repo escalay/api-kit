@@ -15,6 +15,8 @@ const ORIGIN = 'http://localhost'
 const REDIRECT = 'http://localhost:7777/cb'
 const now = () => Math.floor(Date.now() / 1000)
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
+/** A typed device code as the server keys it. */
+const userCodeKey = (typed: string) => sha(typed.toUpperCase().replace(/[^A-Z]/g, ''))
 
 export const form = (fields: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(fields).toString() })
 const json = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
@@ -160,6 +162,76 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       expect(await store.get(`${kind}-other`, 'x')).not.toBeNull()
       await store.trim!(kind, 0)
       expect(await live()).toEqual(['used', 'before'])
+    })
+
+    it('never trims a row that a live row of the holding kind names, and trims it once that row is gone', async () => {
+      const store = await make()
+      const kind = `capped-${crypto.randomUUID()}`
+      const holder = `${kind}-holder`
+      for (const id of ['old', 'mid', 'new']) await store.put(kind, id, { used: false }, now() + 600)
+      await store.put(holder, 'ticket', { holds: 'old', used: false }, now() + 600)
+      await store.put(holder, 'lapsed', { holds: 'mid', used: false }, now() - 1)
+      await store.trim!(kind, 1, holder)
+      expect(await Promise.all(['old', 'mid', 'new'].map(async (id) => Boolean(await store.get(kind, id))))).toEqual([true, false, true])
+      await store.delete(holder, 'ticket')
+      await store.trim!(kind, 1, holder)
+      expect(await store.get(kind, 'old')).toBeNull()
+    })
+
+    it('caps every row an unauthenticated caller writes: agent registrations, claim tokens and attempts, device codes', async () => {
+      const store = await make()
+      const { app } = await oauthApp(store, { maxUnusedClients: 2, maxUnusedTickets: 2 })
+      const agents = []
+      for (let n = 0; n < 3; n++) agents.push(await (await app.request('/agent/identity', json({ type: 'anonymous', client_name: `Agent ${n}` }))).json())
+      const kept = async (kind: string, ids: string[]) => Promise.all(ids.map(async (id) => Boolean(await store.get(kind, id))))
+      expect(await kept('registration', agents.map((agent) => agent.registration_id))).toEqual([false, true, true])
+      expect(await kept('claim-token', agents.map((agent) => sha(agent.claim_token)))).toEqual([false, true, true])
+
+      const attempts = []
+      for (let n = 0; n < 3; n++) attempts.push((await (await app.request('/agent/identity/claim', json({ claim_token: agents[2].claim_token, email: OWNER }))).json()).claim_attempt)
+      expect((await typeClaim(app, attempts[0])).status).toBe(410)
+      expect((await typeClaim(app, attempts[2])).status).toBe(200)
+
+      const device = 'urn:ietf:params:oauth:grant-type:device_code'
+      const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+      const codes = []
+      for (let n = 0; n < 3; n++) codes.push(await (await app.request('/oauth/device_authorization', form({ client_id }))).json())
+      const poll = (code: { device_code: string }) => app.request('/oauth/token', form({ grant_type: device, device_code: code.device_code, client_id }))
+      expect((await (await poll(codes[0])).json()).error).toBe('invalid_grant')
+      expect((await (await poll(codes[2])).json()).error).toBe('authorization_pending')
+      expect(await kept('device-user', codes.map((code) => userCodeKey(code.user_code)))).toEqual([false, true, true])
+    })
+
+    it('never evicts a claimed agent’s registration, so its identity assertion keeps working through a flood', async () => {
+      const { app } = await oauthApp(await make(), { maxUnusedClients: 1 })
+      const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
+      expect((await typeClaim(app, registration.claim)).status).toBe(200)
+      const flood = async () => {
+        for (let n = 0; n < 3; n++) await app.request('/agent/identity', json({ type: 'anonymous' }))
+      }
+      await flood()
+      const collected = await (await claimPoll(app, registration.claim_token)).json()
+      expect(collected.access_token).toBeTruthy()
+      await flood()
+      expect((await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: collected.identity_assertion }))).status).toBe(200)
+    })
+
+    it('never lets a registration flood evict a client whose invite page is open, and evicts it once the ticket lapses', async () => {
+      const store = await make()
+      const { app } = await joinApp(store, { maxUnusedClients: 1 })
+      const invited = await registered(app)
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(invited)}`)).text())
+      for (let n = 0; n < 3; n++) await registered(app)
+      expect(await store.get('client', invited)).not.toBeNull()
+      expect((await browser.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+
+      // A ticket that lapsed holds nothing: the next registration evicts its client
+      const waiting = await registered(app)
+      const lapsing = ticketIn(await (await browserOf(app).request(`/oauth/authorize?${authorizeQuery(waiting)}`)).text())
+      await store.put('consent', lapsing, (await store.get('consent', lapsing))!, now() - 1)
+      await registered(app)
+      expect(await store.get('client', waiting)).toBeNull()
     })
 
     // workers-oauth-provider #420; better-auth GHSA-7w99-5wm4-3g79; OAuth 2.1 §4.1.3

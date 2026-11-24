@@ -257,16 +257,33 @@ const oauth = createOAuth({
   after the lapse is refused, but a code approved in the last minutes of the week can still be exchanged after it (a
   code lives 10 minutes), and the lapsed client is not made again: that sign-in's tokens and refresh tokens work,
   while a new sign-in with that client_id meets the "add it again" page.
-- **Unused registrations are capped** (`maxUnusedClients`, default 10 000): past it, a new registration evicts the
-  oldest unused one, so the table stays bounded whatever the addresses. A used client, or one from before, is never
-  evicted. **Open consent tickets are capped the same way** (`maxUnusedTickets`, default 10 000): an answered ticket
-  takes no place. The cap needs the store's `trim` (`dbOAuthStore` and `memoryOAuthStore` have it); a store without it
-  is not capped. Both caps are whole numbers, 0 or more (`createOAuth` throws otherwise). The cap is soft under
-  concurrency: each write trims before it inserts, so requests that arrive together can all pass the trim and leave
-  the table over the cap by as many as were in flight, until the next write trims it back. Each capped write runs one
-  trim over its kind's unused rows; with `limits` off, nothing slows a flood of them, so an app whose sign-in is
-  reachable outside Access also passes `limits`.
-- **`dbOAuthStore` prunes expired rows** on a write, at most once a minute, besides when it is made.
+- **Every row anyone may write without auth is capped**, so the table stays bounded whatever the addresses: past its
+  cap, a new row evicts the oldest unused row of its kind (`maxUnusedClients` and `maxUnusedTickets`, default 10 000
+  each, whole numbers, 0 or more; `createOAuth` throws otherwise).
+
+| Kind | Written by | Cap |
+|---|---|---|
+| `client` | `POST /oauth/register` | `maxUnusedClients` |
+| `registration`, `claim-token` | `POST /agent/identity` | `maxUnusedClients`, each |
+| `consent` | `GET /oauth/authorize`, when a page holds the ticket | `maxUnusedTickets` |
+| `claim-attempt` | `POST /agent/identity` (`service_auth`), `POST /agent/identity/claim` | `maxUnusedTickets` |
+| `device`, `device-user` | `POST /oauth/device_authorization` | `maxUnusedTickets`, each |
+
+  Never evicted: a used client (a sign-in collected its first token), a claimed registration, a client a live
+  consent ticket holds (a page is waiting on a person: an invite, an ask to join), the claim token of a live
+  registration, an answered ticket, and a row from before the caps (no `used` flag). So the unused rows are at most
+  `maxUnusedClients` clients plus one per open ticket, `maxUnusedClients` registrations and as many claim tokens, and
+  `maxUnusedTickets` of each of the four waiting kinds; the rest follow an approval (claimed registrations, tokens,
+  refresh rows) or a signed-in person (device answers and tries). An approved device not yet collected (one poll,
+  seconds) and a claim code not yet typed can be evicted by a flood: the device or agent starts again. The cap needs
+  the store's `trim` (`dbOAuthStore` and `memoryOAuthStore` have it, with its `heldBy`); a store without it is not
+  capped. The cap is soft under concurrency: each write trims before it inserts, so requests that arrive together can
+  all pass the trim and leave the table over the cap by as many as were in flight, until the next write trims it
+  back. Each capped write first counts its kind by key (the primary key, no JSON read), and only a kind over its cap is
+  scanned; with `limits` off nothing slows a flood, so an app whose sign-in is reachable outside Access also passes
+  `limits`.
+- **`dbOAuthStore` prunes expired rows** on a write, at most once a minute, besides when it is made, through an index
+  on `expires_at` (`OAUTH_MIGRATIONS` step 2).
 - **`limits`** (default `false`: none) counts per address, read by `addressOf` from `address` (default the app's
   `createAgentApi({ address })`). A named source counts a global IPv6 address by its /64; with none named, the
   `'headers'` read takes the address as sent, each IPv6 address on its own. Past a limit: 429 with `Retry-After` (JSON
@@ -328,7 +345,7 @@ a write there could reset a successor already used.
 | `index.ts` | `createOAuth` (the server; `revokeClient` is the owner's kill switch; `rootOf`, `resourceOf` and `mcpPath` as it reads them; `ticketOf`, `answeredOf` and `complete` for the app's own sign-in page), `generateOAuthKey` (a new signing key) |
 | `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`; the ticket cookie and the same-origin rule |
 | `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take`, `markUsed` and `trim`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start, then on a write at most once a minute), `memoryOAuthStore` |
-| `schema.ts` | the `oauth` table and `OAUTH_MIGRATIONS` |
+| `schema.ts` | the `oauth` table, its `expires_at` index, and `OAUTH_MIGRATIONS` |
 
 ## Rules
 
@@ -463,3 +480,15 @@ the store's `trim`. Defaults that change when an app takes this version:
 - `dbOAuthStore` prunes expired rows while it runs, at most once a minute.
 
 Nothing else changes until the app passes `publicOrigin` or `limits`.
+
+## Upgrading to sharing
+
+New, off unless set: nothing yet. Defaults that change when an app takes this version:
+
+- **Every row anyone may write without auth is capped** (before, only registrations and consent tickets): agent
+  registrations and their claim tokens under `maxUnusedClients`, claim attempts and device codes under
+  `maxUnusedTickets`. A client a live consent ticket holds is no longer evicted by the client cap. A store of the app's
+  own with a `trim` gets a third argument, `heldBy`, which it may ignore (it then evicts a held client as before).
+- **`OAUTH_MIGRATIONS` has a step 2**, an index on `expires_at`: `dbOAuthStore` applies it when made; a Workers app
+  runs `pnpm migrations` (`scripts/migrations.ts`) to write its D1 file. It is `create index if not exists`, so a
+  database `migrate()` already brought up takes the file cleanly.

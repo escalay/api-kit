@@ -330,12 +330,30 @@ export const createOAuth = (config: OAuthConfig) => {
     return value
   }
 
+  const maxClients = config.maxUnusedClients ?? MAX_UNUSED
+  const maxTickets = config.maxUnusedTickets ?? MAX_UNUSED
   /**
-   * Writes a row that waits to be used (a registration, a ticket), evicting the oldest unused past `max` first, so the
-   * table stays bounded whoever writes. Before the write: rows written in the same second tie, and the new one never goes.
+   * Every kind of row anyone may write without auth, and its cap: registrations under one, codes waiting for a person
+   * under the other. `heldBy`: the kind whose live rows hold one of these (`holds`), so it is never evicted under them.
    */
-  const putUnused = async (kind: string, id: string, value: Record<string, unknown>, expiresAt: number, max = MAX_UNUSED) => {
-    await store.trim?.(kind, Math.max(0, max - 1))
+  const CAPS = {
+    client: { max: maxClients, heldBy: 'consent' },
+    registration: { max: maxClients },
+    'claim-token': { max: maxClients, heldBy: 'registration' },
+    consent: { max: maxTickets },
+    'claim-attempt': { max: maxTickets },
+    device: { max: maxTickets },
+    'device-user': { max: maxTickets },
+  } satisfies Record<string, { max: number; heldBy?: string }>
+
+  /**
+   * Writes a row that waits to be used, evicting the oldest unused of its kind past its cap first, so the table stays
+   * bounded whoever writes. A client a live consent ticket `holds` is never evicted. Before the write: rows written in
+   * the same second tie, and the new one never goes.
+   */
+  const putUnused = async (kind: keyof typeof CAPS, id: string, value: Record<string, unknown>, expiresAt: number) => {
+    const cap: { max: number; heldBy?: string } = CAPS[kind]
+    await store.trim?.(kind, Math.max(0, cap.max - 1), cap.heldBy)
     await store.put(kind, id, { ...value, used: false }, expiresAt)
   }
 
@@ -742,7 +760,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const clientId = token('client')
       const issuedAt = now()
       // Unused until a sign-in collects its first token: a week's life, and a place under the cap
-      await putUnused('client', clientId, { name, redirectUris: uris }, issuedAt + UNUSED_CLIENT_TTL, config.maxUnusedClients)
+      await putUnused('client', clientId, { name, redirectUris: uris }, issuedAt + UNUSED_CLIENT_TTL)
       const grantTypes = [...(uris.length ? ['authorization_code'] : []), 'refresh_token', ...(device ? [DEVICE_GRANT] : [])]
       return c.json({ client_id: clientId, client_id_issued_at: issuedAt, client_name: name, redirect_uris: uris, grant_types: grantTypes, response_types: uris.length ? ['code'] : [], token_endpoint_auth_method: 'none' }, 201, { 'cache-control': 'no-store' })
     })
@@ -767,7 +785,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const nonce = nonceOf(c, issuerOf(c)) ?? newNonce()
       const ticket = token('consent')
       const expiresAt = now() + CODE_TTL
-      const row = { params, nonce: sha(nonce), arrival: arrivalOf(c), expiresAt }
+      // It holds its client while it lives: a flood of registrations never evicts a client a person is about to approve
+      const row = { params, nonce: sha(nonce), arrival: arrivalOf(c), expiresAt, holds: params.client_id }
       const bindTo = (page: Response) => {
         const bound = new Response(page.body, page)
         bound.headers.append('set-cookie', ticketCookie(c, nonce, CODE_TTL, issuerOf(c)))
@@ -777,15 +796,15 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
         // Stored only once a page holds the ticket: a stranger turned away leaves no row behind
         const own = await config.approve(c, askOf(ticket, row, checked, bound.audience))
         if (own) {
-          await putUnused('consent', ticket, row, expiresAt, config.maxUnusedTickets)
+          await putUnused('consent', ticket, row, expiresAt)
           return bindTo(own)
         }
         const person = await config.owner(c)
         if (!person) return signInFirst(c)
-        await putUnused('consent', ticket, { ...row, owner: person }, expiresAt, config.maxUnusedTickets)
+        await putUnused('consent', ticket, { ...row, owner: person }, expiresAt)
         return bindTo(consentPage(c, ticket, checked, person, bound.audience, params.redirect_uri!))
       }
-      await putUnused('consent', ticket, { ...row, owner }, expiresAt, config.maxUnusedTickets)
+      await putUnused('consent', ticket, { ...row, owner }, expiresAt)
       return bindTo(consentPage(c, ticket, checked, owner!, bound.audience, params.redirect_uri!))
     })
 
@@ -810,8 +829,9 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const expires = now() + REGISTRATION_TTL
       const name = typeof body.client_name === 'string' && body.client_name.trim() ? body.client_name.trim().slice(0, 80) : `Agent ${registrationId.slice(4, 10)}`
       // Its grant from the start, so approvals racing for it can't write two; it names no resource, so it gets the root
-      await store.put('registration', registrationId, { name, type: body.type, claimed: false, email: body.login_hint ?? null, family: newGrant(), audience: rootOf(c), resource: null }, expires)
-      await store.put('claim-token', sha(claimToken), { registration: registrationId }, expires)
+      // It holds its claim token: an agent its owner approved can always collect
+      await putUnused('registration', registrationId, { name, type: body.type, claimed: false, email: body.login_hint ?? null, family: newGrant(), audience: rootOf(c), resource: null, holds: sha(claimToken) }, expires)
+      await putUnused('claim-token', sha(claimToken), { registration: registrationId }, expires)
       const assertion = await sign({ sub: registrationId, typ: 'agent_identity' }, REGISTRATION_TTL, origin)
       const base = { registration_id: registrationId, registration_type: body.type, claim_url: `${origin}/agent/identity/claim`, claim_token: claimToken, claim_token_expires: new Date(expires * 1000).toISOString(), post_claim_scopes: [...SCOPES] }
       if (body.type === 'anonymous') return c.json({ ...base, identity_assertion: assertion, assertion_expires: new Date(expires * 1000).toISOString(), pre_claim_scopes: [] }, 200, { 'cache-control': 'no-store' })
@@ -821,7 +841,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     const startClaim = async (origin: string, registrationId: string, email: string) => {
       const userCode = String(randomInt(0, 1_000_000)).padStart(6, '0')
       const attempt = token('cla')
-      await store.put('claim-attempt', sha(attempt), { registration: registrationId, email: email.toLowerCase(), code: sha(userCode), tries: 0 }, now() + CLAIM_TTL)
+      await putUnused('claim-attempt', sha(attempt), { registration: registrationId, email: email.toLowerCase(), code: sha(userCode), tries: 0 }, now() + CLAIM_TTL)
       return { user_code: userCode, expires_in: CLAIM_TTL, verification_uri: `${origin}/oauth/claim?claim_attempt_token=${attempt}`, interval: 5 }
     }
 
@@ -875,7 +895,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if (registration.claimed) return c.html(page(c, 'Already approved', `<h1>Already approved</h1><p>${escape(String(registration.name))} was approved already; this code is spent. You can close this page.</p>`), 409)
       // One grant for the claim: its claim, refresh and jwt-bearer tokens all carry it (made at registration; older rows get one here)
       // The audience came with the grant at registration: one registered before audiences stays without
-      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: registration.family ?? newGrant() }, now() + REGISTRATION_TTL)
+      // Claimed, it is in use: no cap evicts it while its agent's tokens need it
+      await store.put('registration', String(attempt.registration), { ...registration, claimed: true, owner, family: registration.family ?? newGrant(), used: true }, now() + REGISTRATION_TTL)
       return c.html(page(c, 'Approved', `<h1>Approved</h1><p>${escape(String(registration.name))} can now use ${escape(config.name)}. You can close this page.</p>`))
     })
 
@@ -895,8 +916,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       while (await store.get('device-user', userCodeKey(userCode))) userCode = deviceUserCode()
       const expiresAt = now() + DEVICE_TTL
       // Kept a window past its expiry, so a late poll hears expired_token rather than an unknown code
-      await store.put('device', sha(deviceCode), { client: body.client_id!, name: String(client.name), scopes, ...bound, expiresAt, interval: DEVICE_INTERVAL, polledAt: 0 }, expiresAt + DEVICE_TTL)
-      await store.put('device-user', userCodeKey(userCode), { device: sha(deviceCode) }, expiresAt)
+      await putUnused('device', sha(deviceCode), { client: body.client_id!, name: String(client.name), scopes, ...bound, expiresAt, interval: DEVICE_INTERVAL, polledAt: 0 }, expiresAt + DEVICE_TTL)
+      await putUnused('device-user', userCodeKey(userCode), { device: sha(deviceCode) }, expiresAt)
       return c.json(
         { device_code: deviceCode, user_code: userCode, verification_uri: `${origin}/oauth/device`, verification_uri_complete: `${origin}/oauth/device?user_code=${userCode}`, expires_in: DEVICE_TTL, interval: DEVICE_INTERVAL },
         200,

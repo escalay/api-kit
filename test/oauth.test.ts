@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { SignJWT, decodeJwt, importJWK } from 'jose'
 import { count, eq } from 'drizzle-orm'
 import type { Context } from 'hono'
-import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryGuardStore, memoryOAuthStore, memoryStore, oauthKeys, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, serveGuide, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
+import { createAgentApi, createBrand, createOAuth, defineBrand, generateOAuthKey, matches, memoryGuardStore, memoryOAuthStore, memoryStore, OAUTH_MIGRATIONS, oauthKeys, originOf, parseApiKeys, dbOAuthStore, openDb, rateLimit, serveGuide, testDb, type OAuthStore, type SignInAsk } from '../src/index.js'
 import { ASSETS, cookbookApi } from './brand-fixture.js'
 import { approveSignIn } from '../src/testing/index.js'
 import { approvedCode, audOf, authorizeQuery, browserOf, callerWith, formWithTwoResources, joinApp, oauthApp, oauthStoreContract, refreshWith, registered, signedIn, ticketIn, typeClaim } from './oauth-store-contract.js'
@@ -1702,5 +1702,31 @@ describe('OAuth store in the database', () => {
     expect(await restarted.get('code', 'old')).toBeNull()
     expect(await restarted.get('client', 'c2')).toBeNull()
     expect(new DatabaseSync(file).prepare('select count(*) as n from oauth').get()).toEqual({ n: 1 })
+  })
+
+  it('indexes expiry, also in a database 1.29.0 made, whose rows still read', async () => {
+    const file = join(await mkdtemp(join(tmpdir(), 'oauth-')), 'state.sqlite')
+    const before = new DatabaseSync(file)
+    before.exec("create table kit_migrations (feature text not null, step integer not null, applied_at text not null, primary key (feature, step)); insert into kit_migrations values ('oauth', 1, '2026-11-23')")
+    before.exec(OAUTH_MIGRATIONS[0])
+    before.prepare('insert into oauth values (?, ?, ?, ?)').run('client', 'client_before', JSON.stringify({ name: 'Before', redirectUris: [] }), Math.floor(Date.now() / 1000) + 3600)
+    const store = await dbOAuthStore(await openDb(`file:${file}`))
+    expect(await store.get('client', 'client_before')).toEqual({ name: 'Before', redirectUris: [] })
+    const plan = new DatabaseSync(file).prepare('explain query plan delete from oauth where expires_at <= ?').all(0)
+    expect(JSON.stringify(plan)).toContain('oauth_expires_at')
+  })
+
+  it('reads no row’s JSON to trim a kind that is within its cap', async () => {
+    const sqlite = new DatabaseSync(':memory:')
+    const asked: string[] = []
+    const watched = { exec: (query: string) => sqlite.exec(query), prepare: (query: string) => (asked.push(query), sqlite.prepare(query)) }
+    const store = await dbOAuthStore(await openDb(watched as unknown as DatabaseSync))
+    for (const id of ['a', 'b']) await store.put('client', id, { used: false }, Math.floor(Date.now() / 1000) + 600)
+    asked.length = 0
+    await store.trim!('client', 5)
+    expect(asked.filter((query) => query.includes('json_extract'))).toEqual([])
+    await store.trim!('client', 1)
+    expect(asked.filter((query) => query.includes('json_extract')).length).toBeGreaterThan(0)
+    expect(await store.get('client', 'a')).toBeNull()
   })
 })
