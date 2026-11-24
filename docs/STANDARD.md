@@ -172,7 +172,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   an `approve` hook, `/oauth/authorize` may bypass Access: the app's page decides (an invite, an ask to join), and the
   grant follows only a same-origin POST from the browser that opened it (`complete`), once; nothing is granted without
   a click, and a stored approval never stands in for one. Each ticket is bound to its browser by an HttpOnly,
-  SameSite=Lax nonce cookie (`__Host-oauth_ticket` on https, 10 minutes, renewed and reused by a second sign-in), and
+  SameSite=Lax nonce cookie (`__Host-oauth_ticket` on https, living as long as the ticket: `ticketTtl`, 10 minutes by default, so an app that decides later, an ask to join, keeps it waiting up to a week; renewed and reused by a second sign-in), and
   answered once: posted again from that browser it is a page saying it went through, from another "expired". With
   `approve` set, `/oauth/authorize` never redirects before a person acts: every error is a page. Every approval POST
   (`complete`, the kit's consent, claim and device pages) needs `Sec-Fetch-Site: same-origin`, or with none an

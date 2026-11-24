@@ -182,14 +182,14 @@ app.post('/join', async (c) => {
   client and approver signing in again see the page again.
 - **The ticket is bound to the browser.** Every `GET /oauth/authorize` that stores a ticket sets an HttpOnly,
   SameSite=Lax nonce cookie, `__Host-oauth_ticket` on https (`oauth_ticket` on http; on https only the `__Host-` name is
-  read), Path `/`, Max-Age 600. A live one is reused and its Max-Age renewed, so a second sign-in in the same browser
+  read), Path `/`, Max-Age `ticketTtl` (600 by default). A live one is reused and its Max-Age renewed, so a second sign-in in the same browser
   neither breaks the first nor shortens the second. The ticket keeps only the nonce's SHA-256.
 - **Same-origin, not same-site.** `complete`, the kit's consent POST, `/oauth/claim` and `/oauth/device` take a POST
   only with `Sec-Fetch-Site: same-origin`, or, with no such header, an `Origin` equal to the issuer's. A missing
   header with no matching `Origin` is refused (403), and so is `same-site`: a sibling host is same-site. `Origin: null`
   never matches; the kit's pages set their referrer policy to `same-origin` so a browser sends the real one.
-- **A ticket is answered once.** It is marked used and kept, its nonce hash and the answer only, until its 10 minutes
-  end. Posted again from the browser that answered it (a double click, a tab brought back), it is a page that says the
+- **A ticket is answered once.** It is marked used and kept, its nonce hash and the answer only, until its life
+  (`ticketTtl`) ends. Posted again from the browser that answered it (a double click, a tab brought back), it is a page that says the
   sign-in went through ("Already approved") or was refused, with no code and no redirect; from another browser it is
   "This approval expired".
 - **With `approve` set, `/oauth/authorize` never redirects before a person acts:** every error (an unknown client, a
@@ -212,6 +212,23 @@ app.post('/join', async (c) => {
   returns: a host, or "an app on this computer" for a loopback or app-scheme redirect.
 - Rules after cloudflare/workers-oauth-provider (the browser-bound, single-use consent ticket; never redirect before
   the redirect is checked) and oidc-provider (the grant is saved before the code exists), both MIT.
+
+### Deciding later (`ticketTtl`)
+
+An ask to join waits for the owner, who may answer in hours. A ticket lives `ticketTtl` seconds (default 600, whole,
+from 60 to a week; `createOAuth` throws otherwise), and so does the nonce cookie that binds it to the asker's browser:
+
+1. `approve` records the ask in the app's own table (`ask.ticket`, the client, who is asking) and answers a waiting
+   page holding the ticket in a form, as any approval page does.
+2. The owner decides on the app's own screen, later; the app writes the decision against the ticket.
+3. The waiting page polls an app route for the decision (a GET with the ticket), and once there is one it submits its
+   form: a same-origin POST from the browser that opened the ticket, which the app answers with
+   `oauth.complete(c, ticket, decision)`, and the browser follows the 302 back to the client.
+
+Nothing else changes: `complete` still needs the browser that opened the ticket, a same-origin POST, once. A fetch
+that follows the 302 itself would not take the browser back to the client, so the page submits the form. A decision
+made after the ticket's life finds it expired (the page says to start again from the app), and a ticket can't
+outlive its client: an unused registration lapses a week after it was made. `test/oauth.test.ts` runs this pattern.
 
 In tests, `approveSignIn(app, query, { headers })` from the `testing` part approves on the kit's page the way a
 browser does: it opens the page, keeps its ticket cookie, and posts same-origin.
@@ -483,7 +500,7 @@ Nothing else changes until the app passes `publicOrigin` or `limits`.
 
 ## Upgrading to sharing
 
-New, off unless set: nothing yet. Defaults that change when an app takes this version:
+New, off unless set: `ticketTtl` (default 600, as before). Defaults that change when an app takes this version:
 
 - **Every row anyone may write without auth is capped** (before, only registrations and consent tickets): agent
   registrations and their claim tokens under `maxUnusedClients`, claim attempts and device codes under

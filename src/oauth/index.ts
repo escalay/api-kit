@@ -133,6 +133,14 @@ export type OAuthConfig = {
   maxUnusedClients?: number
   /** Consent tickets stored and not yet answered, kept at most (a whole number, default 10 000): past it a new one evicts the oldest. */
   maxUnusedTickets?: number
+  /**
+   * Seconds a consent ticket lives, and its browser's nonce cookie: whole, from 60 to a week (default 600). Longer for
+   * an app that decides later (an ask to join the owner answers in hours): its page waits, then posts `complete`.
+   *
+   * @example
+   * ticketTtl: 24 * 3600   // the owner has a day to answer an ask to join
+   */
+  ticketTtl?: number
   /** Extra fields for the authorization server metadata, e.g. `poppy_domains`. */
   metadata?: Record<string, unknown>
   /**
@@ -277,6 +285,9 @@ export const createOAuth = (config: OAuthConfig) => {
     const max = config[cap]
     if (max !== undefined && !(Number.isSafeInteger(max) && max >= 0)) throw new Error(`createOAuth: ${cap} must be a whole number of rows, 0 or more, not ${max}.`)
   }
+  const ticketTtl = config.ticketTtl ?? CODE_TTL
+  // Never past a week: an unused client lapses then, and its ticket can no longer be answered
+  if (!(Number.isSafeInteger(ticketTtl) && ticketTtl >= 60 && ticketTtl <= UNUSED_CLIENT_TTL)) throw new Error(`createOAuth: ticketTtl must be whole seconds from 60 to a week (604800), not ${config.ticketTtl}.`)
   /** The issuer's origin: `publicOrigin`, else the request's own. */
   const issuerOf = (c: Context) => publicOrigin ?? originOf(c)
   const jwk = JSON.parse(config.signingKey) as JWK
@@ -784,12 +795,12 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       // One nonce binds every ticket this browser opens: reused while it lives, its life renewed
       const nonce = nonceOf(c, issuerOf(c)) ?? newNonce()
       const ticket = token('consent')
-      const expiresAt = now() + CODE_TTL
+      const expiresAt = now() + ticketTtl
       // It holds its client while it lives: a flood of registrations never evicts a client a person is about to approve
       const row = { params, nonce: sha(nonce), arrival: arrivalOf(c), expiresAt, holds: params.client_id }
       const bindTo = (page: Response) => {
         const bound = new Response(page.body, page)
-        bound.headers.append('set-cookie', ticketCookie(c, nonce, CODE_TTL, issuerOf(c)))
+        bound.headers.append('set-cookie', ticketCookie(c, nonce, ticketTtl, issuerOf(c)))
         return bound
       }
       if (config.approve) {

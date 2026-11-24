@@ -1216,6 +1216,60 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     expect(new URL((await browser.post('/oauth/authorize', { ticket: ticketIn(await secondPage.text()), decision: 'allow' })).headers.get('location')!).searchParams.get('state')).toBe('two')
   })
 
+  it('lets an app decide a sign-in later: the ticket lives ticketTtl, and the asker’s browser completes it once decided', async () => {
+    let at = Date.now()
+    vi.useFakeTimers({ toFake: ['Date'], now: at })
+    // The app's own table: each waiting ask, and who approved it once the owner decided
+    const decisions = new Map<string, { approver?: string }>()
+    const { app, oauth } = await oauthApp(memoryOAuthStore(), {
+      ticketTtl: 24 * 3600,
+      approve: async (c, ask) => (decisions.set(ask.ticket, {}), c.html(`<p>Waiting for the owner.</p><form method="post" action="/join/finish"><input type="hidden" name="ticket" value="${ask.ticket}"></form>`)),
+    }, { open: ['/join/status', '/join/finish'] })
+    // The waiting page polls the status, then submits its form from the asker's browser once the owner decided
+    app.get('/join/status', (c) => c.json({ decided: Boolean(decisions.get(c.req.query('ticket') ?? '')?.approver) }))
+    app.post('/join/finish', async (c) => {
+      const ticket = String((await c.req.parseBody()).ticket ?? '')
+      const approver = decisions.get(ticket)?.approver
+      return approver ? oauth.complete(c, ticket, { approver }) : c.html('<p>Still waiting for the owner.</p>', 409)
+    })
+    const client_id = await registered(app)
+    const browser = browserOf(app)
+    const page = await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)
+    expect(cookieOf(page)).toContain('Max-Age=86400')
+    const ticket = ticketIn(await page.text())
+    expect(await (await browser.request(`/join/status?ticket=${ticket}`)).json()).toEqual({ decided: false })
+    expect((await browser.post('/join/finish', { ticket })).status).toBe(409)
+    // The owner decides three hours later
+    vi.setSystemTime((at += 3 * 3600 * 1000))
+    decisions.set(ticket, { approver: OWNER })
+    expect(await (await browser.request(`/join/status?ticket=${ticket}`)).json()).toEqual({ decided: true })
+    const done = await browser.post('/join/finish', { ticket })
+    expect(new URL(done.headers.get('location')!).searchParams.get('code')).toBeTruthy()
+    expect((await exchangeAt(app, done.headers.get('location'), client_id)).status).toBe(200)
+
+    // Past its life, a decision comes too late
+    const late = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+    vi.setSystemTime((at += 24 * 3600 * 1000 + 1000))
+    decisions.set(late, { approver: OWNER })
+    const expired = await browser.post('/join/finish', { ticket: late })
+    expect([expired.status, expired.headers.get('location'), await expired.text()]).toEqual([400, null, expect.stringContaining('This approval expired')])
+
+    // Without ticketTtl, ten minutes as before
+    const { app: plain } = await joinApp(memoryOAuthStore())
+    const owner = browserOf(plain)
+    const opened = await owner.request(`/oauth/authorize?${authorizeQuery(await registered(plain))}`)
+    expect(cookieOf(opened)).toContain('Max-Age=600')
+    const short = ticketIn(await opened.text())
+    vi.setSystemTime((at += 601 * 1000))
+    expect(await (await owner.post('/join', { ticket: short, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+  })
+
+  it('takes a ticket life of a minute to a week, in whole seconds', async () => {
+    const keyed = { name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null }
+    for (const wrong of [0, 59, 1.5, Number.NaN, 7 * 24 * 3600 + 1]) expect(() => createOAuth({ ...keyed, ticketTtl: wrong }), String(wrong)).toThrow(/ticketTtl/)
+    for (const right of [60, 7 * 24 * 3600]) expect(() => createOAuth({ ...keyed, ticketTtl: right })).not.toThrow()
+  })
+
   it('refuses a claim or device approval posted with no Sec-Fetch-Site and no matching Origin', async () => {
     const { app } = await oauthApp(memoryOAuthStore())
     const registration = await (await app.request('/agent/identity', json({ type: 'service_auth', login_hint: OWNER, client_name: 'Night shift' }))).json()
