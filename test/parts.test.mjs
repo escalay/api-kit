@@ -41,6 +41,12 @@ describe('docs/PARTS.md, the map of the parts', () => {
     }
   })
 
+  it('never says in a goal’s note that a part in the registry is missing', () => {
+    for (const goal of GOALS) {
+      for (const name of names) expect(goal.note ?? '', `${goal.goal}: ${name}`).not.toContain(`no ${name} part`)
+    }
+  })
+
   it('reads the starter’s parts from cli.mjs, the list `init` copies', () => {
     expect(starterParts(read('cli.mjs'))).toEqual(['core', 'db', 'oauth', 'pagination', 'guide', 'mcp', 'brand', 'switches', 'testing'])
   })

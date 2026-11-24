@@ -35,7 +35,7 @@ export const GOALS = [
   { goal: 'One brand on every surface', parts: ['brand'], note: 'then `npx @escalay/kit brand` renders it' },
   { goal: 'Other agents delegate through A2A', parts: ['a2a'] },
   { goal: 'A public front page and the browser app under `/app`, on Node', parts: ['web'] },
-  { goal: 'Sharing: invites to a space, asks to join, the owner’s approval', parts: ['oauth', 'people'], note: 'no sharing part yet: build it on oauth’s `approve`, `complete` with `resource`, `holdTicket`, `onGrant` and `onRevoke` (oauth README)' },
+  { goal: 'Sharing: invites to a space, asks to join, the owner’s approval', parts: ['oauth', 'people'], note: 'the sharing part is being built: until its README says it wires into `createOAuth`, build on oauth’s `approve`, `complete` with `resource`, `holdTicket`, `onGrant` and `onRevoke` (oauth README)' },
 ]
 
 /**

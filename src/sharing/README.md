@@ -1,6 +1,6 @@
 # sharing
 
-Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), asks to join, and the owner's approval, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite, by ask or by the owner's approval. The part is being built in steps; so far it holds its tables, the only queries over them, the named states of its rows and its secrets, and nothing is wired into an app yet.
+Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), asks to join, and the owner's approval, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite, by ask or by the owner's approval. The part is being built in steps; so far it holds its tables, the only queries over them, the named states of its rows and its secrets, and nothing is wired into an app yet: until this README says it wires into `createOAuth`, an app that needs sharing builds it on oauth's `approve`, `complete` with `resource`, `holdTicket`, `onGrant` and `onRevoke`, keeping `docs/STANDARD.md` §23.
 
 ## Use it when
 
@@ -11,8 +11,6 @@ Invites to a **space** (the part of an app that is shared: a shelf, a board, a p
 
 - Only the owner and their own agents sign in: the oauth part alone does that (`src/kit/oauth/README.md`).
 - A whole team reaches the whole app: the people part (members through Cloudflare Access, with roles).
-- Until the part's routes, pages and hooks land, an app that needs sharing now builds it on oauth's `approve`,
-  `complete` with `resource`, `holdTicket`, `onGrant` and `onRevoke`, keeping `docs/STANDARD.md` §23.
 
 ## Add it
 
