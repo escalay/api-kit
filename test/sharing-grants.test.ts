@@ -17,11 +17,11 @@ const ONLY_ITS_SPACE = 'This sign-in works only at its own space: connect again 
 describe('the space addresses', () => {
   it('are issued for by a pure check of the path: one plain name between the address’s two halves (probe T6)', async () => {
     const { sharing } = await box()
-    const issued = ['/s/soups/mcp', '/s/bakes/mcp', '/s/a-1/mcp', '/s/Soups/mcp', '/s/%73oups/mcp', '/s/soups%2Fx/mcp', '/s/../mcp', '/s/-soups/mcp', '/s//mcp', '/s/soups/mcp/x', '/s/soups', '/mcp', ''].map((path) => [path, sharing.oauth.resources(path)])
+    const issued = ['/s/soups/mcp', '/s/bakes/mcp', '/s/a-1/mcp', '/s/Soups/mcp', '/s/%73oups/mcp', '/s/soups%2Fx/mcp', '/s/../mcp', '/s/-soups/mcp', '/s//mcp', '/s/soups/mcp/x', '/s/soups/mcp/', '/s/soups', '/mcp', ''].map((path) => [path, sharing.oauth.resources(path)])
     expect(issued).toEqual([
       ['/s/soups/mcp', true], ['/s/bakes/mcp', true], ['/s/a-1/mcp', true],
       ['/s/Soups/mcp', false], ['/s/%73oups/mcp', false], ['/s/soups%2Fx/mcp', false], ['/s/../mcp', false], ['/s/-soups/mcp', false], ['/s//mcp', false],
-      ['/s/soups/mcp/x', false], ['/s/soups', false], ['/mcp', false], ['', false],
+      ['/s/soups/mcp/x', false], ['/s/soups/mcp/', false], ['/s/soups', false], ['/mcp', false], ['', false],
     ])
     const moved = await createSharing({ db: await testDb(), secret: 'a sharing secret of thirty-two bytes or more, for tests only', spaces: { byName: async () => null, byId: async () => null }, owner: async () => null, resourcePath: '/box/{space}/tools/mcp' })
     expect([moved.oauth.resources('/box/soups/tools/mcp'), moved.oauth.resources('/box/soups/mcp'), moved.oauth.resources('/s/soups/mcp')]).toEqual([true, false, false])
@@ -266,11 +266,25 @@ describe('accepts', () => {
     for (const [path, status, sentence] of refused) expect([path, status, sentence]).toEqual([path, 401, ONLY_ITS_SPACE])
   })
 
-  it('judges the path the router serves: an encoded name is its space, a cased, dotted or slashed one is not (probe T6)', async () => {
-    const { makeInvite, join, call } = await box()
+  it('judges the path the router serves, for all seven paths of probe T6: an encoded name is its space, a cased, slashed or dotted one is not', async () => {
+    const { makeInvite, join, call, byKey } = await box()
     const token = (await join(await makeInvite())).tokens.access_token
-    const statuses = await Promise.all(['/s/%73oups/mcp', '/s/Soups/mcp', '/s/soups%2Fx/mcp', '/s/%2e%2e/mcp', '/s/soups/../bakes/mcp'].map(async (path) => [path, (await call(path, token)).status]))
-    expect(statuses).toEqual([['/s/%73oups/mcp', 200], ['/s/Soups/mcp', 401], ['/s/soups%2Fx/mcp', 401], ['/s/%2e%2e/mcp', 401], ['/s/soups/../bakes/mcp', 401]])
+    const seen = async (answer: Response) => (answer.status === 200 ? ((await answer.json()) as { path: string }).path : null)
+    // Probe T6 as written: what the route sees with the owner's key, then what a Soups member's token gets there
+    const probed = await Promise.all(['/s/soups/mcp', '/s/%73oups/mcp', '/s/Soups/mcp', '/s/soups/mcp/', '/s/soups%2Fx/mcp', '/s/soups/../bakes/mcp', '/s/%2e%2e/mcp'].map(async (path) => {
+      const member = await call(path, token)
+      return [path, await seen(await byKey(path)), member.status, refusalOf(member)]
+    }))
+    expect(probed).toEqual([
+      ['/s/soups/mcp', '/s/soups/mcp', 200, null],
+      ['/s/%73oups/mcp', '/s/soups/mcp', 200, null],
+      ['/s/Soups/mcp', '/s/Soups/mcp', 401, ONLY_ITS_SPACE],
+      // Below its own space's address the member passes, and no route answers
+      ['/s/soups/mcp/', null, 404, null],
+      ['/s/soups%2Fx/mcp', '/s/soups%2Fx/mcp', 401, ONLY_ITS_SPACE],
+      ['/s/soups/../bakes/mcp', '/s/bakes/mcp', 401, ONLY_ITS_SPACE],
+      ['/s/%2e%2e/mcp', '/mcp', 401, ONLY_ITS_SPACE],
+    ])
   })
 
   it('follows a renamed space by its id, and refuses its old name even once another space takes it', async () => {
