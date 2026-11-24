@@ -525,11 +525,11 @@ A product people deploy for themselves may report its use once a day (`telemetry
 - The report holds **coarse ranges and booleans, never ids or text**: counts as `0`, `1-10`, `11-100`, `101-1k`,
   `1k-10k`, `10k+` (`countRange`), days as `0`, `1-7`, `8-30`, `31-90`, `91-365`, `365+` (`dayRange`). Anything else
   is dropped before sending.
-- Off when `DO_NOT_TRACK=1` or `TELEMETRY=off` is set, or the owner switched it off (`PATCH /api/telemetry`
+- Off when `DO_NOT_TRACK=1` or `TELEMETRY=off` (`false`, `0`) is set, or the owner switched it off (`PATCH /api/telemetry`
   `{ enabled }`, owner only). `GET /api/telemetry` shows whether it is on, why, and exactly the body it would send;
   agents get it as `get_telemetry`.
 - It runs from the app's scheduled handler (`sendDaily`), is tried at most once a day even when the collector is
-  down, and never throws into the app. The collector may answer `{ "latest": "<version>" }`; the app keeps and shows it.
+  down or several instances run it, and never throws into the app. The collector may answer `{ "latest": "<version>" }`; the app keeps and shows it.
 - The product's README and setup say that it reports, what, and how to switch it off.
 
 ## 19. The command line
