@@ -10,10 +10,8 @@ the set in this repo, a **preset** is a starting combination (`init --preset`).
 
 ## Layout
 
-Every part is a folder under `src/`. A feature with routes and data keeps one shape (`boards/` is the model, and
-what `feature` generates): `schema.ts` (Drizzle tables + migration steps) · `repo.ts` (the only queries) ·
-`routes.ts` (createRoute contracts) · `handlers.ts` (request → repo → HAL) · `tools.ts` (MCP tools) · `index.ts`
-(`registerX` wiring them, and the part's exports).
+Every part is a folder under `src/`. A feature with routes and data keeps the one shape in `docs/STANDARD.md` §1
+(`boards/` is the model, and what `feature` generates).
 
 
 | Path | What |

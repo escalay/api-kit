@@ -13,7 +13,8 @@ parts an app copies in (`npx @escalay/kit add`, see the README); its `testing` p
   then media and web pages.
 - **In a repo:** `apps/api/` (`src/features/<name>/` one folder per feature: `schema.ts` tables and migration steps,
   `repo.ts` the only queries, `routes.ts` contracts, `handlers.ts` request → repo → HAL, `tools.ts` MCP tools,
-  `index.ts`; `src/app.ts` only wires them; `src/kit/` the copied kit with its `kit.json`, `guide/` the agent guide,
+  `index.ts` the `register…` function wiring them and the feature's exports, beside its `<name>.test.ts`; the kit's
+  `boards` part is the model; `src/app.ts` only wires them; `src/kit/` the copied kit with its `kit.json`, `guide/` the agent guide,
   `test/`), shared logic in `packages/*`. `kit init` makes this layout and `feature` adds to it. The app owns its kit copy: edit it when it must differ, and
   `kit diff` shows those edits next to the kit's changes.
   Read-only data an API serves is built elsewhere (a store in object storage) and synced in; the API never parses raw sources.

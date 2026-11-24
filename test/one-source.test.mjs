@@ -96,3 +96,18 @@ describe('the README shape', () => {
     expect(read(path)).toContain('docs/PARTS.md')
   })
 })
+
+describe('the shape of a feature', () => {
+  const listsShape = (text) => /schema\.ts[\s\S]{0,160}repo\.ts[\s\S]{0,160}routes\.ts/.test(text)
+
+  it('is written in docs/STANDARD.md §1', () => {
+    const standard = read('docs/STANDARD.md')
+    expect(listsShape(standard.slice(standard.indexOf('## 1. '), standard.indexOf('## 2. ')))).toBe(true)
+  })
+
+  it.each(['README.md', 'AGENTS.md', 'skills/api-kit-part/SKILL.md'])('%s links it', (path) => {
+    const text = read(path)
+    expect(listsShape(text)).toBe(false)
+    expect(text).toMatch(/STANDARD\.md[^\n]*§1\b|STANDARD §1\b/)
+  })
+})

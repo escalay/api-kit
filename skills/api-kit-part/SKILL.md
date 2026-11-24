@@ -10,9 +10,8 @@ apps copy in and own. Read the repository's `AGENTS.md` and `docs/STANDARD.md` f
 
 ## 1. The files
 
-1. `src/<part>/`, named as the part. A part with routes and data keeps `boards`' shape: `schema.ts` (tables and
-   migration steps) · `repo.ts` (the only queries) · `routes.ts` · `handlers.ts` · `tools.ts` · `index.ts` (the
-   `register…` function and the exports).
+1. `src/<part>/`, named as the part. A part with routes and data keeps the feature shape of `docs/STANDARD.md` §1;
+   `boards` is the model.
 2. Every export has a JSDoc with an example; every rule has a test in `test/<part>.test.ts`.
 3. It runs on Node and Workers: nothing at global scope that workerd refuses (random values, I/O, timers). A part
    apps import through `./kit/index.js` (no `meta.entry`) goes into `src/index.ts`, which the Workers probe

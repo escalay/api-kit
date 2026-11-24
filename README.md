@@ -71,7 +71,7 @@ src/server.ts            Node: env → openDb → createApp → listen
 src/worker.ts            Workers: D1 → openDb → the same createApp (wrangler.jsonc, migrations/ for D1)
 src/app.ts               the wiring only: auth + OAuth, every feature, the guide, MCP
 src/features/index.ts    FEATURES, the one list (and the Feature shape)
-src/features/<name>/     schema.ts · repo.ts · routes.ts · handlers.ts · tools.ts · index.ts · <name>.test.ts
+src/features/<name>/     one feature, in the shape of docs/STANDARD.md §1, with its <name>.test.ts
 src/kit/                 the copied kit (kit.json + a README per part)
 guide/                   llms.txt and agents/*.md templates; {{api.endpoints}} and {{mcp.tools}} are generated
 guide/skills/<name>/     the skill the product ships to agents that use it: served, offered over MCP, installable
@@ -82,9 +82,8 @@ container/entrypoint.sh  the env allowlist: the API sees only the variables it r
 
 ## The practices it enforces
 
-1. **One shape per feature.** `schema.ts` (Drizzle tables + migration steps) · `repo.ts` (the only queries) ·
-   `routes.ts` (contracts) · `handlers.ts` (request → repo → HAL) · `tools.ts` (MCP tools) · `index.ts`. The kit's
-   own [`boards`](src/boards/README.md) is the reference.
+1. **One shape per feature**, the files and what each holds: [docs/STANDARD.md §1](docs/STANDARD.md#1-stack-and-layout).
+   The kit's own [`boards`](src/boards/README.md) is the reference.
 2. **Only repos touch the database.** Moving off the local SQLite file (Turso, D1) changes how `openDb` is called,
    not the queries. A migration step never changes once it has run; existing tables are adopted with step 1.
 3. **The API is the contract.** Every route documented (camelCase ids, descriptions an agent chooses by, examples,
