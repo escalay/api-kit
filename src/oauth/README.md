@@ -148,12 +148,12 @@ const oauth = createOAuth({
 | `approve` | `(c, ask) => Promise<Response \| null>` | none: the kit's page | the app's own page for a sign-in; null shows the kit's page to the owner |
 | `onGrant` | `(grant, c) => Promise<boolean>` | yes to every grant | hears the first token of every grant; false withdraws it |
 | `onRevoke` | `(revoked) => void` | none | hears every grant the kit ends, and why |
-| `ticketTtl` | seconds | 600 | a consent ticket's life and its nonce cookie's: whole, from 60 to a week |
+| `ticketTtl` | seconds | 600 | a consent ticket's life and its nonce cookie's: whole, from 60 to a week; a held one (`holdTicket`) as long as held |
 | `reuseGraceSeconds` | seconds | 0 | a used refresh token sent again inside it gets the same successor; 0: any replay revokes the grant |
 | `publicOrigin` | origin | the request's own | the one origin of the issuer, every document, token and check |
 | `limits` | `{ store, address? }` \| false | false | per-address limits on the open endpoints, never the owner |
 | `maxUnusedClients` | whole number | 10 000 | registrations no sign-in has used, kept at most of each kind |
-| `maxUnusedTickets` | whole number | 10 000 | codes waiting for a person, kept at most of each kind |
+| `maxUnusedTickets` | whole number | 10 000 | codes waiting for a person, kept at most of each kind; never a held ticket |
 | `mcpPath` | path | `/mcp` | where MCP is mounted (`mountMcp`'s `path`): its resource, metadata pointer and relay |
 | `resources` | `(path) => boolean` | none: the origin and `mcpPath` only | whether this server issues tokens for a resource path; a pure check of the string |
 | `resourceOf` | `(c) => URL` | the origin, plus `mcpPath` under it | the canonical resource a request is for: where its 401 points |
@@ -195,9 +195,10 @@ An OAuth caller (`c.get('caller')`) is `{ kind: 'agent', client, grant, name, sc
 | `oauth.protectedResource(origin, suffix)` | the protected-resource metadata document for `origin + suffix` (RFC 9728) |
 | `oauth.authMd(origin)` | the `/auth.md` text: how an agent registers and is claimed |
 | `oauth.ticketOf(c, ticket)`, `oauth.answeredOf(c, ticket)`, `oauth.complete(c, ticket, decision)` | the app's own sign-in page: the waiting ask, what this browser answered already, the answer |
+| `oauth.holdTicket(c, ticket, seconds)` | holds one ticket for a decision made later (an ask to join): `{ expiresAt, cookie }`, or null when it expired, was answered, or this browser did not open it |
 | `oauth.revokeGrant(grant)`, `oauth.revokeClient(clientId)` | end one sign-in; end every sign-in of a client and drop its registration (the owner's kill switch) |
 | `generateOAuthKey()` | a new signing key, a private JWK JSON string |
-| `dbOAuthStore(db)`, `memoryOAuthStore()`, `OAuthStore` | the stores: `get`, `put`, `delete`, plus `take`, `markUsed` and `trim` |
+| `dbOAuthStore(db)`, `memoryOAuthStore()`, `OAuthStore` | the stores: `get`, `put`, `delete`, plus `take`, `markUsed`, `trim`, `hold` and `extend` |
 | `OAUTH_MIGRATIONS`, `oauthKeys` | the `oauth` table and its steps |
 | `SignInAsk`, `SignInDecision`, `SignInGrant`, `SignInRevoked`, `TokenCaller`, `OAuthConfig` | the types |
 
@@ -205,7 +206,7 @@ An OAuth caller (`c.get('caller')`) is `{ kind: 'agent', client, grant, name, sc
 |---|---|
 | `index.ts` | `createOAuth` and everything it returns, `generateOAuthKey` |
 | `approval.ts` | `SignInAsk`, `SignInDecision`, `SignInGrant`, `SignInRevoked`; the ticket cookie and the same-origin rule |
-| `store.ts` | `OAuthStore` (`get`, `put`, `delete`, plus `take`, `markUsed` and `trim`), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start, then on a write at most once a minute), `memoryOAuthStore` |
+| `store.ts` | `OAuthStore` (its methods above), `dbOAuthStore(db)` (in the app's database, node:sqlite or D1; drops expired rows at start, then on a write at most once a minute), `memoryOAuthStore` |
 | `schema.ts` | the `oauth` table, its `expires_at` index, and `OAUTH_MIGRATIONS` |
 
 ## Flows
@@ -235,7 +236,7 @@ sequenceDiagram
   Browser->>Client: the redirect
 ```
 
-### Deciding later (`ticketTtl`)
+### Deciding later (`holdTicket`)
 
 ```mermaid
 sequenceDiagram
@@ -245,10 +246,13 @@ sequenceDiagram
   participant Kit
   Asker->>Kit: GET /oauth/authorize
   Kit->>App: approve(c, ask)
-  App->>App: record the ask (ask.ticket, the client, who asks)
-  App-->>Asker: a waiting page holding the ticket in a form
-  loop until there is a decision, within ticketTtl
-    Asker->>App: GET the decision for the ticket
+  App-->>Asker: the app's page, the ticket in a form
+  Asker->>App: POST ask (same-origin)
+  App->>Kit: holdTicket(c, ticket, seconds)
+  App->>App: record the ask (the ticket, who asks)
+  App-->>Asker: a waiting page holding the ticket, held.cookie set
+  loop until there is a decision, within the held life
+    Asker->>App: POST the ticket: decided yet?
   end
   Owner->>App: decide on the app's own screen, hours later (the app writes it against the ticket)
   Asker->>App: submit the form: a same-origin POST from the browser that opened the ticket
@@ -432,15 +436,15 @@ too, so its client signs in again rather than holding tokens no row backs.
   client and approver signing in again see the page again.
 - **The ticket is bound to the browser.** Every `GET /oauth/authorize` that stores a ticket sets an HttpOnly,
   SameSite=Lax nonce cookie, `__Host-oauth_ticket` on https (`oauth_ticket` on http; on https only the `__Host-` name
-  is read), Path `/`, Max-Age `ticketTtl` (600 by default). A live one is reused and its Max-Age renewed, so a second
-  sign-in in the same browser neither breaks the first nor shortens the second. The ticket keeps only the nonce's
-  SHA-256.
+  is read), Path `/`, Max-Age `ticketTtl` (600 by default), or longer while a ticket this browser opened is held. A
+  live one is reused and its Max-Age renewed, so a second sign-in in the same browser neither breaks the first nor
+  shortens the second, nor a held one. The ticket keeps only the nonce's SHA-256.
 - **Same-origin, not same-site.** `complete`, the kit's consent POST, `/oauth/claim` and `/oauth/device` take a POST
   only with `Sec-Fetch-Site: same-origin`, or, with no such header, an `Origin` equal to the issuer's. A missing
   header with no matching `Origin` is refused (403), and so is `same-site`: a sibling host is same-site. `Origin: null`
   never matches; the kit's pages set their referrer policy to `same-origin` so a browser sends the real one.
 - **A ticket is answered once.** It is marked used and kept, its nonce hash and the answer only, until its life
-  (`ticketTtl`) ends. Posted again from the browser that answered it (a double click, a tab brought back), it is a
+  (`ticketTtl`, or the held life) ends. Posted again from the browser that answered it (a double click, a tab brought back), it is a
   page that says the sign-in went through ("Already approved") or was refused, with no code and no redirect; from
   another browser it is "This approval expired".
 - **With `approve` set, `/oauth/authorize` never redirects before a person acts:** every error (an unknown client, a
@@ -461,25 +465,23 @@ too, so its client signs in again rather than holding tokens no row backs.
 - Rules after cloudflare/workers-oauth-provider (the browser-bound, single-use consent ticket; never redirect before
   the redirect is checked) and oidc-provider (the grant is saved before the code exists), both MIT.
 
-### Deciding later: the ticket's life
+### Deciding later: holding a ticket
 
-An ask to join waits for the owner, who may answer in hours. A ticket lives `ticketTtl` seconds (default 600, whole,
-from 60 to a week; `createOAuth` throws otherwise), and so does the nonce cookie that binds it to the asker's browser.
-The steps are the Flows diagram (Deciding later): `approve` records the ask (`ask.ticket`, the client, who is asking)
-and answers a waiting page holding the ticket in a form; the page polls an app route and submits the form once there is
-a decision. Nothing else changes: `complete` still needs the browser that opened the ticket, a same-origin POST, once.
-A fetch that follows the 302 itself would not take the browser back to the client, so the page submits the form. A
-decision made after the ticket's life finds it expired (the page says to start again from the app).
-`test/oauth.test.ts` runs this pattern. Two ways a waiting ask ends before its life does:
+The route an ask to join posts to holds its ticket (Flows: Deciding later) and sets `held.cookie`; every other page
+lives `ticketTtl`.
 
-- **Its client lapses.** A ticket does not renew its client's life: a registration no sign-in has used lapses a week
-  after it was made, so a ticket opened by a client older than a week minus `ticketTtl` outlives it. A decision after
-  that is refused (`ticketOf` answers null; `complete` answers the page that says to add the connection again), and the
-  asker starts again from their app.
-- **Newer tickets evict it.** A waiting ticket is capped like any other (`maxUnusedTickets`): once that many newer
-  tickets are open, the oldest goes, and its client is no longer held. With `approve`, anyone can open one at
-  `/oauth/authorize`, so an app that decides later passes `limits` (it slows a flood per address, it doesn't stop one
-  from many addresses) and a `maxUnusedTickets` well above the asks it expects to have waiting at once.
+- Only the browser that opened it may hold it (the nonce cookie); an expired, answered or foreign ticket gives
+  null. `seconds`: whole, 60 to a week, else it throws.
+- It lives `seconds` from now; holding again moves it. One conditional write (the store's `hold`): a hold
+  after `complete` gives null, never reopening it.
+- `cookie` keeps the nonce cookie as long as the longest ticket held in that browser (a `held-nonce` row, only grown,
+  through the store's `extend`), so no later sign-in there cuts it short.
+- Newer tickets never evict it: it is outside `maxUnusedTickets`. The kit doesn't cap held tickets: the app bounds
+  them (one ask per address) and passes `limits`.
+
+The page polls an app route (`ticketOf` first) and submits its form once decided: `complete` still needs the opening
+browser, a same-origin POST, once. A decision after the held life finds it expired. A hold does not renew its
+client: an unused registration still lapses after a week (`complete` then says to add the connection again).
 
 ### Audiences (RFC 8707)
 
@@ -582,11 +584,11 @@ for them, or otherwise verify they are the intended recipient):
 
   Never evicted: a used client (a sign-in collected its first token), a claimed registration, a client a live
   consent ticket holds (a page is waiting on a person: an invite, an ask to join), the claim token of a live
-  registration, an answered ticket, and a row from before the caps (no `used` flag). The waiting ticket itself is not
-  protected: `maxUnusedTickets` newer tickets evict it, and its client with it on a later registration (Deciding
-  later: the ticket's life). So the unused rows are at most
+  registration, an answered ticket, a ticket the app holds (`holdTicket`), and a row from before the caps (no `used`
+  flag). A waiting ticket the app has not held is not protected: `maxUnusedTickets` newer tickets evict it, and its
+  client with it on a later registration (Deciding later: holding a ticket). So the unused rows are at most
   `maxUnusedClients` clients plus one per open ticket, `maxUnusedClients` registrations and as many claim tokens, and
-  `maxUnusedTickets` of each of the four waiting kinds; the rest follow an approval (claimed registrations, tokens,
+  `maxUnusedTickets` of each of the four waiting kinds, plus the tickets the app holds; the rest follow an approval (claimed registrations, tokens,
   refresh rows) or a signed-in person (device answers and tries). An approved device not yet collected (one poll,
   seconds) and a claim code not yet typed can be evicted by a flood: the device or agent starts again. The cap needs
   the store's `trim` (`dbOAuthStore` and `memoryOAuthStore` have it, with its `heldBy`); a store without it is not
@@ -707,9 +709,10 @@ The requests are the Flows diagram (Device authorization). Nothing to wire: `mou
   code), the claim page takes the claim attempt ("This code expired", 410), and the device page takes the typed code
   (the code form again, 400), so Allow and Deny from two tabs write one answer.
 - Revoking an access token (`/oauth/revoke`) ends only that token; `revokeGrant` ends the sign-in.
-- The store makes single use hold under concurrent requests: `markUsed` (codes, refresh tokens) and `take` are one
-  statement each in `dbOAuthStore`, honour expiry, and read a row with no `used` key (a sign-in from before) as
-  unused. A store without them falls back to a read then a write, safe only one request at a time: tests.
+- The store makes single use hold under concurrent requests: `markUsed` (codes, refresh tokens), `take`, `hold`
+  (a held ticket) and `extend` (a browser's held life) are one statement each in `dbOAuthStore`, honour expiry, and
+  read a row with no `used` key (a sign-in from before) as unused. A store without them falls back to a read then a write, safe only one request at a
+  time: tests.
 - OAuth rows live in SQLite or D1, never Workers KV: KV is eventually consistent, so a new code reads as unknown and a
   revoke can be undone.
 - Keep the OAuth paths open (`OAUTH_OPEN_PATHS`); `createAgentApi` does it when `oauth` is set, private mode included.
@@ -727,7 +730,7 @@ The consent page (`/oauth/authorize`):
 | 400 "Can't approve this request" with the reason | an unknown or lapsed client ("Remove this connection in your app and add it again"), a wrong redirect, `response_type`, PKCE, more than one resource, a resource refused (`invalid_target`), a blank approver, or scopes wider than asked |
 | a 302 to the client with `error=invalid_request` | without `approve`, once the owner is signed in, a `response_type` or PKCE error goes back to the client's redirect |
 | 403 "Not allowed" | the POST is not same-origin, nobody is signed in, the ticket was opened in another browser, or it was shown to another owner |
-| 400 "This approval expired" | the ticket's life (`ticketTtl`) ended, it is unknown, or another browser answered it |
+| 400 "This approval expired" | the ticket's life (`ticketTtl`, or the held life) ended, it is unknown, or another browser answered it |
 | 400 "Already approved" / "Already answered" | this browser answered the ticket already (a double click, a tab brought back) |
 | 429 "Too many sign-ins from here" | past `limits` at authorize (60 a minute per address) |
 
@@ -771,9 +774,10 @@ The token endpoint and the API:
 ## Limits
 
 - One `verify` costs three row reads per request with a grant (the issued row and both markers), uncached.
-- Unused rows are bounded by the caps above; the cap is soft under concurrency, by as many writes as were in flight.
+- Unused rows are bounded by the caps above (held tickets by the app); the cap is soft under concurrency, by as many
+  writes as were in flight.
 - A sign-in keeps two refresh rows (its newest token's and its family's) however often it refreshes.
-- Access tokens last an hour, refresh tokens 30 days, codes and device codes 10 minutes, consent tickets `ticketTtl`,
+- Access tokens last an hour, refresh tokens 30 days, codes and device codes 10 minutes, consent tickets `ticketTtl` (a held one up to a week),
   agent registrations a day, unused client registrations a week, used ones a year.
 - Node and Workers; rows in SQLite or D1 (`test/workers/oauth.test.ts` runs the store contract on D1).
 

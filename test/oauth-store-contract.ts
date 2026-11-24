@@ -96,7 +96,8 @@ export const registered = async (app: App, name = 'Sample', redirect = REDIRECT)
 
 /**
  * An app that approves at its own page: the person types an invite, and the app completes the ticket as the person the
- * invite was made for (or `approver` when posted). `heard` is every grant `onGrant` saw; `/join/direct` completes without reading the ticket first.
+ * invite was made for (or `approver` when posted). `heard` is every grant `onGrant` saw; `/join/direct` completes without reading the ticket first;
+ * `/join/hold` holds the ticket for `seconds` (a day when not sent) and sets the cookie `holdTicket` gives.
  */
 export const joinApp = async (store: OAuthStore, options: Partial<OAuthConfig> = {}) => {
   const heard: Parameters<NonNullable<OAuthConfig['onGrant']>>[0][] = []
@@ -106,7 +107,7 @@ export const joinApp = async (store: OAuthStore, options: Partial<OAuthConfig> =
     approve: async (c, ask) => (asks.push(ask), c.html(pageOf(ask.ticket))),
     onGrant: async (grant) => (heard.push(grant), grant.kind !== 'code' || grant.data?.invite === 'garden-42'),
     ...options,
-  }, { open: ['/join', '/join/direct'] })
+  }, { open: ['/join', '/join/direct', '/join/hold'] })
   const spentPages = { approved: 'Already approved: return to your app.', denied: 'You said no to this sign-in.', answered: 'This sign-in was answered already.', expired: 'This sign-in expired: start again from your app.' }
   const decisionOf = (body: Record<string, unknown>) =>
     body.decision === 'deny' ? ('deny' as const) : { approver: body.approver === undefined ? OWNER : String(body.approver), data: { invite: String(body.invite ?? '') }, ...(body.scopes ? { scopes: String(body.scopes).split(' ') } : {}) }
@@ -121,7 +122,19 @@ export const joinApp = async (store: OAuthStore, options: Partial<OAuthConfig> =
     const body = await c.req.parseBody()
     return oauth.complete(c, String(body.ticket ?? ''), decisionOf(body))
   })
+  app.post('/join/hold', async (c) => {
+    const body = await c.req.parseBody()
+    const held = await oauth.holdTicket(c, String(body.ticket ?? ''), Number(body.seconds ?? 24 * 3600))
+    return held ? c.json({ expiresAt: held.expiresAt }, 200, { 'set-cookie': held.cookie }) : c.json(null, 400)
+  })
   return { app, oauth, heard, asks }
+}
+
+/** Opens a sign-in at the join app in `browser` and holds its ticket for a day: the ticket. */
+export const heldTicket = async (app: App, browser: ReturnType<typeof browserOf>, client_id: string, extra: Record<string, string> = {}) => {
+  const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id, extra)}`)).text())
+  expect((await browser.post('/join/hold', { ticket })).status).toBe(200)
+  return ticket
 }
 
 export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>) =>
@@ -255,6 +268,117 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       await registered(app)
       expect(await store.get('client', invited)).toBeNull()
       expect(await (await browser.post('/join', { ticket, invite: 'garden-42' })).text()).toContain('This sign-in expired')
+    })
+
+    it('never trims a held row, and keeps it outside the cap: the newest unheld rows keep their places', async () => {
+      const store = await make()
+      const kind = `capped-${crypto.randomUUID()}`
+      for (const [id, life] of [['a', 100], ['b', 200], ['c', 300]] as const) await store.put(kind, id, { used: false }, now() + life)
+      // Held rows outlive the rest, so ranked with them they would take the newest places
+      await store.put(kind, 'held-1', { used: false, held: true }, now() + 86_400)
+      await store.put(kind, 'held-2', { used: false, held: true }, now() + 90_000)
+      await store.put(kind, 'unheld', { used: false, held: false }, now() + 50)
+      const live = async () => (await Promise.all(['a', 'b', 'c', 'held-1', 'held-2', 'unheld'].map(async (id) => ((await store.get(kind, id)) ? id : null)))).filter(Boolean)
+      await store.trim!(kind, 2)
+      expect(await live()).toEqual(['b', 'c', 'held-1', 'held-2'])
+      await store.trim!(kind, 0)
+      expect(await live()).toEqual(['held-1', 'held-2'])
+    })
+
+    it('holds a live, unused row: its life moved and marked held; never a used, expired or unknown one', async () => {
+      const store = await make()
+      const id = `h-${crypto.randomUUID()}`
+      await store.put('consent', id, { params: { client_id: 'c1' }, used: false, expiresAt: now() + 600 }, now() + 600)
+      const until = now() + 86_400
+      const held = await store.hold!('consent', id, until)
+      expect(held).toEqual({ params: { client_id: 'c1' }, used: false, expiresAt: until, held: true })
+      expect(await store.get('consent', id)).toEqual(held)
+      // Holding again moves it again, shorter too: the row's expiry with it
+      await store.hold!('consent', id, now() - 1)
+      expect(await store.get('consent', id)).toBeNull()
+      await store.put('consent', `${id}-used`, { used: true }, now() + 600)
+      expect(await store.hold!('consent', `${id}-used`, now() + 86_400)).toBeNull()
+      await store.put('consent', `${id}-old`, { used: false }, now() - 1)
+      expect(await store.hold!('consent', `${id}-old`, now() + 86_400)).toBeNull()
+      expect(await store.hold!('consent', `${id}-none`, now() + 86_400)).toBeNull()
+    })
+
+    it('never reopens a row a hold races: marked used at once, it stays used', async () => {
+      const store = await make()
+      for (let n = 0; n < 5; n++) {
+        const id = `r-${crypto.randomUUID()}`
+        await store.put('consent', id, { used: false, expiresAt: now() + 600 }, now() + 600)
+        const [, marked] = await Promise.all([store.hold!('consent', id, now() + 86_400), store.markUsed!('consent', id)])
+        expect(marked).toMatchObject({ used: true })
+        expect(await store.get('consent', id)).toMatchObject({ used: true })
+      }
+    })
+
+    it('never lets newer tickets evict a held ticket or its client, and it completes once', async () => {
+      const store = await make()
+      const { app } = await joinApp(store, { maxUnusedClients: 3, maxUnusedTickets: 3 })
+      const invited = await registered(app)
+      const browser = browserOf(app)
+      // Held a minute, less than a page's ten: by expiry it is the oldest, so only the hold keeps it
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(invited)}`)).text())
+      expect((await browser.post('/join/hold', { ticket, seconds: '60' })).status).toBe(200)
+      for (let n = 0; n < 10; n++) await browserOf(app).request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)
+      expect(await store.get('consent', ticket)).toMatchObject({ held: true })
+      expect(await store.get('client', invited)).not.toBeNull()
+      expect((await browser.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      expect(await (await browser.post('/join', { ticket, invite: 'garden-42' })).text()).toContain('Already approved')
+    })
+
+    it('never reopens a ticket when a hold read it before its completion and writes after', async () => {
+      const store = await make()
+      let release = () => {}
+      const gate = new Promise<void>((resolve) => (release = resolve))
+      // The hold's write waits until the ticket was answered
+      const { app } = await joinApp({ ...store, hold: async (...args) => (await gate, store.hold!(...args)) })
+      const browser = browserOf(app)
+      const ticket = ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(await registered(app))}`)).text())
+      const holding = browser.post('/join/hold', { ticket })
+      expect((await browser.post('/join', { ticket, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      release()
+      expect((await holding).status).toBe(400)
+      expect(await (await browser.post('/join', { ticket, invite: 'garden-42' })).text()).toContain('Already approved')
+      expect(await store.get('consent', ticket)).toMatchObject({ used: true, answer: 'approved' })
+    })
+
+    it('keeps the longest of two holds one browser sends at once, in either order: the next sign-in keeps the week', async () => {
+      const week = 7 * 24 * 3600
+      const maxAgeOf = (answer: Response) => Number(/Max-Age=(\d+)/.exec(answer.headers.getSetCookie().join(';'))?.[1])
+      for (const longFirst of [true, false]) {
+        const store = await make()
+        let arrived = 0
+        let release = () => {}
+        const together = new Promise<void>((resolve) => (release = resolve))
+        // Both holds pass the ticket's own write together, then record the browser's held life at the same moment
+        const { app } = await joinApp({ ...store, hold: async (...args) => (++arrived === 2 && release(), await together, store.hold!(...args)) })
+        const client_id = await registered(app)
+        const browser = browserOf(app)
+        const open = async () => ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)).text())
+        const [long, short] = [await open(), await open()]
+        const holdLong = () => browser.post('/join/hold', { ticket: long, seconds: String(week) })
+        const holdShort = () => browser.post('/join/hold', { ticket: short, seconds: '60' })
+        const [longAnswer, shortAnswer] = longFirst ? await Promise.all([holdLong(), holdShort()]) : (await Promise.all([holdShort(), holdLong()])).reverse()
+        expect([longAnswer!.status, shortAnswer!.status]).toEqual([200, 200])
+        expect(maxAgeOf(longAnswer!)).toBeGreaterThan(week - 10)
+        expect(maxAgeOf(await browser.request(`/oauth/authorize?${authorizeQuery(client_id)}`)), `long first: ${longFirst}`).toBeGreaterThan(week - 10)
+        expect((await browser.post('/join', { ticket: long, invite: 'garden-42' })).headers.get('location')).toContain('code=')
+      }
+    })
+
+    it('extends a row to the longest life written, never shorter, and ignores one that expired', async () => {
+      const store = await make()
+      const id = `x-${crypto.randomUUID()}`
+      const [week, day] = [now() + 7 * 86_400, now() + 86_400]
+      expect(await Promise.all([store.extend!('held-nonce', id, week), store.extend!('held-nonce', id, day)])).toEqual([week, week])
+      expect(await store.extend!('held-nonce', id, day)).toBe(week)
+      expect(await store.get('held-nonce', id)).toEqual({ until: week })
+      await store.put('held-nonce', `${id}-old`, { until: now() + 99_999 }, now() - 1)
+      expect(await store.extend!('held-nonce', `${id}-old`, day)).toBe(day)
+      expect(await store.get('held-nonce', `${id}-old`)).toEqual({ until: day })
     })
 
     // workers-oauth-provider #420; better-auth GHSA-7w99-5wm4-3g79; OAuth 2.1 §4.1.3

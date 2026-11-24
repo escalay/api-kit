@@ -26,7 +26,7 @@ The parts in the order they go in: each after the parts it needs. `kit add` brin
 | One brand on every surface | `core` → `brand` | `npx @escalay/kit add brand`: then `npx @escalay/kit brand` renders it |
 | Other agents delegate through A2A | `core` → `mcp` → `a2a` | `npx @escalay/kit add a2a` |
 | A public front page and the browser app under `/app`, on Node | `core` → `web` | `npx @escalay/kit add web` |
-| Sharing: invites to a space, asks to join, the owner’s approval | `core` → `db` → `oauth` → `mcp` → `people` | `npx @escalay/kit add oauth people`: no sharing part yet: build it on oauth’s `approve`, `complete` with `resource`, `ticketTtl`, `onGrant` and `onRevoke` (oauth README) |
+| Sharing: invites to a space, asks to join, the owner’s approval | `core` → `db` → `oauth` → `mcp` → `people` | `npx @escalay/kit add oauth people`: no sharing part yet: build it on oauth’s `approve`, `complete` with `resource`, `holdTicket`, `onGrant` and `onRevoke` (oauth README) |
 
 ## Server parts
 
