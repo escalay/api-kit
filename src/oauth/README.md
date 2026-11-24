@@ -434,9 +434,9 @@ too, so its client signs in again rather than holding tokens no row backs.
   client and approver signing in again see the page again.
 - **The ticket is bound to the browser.** Every `GET /oauth/authorize` that stores a ticket sets an HttpOnly,
   SameSite=Lax nonce cookie, `__Host-oauth_ticket` on https (`oauth_ticket` on http; on https only the `__Host-` name
-  is read), Path `/`, Max-Age `ticketTtl` (600 by default). A live one is reused and its Max-Age renewed, so a second
-  sign-in in the same browser neither breaks the first nor shortens the second, nor a held one. The ticket keeps only
-  the nonce's SHA-256.
+  is read), Path `/`, Max-Age `ticketTtl` (600 by default), or longer while a ticket this browser opened is held. A
+  live one is reused and its Max-Age renewed, so a second sign-in in the same browser neither breaks the first nor
+  shortens the second, nor a held one. The ticket keeps only the nonce's SHA-256.
 - **Same-origin, not same-site.** `complete`, the kit's consent POST, `/oauth/claim` and `/oauth/device` take a POST
   only with `Sec-Fetch-Site: same-origin`, or, with no such header, an `Origin` equal to the issuer's. A missing
   header with no matching `Origin` is refused (403), and so is `same-site`: a sibling host is same-site. `Origin: null`
