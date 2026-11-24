@@ -159,13 +159,11 @@ export type Embedder = ReturnType<typeof createEmbedder>
 type ParsedLedger = { ledger: Map<string, LedgerLine>; torn: { line: number; at: number } | null }
 
 /**
- * Reads a ledger's text. A last line that isn't JSON is torn (a write cut short) and left out; any other line that
- * isn't JSON is damage, never made by appending, so it throws with its number.
+ * Reads a ledger's text. A line that isn't JSON with only empty lines after it is torn (a write cut short) and left
+ * out; any other line that isn't JSON is damage, never made by appending, so it throws with its number.
  */
 const parseLedger = (file: string, text: string): ParsedLedger => {
   const lines = text.split('\n')
-  // The last line with anything on it (a whole ledger ends with a newline, so an empty line follows)
-  const last = lines.length - 1 - [...lines].reverse().findIndex(Boolean)
   const ledger = new Map<string, LedgerLine>()
   let at = 0
   for (const [index, line] of lines.entries()) {
@@ -174,7 +172,8 @@ const parseLedger = (file: string, text: string): ParsedLedger => {
         const parsed = JSON.parse(line) as LedgerLine
         ledger.set(parsed.key, parsed)
       } catch {
-        if (index < last) throw new Error(`${file}: line ${index + 1} is not a ledger line. Appending never makes one, so the file was damaged: restore it from its copy.`)
+        const isLast = lines.slice(index + 1).every((after) => !after)
+        if (!isLast) throw new Error(`${file}: line ${index + 1} is not a ledger line. Appending never makes one, so the file was damaged: restore it from its copy.`)
         return { ledger, torn: { line: index + 1, at } }
       }
     }
@@ -262,11 +261,15 @@ type EmbedMissingOptions = { file: string; items: LedgerItem[]; embed: (inputs: 
 
 /** embedMissing's work, once it holds the ledger's lock. */
 const embedLocked = async ({ file, items, embed, batchSize = 100, concurrency = 4, budget = Infinity, limit = Infinity, log = () => {} }: EmbedMissingOptions): Promise<EmbedRun> => {
-  const { ledger, torn } = parseLedger(file, await readFile(file, 'utf8').catch(() => ''))
-  // Appending after a torn line would glue the next line to it: drop it, and its item is embedded again
+  const text = await readFile(file, 'utf8').catch(() => '')
+  const { ledger, torn } = parseLedger(file, text)
+  // Appending after a torn line would glue the next line to it: drop it, and its item is embedded again. A whole last
+  // line cut before its newline is kept, ended first
   if (torn) {
     console.warn(tornWarning(file, torn))
     await truncate(file, torn.at)
+  } else if (text && !text.endsWith('\n')) {
+    await appendFile(file, '\n')
   }
   const outdated = items.map((item) => ({ item, hash: hashOf(item.content) })).filter(({ item, hash }) => ledger.get(item.key)?.hash !== hash)
   const stale = outdated.slice(0, limit)

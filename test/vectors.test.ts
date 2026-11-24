@@ -66,6 +66,13 @@ describe('vectors', () => {
       expect([...(await readLedger(file)).keys()]).toEqual(['a', 'b'])
       expect(warned).toHaveBeenCalledTimes(2)
 
+      // A whole last line cut before its newline is kept, and the next line starts on its own
+      const unended = await ledgerFile()
+      await appendFile(unended, JSON.stringify({ key: 'a', hash: hashOf('a'), vector: encodeVector(along(0)) }))
+      await embedMissing({ file: unended, items: [{ key: 'a', content: 'a' }, { key: 'b', content: 'b' }], embed })
+      expect([...(await readLedger(unended)).keys()]).toEqual(['a', 'b'])
+      expect(warned).toHaveBeenCalledTimes(2)
+
       const broken = await ledgerFile()
       await appendFile(broken, `${JSON.stringify({ key: 'a', hash: 'h', vector: '' })}\n{"key":\n${JSON.stringify({ key: 'b', hash: 'h', vector: '' })}\n`)
       await expect(readLedger(broken)).rejects.toThrow(`${broken}: line 2 is not a ledger line`)

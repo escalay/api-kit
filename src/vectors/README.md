@@ -32,6 +32,7 @@ const similar = nearest(space, vectorOf(space, 'note:1')!, { limit: 12 })
   gone (a crash) is taken over on the same machine; a lock left on shared storage by another machine stays until
   someone deletes it. Two machines building one ledger at once is not supported: build in one place, sync the file.
 - **A torn last line** (a write cut short by a crash) is left out by `readLedger` with one `console.warn`, and the next
-  `embedMissing` drops it before appending (and embeds its item again, the only cost). Any other line that isn't JSON
+  `embedMissing` drops it before appending (and embeds its item again, the only cost); a whole last line cut just
+  before its newline is kept and ended first. Any other line that isn't JSON
   is damage appending never makes: `readLedger` throws with its line number, and the file is restored from its copy.
 - Standard: `docs/STANDARD.md` §15.
