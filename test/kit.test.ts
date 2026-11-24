@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, readlink, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRoute, z } from '@hono/zod-openapi'
@@ -820,8 +820,17 @@ describe('the copy-in CLI', () => {
       expect(JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).scripts).toMatchObject({ dev: 'tsx watch src/server.ts', 'dev:worker': 'wrangler dev', deploy: expect.stringContaining('wrangler d1 migrations apply DB --remote') })
       const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
       expect(migrations.status, migrations.stderr).toBe(0)
-      expect((await readdir(join(app, 'migrations'))).sort()).toEqual(['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_oauth_2.sql', '0003_guards_1.sql', '0004_switches_1.sql', '0005_notes_1.sql', '0006_reading-lists_1.sql'])
+      expect((await readdir(join(app, 'migrations'))).sort()).toEqual(['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_oauth_2.sql', '0003_guards_1.sql', '0004_guards_2.sql', '0005_switches_1.sql', '0006_notes_1.sql', '0007_reading-lists_1.sql'])
       expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).stdout).toContain('current')
+      // An app made with 1.30.0 had no guards step 2: `--check` (CI) asks for it, and `pnpm migrations` adds it at the end
+      const current = join(app, 'migrations')
+      await rm(join(current, '0004_guards_2.sql'))
+      for (const [from, to] of [['0005_switches_1', '0004_switches_1'], ['0006_notes_1', '0005_notes_1'], ['0007_reading-lists_1', '0006_reading-lists_1']]) await rename(join(current, `${from}.sql`), join(current, `${to}.sql`))
+      const behind = spawnSync(bin('tsx'), ['scripts/migrations.ts', '--check'], { cwd: app, encoding: 'utf8' })
+      expect([behind.status, behind.stderr]).toEqual([1, expect.stringContaining('guards_2')])
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      expect((await readdir(current)).sort().at(-1)).toBe('0007_guards_2.sql')
+      expect(await readFile(join(current, '0007_guards_2.sql'), 'utf8')).toContain("delete from kit_guards where kind = 'key' and value <> '';")
       // A database `migrate()` already brought up (local dev) takes the files without a duplicate record
       const { DatabaseSync } = await import('node:sqlite')
       const sqlite = new DatabaseSync(':memory:')

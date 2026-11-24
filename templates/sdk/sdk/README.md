@@ -14,7 +14,9 @@ const __camel__ = create__Pascal__({ baseUrl: 'https://api.example.com', apiKey:
 Every failure is a `__Pascal__Error` with `status`, a stable `code` (`not_found`, `conflict`, `bad_request`,
 `unauthorized`, …, or `network` when the API could not be reached) and a `detail` that says what to change.
 
-Creates and changes carry an `Idempotency-Key`, and a request whose connection fails is retried once.
+Creates and changes carry an `Idempotency-Key`, and a request whose connection fails is retried once. When the first
+try was done and its answer showed a secret once (a new key), the retry fails with `code` `shown_once`: its `detail`
+says what was made, and the secret is never shown again.
 
 ## The `__bin__` command
 
