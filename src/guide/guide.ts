@@ -101,6 +101,24 @@ const recentlyUsed = <Value>(max: number) => {
   }
 }
 
+/** A plain object or array: what JSON spells out whole. */
+const isPlain = (value: object) => Array.isArray(value) || [Object.prototype, null].includes(Object.getPrototypeOf(value))
+
+/**
+ * The values a render was filled from, as a key to compare; null when they hold what JSON can't spell out whole (a
+ * Map, a class instance, a BigInt, a cycle), and then nothing is kept: every request renders again.
+ */
+const valuesKeyOf = (values: unknown) => {
+  try {
+    return JSON.stringify(values, (_key, value: unknown) => {
+      if (['bigint', 'function', 'symbol'].includes(typeof value) || (value && typeof value === 'object' && !isPlain(value))) throw new Error('not plain')
+      return value
+    })
+  } catch {
+    return null
+  }
+}
+
 /** The guide as served: its template files and a renderer that fills them for one origin. */
 export type Guide = { files: Map<string, string>; render: (origin: string, name: string) => Promise<string> }
 
@@ -166,13 +184,14 @@ export const serveGuide = (app: Hono<any, any, any> & Requester, { vars, full, c
         return { name, description, type: 'archive' as const, url: `/.well-known/agent-skills/${name}.tar.gz`, bytes: tarGz(entries), mediaType: 'application/gzip' }
       }),
     )
-  // Kept per origin with the values they were filled from (`vars()`): built again only when those change. A render
-  // that fails is never kept. The catalogs read the set synchronously, right after refreshing it
-  const built = recentlyUsed<{ values: string; list: SkillArtifact[] }>(MAX_ORIGINS)
+  // Kept per origin with the values they were filled from (`vars()`): built again only when those change, or every
+  // time when they can't be compared. A render that fails is never kept. The catalogs read the set synchronously,
+  // right after refreshing it
+  const built = recentlyUsed<{ values: string | null; list: SkillArtifact[] }>(MAX_ORIGINS)
   const artifactsNow = async (origin: string, credentials: Record<string, string> = {}) => {
-    const values = JSON.stringify(vars())
+    const values = valuesKeyOf(vars())
     const kept = built.get(origin)
-    if (kept?.values === values) return kept.list
+    if (values !== null && kept?.values === values) return kept.list
     const list = await artifacts(origin, credentials)
     built.set(origin, { values, list })
     return list

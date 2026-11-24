@@ -39,6 +39,7 @@ serveGuide(app, { files: GUIDE_FILES, vars, full })   // Workers can't read a fo
   skill, so a forged `X-Forwarded-Host` names nothing; without it, the request's origin, as before. Set `publicOrigin`
   on an app open to anyone.
 - The OpenAPI document is fetched once per origin, and the skills discovery files (`/.well-known/agent-skills/*`) are
-  rendered once per origin and built again only when `vars()` gives other values; a failed fetch or render is never
-  kept. Both keep the 8 origins used last, so callers naming new hosts can't grow memory.
+  rendered once per origin and built again only when `vars()` gives other values (compared as JSON: values JSON can't
+  spell out whole, a Map, a class instance or a BigInt, are rendered again on every request); a failed fetch or render
+  is never kept. Both keep the 8 origins used last, so callers naming new hosts can't grow memory.
 - Test it: `guideRoutes` and `guideGaps` (the testing module) return `[]`. Standard: `docs/STANDARD.md` §10.

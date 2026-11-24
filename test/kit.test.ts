@@ -1121,6 +1121,17 @@ describe('the guide under many origins', () => {
     const changed = await index()
     expect(changed.skills[0].digest).not.toBe(first.skills[0].digest)
   })
+
+  it('renders the skills discovery every time when the guide\'s values can\'t be compared', async () => {
+    const app = createAgentApi({ title: 'Apps', version: '1.0.0', description: 'Apps.', tags: [], auth: { realm: 'apps', keys: parseApiKeys('') } })
+    const tally = { apps: 2 }
+    // A Map spells out as {} and a BigInt not at all: neither could tell a change
+    serveGuide(app, { files: FILES, vars: () => ({ counts: { apps: tally.apps }, seen: new Map([['apps', tally.apps]]), big: 1n }), full: ['llms.txt'] })
+    const digestOf = async () => (await (await app.request('/.well-known/agent-skills/index.json')).json()).skills[0].digest
+    const first = await digestOf()
+    tally.apps = 3
+    expect(await digestOf()).not.toBe(first)
+  })
 })
 
 describe('a guide\'s skills over MCP', () => {
