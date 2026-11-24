@@ -2,12 +2,13 @@ import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import type { AddressInfo } from 'node:net'
 import { addressOf, createAgentApi, dbGuardStore, idempotency, memoryGuardStore, parseApiKeys, rateLimit, showOnce, testDb, type AddressTrust, type GuardStore } from '../src/index.js'
-import { countedDbStore, guardStoreContract } from './guard-store-contract.js'
+import { countedDbStore, guardStoreContract, guardTableUpgrade } from './guard-store-contract.js'
 import { describe, expect, it } from 'vitest'
 import * as dbModule from '../src/db/index.js'
 
 guardStoreContract('memory', async () => memoryGuardStore())
 guardStoreContract('database (node:sqlite)', async () => dbGuardStore(await testDb()), async () => countedDbStore(await testDb()))
+guardTableUpgrade('node:sqlite', testDb)
 
 describe('memoryGuardStore past maxEntries', () => {
   const answer = { bodyHash: 'h', status: 201, headers: [] as [string, string][], body: btoa('{}') }

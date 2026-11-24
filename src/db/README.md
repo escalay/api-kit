@@ -100,14 +100,16 @@ sequenceDiagram
 
 - One SQLite file per Node process is the local shape; several instances share state only on a shared database (Turso,
   D1).
-- `dbGuardStore` prunes expired rows at most once a minute per store.
+- `dbGuardStore` prunes expired rows at most once a minute per store. `GUARD_MIGRATIONS` step 2 deleted the stored
+  idempotency answers once (they could hold a secret through 1.30.0); rate windows were kept.
 - Node and Workers: `node:sqlite` on Node ≥ 22.16, D1 on Workers.
 
 ## Tests
 
 - `testDb()` in the app's tests: an empty in-memory database on Node, the `DB` binding inside workerd.
 - `test/db.test.ts` (an older state file adopted, every source opened), `test/workers/smoke.test.ts` (D1 migrations and
-  `testDb`), `test/guard-store-contract.ts` (the guard stores, memory and database).
+  `testDb`), `test/guard-store-contract.ts` (the guard stores, memory and database; `kit_guards` from 1.30.0 upgraded,
+  on node:sqlite and in `test/workers/guard-upgrade.test.ts` on D1).
 
 ## Upgrading
 

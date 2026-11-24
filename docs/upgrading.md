@@ -36,9 +36,9 @@ the version in `kit.json` up.
   `guards.skip`.
 - `StoredAnswer` is now `ReplayedAnswer | ShownOnceAnswer`. A custom `GuardStore` that keeps the answer as JSON needs
   no change; one that copies known fields keeps `shownOnce` too.
-- After updating, delete the answers kept under 1.30.0 and before, which may hold secrets for up to 24 hours: on the
-  database store, `delete from kit_guards where kind = 'key'`; the memory store goes with a restart. A retry in flight
-  then runs again once, which for a create makes another.
+- The answers kept under 1.30.0, which may hold a secret for up to 24 hours, are dropped for you: the database store's
+  next start runs a new migration step that deletes them (the db part, below), and the memory store goes with the
+  restart. The cost is one day of replay protection: a retry of a request made before the update runs again.
 
 ### 1.30.0
 
@@ -73,7 +73,12 @@ the version in `kit.json` up.
 
 ## db
 
-Nothing to do in any version recorded here.
+### Unreleased (after 1.30.0)
+
+- `GUARD_MIGRATIONS` has a second step that deletes every stored idempotency answer (`kit_guards` rows of kind `key`;
+  rate windows stay), because through 1.30.0 an answer that showed a key once was kept whole for a day. On Node,
+  `dbGuardStore` runs it on the next start. On Workers, run `pnpm migrations` after `update`: it adds the step as a new
+  file in `migrations/` (`pnpm check` and CI fail until it is there), and the deploy applies it.
 
 ## oauth
 
@@ -291,8 +296,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 - A made key is never kept by Idempotency-Key (core's `showOnce`): a create retried with the same key is a 409
   `shown_once` naming the key made and where it is, never the key again. The kit's client retries a lost answer
-  with the same key, so it now gets that 409: revoke the key it names and make another. Delete the rows 1.30.0 kept
-  (core, above).
+  with the same key, so it now gets that 409: revoke the key it names and make another. The answers 1.30.0 kept are
+  dropped by a migration step (db).
 
 ### 1.30.0
 

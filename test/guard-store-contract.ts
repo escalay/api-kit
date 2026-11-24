@@ -1,7 +1,7 @@
 import { count as countAll, like } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
-import { dbGuardStore, idempotency, kitGuards, showOnce, type Db, type GuardStore } from '../src/index.js'
+import { dbGuardStore, GUARD_MIGRATIONS, idempotency, kitGuards, migrate, showOnce, type Db, type GuardStore } from '../src/index.js'
 
 /** Counts a store's rows whose id starts with `prefix`, for the checks that can't be seen through `GuardStore`. */
 export type RowCount = (prefix: string) => Promise<number>
@@ -88,5 +88,31 @@ export const guardStoreContract = (name: string, make: () => Promise<GuardStore>
       expect(await count(prefix)).toBe(1)
       expect(await store.claim(`${prefix}-last`, 1_000, 122_000)).toBeNull()
       expect(await count(prefix)).toBe(1)
+    })
+  })
+
+/**
+ * The `kit_guards` table as 1.30.0 left it, upgraded: its stored idempotency answers (which could hold a key shown
+ * once) are gone after the next migrate, and its rate windows stay. Runs on node:sqlite and D1.
+ */
+export const guardTableUpgrade = (name: string, makeDb: () => Promise<Db>) =>
+  describe(`kit_guards from 1.30.0: ${name}`, () => {
+    it('drops the stored idempotency answers on the next start, and keeps the rate windows', async () => {
+      const db = await makeDb()
+      await migrate(db, 'guards', GUARD_MIGRATIONS.slice(0, 1))
+      const secret = `sk_${crypto.randomUUID()}`
+      const answer = { bodyHash: 'h', status: 201, headers: [['location', '/api/keys/key_1']], body: btoa(JSON.stringify({ id: 'key_1', key: secret })) }
+      const later = Date.now() + 86_400_000
+      // This test's rows carry their own prefix, whatever else the database holds
+      const prefix = `upgrade-${crypto.randomUUID()}`
+      await db.insert(kitGuards).values([
+        { kind: 'key', id: `${prefix} POST /api/keys k1`, start: 0, used: 0, value: JSON.stringify(answer), expiresAt: later },
+        { kind: 'key', id: `${prefix} POST /api/keys k2`, start: 0, used: 0, value: '', expiresAt: later },
+        { kind: 'rate', id: `${prefix} paid`, start: 1_000, used: 7, value: '', expiresAt: later },
+      ])
+      await dbGuardStore(db)
+      const rows = await db.select().from(kitGuards).where(like(kitGuards.id, `${prefix}%`))
+      expect(rows).toEqual([{ kind: 'rate', id: `${prefix} paid`, start: 1_000, used: 7, value: '', expiresAt: later }])
+      expect(JSON.stringify(rows)).not.toContain(answer.body)
     })
   })
