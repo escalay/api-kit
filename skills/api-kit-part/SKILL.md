@@ -23,7 +23,7 @@ apps copy in and own. Read the repository's `AGENTS.md` and `docs/STANDARD.md` f
 ## 2. The README
 
 `src/<part>/README.md` ships with the part, so it changes with the code in the same pull request. Its headings, in
-this order (a test checks them): what it is (one paragraph) · **Use it when / Don't use it when** · **Add it** ·
+this order: what it is (one paragraph) · **Use it when / Don't use it when** · **Add it** ·
 **Wire it** (the copy-paste block) · **Options** (name, type, default, what it does) · **Flows** (a Mermaid diagram
 for any flow of more than two steps) · **Failure modes** · **Limits** (Node only, Workers, one writer, ceilings) ·
 **Tests** · **Upgrading** (a link to `docs/upgrading.md`; history never inline). Every option and hook is in it.
@@ -79,8 +79,8 @@ A browser part is one file in `src/browser/`, with `meta: { "entry": true, "web"
 - **New apps.** Does every new app need it? Then it joins `APP_MODULES` in `cli.mjs` (`WEB_APP_MODULES` for the
   `app` preset's browser), the generator test's `kit.json` modules, and the starter's wiring in `templates/app`.
   Most parts do not: an app adds them with `kit add`.
-- **The map.** `docs/PARTS.md` is generated from `registry.json` by its script in `scripts/`; run it again (a
-  test fails while it is stale). The `api-kit-build` skill names every part by goal: add the new one there
+- **The map.** `docs/PARTS.md` is generated from `registry.json`: generate it again after changing a part's
+  registry item. The `api-kit-build` skill names every part by goal: add the new one there
   (a test checks every part is named in some skill), and the `AGENTS.md` layout table gets its row.
 - **The release note.** The pull request's title is the line in the release notes: `feat(reminders): …` for a new
   part or option, `fix(<part>): …` for a fix. A change an app must act on (a new migration step, a renamed export, a
