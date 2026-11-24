@@ -166,7 +166,7 @@ What the app's hooks take and give (`approval.ts`):
 
 | Shape | Fields |
 |---|---|
-| `SignInAsk` (to `approve`) | `ticket`, `client` (`id`, `name`, `redirectUris`), `redirectUri`, `redirectHost` (a host, or an app's scheme such as `sample-app:`), `onThisComputer` (a loopback or app-scheme redirect), `scopes`, `resource` (the audience the grant gets), `state`, and `arrival` (`site`: the first GET's `Sec-Fetch-Site`, `referrerOrigin`: its `Referer`'s origin, each null when not sent) |
+| `SignInAsk` (to `approve`) | `ticket`, `client` (`id`, `name`, `redirectUris`), `redirectUri`, `redirectHost` (a host, or the scheme, `sample-app:`), `onThisComputer` (an http loopback redirect only), `scopes`, `resource` (the audience the grant gets), `named` (the client chose `resource`: `complete` binds no other), `expiresAt` (the ticket's, epoch seconds), `state`, and `arrival` (`site`: the first GET's `Sec-Fetch-Site`, `referrerOrigin`: its `Referer`'s origin, each null when not sent) |
 | `SignInDecision` (to `complete`) | `{ approver, scopes?, data?, resource? }` or `'deny'` |
 | `SignInGrant` (to `onGrant`) | `kind` (`code`, `device` or `claim`), `grant`, `client` (`id`, `name`), `approver`, `scopes`, `resource` (absent on a grant from before audiences), `data` |
 | `SignInRevoked` (to `onRevoke`) | `grant` (none on `client_revoked`), `client` (none from `revokeGrant`), `reason`: `revoked`, `replayed`, `withdrawn`, `client_revoked` |
@@ -268,6 +268,7 @@ sequenceDiagram
   alt first use
     Token->>Token: client, redirect, verifier, the client not revoked
     Token->>Token: onGrant (false withdraws it: invalid_grant)
+    Token->>Store: the revoke markers again: ended meanwhile, invalid_grant (onRevoke told again)
     Token-->>Client: access token (an hour) and refresh token (generation 0)
   else used already, sent again with the right client and verifier
     Token->>Store: end the grant the first exchange got (onRevoke: replayed)
@@ -405,9 +406,10 @@ every first token in `onGrant`:
 - `onGrant(grant, c)` hears the first token of every grant. It runs after the kit's own checks (client, redirect and
   verifier for a code; the owner's answer for a device; the collected claim token for a claim), once per grant however
   many polls race. false withdraws it: `invalid_grant` ("This sign-in was withdrawn: start again"), the code or device
-  code spent, the grant ended (`onRevoke` hears `withdrawn`). It is not asked on refresh or jwt-bearer: judge later
-  requests in `accepts`. An app that keeps its own rows per grant makes them here and refuses a token whose grant has
-  none.
+  code spent, the grant ended (`onRevoke` hears `withdrawn`). A grant ended while it ran (a replayed code, a revoke)
+  gets no token either ("This sign-in was revoked"), and `onRevoke` hears it again after. It is not asked on refresh
+  or jwt-bearer: judge later requests in `accepts`. An app that keeps its own rows per grant makes them here and
+  refuses a token whose grant has none.
 - `onRevoke(revoked)` hears every grant the kit ends, after it has ended it. A grant that lapses (its refresh token
   unused for 30 days) is not told: nothing ends it, its tokens just expire. `revoked`: `revokeGrant` (no `client`: the
   kit keeps no grant-to-client index) or a refresh token at `/oauth/revoke`. `replayed`: a used code or refresh token
@@ -455,7 +457,7 @@ too, so its client signs in again rather than holding tokens no row backs.
 - Every page the kit shows (consent, device, claim, errors) carries the app's brand when it has one
   (`createAgentApi({ brand })`, or `brand` here): its head tags, icon, title and accent. Without one, the plain look.
 - The consent page names what is asked for, `Sample: /s/alpha/mcp` (all of Sample for the root), and where it
-  returns: a host, or "an app on this computer" for a loopback or app-scheme redirect.
+  returns: a host, a custom scheme (any app may claim one), or "an app on this computer" for an http loopback redirect.
 - Rules after cloudflare/workers-oauth-provider (the browser-bound, single-use consent ticket; never redirect before
   the redirect is checked) and oidc-provider (the grant is saved before the code exists), both MIT.
 
@@ -758,6 +760,7 @@ The token endpoint and the API:
 | `invalid_grant` "This code is used, expired or unknown." | a code sent twice, too late, or made up |
 | `invalid_grant` "already used, so every refresh token from this sign-in is revoked" | a refresh token replayed: the grant is ended |
 | `invalid_grant` "This sign-in was withdrawn: start again." | `onGrant` said false |
+| `invalid_grant` "This sign-in was revoked: start again." | the grant ended while `onGrant` ran |
 | `invalid_grant` "This client was revoked" / "This sign-in is revoked" | `revokeClient` or `revokeGrant` ended it |
 | `invalid_target` | a second resource, or one other than the authorization request's |
 | `authorization_pending`, `slow_down`, `expired_token`, `access_denied` | a device or a claim still waiting, polled too fast, expired, or refused |
@@ -777,7 +780,7 @@ The token endpoint and the API:
 ## Tests
 
 - `approveSignIn(app, query, { headers })` (testing part) approves on the kit's page the way a browser does: it opens
-  the page, keeps its ticket cookie, and posts same-origin.
+  the page, keeps its ticket cookie, and posts same-origin; `{ form }` posts the app's own page instead.
 
 ```ts
 import { approveSignIn } from './kit/testing/index.js'

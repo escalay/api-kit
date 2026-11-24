@@ -186,12 +186,16 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   `<meta name="referrer" content="same-origin">` over the `no-referrer` header); `same-site` is refused, since a
   sibling host is same-site. The approval only narrows scopes, and sets the resource only where the client named none (an invite binds its space; checked as a client's resource would be, the client's own never changed). `onGrant` hears
   the first token of every grant (code, device, claim) after the kit's checks, once, and false withdraws it
-  (`invalid_grant`); an app that keeps its own client rows makes them in `onGrant`, drops them in `onRevoke`,
+  (`invalid_grant`); a grant ended while it ran (a replayed code, a revoke) gets no token either, and `onRevoke` hears
+  it again, so no row the app wrote outlives its grant; an app that keeps its own client rows makes them in `onGrant`, drops them in `onRevoke`,
   which hears every grant the kit ends (revoked, replayed, withdrawn, its client revoked; a throw there never fails the
   revoke), and refuses a token whose grant has none. A grant that lapses (its refresh token unused for 30 days) is not
   told, since nothing ends it: the app ages its own rows (a last-seen time written in `accepts`, a row with none for 30
   days dropped with `revokeGrant`). The kit's own pages carry the app's brand (§22) and name the client by text only, never a `logo_uri`; the
-  consent page names the resource asked for and whether the client returns to a host or an app on this computer.
+  consent page names the resource asked for and where the client returns: a host, a custom scheme (named, never
+  trusted: any app, a browser included, may claim one), or an app on this computer, which is an http redirect to a
+  loopback host and nothing else (`SignInAsk.onThisComputer` too). The app's page hears whether the client named its
+  resource (`named`), since `complete` binds no other for it.
 - **Audiences (RFC 8707, RFC 9728, MCP 2026-07-28):** every grant is bound to one resource, signed as the token's
   `aud`. It is the resource the client sent at the authorization request (or device authorization) when the server
   issues for it, else the **root** (the issuer's origin): a client that sends none, or (without `resources`) one the
@@ -716,7 +720,8 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
   the browser may remember it for a short while (a sealed cookie that holds no code). The invite is spent with the
   grant's first token (`onGrant`), never at the click, so a second use is refused and junk cannot spend it.
 - **Known apps redeem in one click; any other app is warned and asks for the code.** The app keeps a list of
-  returns it knows (the exact callbacks of the agents it expects, and an app on this computer). For one of those, a
+  returns it knows (the exact callbacks of the agents it expects, and an app on this computer: an http loopback
+  redirect, never a custom scheme the app has not listed). For one of those, a
   remembered invite is one click. For any other return, the page warns "This app returns to <host>" (the client's
   name is its own claim, never verified; the return is what counts) and asks for the code from the invite, even when
   the link is remembered. Nothing is approved without a click.
@@ -740,6 +745,6 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
   for a space that exists and one that does not; never a 403 that confirms it. Metadata is 404 only for a path
   `resources` refuses, and a wrong code is "not one of ours" whether or not the space is real. The code page is
   limited like the kit's own open endpoints.
-- **Tested as a browser does it.** The owner's approval through `approveSignIn` (`testing`); the app's own page with
-  the same ticket cookie and `Sec-Fetch-Site: same-origin`; then a space's token refused at another space, a spent
+- **Tested as a browser does it.** The owner's approval through `approveSignIn` (`testing`); the app's own page
+  through its `form` option (the same ticket cookie and `Sec-Fetch-Site: same-origin`); then a space's token refused at another space, a spent
   invite refused, a removed member's token refused, and the 404 the same for an unknown and a hidden space.
