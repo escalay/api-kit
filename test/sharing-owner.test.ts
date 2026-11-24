@@ -145,6 +145,26 @@ describe('invites', () => {
     expect(await invitesAt(byKey)).toHaveLength(2)
   })
 
+  it('each have a self, from the 201 (and its Location) and the list, that answers the card without a link or code', async () => {
+    const { byKey } = await sharingApi()
+    const made = await byKey('/api/spaces/soups/invites', { method: 'POST', body: { label: 'Sam' } })
+    const invite = (await made.json()) as NewInvite & { _links: { self: { href: string } } }
+    expect(invite._links.self.href).toBe(`${ORIGIN}/api/spaces/soups/invites/${invite.id}`)
+    expect(made.headers.get('location')).toBe(`/api/spaces/soups/invites/${invite.id}`)
+    const listed = (await invitesAt(byKey))[0] as unknown as { _links: { self: { href: string } } }
+    expect(listed._links.self.href).toBe(invite._links.self.href)
+
+    const one = await byKey(invite._links.self.href.replace(ORIGIN, ''))
+    expect([one.status, one.headers.get('cache-control')]).toEqual([200, 'no-store'])
+    const card = (await one.json()) as Record<string, unknown>
+    expect(card).toMatchObject({ id: invite.id, label: 'Sam', state: 'open', _links: { self: { href: invite._links.self.href } } })
+    const text = JSON.stringify(card)
+    for (const secret of [invite.link, invite.code, 'linkHash', 'codeHash', 'madeByGrant']) expect(text).not.toContain(secret)
+
+    expect((await byKey(`/api/spaces/soups/invites/${invite.id}`, { method: 'DELETE' })).status).toBe(204)
+    expect(((await (await byKey(`/api/spaces/soups/invites/${invite.id}`)).json()) as { state: string }).state).toBe('revoked')
+  })
+
   it('refuses a label with control, bidi or zero-width characters, and one over 80', async () => {
     const { byKey } = await sharingApi()
     for (const label of ['Sam‮gnp.exe', 'Sa​m', 'Sam\nAda', '', 'x'.repeat(81)]) expect((await byKey('/api/spaces/soups/invites', { method: 'POST', body: { label } })).status, label).toBe(400)
@@ -223,6 +243,7 @@ describe('the same 404', () => {
     ['PATCH', `/api/spaces/${space}/sharing`, { askToJoin: true }],
     ['POST', `/api/spaces/${space}/invites`, { label: 'Sam' }],
     ['GET', `/api/spaces/${space}/invites`, undefined],
+    ['GET', `/api/spaces/${space}/invites/inv_x`, undefined],
     ['DELETE', `/api/spaces/${space}/invites/inv_x`, undefined],
   ] as const
 
@@ -259,9 +280,11 @@ describe('the same 404', () => {
   it('for an invite id from Bakes at Soups: a made-up id answers the same, and the Bakes invite stays open', async () => {
     const { byKey } = await sharingApi()
     const bakes = await makeInvite(byKey, 'bakes')
-    const crossed = await problemOf(await byKey(`/api/spaces/soups/invites/${bakes.id}`, { method: 'DELETE' }))
-    const madeUp = await problemOf(await byKey('/api/spaces/soups/invites/inv_madeup', { method: 'DELETE' }))
-    expect(crossed).toEqual({ status: 404, body: { ...madeUp.body, detail: (madeUp.body.detail as string).replace('inv_madeup', bakes.id) } })
+    for (const method of ['GET', 'DELETE']) {
+      const crossed = await problemOf(await byKey(`/api/spaces/soups/invites/${bakes.id}`, { method }))
+      const madeUp = await problemOf(await byKey('/api/spaces/soups/invites/inv_madeup', { method }))
+      expect(crossed, method).toEqual({ status: 404, body: { ...madeUp.body, detail: (madeUp.body.detail as string).replace('inv_madeup', bakes.id) } })
+    }
     expect((await invitesAt(byKey, 'bakes')).map((one) => one.state)).toEqual(['open'])
   })
 })

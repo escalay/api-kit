@@ -8,6 +8,7 @@
  *   PATCH  {path}/{space}/sharing         switch Ask to join
  *   POST   {path}/{space}/invites         a new invite → 201, its link and code shown this once
  *   GET    {path}/{space}/invites         the space's invites, newest first, a page at a time
+ *   GET    {path}/{space}/invites/{id}    one invite and its state, never its link or code
  *   DELETE {path}/{space}/invites/{id}    revoke an invite no one has used
  * The sign-in pages and the hooks come next (its README says what is there).
  *
@@ -126,5 +127,6 @@ export const registerSharing = async (app: OpenAPIHono, sharing: Sharing, { oaut
   app.openapi(routes.update, handle.update)
   app.openapi(routes.createInvite, handle.createInvite)
   app.openapi(routes.listInvites, handle.listInvites)
+  app.openapi(routes.getInvite, handle.getInvite)
   app.openapi(routes.revokeInvite, handle.revokeInvite)
 }

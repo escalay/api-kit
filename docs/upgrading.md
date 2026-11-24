@@ -499,8 +499,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - A new part, not yet wired into `createOAuth`: its tables (`SHARING_MIGRATIONS` step 1: `sharing_spaces`,
   `sharing_invites`, `sharing_requests`, `sharing_members`), `sharingRepo`, the named states of its rows and its
   secrets; `createSharing` and `registerSharing` with the owner's routes under `/api/spaces/{space}` (the space's
-  sharing and its invites: made with the link and code shown once, listed, revoked) and `sharingTools`. Nothing to do
-  in an app that doesn't add it.
+  sharing and its invites: made with the link and code shown once, listed, read one at a time, revoked) and
+  `sharingTools`. Nothing to do in an app that doesn't add it.
 
 ## testing
 

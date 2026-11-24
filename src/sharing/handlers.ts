@@ -83,7 +83,9 @@ type InviteWanted = { label: string; scope: Scope; lifetime: Lifetime; replacesM
 export const sharingHandlers = (config: SharingConfig, oauth: Pick<OAuth, 'rootOf' | 'issuerOf' | 'mcpPath'>, repo: SharingRepo) => {
   const spacePath = (space: Space) => `${config.path}/${encodeURIComponent(space.name)}`
   const invitesPath = (space: Space) => `${spacePath(space)}/invites`
+  const invitePath = (space: Space, id: string) => `${invitesPath(space)}/${encodeURIComponent(id)}`
   const noSuchSpace = (name: string) => new ProblemError('not_found', { detail: `No space ${name} here that you may share. Check the name in its address, or ask its owner.` })
+  const noSuchInvite = (space: Space, id: string) => new ProblemError('not_found', { detail: `No invite ${id} at ${space.title}. GET ${invitesPath(space)} lists them.` })
 
   /** Who is asking and the space they named; the same 404 for anyone who may not share and for a space not found. */
   const sharingAt = async (c: Context, name: string) => {
@@ -99,7 +101,7 @@ export const sharingHandlers = (config: SharingConfig, oauth: Pick<OAuth, 'rootO
 
   const cardOf = (origin: string, space: Space, invite: Omit<InviteWithMember, 'linkHash' | 'codeHash'>, now: Date) => {
     const state = inviteStateOf(invite, invite.memberId ? { id: invite.memberId } : null, now)
-    const revoke = state === 'open' ? { path: `${invitesPath(space)}/${invite.id}`, title: 'DELETE to revoke' } : null
+    const revoke = state === 'open' ? { path: invitePath(space, invite.id), title: 'DELETE to revoke' } : null
     return {
       id: invite.id,
       label: invite.label,
@@ -110,7 +112,7 @@ export const sharingHandlers = (config: SharingConfig, oauth: Pick<OAuth, 'rootO
       createdAt: invite.createdAt,
       redeemBy: invite.redeemBy,
       revokedAt: invite.revokedAt,
-      _links: linksOf(origin, { list: invitesPath(space), revoke }),
+      _links: linksOf(origin, { self: invitePath(space, invite.id), list: invitesPath(space), revoke }),
     }
   }
 
@@ -146,7 +148,7 @@ export const sharingHandlers = (config: SharingConfig, oauth: Pick<OAuth, 'rootO
     const link = `${oauth.issuerOf(c)}/sharing/join/${token}`
     showOnce(c, `This Idempotency-Key already made invite ${id} for ${wanted.label} at ${space.title} (GET ${invitesPath(space)}). Its link and code were shown once, in that answer, and are never shown again. Lost them? Revoke it (DELETE ${invitesPath(space)}/${id}) and make another with a new Idempotency-Key.`)
     const card = cardOf(originOf(c), space, { ...row, id, revokedAt: null, memberId: null }, now)
-    return c.json({ ...card, link, code, message: messageOf(space, link, code, row.redeemBy) }, 201, NO_STORE)
+    return c.json({ ...card, link, code, message: messageOf(space, link, code, row.redeemBy) }, 201, { location: invitePath(space, id), ...NO_STORE })
   }
 
   const get: RouteHandler<SharingRoutes['get']> = async (c) => {
@@ -182,6 +184,14 @@ export const sharingHandlers = (config: SharingConfig, oauth: Pick<OAuth, 'rootO
     return c.json(pageOf({ origin, path: invitesPath(space), query: { limit }, name: 'invites', items: shown.map((row) => cardOf(origin, space, row, now)), next }), 200, NO_STORE)
   }
 
+  const getInvite: RouteHandler<SharingRoutes['getInvite']> = async (c) => {
+    const { space: name, id } = c.req.valid('param')
+    const { space } = await sharingAt(c, name)
+    const invite = await repo.inviteAt(space.id, id)
+    if (!invite) throw noSuchInvite(space, id)
+    return c.json(cardOf(originOf(c), space, invite, new Date()), 200, NO_STORE)
+  }
+
   const revokeInvite: RouteHandler<SharingRoutes['revokeInvite']> = async (c) => {
     const { space: name, id } = c.req.valid('param')
     const { space } = await sharingAt(c, name)
@@ -189,11 +199,11 @@ export const sharingHandlers = (config: SharingConfig, oauth: Pick<OAuth, 'rootO
     if (await repo.revokeInvite(space.id, id, now)) return c.body(null, 204)
     // Not revoked now: not at this space, used already, or revoked before
     const invite = await repo.inviteAt(space.id, id)
-    if (!invite) throw new ProblemError('not_found', { detail: `No invite ${id} at ${space.title}. GET ${invitesPath(space)} lists them.` })
+    if (!invite) throw noSuchInvite(space, id)
     if (inviteStateOf(invite, invite.memberId ? { id: invite.memberId } : null, now) === 'redeemed')
       throw new ProblemError('conflict', { detail: `Invite ${id} was used already, so revoking it changes nothing.` })
     return c.body(null, 204)
   }
 
-  return { get, update, createInvite, listInvites, revokeInvite }
+  return { get, update, createInvite, listInvites, getInvite, revokeInvite }
 }

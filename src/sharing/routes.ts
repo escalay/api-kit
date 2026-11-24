@@ -1,4 +1,4 @@
-/** The owner's sharing routes as OpenAPI contracts: a space's settings, and its invites made, listed and revoked. */
+/** The owner's sharing routes as OpenAPI contracts: a space's settings, and its invites made, listed, read and revoked. */
 import { createRoute, z } from '@hono/zod-openapi'
 import { HAL_JSON, LinksSchema } from '../core/hal.js'
 import { problemResponses } from '../core/problem.js'
@@ -77,6 +77,12 @@ export const sharingRoutes = ({ path, tag }: { path: string; tag: string }) => {
       description: 'The space’s invites, newest first, each with its state. Never a link or a code: those were shown once.',
       request: { params: z.object({ space }), query: z.object({ limit: limitQuery({ fallback: 50, max: 100 }), cursor: cursorQuery }) },
       responses: { 200: ok('A page of invites.', InvitePageSchema), ...problemResponses(400, 401, 404) },
+    }),
+    getInvite: createRoute({
+      method: 'get', path: `${at}/invites/{id}`, operationId: 'getInvite', tags: [tag], summary: 'One invite',
+      description: 'One of the space’s invites and its state. Never its link or code: those were shown once.',
+      request: { params: z.object({ space, id }) },
+      responses: { 200: ok('The invite.', InviteSchema), ...problemResponses(401, 404) },
     }),
     revokeInvite: createRoute({
       method: 'delete', path: `${at}/invites/{id}`, operationId: 'revokeInvite', tags: [tag], summary: 'Revoke an invite',

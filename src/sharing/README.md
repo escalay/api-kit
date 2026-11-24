@@ -85,8 +85,9 @@ The owner routes (`{path}` default `/api/spaces`) and their tools:
 |---|---|---|---|
 | `GET {path}/{space}/sharing` | `getSharing` | `get_sharing`, `sharing view` | 200 `askToJoin` (`off`, `on`, `paused`), `askToJoinOffered`, `openInvites`; 404 |
 | `PATCH {path}/{space}/sharing` `{ askToJoin }` | `updateSharing` | `set_ask_to_join`, `sharing edit` | 200; 409 when `askToJoin` is off in the options; off refuses everyone waiting |
-| `POST {path}/{space}/invites` `{ label, scope = 'read', lifetime = '30d' }` | `createInvite` | `create_invite`, `invite create` | 201 with `link`, `code` and `message`, shown once; 400; 409 at 100 open, or `shown_once` on a retry |
+| `POST {path}/{space}/invites` `{ label, scope = 'read', lifetime = '30d' }` | `createInvite` | `create_invite`, `invite create` | 201 with `link`, `code` and `message`, shown once, and `Location`; 400; 409 at 100 open, or `shown_once` on a retry |
 | `GET {path}/{space}/invites?limit&cursor` | `listInvites` | `list_invites`, `invite list` | 200, newest first, a page at a time, never a link or code |
+| `GET {path}/{space}/invites/{id}` | `getInvite` | none: `list_invites` holds the same | 200, the card its `self` names; 404 |
 | `DELETE {path}/{space}/invites/{id}` | `revokeInvite` | `revoke_invite`, `invite revoke` | 204, again 204; 409 once used |
 
 `sharingRepo(db)`, by table:
@@ -223,7 +224,7 @@ stateDiagram-v2
 
 - `test/sharing.test.ts`: the migration's tables and indexes, every named state as a table, the secrets, both claims
   and the 100-open cap under a race, an id from one space at another for every by-id statement, and no table holding a secret.
-- `test/sharing-owner.test.ts`: who may share as a table; invites made, listed, paged and revoked; the same 404 at
+- `test/sharing-owner.test.ts`: who may share as a table; invites made, listed, paged, read by their `self` and revoked; the same 404 at
   every route for strangers, missing, cased and encoded names, and another space's id; the cap with invites made at
   once; agents' lifetimes and makers;
   an Idempotency-Key retry (memory and database guards, and through MCP) keeping no link or code; `lintOpenApi`,
