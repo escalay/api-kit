@@ -422,6 +422,19 @@ input{background:var(--bg);color:var(--fg);letter-spacing:.3em;width:9ch;text-al
     return { audience: root, resource: null }
   }
 
+  /**
+   * The audience an approval gives: the ticket's, or the app's choice when the client named no resource it was issued
+   * (`decision.resource`), checked as a resource the client asks for. A client that named its resource keeps it.
+   */
+  const approvedAudience = (c: Context, asked: string | undefined, decided: string | undefined) => {
+    const bound = audienceFor(c, asked)
+    if ('refused' in bound || decided === undefined) return bound
+    const resource = canonical(decided)
+    if (!resource || !issues(rootOf(c), resource)) return { refused: `This server issues no tokens for ${decided}.` }
+    if (bound.resource !== null && bound.resource !== resource) return { refused: `The client asked for ${bound.resource}, not ${resource}.` }
+    return { audience: resource, resource: bound.resource }
+  }
+
   /** A stored row's audience, or nothing for a row from before audiences: it never gains one. */
   const boundOf = (row: Record<string, unknown>) => (typeof row.audience === 'string' ? { audience: row.audience, resource: typeof row.resource === 'string' ? row.resource : null } : {})
   /** A token request naming a resource other than the one its grant asked for (RFC 8707 §2.2); an audience the server chose is never held against it. */
@@ -650,8 +663,8 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       if (typeof decision.approver !== 'string' || !decision.approver.trim()) return cantApprove(c, 'An approval needs an approver: the person it is for.')
       const checked = await authorizeParams(c, params)
       if ('error' in checked) return cantApprove(c, checked.error!)
-      // Resolved again from the ticket's own request: the audience is the ticket's, never chosen here
-      const bound = audienceFor(c, params.resource)
+      // Resolved again from the ticket's own request: the ticket's audience, or the app's where the client named none
+      const bound = approvedAudience(c, params.resource, decision.resource)
       if ('refused' in bound) return cantApprove(c, `${bound.refused} (invalid_target)`)
       // Only the app's own list is checked: without one, the request's scopes go through as they did before approvals, even none
       const scopes = decision.scopes ?? checked.scopes
@@ -703,11 +716,12 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
 
   /**
    * Answers a ticket from the app's own page: the grant follows only a same-origin POST from the browser that opened it,
-   * once. `approver` becomes the token's `sub`, `scopes` may only narrow, `data` reaches `onGrant`; the resource is the
-   * ticket's. Returns the 302 to the client (`code`, `state`, `iss`, or `access_denied`), or a 400/403 page.
+   * once. `approver` becomes the token's `sub`, `scopes` may only narrow, `data` reaches `onGrant`; `resource` binds the
+   * grant to one this server issues for when the client named none (an invite's space), else the ticket's stays.
+   * Returns the 302 to the client (`code`, `state`, `iss`, or `access_denied`), or a 400/403 page.
    *
    * @example
-   * return oauth.complete(c, ask.ticket, { approver: 'owner@example.test', scopes: ['read'], data: { invite } })
+   * return oauth.complete(c, ask.ticket, { approver: 'owner@example.test', scopes: ['read'], data: { invite }, resource: `${oauth.rootOf(c)}/s/alpha/mcp` })
    */
   const complete = (c: Context, ticket: string, decision: SignInDecision) => answer(c, ticket, decision)
 

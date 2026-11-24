@@ -178,7 +178,7 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   (`complete`, the kit's consent, claim and device pages) needs `Sec-Fetch-Site: same-origin`, or with none an
   `Origin` equal to the issuer's (never `null`, so every page whose form posts there, the kit's and the app's, sets
   `<meta name="referrer" content="same-origin">` over the `no-referrer` header); `same-site` is refused, since a
-  sibling host is same-site. The approval only narrows scopes, never sets the resource (the ticket's). `onGrant` hears
+  sibling host is same-site. The approval only narrows scopes, and sets the resource only where the client named none (an invite binds its space; checked as a client's resource would be, the client's own never changed). `onGrant` hears
   the first token of every grant (code, device, claim) after the kit's checks, once, and false withdraws it
   (`invalid_grant`); an app that keeps its own client rows makes them in `onGrant` and refuses a token whose grant has
   none. The kit's own pages carry the app's brand (§22) and name the client by text only, never a `logo_uri`; the

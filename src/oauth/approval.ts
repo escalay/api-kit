@@ -27,8 +27,11 @@ export type SignInAsk = {
   arrival: { site: string | null; referrerOrigin: string | null }
 }
 
-/** The app's answer to a ticket: who approves (the token's `sub`), narrower scopes, data for `onGrant`; or `'deny'`. */
-export type SignInDecision = { approver: string; scopes?: string[]; data?: Record<string, string> } | 'deny'
+/**
+ * The app's answer to a ticket: who approves (the token's `sub`), narrower scopes, data for `onGrant`, and the
+ * audience when the client named none (`resource`: an invite binds its space); or `'deny'`.
+ */
+export type SignInDecision = { approver: string; scopes?: string[]; data?: Record<string, string>; resource?: string } | 'deny'
 
 /** What `onGrant` hears before the first token of a grant. `resource` is absent on a grant from before audiences. */
 export type SignInGrant = {

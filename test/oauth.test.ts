@@ -1264,6 +1264,51 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     expect(await (await owner.post('/join', { ticket: short, invite: 'garden-42' })).text()).toContain('This sign-in expired')
   })
 
+  it('lets complete bind an invite’s grant to its space when the client named none, and its token works nowhere else', async () => {
+    const ALPHA = `${ORIGIN}/s/alpha/mcp`
+    const BETA = `${ORIGIN}/s/beta/mcp`
+    const resourceOf = (c: Context) => `${originOf(c)}${/^\/s\/[a-z]+\/mcp/.exec(c.req.path)?.[0] ?? ''}`
+    const { app, oauth } = await oauthApp(memoryOAuthStore(), {
+      resources: (path) => /^\/s\/[a-z]+\/mcp$/.test(path),
+      resourceOf,
+      approve: async (c, ask) => c.html(`<form method="post" action="/join"><input type="hidden" name="ticket" value="${ask.ticket}"></form>`),
+    }, { open: ['/join'] })
+    app.post('/s/:name/mcp', (c) => c.json({ ok: true }))
+    // The invite names its space: the grant is bound to it, whatever the client asked
+    app.post('/join', async (c) => {
+      const body = await c.req.parseBody()
+      return oauth.complete(c, String(body.ticket), { approver: OWNER, resource: String(body.resource) })
+    })
+    const client_id = await registered(app)
+    const browser = browserOf(app)
+    const open = async (extra: Record<string, string> = {}) => ticketIn(await (await browser.request(`/oauth/authorize?${authorizeQuery(client_id, extra)}`)).text())
+    const mcpAt = (path: string, token: string) => app.request(path, { method: 'POST', headers: { authorization: `Bearer ${token}` } })
+
+    const ticket = await open()
+    const joined = await browser.post('/join', { ticket, resource: ALPHA })
+    const tokens = await (await exchangeAt(app, joined.headers.get('location'), client_id)).json()
+    expect(audOf(tokens.access_token)).toBe(ALPHA)
+    expect((await mcpAt('/s/alpha/mcp', tokens.access_token)).status).toBe(200)
+    expect((await mcpAt('/s/beta/mcp', tokens.access_token)).status).toBe(401)
+    // The app chose the audience, so a resource the client sends on refresh is not held against it, and it stays
+    const rotated = await (await refreshWith(app, tokens.refresh_token, ORIGIN)).json()
+    expect(audOf(rotated.access_token)).toBe(ALPHA)
+
+    // A resource the server does not issue for is a page, and the ticket stays live
+    const kept = await open()
+    for (const wrong of [`${ORIGIN}/s/alpha/files`, 'https://elsewhere.example.test/s/alpha/mcp', 'not a url']) {
+      const refused = await browser.post('/join', { ticket: kept, resource: wrong })
+      expect([refused.status, refused.headers.get('location'), await refused.text()], wrong).toEqual([400, null, expect.stringContaining('invalid_target')])
+    }
+    expect((await browser.post('/join', { ticket: kept, resource: ALPHA })).headers.get('location')).toContain('code=')
+
+    // A client that named its resource keeps it: the same one is fine, another is refused
+    const asked = await open({ resource: BETA })
+    expect(await (await browser.post('/join', { ticket: asked, resource: ALPHA })).text()).toContain('invalid_target')
+    const same = await browser.post('/join', { ticket: asked, resource: `${BETA}/` })
+    expect(audOf((await (await exchangeAt(app, same.headers.get('location'), client_id, { resource: BETA })).json()).access_token)).toBe(BETA)
+  })
+
   it('takes a ticket life of a minute to a week, in whole seconds', async () => {
     const keyed = { name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null }
     for (const wrong of [0, 59, 1.5, Number.NaN, 7 * 24 * 3600 + 1]) expect(() => createOAuth({ ...keyed, ticketTtl: wrong }), String(wrong)).toThrow(/ticketTtl/)

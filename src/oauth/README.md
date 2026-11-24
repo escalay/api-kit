@@ -32,6 +32,12 @@ Nothing to wire: `mount` adds it, and the metadata names `device_authorization_e
 
 ## Audiences (RFC 8707)
 
+> **The default `accepts` takes a root token at every space.** A client that sends no `resource` gets the root, and a
+> root token works everywhere on the origin, every space included. An app that signs people in by invite binds each
+> grant to the invite's space: `oauth.complete(c, ticket, { approver, resource: <the space's resource> })`. Its token
+> then works at that space only, even when the client asked for nothing. An app that wants a space to take only its
+> own tokens also refuses the root there in its own `accepts` (below).
+
 Every grant is bound to one resource, signed as its tokens' `aud` and on the caller as `resource`:
 
 - The resource the client sends at `/oauth/authorize` (or `/oauth/device_authorization`), when this server issues for
@@ -135,8 +141,12 @@ every first token in `onGrant`:
   expired, answered, or opened in another browser; then `oauth.answeredOf(c, ticket)` says `approved`, `denied` or
   `answered` for a ticket this browser spent already, so the route can say "Already approved") and answers with `oauth.complete(c, ticket, decision)`:
   `{ approver, scopes?, data? }` or `'deny'`. `approver` becomes the token's `sub` (`caller.owner`), `scopes` may only
-  narrow what was asked (a wider or empty list is a 400 page), `data` goes on the code and reaches `onGrant`. The
-  resource is the ticket's; `complete` never sets one. It returns the 302 to the client (`code`, `state`, `iss`, or
+  narrow what was asked (a wider or empty list is a 400 page), `data` goes on the code and reaches `onGrant`.
+  `resource` binds the grant to a resource this server issues for (an invite's space), checked as a client's would be
+  (`resources`, the issuer's origin, the canonical form) when the client named none; a client that named one keeps
+  it, the same one again is fine, and any other, or one not issued for, is a 400 page (`invalid_target`) with the
+  ticket still live. The audience the app chose is the server's choice: a `resource` the client sends later at the
+  token endpoint is not held against it, and refresh keeps it. Without `resource`, the ticket's audience. It returns the 302 to the client (`code`, `state`, `iss`, or
   `access_denied`) or a 400/403 page. A blank `approver` is a 400 page, and the ticket stays live.
 - `onGrant(grant, c)` hears the first token of every grant: `kind` (`code`, `device` or `claim`), `grant`, `client`
   (`id`, `name`), `approver`, `scopes`, `resource` (absent on a grant from before audiences) and `data`. It runs after
@@ -500,7 +510,7 @@ Nothing else changes until the app passes `publicOrigin` or `limits`.
 
 ## Upgrading to sharing
 
-New, off unless set: `ticketTtl` (default 600, as before). Defaults that change when an app takes this version:
+New, off unless set: `ticketTtl` (default 600, as before), `complete`'s `resource`. Defaults that change when an app takes this version:
 
 - **Every row anyone may write without auth is capped** (before, only registrations and consent tickets): agent
   registrations and their claim tokens under `maxUnusedClients`, claim attempts and device codes under
