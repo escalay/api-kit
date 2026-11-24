@@ -5,6 +5,7 @@ import { Readable } from 'node:stream'
 import { eq } from 'drizzle-orm'
 import { describe, expect, it, vi } from 'vitest'
 import { createAgentApi, dbGuardStore, hashApiKey, holderOf, KEYS_TAG, keyTools, kitGuards, memoryGuardStore, parseApiKeys, registerKeys, storedKeysOf, testDb, type Db, type GuardStore, type KeyChange, type StoredAnswer } from '../src/index.js'
+import { mountA2A } from '../src/a2a/index.js'
 import { inProcess, mcpServerFactory, mountMcp } from '../src/mcp/index.js'
 import { cliSnapshot, lintOpenApi, toolRoutes, toolsRun } from '../src/testing/index.js'
 import { createCli } from '../templates/sdk/sdk/cli/engine/index.js'
@@ -15,14 +16,14 @@ const KEY = 'owner-key'
 /** Where an app keeps its idempotency answers. */
 const GUARD_STORES = { memory: async () => memoryGuardStore(), database: (db: Db) => dbGuardStore(db) }
 
-const setup = async ({ onKeyChange, guards = 'memory' }: { onKeyChange?: (change: KeyChange) => void; guards?: keyof typeof GUARD_STORES } = {}) => {
+const setup = async ({ onKeyChange, guards = 'memory', relay }: { onKeyChange?: (change: KeyChange) => void; guards?: keyof typeof GUARD_STORES; relay?: string[] } = {}) => {
   const db = await testDb()
   const store = await GUARD_STORES[guards](db)
   // Every answer the guard keeps, as it handed it to the store
   const kept: StoredAnswer[] = []
   const recording: GuardStore = { ...store, save: (id, answer, expiresAt) => (kept.push(answer), store.save(id, answer, expiresAt)) }
   const keys = parseApiKeys(`owner:${hashApiKey(KEY)}`)
-  const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [KEYS_TAG], auth: { realm: 'sample', keys, storedKeys: storedKeysOf(db) }, guards: { store: recording } })
+  const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [KEYS_TAG], auth: { realm: 'sample', keys, storedKeys: storedKeysOf(db), relay }, guards: { store: recording } })
   const changes: unknown[] = []
   await registerKeys(app, { db, fixedKeys: [...keys.values()], keyPrefix: 'sk', onKeyChange: onKeyChange ?? ((change) => void changes.push(change)) })
   const as = (key: string) => (path: string, init: RequestInit = {}) => app.request(path, { ...init, headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' } })
@@ -32,6 +33,31 @@ const setup = async ({ onKeyChange, guards = 'memory' }: { onKeyChange?: (change
 /** POST /api/keys as the owner with an Idempotency-Key, as the kit's client sends every create. */
 const makeKey = (app: Awaited<ReturnType<typeof setup>>['app'], name: string, idempotencyKey: string) =>
   app.request('/api/keys', { method: 'POST', headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json', 'idempotency-key': idempotencyKey }, body: JSON.stringify({ name }) })
+
+const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} }
+
+/** Mounts MCP or A2A with the key tools at `path`, and gives a call that makes the key `agent` with an Idempotency-Key. */
+const relayOf = (app: Awaited<ReturnType<typeof setup>>['app'], kind: 'mcp' | 'a2a', path: string) => {
+  const tools = keyTools()
+  const headers = (idempotencyKey: string) => ({ authorization: `Bearer ${KEY}`, 'idempotency-key': idempotencyKey, 'content-type': 'application/json' })
+  if (kind === 'mcp') {
+    mountMcp(app, { path, factory: mcpServerFactory({ info: { name: 'sample', version: '1.0.0' }, instructions: 'Keys.', tools, callApi: inProcess(app) }), allowedHostnames: ['localhost'] })
+    return async (idempotencyKey: string) =>
+      (await app.request(path, {
+        method: 'POST',
+        headers: { ...headers(idempotencyKey), accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': 'create_key' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'create_key', arguments: { name: 'agent' }, _meta: META } }),
+      })).text()
+  }
+  const createKey = tools.find((tool) => tool.name === 'create_key')!
+  mountA2A(app, { path, info: { name: 'Sample', description: 'Keys.', version: '1.0.0' }, skills: [{ tool: createKey, text: 'name', tags: ['keys'] }], callApi: inProcess(app), waitMs: 0 })
+  return async (idempotencyKey: string) =>
+    (await app.request(path, {
+      method: 'POST',
+      headers: { ...headers(idempotencyKey), 'a2a-version': '1.0' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'SendMessage', params: { message: { messageId: 'm1', role: 'ROLE_USER', parts: [{ data: { name: 'agent' } }] } } }),
+    })).text()
+}
 
 const keyNamesOf = async (owner: Awaited<ReturnType<typeof setup>>['owner']) =>
   ((await (await owner('/api/keys')).json()) as { _embedded: { keys: { name: string }[] } })._embedded.keys.map((key) => key.name)
@@ -116,6 +142,30 @@ describe('keys', () => {
   })
 })
 
+describe('a key made through a relay, wherever it is mounted', () => {
+  const relays = [
+    { name: 'MCP at /mcp', kind: 'mcp', path: '/mcp' },
+    { name: 'MCP at /api/mcp', kind: 'mcp', path: '/api/mcp' },
+    { name: 'MCP at /mcp, auth.relay: []', kind: 'mcp', path: '/mcp', relay: [] },
+    { name: "MCP at /mcp, auth.relay: ['/s/*/mcp']", kind: 'mcp', path: '/mcp', relay: ['/s/*/mcp'] },
+    { name: 'A2A at /agents/a2a', kind: 'a2a', path: '/agents/a2a' },
+  ] as const
+
+  it.each(relays)('is made once, and a retry with the same Idempotency-Key never answers or stores it: $name', async ({ kind, path, ...options }) => {
+    const { app, kept, owner } = await setup({ relay: 'relay' in options ? [...options.relay] : undefined })
+    const call = relayOf(app, kind, path)
+    const first = await call('k1')
+    const key = /sk_[\w-]+/.exec(first)?.[0]
+    expect(key, first).toBeDefined()
+    const again = await call('k1')
+    expect(again).not.toContain(key)
+    expect(again).toContain('This Idempotency-Key already made the key agent')
+    // The guard kept the route's own answer, as a marker: the relay's answer is never kept
+    expect(kept).toEqual([{ bodyHash: expect.any(String), shownOnce: expect.stringContaining('the key agent') }])
+    expect(await keyNamesOf(owner)).toEqual(['agent'])
+  })
+})
+
 describe('a made key and Idempotency-Key', () => {
   it.each(['memory', 'database'] as const)('never keeps the key to replay (%s guards): the same Idempotency-Key answers 409 shown_once', async (guards) => {
     const { app, db, kept, owner } = await setup({ guards })
@@ -144,25 +194,6 @@ describe('a made key and Idempotency-Key', () => {
     expect(second.status).toBe(201)
     expect(((await second.json()) as { key: string }).key).not.toBe(key)
     expect(await keyNamesOf(owner)).toEqual(['ci', 'ci-2'])
-  })
-
-  it('never keeps a key made by a tool over /mcp, whose answer the guard cannot see', async () => {
-    const { app, kept, owner } = await setup()
-    mountMcp(app, { factory: mcpServerFactory({ info: { name: 'sample', version: '1.0.0' }, instructions: 'Keys.', tools: keyTools(), callApi: inProcess(app) }), allowedHostnames: ['localhost'] })
-    const call = () =>
-      app.request('/mcp', {
-        method: 'POST',
-        headers: { authorization: `Bearer ${KEY}`, 'idempotency-key': 'k1', 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': 'create_key' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'create_key', arguments: { name: 'agent' }, _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} } } }),
-      })
-    const first = await (await call()).text()
-    const key = /sk_[\w-]+/.exec(first)?.[0]
-    expect(key).toBeDefined()
-    const again = await call()
-    expect(again.headers.get('idempotent-replayed')).toBeNull()
-    expect(await again.text()).not.toContain(key)
-    expect(kept).toEqual([])
-    expect(await keyNamesOf(owner)).toEqual(['agent'])
   })
 
   it("the kit's client: a lost answer retried with the same key is a shown_once error, never the key twice", async () => {

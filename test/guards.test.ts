@@ -1,7 +1,10 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import type { AddressInfo } from 'node:net'
-import { addressOf, createAgentApi, dbGuardStore, idempotency, memoryGuardStore, parseApiKeys, rateLimit, showOnce, testDb, type AddressTrust, type GuardStore } from '../src/index.js'
+import { z } from '@hono/zod-openapi'
+import { mountA2A } from '../src/a2a/index.js'
+import { addressOf, createAgentApi, dbGuardStore, hashApiKey, idempotency, memoryGuardStore, parseApiKeys, rateLimit, showOnce, testDb, type AddressTrust, type GuardStore } from '../src/index.js'
+import { inProcess, mcpServerFactory, mcpTool, mountMcp } from '../src/mcp/index.js'
 import { countedDbStore, guardStoreContract, guardTableUpgrade } from './guard-store-contract.js'
 import { describe, expect, it } from 'vitest'
 import * as dbModule from '../src/db/index.js'
@@ -208,17 +211,57 @@ describe('idempotency', () => {
     })
   })
 
-  it("never keeps createAgentApi's relay paths, whose tools may answer a secret once", async () => {
-    for (const relay of [undefined, ['/agents/mcp']]) {
-      const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(undefined), open: ['/mcp', '/a2a', '/agents/mcp', '/api/notes'], relay } })
-      let runs = 0
-      for (const path of ['/mcp', '/a2a', '/agents/mcp', '/api/notes']) app.post(path, (c) => c.json({ run: ++runs }))
-      const post = (path: string) => app.request(path, { method: 'POST', headers: { 'idempotency-key': 'k1', 'content-type': 'application/json' }, body: '{}' })
-      const replayedOn = async (path: string) => (await post(path), (await post(path)).headers.get('idempotent-replayed') === 'true')
-      const relayPaths = relay ?? ['/mcp', '/a2a']
-      for (const path of ['/mcp', '/a2a', '/agents/mcp']) expect(await replayedOn(path), `${String(relay)} ${path}`).toBe(!relayPaths.includes(path))
-      expect(await replayedOn('/api/notes')).toBe(true)
+  describe('a relay', () => {
+    const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} }
+    /** MCP and A2A over one tool that POSTs to `route`, each called with an Idempotency-Key. */
+    const relays = (app: Hono<any, any, any>, route: string) => {
+      const tool = mcpTool({ name: 'add_note', title: 'Add a note', description: 'Adds a note.', input: z.object({ text: z.string().describe('The note.') }), call: (body) => ({ method: 'POST', path: route, body }), summarize: (json) => JSON.stringify(json) })
+      mountMcp(app, { factory: mcpServerFactory({ info: { name: 'sample', version: '1.0.0' }, instructions: 'Notes.', tools: [tool], callApi: inProcess(app) }), allowedHostnames: ['localhost'] })
+      mountA2A(app, { info: { name: 'Sample', description: 'Notes.', version: '1.0.0' }, skills: [{ tool, text: 'text', tags: ['notes'] }], callApi: inProcess(app), waitMs: 0 })
+      const headers = (key: string) => ({ authorization: `Bearer ${KEY}`, 'idempotency-key': key, 'content-type': 'application/json' })
+      return {
+        mcp: async (key: string) =>
+          (await app.request('/mcp', { method: 'POST', headers: { ...headers(key), accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': 'add_note' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'add_note', arguments: { text: 'hi' }, _meta: META } }) })).text(),
+        a2a: async (key: string) =>
+          (await app.request('/a2a', { method: 'POST', headers: { ...headers(key), 'a2a-version': '1.0' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'SendMessage', params: { message: { messageId: 'm1', role: 'ROLE_USER', parts: [{ text: 'hi' }] } } }) })).text(),
+      }
     }
+    const KEY = 'relay-key'
+
+    it('runs a retried tool call once: its route gets the same Idempotency-Key', async () => {
+      for (const kind of ['mcp', 'a2a'] as const) {
+        const app = createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A sample.', tags: [], auth: { realm: 'sample', keys: parseApiKeys(`tester:${hashApiKey(KEY)}`) } })
+        let runs = 0
+        app.post('/api/notes', (c) => c.json({ note: ++runs }, 201))
+        const call = relays(app, '/api/notes')[kind]
+        const first = await call('k1')
+        expect(first, kind).toContain('{\\"note\\":1}')
+        expect(await call('k1'), kind).toContain('{\\"note\\":1}')
+        expect(runs, kind).toBe(1)
+        await call('k2')
+        expect(runs, kind).toBe(2)
+      }
+    })
+
+    it('keeps no secret when idempotency is wired by hand: the relay marks its own answer', async () => {
+      const app = new Hono()
+      const store = memoryGuardStore()
+      const kept: unknown[] = []
+      app.use('*', idempotency({ store: { ...store, save: (id, answer, expiresAt) => (kept.push(answer), store.save(id, answer, expiresAt)) } }))
+      app.use('*', async (c, next) => (c.set('caller' as never, { kind: 'key', name: 'tester' } as never), next()))
+      let made = 0
+      app.post('/api/secrets', (c) => (showOnce(c, `Made secret ${++made}; it is never shown again.`), c.json({ secret: `sk_secret_${made}` }, 201)))
+      const { mcp, a2a } = relays(app, '/api/secrets')
+      for (const [kind, call] of [['mcp', mcp], ['a2a', a2a]] as const) {
+        const key = `k-${kind}`
+        expect(await call(key), kind).toContain('sk_secret_')
+        const again = await call(key)
+        expect(again, kind).not.toContain('sk_secret_')
+        expect(again, kind).toContain('it is never shown again')
+      }
+      expect(made).toBe(2)
+      expect(kept).toEqual([0, 1].map(() => ({ bodyHash: expect.any(String), shownOnce: expect.any(String) })))
+    })
   })
 })
 

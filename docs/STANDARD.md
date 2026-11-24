@@ -269,9 +269,10 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   session cookie, an invite code) calls `showOnce(c, replay)`: the guard keeps only `replay`, never the body or a
   header, and a retry with the same key and body is a `409 shown_once` whose detail says what was made, where to see
   it, that the secret is never shown again, and what to do if it was lost. Never a `400`: the kit's client sends a key
-  on every create, so creating keeps working. The relay paths (`/mcp`, `/a2a`) are never kept: a tool runs its route
-  in a request of its own, out of the guard's sight. `skip` is for a route where a retry should run again (the
-  secret is new each time); `showOnce` for one that must not run twice.
+  on every create, so creating keeps working. A relay (MCP, A2A, wherever mounted) never keeps its own answer
+  (`neverKeep`) and hands the caller's Idempotency-Key to the route its tool runs, which keeps its own: a retried tool
+  call runs once and never answers a secret twice. `skip` is for a route where a retry should run again (the secret
+  is new each time); `showOnce` for one that must not run twice.
 - Paid routes sit behind `rateLimit` per caller, with the `RateLimit-Policy` / `RateLimit` headers and a `429` with
   `Retry-After` past the limit, so a looping agent can't drain the budget. `rateLimit({ key })` counts per anything
   else instead (a pack, a grant); a `null` key leaves the call uncounted.

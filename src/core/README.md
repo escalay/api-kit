@@ -162,7 +162,7 @@ connect: MCP clients through OAuth (the 401 names the resource metadata), others
 
 - `idempotency` (wired by `createAgentApi`): `Idempotency-Key` on POST and PATCH, as the flow below. Kept 24 hours,
   only what `keep` passes (a success: after a refusal or a server error a retry runs again). Never kept: `/oauth/*`,
-  `/agent/identity*`, the relay paths, and `guards.skip` (an open route answering a secret: `['/join/*']`).
+  `/agent/identity*`, a relay (`neverKeep`), and `guards.skip` (an open route answering a secret: `['/join/*']`).
 - `showOnce(c, replay)`: an answer that shows a secret once keeps only `replay`, and a retry gets it as a 409
   `shown_once` (keys, setup's claim, `startSession`).
 - `rateLimit({ policy, limit, windowSeconds, store?, address?, key? })` for anything that spends money: the draft

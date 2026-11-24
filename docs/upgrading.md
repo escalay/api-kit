@@ -31,9 +31,9 @@ the version in `kit.json` up.
   memory or the `kit_guards` table, and a retry with the same `Idempotency-Key` got it again. A route now marks such
   an answer with `showOnce(c, replay)`: the guard keeps only `replay`, and the retry is a 409 `shown_once` (a new
   problem code) saying what was made. The keys, setup and people parts call it.
-- `createAgentApi` never keeps the relay paths (`auth.relay`, default `/mcp` and `/a2a`): a tool there runs its route
-  in a request of its own, out of the guard's sight. MCP mounted on another path that is not in `auth.relay`: add it to
-  `guards.skip`.
+- MCP and A2A never keep their own answer (`neverKeep`, wherever they are mounted) and pass the caller's
+  `Idempotency-Key` on to the route a tool runs (`FORWARDED`), which keeps its own answer: a retried tool call runs
+  once, and a key made by a tool is never answered twice. A relay of the app's own calls `neverKeep(c)` too.
 - `StoredAnswer` is now `ReplayedAnswer | ShownOnceAnswer`. A custom `GuardStore` that keeps the answer as JSON needs
   no change; one that copies known fields keeps `shownOnce` too.
 - The answers kept under 1.30.0, which may hold a secret for up to 24 hours, are dropped for you: the database store's
@@ -234,6 +234,12 @@ Nothing to do in any version recorded here.
 
 ## mcp
 
+### Unreleased (after 1.30.0)
+
+- `FORWARDED` adds `idempotency-key`: a tool's route gets the caller's key, so a retried `tools/call` runs the route
+  once (through 1.30.0 a retry replayed the whole `/mcp` answer, a key made by a tool included). `mountMcp` never keeps
+  its own answer, on any path.
+
 ### 1.30.0
 
 - `callWaiting` looks at a run right away. A tool still working past `waitMs` says which run to `GET` and where, and
@@ -245,6 +251,11 @@ Nothing to do in any version recorded here.
   name reads `authInfo.extra.name`; the grant is `authInfo.extra.grant`.
 
 ## a2a
+
+### Unreleased (after 1.30.0)
+
+- `mountA2A` never keeps its own answer and passes the caller's `Idempotency-Key` to the route a skill runs, as MCP
+  does: a retried `SendMessage` runs the route once.
 
 ### 1.30.0
 

@@ -22,6 +22,7 @@ import type { Context, Hono } from 'hono'
 import { CLI_META, cliOf, hintsOf, PENDING_META, PROBLEM_META, TOOLS_HASH_META, resourceCli, routeOf, templateVariables, type CliSpec } from '../core/cli.js'
 import { attachSkills, instructionsWithSkills } from './skills.js'
 import { MODERN_PROTOCOL_VERSION, mountedOf, publicOriginOf, recordMounted, sendPublic, serverCard, SERVER_CARD_TYPE, WELL_KNOWN, type AgentBrand, type ServerIcon } from '../core/discovery.js'
+import { neverKeep } from '../core/guards.js'
 import { originOf, pathWith } from '../core/hal.js'
 
 type Query = Record<string, string | number | boolean | string[] | null | undefined>
@@ -309,7 +310,8 @@ export const mountedMcp = (app: object) => {
   return { tools: (mcp?.tools ?? []) as unknown as McpTool[], resources: (mcp?.resources ?? []) as unknown as McpResource[] }
 }
 
-export const FORWARDED = ['authorization', 'cf-access-jwt-assertion'] as const
+/** The caller's headers a tool's route gets: who is calling, and the Idempotency-Key, so a retried call runs once. */
+export const FORWARDED = ['authorization', 'cf-access-jwt-assertion', 'idempotency-key'] as const
 
 /** Tools run the app's routes in-process with the caller's own credentials: no network hop, same auth decision. */
 export const inProcess = (app: { request: (input: string, init?: RequestInit) => Response | Promise<Response> }): CallApi => async (call, auth) => {
@@ -361,6 +363,8 @@ export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, all
   recordMounted(app, { mcp: { path, card, tools: factory.tools, resources: factory.resources } })
   for (const at of [`${path}/server-card`, WELL_KNOWN.serverCard]) app.get(at, (c: Context) => sendPublic(c, JSON.stringify(card(publicOriginOf(app, c)), null, 2), SERVER_CARD_TYPE))
   app.all(path, async (c: Context) => {
+    // A tool's route keeps its own answer under the same Idempotency-Key; this one, holding it, is never kept
+    neverKeep(c)
     const rejected = originValidationResponse(c.req.raw, allowedHostnames)
     if (rejected) return rejected
     const greeting = await modernInitialize(c, factory, brandOf())

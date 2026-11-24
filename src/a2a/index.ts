@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto'
 import type { AuthInfo } from '@modelcontextprotocol/server'
 import type { Context, Hono } from 'hono'
 import { mountedOf, publicOriginOf, sendPublic, WELL_KNOWN, type AgentBrand } from '../core/discovery.js'
+import { neverKeep } from '../core/guards.js'
 import { originOf } from '../core/hal.js'
 import { callWaiting, FORWARDED, pollRun, problemText, type CallApi, type McpTool } from '../mcp/index.js'
 import { memoryStore, type KeyValueStore } from '../core/kv.js'
@@ -262,6 +263,8 @@ export const mountA2A = (app: Hono<any, any, any>, config: A2AConfig) => {
   const push = ['CreateTaskPushNotificationConfig', 'GetTaskPushNotificationConfig', 'ListTaskPushNotificationConfigs', 'DeleteTaskPushNotificationConfig']
 
   app.post(path, async (c: Context) => {
+    // A tool's route keeps its own answer under the same Idempotency-Key; this one, holding it, is never kept
+    neverKeep(c)
     const reply = (body: unknown) => c.json(body as never, 200)
     const body = await c.req.json().catch(() => undefined)
     if (body === undefined) return reply(rpcError(null, ERRORS.parse, 'The body is not JSON.'))

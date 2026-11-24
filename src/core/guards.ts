@@ -6,8 +6,8 @@
  *                 a refusal or a server error, which changed nothing). An answer that shows a secret once (a new
  *                 key, an enrolment, a session) says so with `showOnce`: only that it was made is kept, and a replay
  *                 is a 409 `shown_once` saying what was made. Never on `/oauth/*` and `/agent/identity*`, whose
- *                 answers hold tokens, the relay paths (`/mcp`, `/a2a`: a tool's answer is out of its sight), nor
- *                 on the paths an app adds to `skip`.
+ *                 answers hold tokens, nor on the paths an app adds to `skip`. A relay (MCP, A2A) calls `neverKeep`:
+ *                 its tool's route gets the same key and keeps its own answer.
  *   rateLimit     at most `limit` calls per `windowSeconds` per caller on the routes it guards, with the draft
  *                 `RateLimit-Policy` / `RateLimit` headers (IETF httpapi-ratelimit-headers) and a 429 problem with
  *                 `Retry-After` past it: a looping agent can't drain a paid budget.
@@ -200,6 +200,16 @@ const callerOf = (c: Context, trust?: AddressTrust) => {
 }
 
 const SHOWN_ONCE = 'kit:shown-once'
+const NEVER_KEPT = 'kit:never-kept'
+
+/**
+ * Marks this request's answer as never kept: a relay (MCP, A2A), whose tool runs a route in a request of its own. That
+ * request carries the same Idempotency-Key, so the route keeps its own answer, or only what `showOnce` left.
+ *
+ * @example
+ * app.post('/mcp', (c) => { neverKeep(c); … })
+ */
+export const neverKeep = (c: Context) => c.set(NEVER_KEPT as never, true as never)
 
 /**
  * Marks this request's answer as showing a secret once (a new key, an enrolment, a session cookie): `idempotency` then
@@ -234,7 +244,7 @@ const replayOf = (c: Context, answer: StoredAnswer) => {
 const keepSuccess = (status: number) => status < 400
 
 /** Paths whose answers are never kept: the OAuth endpoints answer with tokens and codes. */
-const NEVER_KEPT = [...OAUTH_OPEN_PATHS, '/agent/identity*']
+const NEVER_KEPT_PATHS = [...OAUTH_OPEN_PATHS, '/agent/identity*']
 
 /** `idempotency`'s options; `createAgentApi({ guards })` passes `store`, `keep` and `skip`. */
 export type IdempotencyOptions = {
@@ -243,10 +253,7 @@ export type IdempotencyOptions = {
   store?: GuardStore
   /** Which statuses are kept to replay (default: below 400). `(status) => status < 500` keeps refusals too, as the kit once did; one that passes a 5xx keeps server errors as well. */
   keep?: (status: number) => boolean
-  /**
-   * More paths never kept, beside `/oauth/*` and `/agent/identity*` (`createAgentApi` adds its relay paths): an app's
-   * own open routes that answer a secret (a redirect holding a code), where a retry should run again.
-   */
+  /** More paths never kept, beside `/oauth/*` and `/agent/identity*`: an app's own open routes that answer a secret (a redirect holding a code), where a retry should run again. */
   skip?: string[]
 }
 
@@ -260,7 +267,7 @@ export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, stor
   async (c, next) => {
     const key = c.req.header('idempotency-key')
     if (!key || (c.req.method !== 'POST' && c.req.method !== 'PATCH')) return next()
-    if ([...NEVER_KEPT, ...skip].some((pattern) => matches(c.req.path, pattern))) return next()
+    if ([...NEVER_KEPT_PATHS, ...skip].some((pattern) => matches(c.req.path, pattern))) return next()
     if (key.length > 255) return problemResponse(c, 'bad_request', { detail: 'Idempotency-Key is at most 255 characters.', errors: [{ in: 'header', path: 'Idempotency-Key', message: 'too long' }] })
     const id = `${callerOf(c)} ${c.req.method} ${c.req.path} ${key}`
     const bodyHash = createHash('sha256').update(new Uint8Array(await c.req.raw.clone().arrayBuffer())).digest('hex')
@@ -277,8 +284,8 @@ export const idempotency = ({ ttlMs = 24 * 60 * 60 * 1000, lockMs = 60_000, stor
       await store.release(id)
       throw error
     }
-    // What isn't kept (a refusal, a server error) frees the key: a retry with it runs again
-    if (!keep(c.res.status)) return void (await store.release(id))
+    // What isn't kept (a refusal, a server error, a relay's answer) frees the key: a retry with it runs again
+    if (c.get(NEVER_KEPT as never) || !keep(c.res.status)) return void (await store.release(id))
     await store.save(id, await storedAnswerOf(c, bodyHash), now + ttlMs)
   }
 

@@ -52,8 +52,7 @@ export type AgentApiConfig = {
   brand?: AgentBrand
   /**
    * Idempotency-Key: where answers are kept (`store`, default this process's memory; on Workers `dbGuardStore(db)`),
-   * which statuses are kept (`keep`, default a success), and more paths never kept (`skip`, beside the OAuth ones and
-   * the relay paths, `auth.relay` or `/mcp` and `/a2a`, whose tools' answers it cannot see).
+   * which statuses are kept (`keep`, default a success), and more paths never kept (`skip`, beside the OAuth ones).
    *
    * @example
    * guards: { store: await dbGuardStore(db), skip: ['/join/*'] }
@@ -187,8 +186,7 @@ export const createAgentApi = (config: AgentApiConfig) => {
     app.use('*', linkHeaders)
     app.use('*', markdownForAgents(app))
   }
-  const relay = config.auth.relay ?? [config.oauth?.mcpPath ?? '/mcp', '/a2a']
-  app.use('*', authenticate({ ...config.auth, relay, open, ...(config.oauth ? { tokens: config.oauth.verify, resourceMetadata: config.oauth.resourceMetadataFor } : {}) }) as MiddlewareHandler)
+  app.use('*', authenticate({ relay: [config.oauth?.mcpPath ?? '/mcp', '/a2a'], ...config.auth, open, ...(config.oauth ? { tokens: config.oauth.verify, resourceMetadata: config.oauth.resourceMetadataFor } : {}) }) as MiddlewareHandler)
   app.use('*', cacheControl({ '/openapi.json': CACHE.docs, '/problems/': CACHE.docs, '/api/': CACHE.api }))
   // Resources under /api are HAL; Hono writes plain JSON, so name the media type once here
   app.use('/api/*', async (c, next) => {
@@ -196,9 +194,8 @@ export const createAgentApi = (config: AgentApiConfig) => {
     if (c.res.status < 300 && c.req.path !== '/api/health' && c.res.headers.get('content-type')?.startsWith('application/json')) c.res.headers.set('content-type', HAL_JSON)
   })
   app.use('*', rejectUnknownQuery(app))
-  // After auth: a retried POST is recognised per caller. A tool behind a relay runs its route in a request of its own,
-  // where a secret shown once is marked out of this guard's sight, so a relay's answers are never kept
-  app.use('*', idempotency({ ...config.guards, skip: [...relay, ...(config.guards?.skip ?? [])] }))
+  // After auth: a retried POST is recognised per caller
+  app.use('*', idempotency(config.guards))
   app.onError(errorHandler)
   app.notFound(notFoundHandler)
 
