@@ -6,6 +6,7 @@ import {
   memoryGuardStore,
   parseApiKeys,
   passkeyBaseName,
+  peopleRepo,
   PEOPLE_OPEN_PATHS,
   PEOPLE_TAG,
   registerKeys,
@@ -286,6 +287,25 @@ describe('passkeys and the session', () => {
     expect(await owner.json('POST', '/api/session/passkeys/register/verify', { challengeId: again.challengeId, enrolment, response: await device.register(again.options, ORIGIN) })).toMatchObject({ signedIn: true })
     // Once a passkey is made, the enrolment is spent
     expect((await browser().call('POST', '/api/session/passkeys/register/options', { enrolment })).status).toBe(401)
+  })
+
+  it('takes a challenge once when two verifies of it arrive together', async () => {
+    const { browser, claimAsOwner, db } = await setup()
+    const { authenticator } = await claimAsOwner()
+    const again = browser()
+    const { challengeId, options } = await again.json('POST', '/api/session/passkeys/login/options')
+    const response = await authenticator.login(options, ORIGIN)
+    const answers = await Promise.all([again.call('POST', '/api/session/passkeys/login/verify', { challengeId, response }), browser().call('POST', '/api/session/passkeys/login/verify', { challengeId, response })])
+    expect(answers.map((answer) => answer.status).sort()).toEqual([200, 400])
+
+    const repo = peopleRepo(db)
+    await repo.addChallenge({ id: 'wch_twice', kind: 'enrol', challenge: 'c', personId: 'prs_1', expiresAt: new Date(Date.now() + 60_000).toISOString() })
+    const taken = await Promise.all([repo.takeChallenge('wch_twice', 'enrol'), repo.takeChallenge('wch_twice', 'enrol')])
+    expect(taken.filter(Boolean)).toHaveLength(1)
+    // An expired one is taken out, never handed back
+    await repo.addChallenge({ id: 'wch_old', kind: 'login', challenge: 'c', personId: null, expiresAt: new Date(Date.now() - 1000).toISOString() })
+    expect(await repo.takeChallenge('wch_old', 'login')).toBeUndefined()
+    expect(await repo.peekChallenge('wch_old', 'login')).toBeUndefined()
   })
 
   it('refuses a passkey nobody registered, and an enrolment used twice', async () => {

@@ -49,12 +49,10 @@ export const peopleRepo = (db: Db) => ({
     const row = (await db.select().from(challenges).where(and(eq(challenges.id, id), eq(challenges.kind, kind))))[0]
     return row && row.expiresAt > now() ? row : undefined
   },
-  /** Takes a challenge: it can be used once, and not after it expired. */
+  /** Takes a challenge in one statement, so two verifies of it can't both have it; never after it expired. */
   takeChallenge: async (id: string, kind: (typeof challenges.$inferSelect)['kind']) => {
-    const row = (await db.select().from(challenges).where(and(eq(challenges.id, id), eq(challenges.kind, kind))))[0]
-    if (!row) return undefined
-    await db.delete(challenges).where(eq(challenges.id, id))
-    return row.expiresAt > now() ? row : undefined
+    const [row] = await db.delete(challenges).where(and(eq(challenges.id, id), eq(challenges.kind, kind))).returning()
+    return row && row.expiresAt > now() ? row : undefined
   },
   /** Drops what expired: challenges, and sessions past their date. */
   sweep: async () => {
