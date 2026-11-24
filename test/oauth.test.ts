@@ -1685,6 +1685,12 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
       expect(two.posted).toEqual([])
       expect(other.posted).toEqual([])
     })
+
+    it('reads a numeric reference no character has as a browser does (U+FFFD), so the error still names the forms', async () => {
+      const malformed = await ownPage((ask) => `<form method="post" action="/join?from=&#x110000;&#0;&#xD800;&#99999999999;"><input type="hidden" name="ticket" value="${ask.ticket}"></form>`)
+      await expect(approveSignIn(malformed.app, malformed.query, { form: { action: '/join' } })).rejects.toThrow('approveSignIn: no form posts to /join (the page’s forms: post /join?from=����)')
+      expect(malformed.posted).toEqual([])
+    })
   })
 
   describe('the brand on the kit’s own pages', () => {

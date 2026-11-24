@@ -170,10 +170,16 @@ type AppForm = { action: string; fields?: Record<string, string> }
 type PageForm = { method: string; action: string; hidden: Record<string, string> }
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
+/** The character a numeric reference names; U+FFFD, as in a browser, for zero, a surrogate or one past U+10FFFF. */
+const characterOf = (reference: string) => {
+  const codePoint = /^#x/i.test(reference) ? Number.parseInt(reference.slice(2), 16) : Number(reference.slice(1))
+  const named = codePoint > 0 && codePoint <= 0x10ffff && !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+  return named ? String.fromCodePoint(codePoint) : '�'
+}
 /** An attribute value as a browser reads it: named and numeric character references decoded. */
 const decoded = (text: string) =>
   text.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, entity: string) =>
-    entity.startsWith('#') ? String.fromCodePoint(entity[1] === 'x' || entity[1] === 'X' ? Number.parseInt(entity.slice(2), 16) : Number(entity.slice(1))) : ENTITIES[entity.toLowerCase()]!,
+    entity.startsWith('#') ? characterOf(entity) : ENTITIES[entity.toLowerCase()]!,
   )
 /** A tag's attributes, names lower-cased, quoted or bare values decoded. */
 const attributesOf = (tag: string): Record<string, string> =>
