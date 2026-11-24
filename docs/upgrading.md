@@ -19,7 +19,7 @@ sections below for every part the app has, from the version in `kit.json` up.
 
 ## core
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 - `tellApp` (what the parts' hooks go through: a hook that throws is logged, never answered) lives in
   `core/hooks.ts`, a new file `update` adds.
@@ -56,7 +56,7 @@ Nothing to do in any version recorded here.
 
 ## oauth
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 New, off unless set: `ticketTtl` (default 600, as before), `complete`'s `resource`, `onRevoke`. Defaults that change
 when an app takes this version:
@@ -199,7 +199,7 @@ Nothing to do in any version recorded here.
 
 ## guide
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 - `{{origin}}` is the app's `publicOrigin` (the OAuth server's) when it has one; without it, the request's origin, as
   before.
@@ -208,7 +208,7 @@ Nothing to do in any version recorded here.
 
 ## mcp
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 - `callWaiting` looks at a run right away. A tool still working past `waitMs` says which run to `GET` and where, and
   `_meta["api-kit/pending"]` gains `location` beside `run` (unchanged).
@@ -220,7 +220,7 @@ Nothing to do in any version recorded here.
 
 ## a2a
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 - `GetTask` on a working task polls the run its slow call started instead of calling the tool again, so a tool with
   side effects is not repeated; a done run answers from its `_links.result` when it names one. A task that ended
@@ -235,7 +235,7 @@ Nothing to do in any version recorded here.
 
 ## vectors
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 - `embedMissing` takes `<file>.lock` while it runs: a second run on the same ledger throws, naming the lock. A lock
   left on shared storage by another machine must be deleted by hand.
@@ -258,7 +258,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## boards
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 - Two PUTs of one item that arrive together add it once (201, then 200), never a 500.
 - A note can be cleared: `null` clears it, left out (or blank) keeps it, text sets it.
@@ -266,14 +266,14 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## keys
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 - `onKeyChange` is guarded: a hook that throws is logged and never answered, so a key made is still shown (once) with
   its 201.
 
 ## people
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 - A challenge or enrolment is taken in one statement: two verifies that race sign in once.
 - Expired challenges and sessions are swept from the write paths, at most once a minute.
@@ -283,7 +283,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## setup
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 - Every attempt still counts at its address (5 an hour), but only wrong codes count toward the day's 20, so the right
   code always gets through (through 1.29.0 every attempt counted, and 20 junk posts locked the owner out of claiming).
@@ -291,7 +291,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## telemetry
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 - The day's stamp is one conditional update: replicas running the schedule together send once.
   `telemetryRepo.markSent` returns a boolean, whether this call made the stamp.
@@ -299,7 +299,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## switches
 
-### Unreleased (after 1.29.0)
+### 1.30.0
 
 - `onSwitch` is guarded: a hook that throws is logged and never answered, so the switch stays made.
 

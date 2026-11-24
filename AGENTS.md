@@ -101,7 +101,8 @@ for a look at the kit on Workers by hand)
    part). Adding or changing a part: the `api-kit-part` skill.
 2. Open a pull request whose title is a Conventional Commit that reads well in release notes (CI checks it), and
    squash-merge it.
-3. Merge the release pull request (`chore(main): release X.Y.Z`) to publish: it bumps `package.json` (the CLI
+3. Before merging the release pull request, rename `docs/upgrading.md`'s `### Unreleased (after X)` headings to the
+   version it names, in a docs pull request of its own. Merge the release pull request (`chore(main): release X.Y.Z`) to publish: it bumps `package.json` (the CLI
    stamps that version into each app's `kit.json`) and `packages/create-escalay/package.json` together, and
    `release.yml` publishes both to npm, then runs `scripts/release-smoke.sh`.
 4. `pnpm release:check` on `main` when something looks off. The trusted publishers, set once per package:
