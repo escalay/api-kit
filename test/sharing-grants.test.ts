@@ -89,6 +89,12 @@ describe('onGrant', () => {
       expect((await exchange()).status).toBe(400)
     }
     expect(revoked.filter((told) => told.reason === 'withdrawn')).toHaveLength(4)
+
+    // A resource of the app's own beside the spaces is no space: its grant is withdrawn too
+    const docs = `${ORIGIN}/docs/mcp`
+    const own = await box({ oauth: { resources: (path) => path === '/docs/mcp' } })
+    const answer = await own.ownerSignsIn(docs)
+    expect([answer.status, answer.tokens.error]).toEqual([400, 'invalid_grant'])
   })
 
   it('never lets a sharing approval make a root grant', async () => {

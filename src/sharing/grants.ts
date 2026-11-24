@@ -164,6 +164,9 @@ const joinSpace = async (grants: Grants, grant: SignInGrant, root: string) => {
 /**
  * `onGrant`: a root grant passes untouched, unless one of the part's pages made it (they bind a space, never the root).
  * A space grant becomes a member, or is withdrawn. Before `bind`, no.
+ *
+ * @example
+ * const onGrant = onGrantFor({ config, repo, binding })   // what sharing.oauth.onGrant is
  */
 export const onGrantFor = (grants: Grants) => async (grant: SignInGrant, c: Context) => {
   const oauth = grants.binding.oauth
@@ -178,6 +181,9 @@ export const onGrantFor = (grants: Grants) => async (grant: SignInGrant, c: Cont
  * reason ends the rows of that grant, or of that client. Then, unless withdrawn, the open invites an agent made under
  * that grant or client are revoked; people who joined through them keep access. Each statement is conditional, so being
  * told twice changes nothing.
+ *
+ * @example
+ * const onRevoke = onRevokeFor({ repo })   // what sharing.oauth.onRevoke is
  */
 export const onRevokeFor = ({ repo }: Pick<Grants, 'repo'>) => async ({ grant, client, reason }: SignInRevoked) => {
   const now = new Date()
@@ -209,7 +215,12 @@ const spaceTokenFits = async ({ config, repo }: Grants, caller: TokenCaller, c: 
   return true
 }
 
-/** `accepts`: a root token fits everywhere; a space token only at its member's space. Before `bind`, only a token with no audience. */
+/**
+ * `accepts`: a root token fits everywhere; a space token only at its member's space. Before `bind`, only a token with no audience.
+ *
+ * @example
+ * await acceptsFor(grants)(caller, c)   // true, or the sentence a 401 carries
+ */
 export const acceptsFor = (grants: Grants) => async (caller: TokenCaller, c: Context): Promise<true | string> => {
   const oauth = grants.binding.oauth
   if (!oauth) return caller.resource ? NOT_READY : true
@@ -217,7 +228,12 @@ export const acceptsFor = (grants: Grants) => async (caller: TokenCaller, c: Con
   return spaceTokenFits(grants, caller, c)
 }
 
-/** `resources`: this server issues for a space address whose name passes `spaceName`; a pure check of the path. */
+/**
+ * `resources`: this server issues for a space address whose name passes `spaceName`; a pure check of the path.
+ *
+ * @example
+ * resourcesFor({ config })('/s/soups/mcp')   // true
+ */
 export const resourcesFor = ({ config }: Pick<Grants, 'config'>) => (path: string) => spaceNameIn(config, path) !== null
 
 /** The resource path a request is for: its space's address, the root's MCP, or the root (''). */
@@ -228,19 +244,34 @@ const resourcePathOf = (config: SharingConfig, path: string, mcpPath: string | u
   return ''
 }
 
-/** `resourceOf`: the space address a request is at, the root's MCP, or the root. Before `bind`, on the request's own origin. */
+/**
+ * `resourceOf`: the space address a request is at, the root's MCP, or the root. Before `bind`, on the request's own origin.
+ *
+ * @example
+ * resourceOfFor({ config, binding })(c)   // 'https://sample.example.test/s/soups/mcp' for /s/soups/mcp/server-card
+ */
 export const resourceOfFor = ({ config, binding }: Pick<Grants, 'config' | 'binding'>) => (c: Context) => {
   const root = binding.oauth ? binding.oauth.rootOf(c) : originOf(c)
   return root + resourcePathOf(config, c.req.path, binding.oauth?.mcpPath)
 }
 
-/** Whether a sign-in is the part's to judge: its audience a space, the root, or (once bound) the root's MCP. */
+/**
+ * Whether a sign-in is the part's to judge: its audience a space, the root, or (once bound) the root's MCP.
+ *
+ * @example
+ * handlesFor({ config, binding })(ask)   // what sharing.handles is
+ */
 export const handlesFor = ({ config, binding }: Pick<Grants, 'config' | 'binding'>) => (ask: Pick<SignInAsk, 'resource'>) => {
   const path = pathOf(ask.resource)
   return path === '' || path === binding.oauth?.mcpPath || spaceNameIn(config, path) !== null
 }
 
-/** The member behind a request's space token while it lives, with its space; null for anyone else. */
+/**
+ * The member behind a request's space token while it lives, with its space; null for anyone else.
+ *
+ * @example
+ * const member = await memberOfFor({ config, repo })(c)   // what sharing.memberOf is
+ */
 export const memberOfFor = ({ config, repo }: Pick<Grants, 'config' | 'repo'>) => async (c: Context): Promise<MemberView | null> => {
   const caller = c.get('caller' as never) as Caller | undefined
   if (caller?.kind !== 'agent' || !caller.grant) return null

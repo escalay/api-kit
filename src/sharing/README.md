@@ -55,7 +55,6 @@ the kit withdraws the grant and `onRevoke` deletes the claim's row).
 onGrant: async (grant, c) => (await mine.onGrant(grant, c)) && (await sharing.oauth.onGrant(grant, c)),
 onRevoke: async (revoked) => { await sharing.oauth.onRevoke(revoked); await mine.onRevoke(revoked) },
 accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(caller, c); return judged === true ? mine.accepts(caller, c) : judged },
-resources: (path) => sharing.oauth.resources(path) || mine.resources(path),
 ```
 
 ## Options
@@ -201,7 +200,7 @@ stateDiagram-v2
   |---|---|---|
   | no audience, the root, the root's MCP (`isRootAudience`) | yes, untouched; no if a sharing page made it | everywhere |
   | a space, from the part's pages (`data.sharing`) | the claim writes the member, or no | its member's space only, while it lives |
-  | a space any other way (a device grant, the kit's page) | no: withdrawn | refused: no member |
+  | any other audience (a space by a device grant or the kit's page, a resource of the app's own) | no: withdrawn | refused: no member |
 
 - **A member is its row.** `accepts` finds it by the token's grant, its space by `byId`, and compares that space's
   name now with the one the request is about (its path at a space address, else `spaceOfPath`). A renamed space keeps
