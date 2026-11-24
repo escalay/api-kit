@@ -79,9 +79,9 @@ Add one with `npx @escalay/kit add <part> --dir src/kit --install` (browser part
    still finds them.
 2. `npx @escalay/kit doctor`: one line per file that is missing, edited, or behind, each with its fix.
 3. `npx @escalay/kit diff --patch`: your edits beside the kit's changes.
-4. `npx @escalay/kit update`: writes what the kit changed and keeps every file you edited. When the kit changed a
-   kept file since the version `kit.json` records, it exits 1 and leaves `kit.json` at that version: `--force` takes
-   the kit's, then make your edits again.
+4. `npx @escalay/kit update`: writes what the kit changed and keeps every file you edited. When it exits 1, the
+   kit's [Taking a new version](https://github.com/escalay/api-kit/blob/main/docs/upgrading.md#taking-a-new-version)
+   says what to do.
 5. Done when `doctor` exits 0, or lists only the edits you mean to keep, and `pnpm test` passes.
 
 ## Shipping
