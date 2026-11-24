@@ -427,12 +427,17 @@ Replay detection is unchanged:
 - One whose row is gone is still known: its MAC shows this server made it, and its family has moved past its
   generation, so it was used. Sending it ends the grant ("already used"), and so does revoking it at `/oauth/revoke`.
 - A made-up token that names a grant (every access token carries its grant) has no valid MAC and ends nothing.
-- A token issued by 1.29.0 (`rt_` and 32 random characters) carries no family. Its first refresh after the update marks
-  it used and keeps its row 30 days, as before, and gives a token one generation past its family's newest (generation
-  1 for a family with no row). So after a rollback, when 1.29.0 refreshed a token of a family this version had moved to
-  generation 4, the family goes on at 5 and every earlier token still ends it. It and the used 1.29.0 tokens before
-  it are still known by their rows; its row also keeps the generation its successor got, so a retry in the grace gets
-  that same successor.
+- A token issued by 1.29.0 (`rt_` and 32 random characters, or 43 for one it rotated) carries no family. Its first
+  refresh after the update marks it used and keeps its row 30 days, as before, and gives a token one generation past
+  its family's newest (generation 1 for a family with no row). So after a rollback shorter than 30 days, when 1.29.0
+  refreshed a token of a family this version had moved to generation 4, the family goes on at 5 and every earlier
+  token still ends it. It and the used 1.29.0 tokens before it are still known by their rows; its row also keeps the
+  generation its successor got, so a retry in the grace gets that same successor.
+- A family's row lapses 30 days after this version last rotated it, and 1.29.0 never writes it. So when 1.29.0 alone
+  rotates a sign-in for 30 days or more (a longer rollback), the family has no row when this version comes back, and
+  its next refresh starts it again at generation 1: this version's tokens from before the rollback, at generation 1 or
+  later, are then only unknown, no longer replays. That is the memory 1.29.0 had: it kept a used token's row 30 days,
+  and one used longer ago was unknown to it too.
 - A retry in the grace of a token 1.29.0 answered first (1.29.0 still serving during an update, or after a rollback)
   gets the successor 1.29.0 gave: 1.29.0 named it `rt_` and an HMAC of the token under a secret from the signing key,
   so this version names it the same way and finds its row. Once that successor is used, the retry is reuse and ends
