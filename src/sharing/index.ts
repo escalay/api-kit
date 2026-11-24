@@ -15,7 +15,7 @@
  *
  * @example
  * const sharing = await createSharing({ db, secret: env.SHARING_SECRET, spaces, owner, spaceOfPath, fixedKeys: [...parseApiKeys(env.API_KEYS).values()] })
- * const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, ...sharing.oauth })
+ * const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, publicOrigin, ...sharing.oauth })
  * const app = createAgentApi({ …, tags: [...FEATURE_TAGS, SHARING_TAG], auth: { …, relay: ['/mcp', '/a2a', sharing.relay] }, guards: { …, skip: sharing.neverKept }, oauth })
  * await registerSharing(app, sharing, { oauth })
  * mcpServerFactory({ tools: [...FEATURE_TOOLS, ...sharingTools({ noun: 'shelf' })], … })
@@ -23,15 +23,15 @@
 import type { OpenAPIHono } from '@hono/zod-openapi'
 import type { Context } from 'hono'
 import { migrate, type Db } from '../db/index.js'
-import type { OAuth, OAuthConfig, SignInAsk } from '../oauth/index.js'
-import { acceptsFor, handlesFor, memberOfFor, onGrantFor, onRevokeFor, resourceOfFor, resourcesFor, type Binding, type BoundOAuth, type MemberView } from './grants.js'
+import type { OAuthConfig, SignInAsk } from '../oauth/index.js'
+import { acceptsFor, boundOf, handlesFor, memberOfFor, onGrantFor, onRevokeFor, resourceOfFor, resourcesFor, type Binding, type Bound, type BoundOAuth, type MemberView } from './grants.js'
 import { sharingHandlers } from './handlers.js'
 import { sharingRepo } from './repo.js'
 import { sharingRoutes } from './routes.js'
 import { SHARING_MIGRATIONS } from './schema.js'
 import { sharingKeys, type SharingKeys } from './secrets.js'
 
-export { appNameOf, isRootAudience, ONLY_ITS_SPACE, spaceNameIn, type Binding, type BoundOAuth, type MemberView } from './grants.js'
+export { appNameOf, boundOf, isRootAudience, ONLY_ITS_SPACE, spaceNameIn, type Binding, type Bound, type BoundOAuth, type MemberView } from './grants.js'
 export { sharerOf, type Sharer, type SharerFacts } from './handlers.js'
 export { sharingRepo, type InviteRow, type InviteWithMember, type MemberRow, type NewInvite, type NewMember, type NewRequest, type PageAt, type RequestRow, type RequestWithMember, type SharingRepo, type SpaceRow } from './repo.js'
 export { PLAIN_TEXT, sharingRoutes, type SharingRoutes } from './routes.js'
@@ -90,8 +90,11 @@ export type Sharing = {
    * chains them (its README, Wire it).
    */
   oauth: Required<Pick<OAuthConfig, 'onGrant' | 'onRevoke' | 'accepts' | 'resources' | 'resourceOf'>>
-  /** Ties the hooks to the app's OAuth server; `registerSharing` calls it. Before it, `onGrant` says no and `accepts` takes only a token with no audience. */
-  bind: (oauth: BoundOAuth) => void
+  /**
+   * Ties the hooks to the app's OAuth server and answers what they judge by; `registerSharing` calls it. Throws when the
+   * server has no `publicOrigin`. Before it, `onGrant` says no and `accepts` takes only a token with no audience.
+   */
+  bind: (oauth: BoundOAuth) => Bound
   /** Whether a sign-in is the part's to judge: its audience a space, the root or the root's MCP. */
   handles: (ask: Pick<SignInAsk, 'resource'>) => boolean
   /** The member behind a request's space token while it lives, with its space; null for anyone else. */
@@ -131,7 +134,7 @@ export const createSharing = async (options: SharingOptions): Promise<Sharing> =
     tag: options.tag ?? SHARING_TAG.name,
     spaceOfPath: options.spaceOfPath ?? (() => null),
   }
-  const binding: Binding = { oauth: null }
+  const binding: Binding = { bound: null }
   const grants = { config, repo: sharingRepo(config.db), binding }
   return {
     relay,
@@ -140,7 +143,8 @@ export const createSharing = async (options: SharingOptions): Promise<Sharing> =
     config,
     oauth: { onGrant: onGrantFor(grants), onRevoke: onRevokeFor(grants), accepts: acceptsFor(grants), resources: resourcesFor(grants), resourceOf: resourceOfFor(grants) },
     bind: (oauth) => {
-      binding.oauth = oauth
+      binding.bound = boundOf(oauth)
+      return binding.bound
     },
     handles: handlesFor(grants),
     memberOf: memberOfFor(grants),
@@ -148,19 +152,19 @@ export const createSharing = async (options: SharingOptions): Promise<Sharing> =
 }
 
 /**
- * Registers the owner's sharing routes on the app, after migrating the sharing tables and binding the hooks to the
- * app's `createOAuth` server (`bind`). Call it after `createAgentApi`, before serving: its root and MCP path say which
- * agents may share and which tokens are root tokens, and its issuer names links.
+ * Registers the owner's sharing routes on the app, after binding the hooks to the app's `createOAuth` server (`bind`,
+ * which throws without `publicOrigin`) and migrating the sharing tables. Call it after `createAgentApi`, before
+ * serving: its pinned origin and MCP path say which agents may share and which tokens are root tokens, and name links.
  *
  * @example
  * await registerSharing(app, sharing, { oauth })
  */
-export const registerSharing = async (app: OpenAPIHono, sharing: Sharing, { oauth }: { oauth: Pick<OAuth, 'rootOf' | 'issuerOf' | 'mcpPath'> }) => {
+export const registerSharing = async (app: OpenAPIHono, sharing: Sharing, { oauth }: { oauth: BoundOAuth }) => {
   const { config } = sharing
+  const bound = sharing.bind(oauth)
   await migrate(config.db, 'sharing', SHARING_MIGRATIONS)
-  sharing.bind(oauth)
   const routes = sharingRoutes({ path: config.path, tag: config.tag })
-  const handle = sharingHandlers(config, oauth, sharingRepo(config.db))
+  const handle = sharingHandlers(config, bound, sharingRepo(config.db))
   app.openapi(routes.get, handle.get)
   app.openapi(routes.update, handle.update)
   app.openapi(routes.createInvite, handle.createInvite)

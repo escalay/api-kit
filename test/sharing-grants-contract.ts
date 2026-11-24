@@ -36,10 +36,10 @@ export const grantOf = (token: string) => String(decodeJwt(token).grant)
 
 /**
  * A recipe box with two shelves (Soups, Bakes) as spaces, `sharing.oauth` spread into `createOAuth`, and a bare sign-in
- * page. The owner (the `x-test-owner` header) gets the kit's own consent page. `byNameDelay` slows `spaces.byName`, as a
+ * page, under `publicOrigin` (the part needs one). The owner (the `x-test-owner` header) gets the kit's own consent page. `byNameDelay` slows `spaces.byName`, as a
  * slow lookup inside `onGrant` would be.
  */
-export const grantsApp = async (db: Db, { options = {}, oauth: oauthOptions = {}, byNameDelay = 0, publicOrigin }: { options?: Partial<SharingOptions>; oauth?: Partial<OAuthConfig>; byNameDelay?: number; publicOrigin?: string } = {}) => {
+export const grantsApp = async (db: Db, { options = {}, oauth: oauthOptions = {}, byNameDelay = 0, publicOrigin = ORIGIN }: { options?: Partial<SharingOptions>; oauth?: Partial<OAuthConfig>; byNameDelay?: number; publicOrigin?: string } = {}) => {
   // Each app its own shelves, so a test may rename or delete one
   const shelves: Space[] = [{ id: 'sp_soups', name: 'soups', title: 'Soups' }, { id: 'sp_bakes', name: 'bakes', title: 'Bakes' }]
   const spaces = {

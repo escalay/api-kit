@@ -11,7 +11,7 @@
  * another space takes later never opens to them.
  *
  * @example
- * const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, ...sharing.oauth })
+ * const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, publicOrigin, ...sharing.oauth })
  */
 import type { Context } from 'hono'
 import type { Caller } from '../core/auth.js'
@@ -32,12 +32,26 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 export const ONLY_ITS_SPACE = 'This sign-in works only at its own space: connect again from the address you were given.'
 const NOT_READY = 'Sharing is not ready here yet (the app calls registerSharing before serving): try again in a minute.'
 
-/** What the hooks read from the app's OAuth server once `bind` ties them to it. */
-export type BoundOAuth = Pick<OAuth, 'rootOf' | 'mcpPath'>
+/** What `bind` reads from the app's OAuth server: its pinned origin and its MCP path. */
+export type BoundOAuth = Pick<OAuth, 'publicOrigin' | 'mcpPath'>
+/** What the hooks judge by once bound: the root is the issuer's pinned origin, never a request's host. */
+export type Bound = { root: string; mcpPath: string }
 /** The server the hooks are bound to: null until `registerSharing` binds it, and the hooks refuse until then. */
-export type Binding = { oauth: BoundOAuth | null }
+export type Binding = { bound: Bound | null }
 /** What every hook works from. */
 type Grants = { config: SharingConfig; repo: SharingRepo; binding: Binding }
+
+/**
+ * The root and MCP path the hooks judge by, from an OAuth server with `publicOrigin`; throws without one, since a
+ * forwarded host would then name the root and a space token would read as the root's.
+ *
+ * @example
+ * boundOf(oauth)   // { root: 'https://sample.example.test', mcpPath: '/mcp' }
+ */
+export const boundOf = (oauth: BoundOAuth): Bound => {
+  if (!oauth.publicOrigin) throw new Error('sharing: the OAuth server needs publicOrigin (createOAuth({ publicOrigin })): without it a forwarded host names the root, and a space token would read as a root token.')
+  return { root: oauth.publicOrigin, mcpPath: oauth.mcpPath }
+}
 
 /** What `memberOf` tells the app about the member behind a request; never its grant. */
 export type MemberView = Pick<MemberRow, 'id' | 'label' | 'appName' | 'returnsTo' | 'via' | 'scope' | 'lifetime' | 'joinedAt' | 'expiresAt'> & { space: Space }
@@ -168,12 +182,11 @@ const joinSpace = async (grants: Grants, grant: SignInGrant, root: string) => {
  * @example
  * const onGrant = onGrantFor({ config, repo, binding })   // what sharing.oauth.onGrant is
  */
-export const onGrantFor = (grants: Grants) => async (grant: SignInGrant, c: Context) => {
-  const oauth = grants.binding.oauth
-  if (!oauth) return false
-  const root = oauth.rootOf(c)
-  if (isRootAudience(grant.resource, root, oauth.mcpPath)) return grant.data?.sharing === undefined
-  return joinSpace(grants, grant, root)
+export const onGrantFor = (grants: Grants) => async (grant: SignInGrant) => {
+  const bound = grants.binding.bound
+  if (!bound) return false
+  if (isRootAudience(grant.resource, bound.root, bound.mcpPath)) return grant.data?.sharing === undefined
+  return joinSpace(grants, grant, bound.root)
 }
 
 /**
@@ -216,15 +229,16 @@ const spaceTokenFits = async ({ config, repo }: Grants, caller: TokenCaller, c: 
 }
 
 /**
- * `accepts`: a root token fits everywhere; a space token only at its member's space. Before `bind`, only a token with no audience.
+ * `accepts`: a root token fits everywhere; a space token only at its member's space. Which is which is judged against
+ * the issuer's pinned origin, never the request's host. Before `bind`, only a token with no audience.
  *
  * @example
  * await acceptsFor(grants)(caller, c)   // true, or the sentence a 401 carries
  */
 export const acceptsFor = (grants: Grants) => async (caller: TokenCaller, c: Context): Promise<true | string> => {
-  const oauth = grants.binding.oauth
-  if (!oauth) return caller.resource ? NOT_READY : true
-  if (isRootAudience(caller.resource, oauth.rootOf(c), oauth.mcpPath)) return true
+  const bound = grants.binding.bound
+  if (!bound) return caller.resource ? NOT_READY : true
+  if (isRootAudience(caller.resource, bound.root, bound.mcpPath)) return true
   return spaceTokenFits(grants, caller, c)
 }
 
@@ -251,8 +265,8 @@ const resourcePathOf = (config: SharingConfig, path: string, mcpPath: string | u
  * resourceOfFor({ config, binding })(c)   // 'https://sample.example.test/s/soups/mcp' for /s/soups/mcp/server-card
  */
 export const resourceOfFor = ({ config, binding }: Pick<Grants, 'config' | 'binding'>) => (c: Context) => {
-  const root = binding.oauth ? binding.oauth.rootOf(c) : originOf(c)
-  return root + resourcePathOf(config, c.req.path, binding.oauth?.mcpPath)
+  const root = binding.bound?.root ?? originOf(c)
+  return root + resourcePathOf(config, c.req.path, binding.bound?.mcpPath)
 }
 
 /**
@@ -263,7 +277,7 @@ export const resourceOfFor = ({ config, binding }: Pick<Grants, 'config' | 'bind
  */
 export const handlesFor = ({ config, binding }: Pick<Grants, 'config' | 'binding'>) => (ask: Pick<SignInAsk, 'resource'>) => {
   const path = pathOf(ask.resource)
-  return path === '' || path === binding.oauth?.mcpPath || spaceNameIn(config, path) !== null
+  return path === '' || path === binding.bound?.mcpPath || spaceNameIn(config, path) !== null
 }
 
 /**

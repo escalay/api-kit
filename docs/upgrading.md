@@ -124,6 +124,8 @@ the version in `kit.json` up.
   host, so the root never has a path. Update core with it. An app reachable by more than one host or behind a proxy
   sets `publicOrigin`: a caller can still forward any bare host, which moves the root to that origin but never puts
   a path in it, so no token widens.
+- New: `oauth.publicOrigin`, the origin the server is pinned to (canonical), or undefined when the app set none.
+  Nothing to do.
 
 ### 1.31.0
 
@@ -503,7 +505,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
   `sharingTools`; and the oauth hooks, `sharing.oauth` (`onGrant`, `onRevoke`, `accepts`, `resources`,
   `resourceOf`) to spread into `createOAuth`, with `handles`, `memberOf` and `bind` (`registerSharing` calls it).
   `spaces` takes `byId` beside `byName`, and the new option `spaceOfPath` names the space of an in-process `/api` call.
-  Nothing to do in an app that doesn't add it.
+  It needs `createOAuth`'s `publicOrigin`: `registerSharing` throws without it. Nothing to do in an app that doesn't
+  add it.
 
 ## testing
 

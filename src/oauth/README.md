@@ -12,7 +12,7 @@ The app as its own OAuth server, so MCP clients (Claude, ChatGPT) and agents con
 ## Don't use it when
 
 - Only the owner's own machines call the API: keys are simpler (`API_KEYS`, the keys part).
-- The rows would live in Workers KV: KV is eventually consistent, so a new code reads as unknown and a revoke can be
+- The rows would live in Workers KV: eventually consistent, so a new code reads as unknown and a revoke can be
   undone. Use SQLite or D1 (`dbOAuthStore`).
 
 ## Add it
@@ -189,7 +189,7 @@ An OAuth caller (`c.get('caller')`) is `{ kind: 'agent', client, grant, name, sc
 | `oauth.mount(app)` | the metadata, `/oauth/*`, `/agent/identity*` and `/auth.md`; `createAgentApi({ oauth })` calls it |
 | `oauth.verify(jwt, c)` | an access token → its caller, `{ refused }` when `accepts` turns it away here (truthy: check `'refused' in answer`), or null (expired, revoked, not ours); `createAgentApi` passes it as `auth.tokens` |
 | `oauth.resourceMetadataFor(c)` | the protected-resource metadata URL for a request's resource (RFC 9728 §3.3): where a 401 points |
-| `oauth.issuerOf(c)` | the issuer's origin: `publicOrigin`, else the request's |
+| `oauth.issuerOf(c)`, `oauth.publicOrigin` | the issuer's origin: `publicOrigin` (undefined when unset), else the request's |
 | `oauth.rootOf(c)`, `oauth.resourceOf(c)`, `oauth.mcpPath` | the root resource (the issuer's origin, canonical), the resource a request is for, where MCP is mounted |
 | `oauth.authorizationServer(origin)` | the authorization server metadata document (RFC 8414) |
 | `oauth.protectedResource(origin, suffix)` | the protected-resource metadata document for `origin + suffix` (RFC 9728) |
@@ -525,8 +525,8 @@ included: it stays aud-less. Errors at authorize are pages, never redirects.
   outside request, and the request's own path outranks it at every MCP address, a space's or `mcpPath`: otherwise a
   client sends the carrier with one space's token and reaches another, or `mcpPath`. A sentence refuses: 401
   `invalid_token`, the sentence as `detail` (and its printable ASCII as `error_description`), `resource_metadata` at
-  `resourceOf(c)`. Compare audiences with `oauth.rootOf(c)`, the root as the kit signs it (canonical: a forwarded
-  host in capitals or with its default port is the same root), not the raw origin.
+  `resourceOf(c)`. Compare audiences with `oauth.rootOf(c)`, the root as the kit signs it (canonical: a host in
+  capitals or with its default port is the same root).
 - Keep `mcpPath` in `resourceOf` and in `accepts`: without it, a token asked for `<origin>/mcp` (what MCP clients
   send) is refused at `/mcp`, `/api` and every space, and the 401 at `/mcp` points at the origin's metadata.
 - `listResources(origin)` names what the authorization server metadata lists (`protected_resources`, default the
@@ -537,8 +537,8 @@ included: it stays aud-less. Errors at authorize are pages, never redirects.
 Three exceptions to "a token is accepted only by its audience" (MCP 2026-07-28 asks servers to reject tokens not meant
 for them, or otherwise verify they are the intended recipient):
 
-- **A token with no `aud` is accepted** by the default `accepts`: every token, code, device approval, refresh token and
-  agent registration from before audiences has none, and none ever gains one. Connections made before keep working.
+- **A token with no `aud` is accepted** by the default `accepts`: no token, code, device approval, refresh token or
+  registration from before audiences has one, nor ever gains one. Connections made before keep working.
 - **A root token is accepted at a space's resource:** the default `accepts` takes it everywhere on the origin, so a
   client that sends no `resource`, or a connection made before the app had spaces, keeps working there. The app, with
   one issuer and a row per grant, is then what verifies the token is meant for it.

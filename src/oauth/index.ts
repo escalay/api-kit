@@ -302,6 +302,7 @@ const oauthError = (c: Context, status: 400 | 401 | 403 | 410 | 429, error: stri
 
 export const createOAuth = (config: OAuthConfig) => {
   const { store } = config
+  /** The one origin the server answers as, canonical (`oauth.publicOrigin`); undefined when the app pinned none. */
   const publicOrigin = config.publicOrigin === undefined ? undefined : (canonical(config.publicOrigin) ?? '')
   if (publicOrigin !== undefined && (!publicOrigin || pathOf(publicOrigin))) throw new Error(`createOAuth: publicOrigin must be an origin with no path, query or fragment (https://sample.example.test), not ${config.publicOrigin}.`)
   for (const cap of ['maxUnusedClients', 'maxUnusedTickets'] as const) {
@@ -1413,7 +1414,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     await tellRevoked({ client: clientId, reason: 'client_revoked' })
   }
 
-  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, issuerOf, mcpPath, revokeGrant, revokeClient, ticketOf, answeredOf, holdTicket, complete, authorizationServer, protectedResource, authMd }
+  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, issuerOf, publicOrigin, mcpPath, revokeGrant, revokeClient, ticketOf, answeredOf, holdTicket, complete, authorizationServer, protectedResource, authMd }
 }
 
 export type OAuth = ReturnType<typeof createOAuth>

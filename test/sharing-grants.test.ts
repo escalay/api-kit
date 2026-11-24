@@ -2,8 +2,8 @@
 import { decodeJwt } from 'jose'
 import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
-import { testDb, type SignInAsk, type SignInGrant, type TokenCaller } from '../src/index.js'
-import { appNameOf, createSharing } from '../src/sharing/index.js'
+import { createAgentApi, createOAuth, generateOAuthKey, memoryOAuthStore, migrate, testDb, type SignInAsk, type SignInGrant, type TokenCaller } from '../src/index.js'
+import { appNameOf, createSharing, registerSharing, SHARING_MIGRATIONS } from '../src/sharing/index.js'
 import { BAKES, grantOf, grantsApp, ORIGIN, OWNER, sharingGrantsContract, SOUPS } from './sharing-grants-contract.js'
 import { HOUR } from './sharing-rows.js'
 
@@ -267,6 +267,34 @@ describe('accepts', () => {
     expect(Date.parse((await memberOfToken(token))!.lastSeenAt)).toBeGreaterThan(Date.now() - 60_000)
   })
 
+  it('keeps a space token a space token under a forged X-Forwarded-Host, even one refreshed there', async () => {
+    const { makeInvite, join, app } = await box()
+    const joined = await join(await makeInvite())
+    // A host that makes the request's origin plus /mcp read as the token's audience
+    const forged = { 'x-forwarded-host': 'localhost/s/soups' }
+    const refreshed = await app.request('/oauth/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', ...forged }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: joined.tokens.refresh_token, client_id: joined.client_id }).toString() })
+    for (const token of [joined.tokens.access_token, ((await refreshed.json()) as { access_token: string }).access_token]) {
+      const at = (path: string) => app.request(path, { headers: { authorization: `Bearer ${token}`, ...forged } })
+      expect((await at('/s/soups/mcp')).status).toBe(200)
+      for (const path of ['/mcp', '/api/elsewhere', '/api/spaces/soups/invites', '/s/bakes/mcp']) {
+        const answer = await at(path)
+        expect([path, answer.status, refusalOf(answer)]).toEqual([path, 401, ONLY_ITS_SPACE])
+      }
+    }
+  })
+
+  it('judges a token’s audience against the issuer’s pinned origin, never the request’s host', async () => {
+    const db = await testDb()
+    await migrate(db, 'sharing', SHARING_MIGRATIONS)
+    const sharing = await createSharing({ db, secret: 'a sharing secret of thirty-two bytes or more, for tests only', spaces: { byName: async () => null, byId: async () => null }, owner: async () => null })
+    sharing.bind({ publicOrigin: ORIGIN, mcpPath: '/mcp' })
+    const probe = new Hono()
+    const caller: TokenCaller = { kind: 'agent', name: 'Sample', client: 'client-1', grant: 'grant-1', scopes: ['read'], owner: OWNER, resource: SOUPS }
+    probe.get('*', async (c) => c.json({ judged: await sharing.oauth.accepts(caller, c), resource: sharing.oauth.resourceOf(c) }))
+    const judged = await (await probe.request('/mcp', { headers: { 'x-forwarded-host': 'localhost/s/soups' } })).json()
+    expect(judged).toEqual({ judged: ONLY_ITS_SPACE, resource: `${ORIGIN}/mcp` })
+  })
+
   it('names the day an access ended', async () => {
     const { makeInvite, join, call, ageMember } = await box()
     const token = (await join(await makeInvite())).tokens.access_token
@@ -325,6 +353,16 @@ describe('memberOf', () => {
     expect(JSON.stringify(member)).not.toContain(grantOf(token))
     const root = (await ownerSignsIn()).tokens.access_token
     expect(await (await call('/s/soups/mcp/member', root)).json()).toEqual({ member: null })
+  })
+})
+
+describe('bind', () => {
+  it('refuses an OAuth server with no publicOrigin: a forwarded host would pick the root', async () => {
+    const db = await testDb()
+    const sharing = await createSharing({ db, secret: 'a sharing secret of thirty-two bytes or more, for tests only', spaces: { byName: async () => null, byId: async () => null }, owner: async () => null })
+    expect(() => sharing.bind({ publicOrigin: undefined, mcpPath: '/mcp' })).toThrow(/publicOrigin/)
+    const oauth = createOAuth({ name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null, ...sharing.oauth })
+    await expect(registerSharing(createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A recipe box.', tags: [], auth: { realm: 'sample', keys: new Map() }, oauth }), sharing, { oauth })).rejects.toThrow(/publicOrigin/)
   })
 })
 

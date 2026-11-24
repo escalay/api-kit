@@ -29,7 +29,7 @@ const owner = async (c: { req: { header: (name: string) => string | undefined } 
 const PEOPLE: Record<string, string> = { 'owner-token': OWNER, 'ada-token': 'ada@example.test' }
 
 /** A recipe box whose shelves are spaces, with every kind of caller: keys, people through Access, and OAuth agents. */
-const sharingApi = async ({ guards = 'memory', options = {}, publicOrigin }: { guards?: 'memory' | 'database'; options?: Partial<SharingOptions>; publicOrigin?: string } = {}) => {
+const sharingApi = async ({ guards = 'memory', options = {}, publicOrigin = ORIGIN }: { guards?: 'memory' | 'database'; options?: Partial<SharingOptions>; publicOrigin?: string } = {}) => {
   const db = await testDb()
   const store = guards === 'database' ? await dbGuardStore(db) : memoryGuardStore()
   // Every answer the guard keeps, as it handed it to the store

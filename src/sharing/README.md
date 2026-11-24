@@ -1,6 +1,6 @@
 # sharing
 
-Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), asks to join, and the owner's approval, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite, by ask or by the owner's approval. Built in steps; so far: its tables and queries, the named states of its rows, its secrets, the owner's routes and tools for a space's settings and invites, and the oauth hooks (`sharing.oauth`) that make members and hold a space's token to its space. The sign-in pages (`approve`, where an invite's link points) come next; until then an app's own page completes the ticket as they will (Flows), keeping `docs/STANDARD.md` §23.
+Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), asks to join, and the owner's approval, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite, by ask or by the owner's approval. Built in steps (Exports says what is here): the sign-in pages (`approve`, where an invite's link points) come next; until then an app's own page completes the ticket as they will (Flows), keeping `docs/STANDARD.md` §23.
 
 ## Use it when
 
@@ -36,7 +36,7 @@ const sharing = await createSharing({
   fixedKeys: [...parseApiKeys(env.API_KEYS).values()],
   askToJoin: true,
 })
-const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, publicOrigin, limits, ...sharing.oauth })
+const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, publicOrigin, limits, ...sharing.oauth })   // publicOrigin: required
 const app = createAgentApi({
   …,
   tags: [...FEATURE_TAGS, SHARING_TAG],
@@ -75,16 +75,15 @@ accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(calle
 | `askToJoin` | boolean | `false` | whether asking to join exists at all; each space still switches it on |
 | `tag` | string | `'Sharing'` | the routes' OpenAPI tag (`SHARING_TAG` declares it) |
 
-`registerSharing(app, sharing, { oauth })` takes the app's `createOAuth` server and binds the hooks to it (`bind`): its
-root and MCP path say which agents may share and which tokens are root tokens, and its issuer (`publicOrigin`) names
-invite links.
+`registerSharing(app, sharing, { oauth })` binds the hooks to the app's `createOAuth` server (`bind`, `boundOf`), and
+throws when it has no `publicOrigin`: that origin and its MCP path say which tokens are root tokens and who may share.
 
 ## Exports
 
 | File | What |
 |---|---|
 | `index.ts` | `createSharing` (the options checked: `relay`, `mcpPath`, `neverKept`, `config`; the hooks `oauth`; `bind`, `handles`, `memberOf`), `registerSharing`, `SHARING_TAG`, and re-exports the files below |
-| `grants.ts` | the hooks (Rules); `appNameOf`, `isRootAudience`, `spaceNameIn`, `ONLY_ITS_SPACE`, `MemberView` |
+| `grants.ts` | the hooks (Rules); `boundOf`, `appNameOf`, `isRootAudience`, `spaceNameIn`, `ONLY_ITS_SPACE`, `MemberView` |
 | `routes.ts` | `sharingRoutes`: the owner routes as OpenAPI contracts (below); `PLAIN_TEXT`, the label rule (no control, bidi or zero-width characters) |
 | `handlers.ts` | the handlers; `sharerOf`, who may share (`Sharer`) |
 | `tools.ts` | `sharingTools`: the MCP tools for the owner routes |
@@ -228,8 +227,8 @@ stateDiagram-v2
   of the guard store too.
 - **Agents invite for a while, on the record.** An agent may give 7 or 30 days, never until revoked; each invite it
   makes records its client and grant (`made_by_client`, `made_by_grant`).
-- **Links name the issuer.** An invite's link is `oauth.issuerOf(c)` (`publicOrigin`) + `/sharing/join/<token>`,
-  whatever the request's host header says.
+- **The root is the pinned origin.** `publicOrigin`, never a request's host, judges which tokens are root tokens and
+  names links (`<publicOrigin>/sharing/join/<token>`): a forged host never makes a space token a root one.
 - **Never through A2A.** `sharingTools` go to the owner's MCP only: a delegating agent must not mint invites. Each
   tool acts only on the user's word, and `create_invite` returns the message to send, never sends it.
 - **The claim is the insert.** `claimInvite` and `claimRequest` are one `insert … select … where` each (the invite of
@@ -251,6 +250,7 @@ stateDiagram-v2
 | The caller sees | Why |
 |---|---|
 | `createSharing` throws "the secret holds N bytes" | the sharing secret is shorter than 32 bytes: make 32 random bytes of its own |
+| `registerSharing` throws "needs publicOrigin" | the app's `createOAuth` has none: pass it |
 | `createSharing` throws "needs exactly one {space} segment" | `resourcePath` has no `{space}`, two, one inside a segment, or none after it |
 | 404 "No space … here that you may share" | the caller may not share, or the name is not a space (always the same body) |
 | 400 on `createInvite` | a label that is empty, over 80 or holds control, bidi or zero-width characters; an agent asking for `until_revoked` |
@@ -278,7 +278,7 @@ stateDiagram-v2
   (strangers, missing, cased, encoded names, another space's id); the cap at once; agents' lifetimes and makers; an
   Idempotency-Key retry keeping no link or code (memory and database guards, MCP); `lintOpenApi`, `toolRoutes`,
   `toolsRun`, `cliGaps`.
-- `test/sharing-grants.test.ts`: the addresses (probe T6); `onGrant` (once, in time, at its space; grants around the
+- `test/sharing-grants.test.ts`: the addresses (probe T6); `bind`; a forged host; `onGrant` (once, in time, at its space; grants around the
   part; no root grant; no more than given; the owner's; probe T7; `race.mts`; races); `accepts`; `onRevoke`;
   `memberOf`; before `bind`. Its contract (`test/sharing-grants-contract.ts`) runs on node:sqlite and D1.
 - `test/workers/sharing.test.ts`: the migration, both claims, the cap and the grants contract on D1, the keys in workerd.

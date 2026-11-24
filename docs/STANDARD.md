@@ -737,6 +737,9 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
 - **A space is named by its resource.** Each space has its own address on the app's origin (`<origin>/s/<space>/mcp`),
   and every grant into it carries that audience. The app passes `resources` (a pure check of the path, never a
   lookup) and `resourceOf`, so each space's token works at its own address and nowhere else.
+- **The root is the pinned origin.** An app with spaces passes `publicOrigin`, and judges whether a token's audience
+  is the root (or the root's MCP) against it, never against a request's host: otherwise a forged `X-Forwarded-Host`
+  that ends where a space's address does makes that space's token read as the root's, everywhere.
 - **Invites are single-use, with a link and a typed code.** An invite is for one space and one person, must be used
   within a day, and gives access for a set time or until revoked. Its link opens the app's own page (`approve`), and
   the browser may remember it for a short while (a sealed cookie that holds no code). The invite is spent with the
