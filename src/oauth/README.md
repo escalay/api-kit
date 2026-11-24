@@ -442,6 +442,11 @@ Replay detection is unchanged:
   gets the successor 1.29.0 gave: 1.29.0 named it `rt_` and an HMAC of the token under a secret from the signing key,
   so this version names it the same way and finds its row. Once that successor is used, the retry is reuse and ends
   the grant, as any other.
+- The reverse does not hold: while 1.29.0 answers (an instance not yet updated, or a rollback), it knows nothing of
+  this version's tokens. It keeps no family row and names successors its own way, so an earlier token of this
+  version reads as unknown there, and a retry or replay inside the grace of a token this version answered gets new
+  tokens from it (a retried one gets a successor no row backs, which then fails). Replay detection for those tokens
+  resumes once this version answers them again. Finish an update quickly, and keep rollbacks short.
 
 Revocation reads stay uncached: `verify` reads the issued row and the markers on every request, so a revoke stops a
 client on its next request. Rotating the signing key also changes the MAC, so earlier tokens of the old key are no
