@@ -1,6 +1,6 @@
 # sharing
 
-Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), asks to join, and the owner's approval, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite, by ask or by the owner's approval. Built in steps (Exports says what is here): the sign-in pages (`approve`, where an invite's link points) come next; until then an app's own page completes the ticket as they will (Flows), keeping `docs/STANDARD.md` §23.
+Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), asks to join, and the owner's approval, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite, by ask or by the owner's approval. Built in steps: the sign-in pages (`approve`, where an invite's link points) come next; until then an app's own page completes the ticket (Flows), keeping `docs/STANDARD.md` §23.
 
 ## Use it when
 
@@ -75,8 +75,8 @@ accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(calle
 | `askToJoin` | boolean | `false` | whether asking to join exists at all; each space still switches it on |
 | `tag` | string | `'Sharing'` | the routes' OpenAPI tag (`SHARING_TAG` declares it) |
 
-`registerSharing(app, sharing, { oauth })` binds the hooks to the app's `createOAuth` server (`bind`, `boundOf`), and
-throws when it has no `publicOrigin`: that origin and its MCP path say which tokens are root tokens and who may share.
+`registerSharing(app, sharing, { oauth })` binds the hooks to the app's `createOAuth` (`bind`, `boundOf`), and
+throws when it has no `publicOrigin`.
 
 ## Exports
 
@@ -132,8 +132,8 @@ sequenceDiagram
   R-->>O: 201 link, code, message (shown once, no-store)
 ```
 
-An invite is spent at the token exchange, never at the click. Until the sign-in pages come, the app's page completes
-the ticket as they will: `{ approver: 'invite:<id>', scopes: <asked ∩ the invite's>, resource: <the space's address>,
+An invite is spent at the token exchange, never at the click. The app's page completes the ticket as the sign-in
+pages will: `{ approver: 'invite:<id>', scopes: <asked ∩ the invite's>, resource: <the space's address>,
 data: { sharing: 'invite', invite, returnsTo } }`; the owner's, `approver: 'owner:<email>'`, `data: { sharing:
 'owner', space: <its id>, lifetime, returnsTo }`.
 
@@ -208,8 +208,8 @@ stateDiagram-v2
 - **A grant never holds more than was given:** an invite's approver `invite:<id>` and scopes within the invite's; the
   owner's `owner:<email>` (never the bare email: never the owner's token), the resource's space id, a lifetime the part
   has. A sharing approval never makes a root grant.
-- **`onRevoke` mirrors the kit**: `withdrawn` (a veto, or anything failing after `onGrant`'s yes: the kit withdraws
-  the grant) deletes its row, so its invite opens again; `client_revoked` ends the client's rows, any other end the
+- **`onRevoke` mirrors the kit**: `withdrawn` (a veto, or anything failing after `onGrant`'s yes) deletes its
+  row, so its invite opens again; `client_revoked` ends the client's rows, any other end the
   grant's. Then, unless withdrawn, the open invites an agent made under that
   grant or client are revoked; people who joined through them keep access. Told twice, nothing moves.
 - **Before `bind`** (`registerSharing`), `onGrant` says no and `accepts` takes only a token with no audience.
@@ -221,7 +221,7 @@ stateDiagram-v2
 - **Nothing says whether a space exists.** Anyone who may not share, a name `spaceName` refuses (cased, dotted,
   encoded) and a space `byName` doesn't find all get the same 404 with the same body. An invite id from another space
   is the same 404 as a made-up one.
-- **Shown once means never kept.** An invite's link and code are kept only as HMACs and answered once, `no-store`;
+- **Shown once means never kept.** An invite's link and code are answered once, `no-store`;
   `createInvite` calls `showOnce`, so a retry with the same Idempotency-Key is a 409 `shown_once`, never the secrets,
   and only one invite exists. `neverKept` (`/sharing/*`) keeps the sign-in pages' answers out
   of the guard store too.
@@ -263,7 +263,8 @@ stateDiagram-v2
 | 400 `invalid_grant` "withdrawn" | `onGrant` said no: a space grant not from the part's pages; an invite spent, revoked, late or another space's; more scope, or another approver; a sharing approval at the root |
 | 401 "works only at its own space" | a live space token at another space (or an old name), `/mcp`, an `/api` route `spaceOfPath` doesn't name, or a space `byId` misses |
 | 401 "ended on …", "lapsed", "not ready" | the member's lifetime passed; 30 days unused; a token with an audience before `bind` |
-| 500 at `/oauth/token`, the invite open again | a throw after the claim (a hook chained after the part's, a store): no token; the kit withdraws the grant and `onRevoke` deletes the row |
+| 500 at `/oauth/token`, the invite open again | a throw after the claim (a hook chained after the part's, a store): no token; the kit withdraws the grant, so the row goes |
+| a member who never got in, its code spent | the withdraw could not land (the store and `onRevoke` both failing, or the process dying between the claim and the answer): no token; the row lapses with the grant; send a new invite |
 
 ## Limits
 
@@ -279,7 +280,7 @@ stateDiagram-v2
   `toolsRun`, `cliGaps`.
 - `test/sharing-grants.test.ts`: the addresses (probe T6); `bind`; a forged host; `onGrant` (once, in time, at its space; grants around the
   part; no root grant; no more than given; the owner's; probe T7; a failed exchange undone; `race.mts`; races); `accepts`; `onRevoke`;
-  `memberOf`; before `bind`. Its contract (`test/sharing-grants-contract.ts`) runs on node:sqlite and D1.
+  `memberOf`; before `bind`. Its contract (`test/sharing-grants-contract.ts`) runs on node:sqlite.
 - `test/workers/sharing.test.ts`: the migration, both claims, the cap and the grants contract on D1, the keys in workerd.
 
 ## Upgrading
