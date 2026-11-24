@@ -82,7 +82,8 @@ with that cookie and `sec-fetch-site: same-origin`. Standard: §7 and §23.
 | Row | Passes when |
 |---|---|
 | Owner approval | `approveSignIn` answers 302 with a `code`; with `decision: 'deny'`, `access_denied`; without the owner signed in there is no consent page to approve |
-| Invite | the right code gets a token bound to the invite's space (`aud`); the same code again, a wrong code or an expired invite gets none |
+| Invite | a known app's return redeems a remembered invite in one click; any other return sees "This app returns to <host>" and needs the typed code; either way the token is bound to the invite's space (`aud`), and the invite again, a wrong code or an expired invite gets none |
+| Account line | every approval page says it connects the app signed in in this browser |
 | Ask to join | nothing is granted until the owner decides; the grant names the asker, not the owner, and works at that space only |
 | Revoke | after `revokeGrant`, `revokeClient` or a removed member, the next call with the token answers 401, and `onRevoke` dropped the app's row |
 | Another space | a space's token at another space answers 401; a root token is given only to the owner's own sign-ins |

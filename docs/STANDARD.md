@@ -710,20 +710,27 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
 - **A space is named by its resource.** Each space has its own address on the app's origin (`<origin>/s/<space>/mcp`),
   and every grant into it carries that audience. The app passes `resources` (a pure check of the path, never a
   lookup) and `resourceOf`, so each space's token works at its own address and nowhere else.
-- **Invites are single-use, with a link and a typed code.** An invite is for one space and one person, and expires.
-  Its link opens the app's own page (`approve`); the code, typed there, decides. A link passed on without
-  its code lets no one in. The invite is spent with the grant's first token (`onGrant`), so a second use is refused.
-- **An app the person has not used before is named and warned.** The page names the client as it registered (its own
-  claim, never verified), where it returns (`redirectHost`, or an app on this computer) and the space, and asks for
-  the code: nothing is approved by the link alone, and nothing without a click.
-- **The owner's approval makes a space-locked grant, never an owner token.** Asking to join waits on the owner (the
-  asker's page polls the app, then posts `complete` from the same browser: `ticketTtl`). The grant names the person let
-  in as `approver` and binds the space with `complete`'s `resource`, even when the client asked for none. The default
-  `accepts` takes a root token at every space, so only the owner's own sign-ins get the root.
-- **The app's page names who is signed in.** The kit passes `approve` the request and no account (`SignInAsk` has
-  none), so the app's page reads its own session from `c` and names the account this browser is signed in to, so
-  nobody joins a space as whoever used the browser last. The kit's own pages do the same: its consent page says
-  "as you (…)" and its claim page "You are signed in as …", both from `owner(c)`.
+- **Invites are single-use, with a link and a typed code.** An invite is for one space and one person, must be used
+  within a day, and gives access for a set time or until revoked. Its link opens the app's own page (`approve`), and
+  the browser may remember it for a short while (a sealed cookie that holds no code). The invite is spent with the
+  grant's first token (`onGrant`), never at the click, so a second use is refused and junk cannot spend it.
+- **Known apps redeem in one click; any other app is warned and asks for the code.** The app keeps a list of
+  returns it knows (the exact callbacks of the agents it expects, and an app on this computer). For one of those, a
+  remembered invite is one click. For any other return, the page warns "This app returns to <host>" (the client's
+  name is its own claim, never verified; the return is what counts) and asks for the code from the invite, even when
+  the link is remembered. Nothing is approved without a click.
+- **The owner's approval makes a space-locked grant, never an owner token.** The owner, signed in, approves an app at
+  a space in one click, after the same warning for an unknown return. Asking to join waits on the owner (the asker's
+  page polls the app, then posts `complete` from the same browser: `ticketTtl`). The grant binds the space with
+  `complete`'s `resource`, even when the client asked for none. The default `accepts` takes a root token at every
+  space, so only the owner's own sign-ins at the root get the root.
+- **The page says which app account it connects.** The approval page always carries one line: this connects the app
+  signed in in this browser. Someone signed in to the agent's site with another account in the same browser would
+  otherwise hand the space to that account. (The kit's own pages already name the owner they approve as: "as you
+  (…)", "You are signed in as …", from `owner(c)`.)
+- **A lost sign-in gets a fresh invite.** There is no reconnect that carries a grant over: the person gets a new
+  invite and a new grant. The app offers "Invite again" (same space, scope and lifetime) and revokes the old grant
+  when the new one signs in.
 - **Revocation is mirrored.** The app keeps a row per grant (who is in a space, their agents): made when `onGrant`
   says yes, dropped when `onRevoke` names the grant (every grant of a client on `client_revoked`), aged out by its
   last use (`revokeGrant` after 30 days). `accepts` refuses a token whose grant has no row, so removing a member
