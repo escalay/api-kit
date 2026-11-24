@@ -16,6 +16,7 @@
  * await registerPeople(app, { db, rpName: 'Postbox', fixedKeys, onPasskeyChange: (change) => log('passkey', change) })
  */
 import type { OpenAPIHono } from '@hono/zod-openapi'
+import { rateLimit, type AddressTrust, type GuardStore } from '../core/guards.js'
 import { migrate, type Db } from '../db/index.js'
 import type { Context } from 'hono'
 import { peopleHandlers, type PasskeyChange, type TeamChange } from './handlers.js'
@@ -54,11 +55,27 @@ export type PeopleOptions = {
   onTeamChange?: (change: TeamChange, c: Context) => void | Promise<void>
   /** Told about every passkey added or removed (whose, its id and name, by whom, and how its maker got in), e.g. to alert its person. */
   onPasskeyChange?: (change: PasskeyChange, c: Context) => void | Promise<void>
+  /**
+   * A limit on the two options routes anyone may call (each stores a challenge): 30 a minute per caller, an anonymous
+   * one by address (`addressOf`, `address` default the app's), counted in `store`. Default false: none.
+   *
+   * @example
+   * limits: { store: await dbGuardStore(db), address: { header: 'cf-connecting-ip' } }
+   */
+  limits?: { store: GuardStore; address?: AddressTrust } | false
 }
 
+/** What `limits` allows on the options routes, together. */
+const OPTIONS_LIMIT = { limit: 30, windowSeconds: 60 }
+
 /** Registers the people routes on the app, after migrating their tables. Call it after `createAgentApi`. */
-export const registerPeople = async (app: OpenAPIHono, { db, rpName, fixedKeys = [], sessionPath = '/api/session', teamPath = '/api/team', cookie = 'session', tag = PEOPLE_TAG.name, onTeamChange, onPasskeyChange }: PeopleOptions) => {
+export const registerPeople = async (app: OpenAPIHono, { db, rpName, fixedKeys = [], sessionPath = '/api/session', teamPath = '/api/team', cookie = 'session', tag = PEOPLE_TAG.name, onTeamChange, onPasskeyChange, limits = false }: PeopleOptions) => {
   await migrate(db, 'people', PEOPLE_MIGRATIONS)
+  if (limits) {
+    // Before the routes, so a call past the limit stores nothing
+    const limit = rateLimit({ policy: 'passkey-options', ...OPTIONS_LIMIT, store: limits.store, address: limits.address })
+    for (const ceremony of ['register', 'login']) app.use(`${sessionPath}/passkeys/${ceremony}/options`, limit)
+  }
   const routes = peopleRoutes({ sessionPath, teamPath, tag })
   const onRecovered = () => recoveryListeners.get(app)
   const handle = peopleHandlers(peopleRepo(db), { db, rpName, sessionPath, teamPath, cookie, fixedKeys, onTeamChange, onPasskeyChange, onRecovered })
