@@ -325,10 +325,12 @@ sequenceDiagram
   participant Device
   participant Kit
   participant Owner as the owner's browser
-  Device->>Kit: POST /oauth/register (grant_types the device_code grant, no redirect_uris)
+  Device->>Kit: POST /oauth/register (client_name, grant_types the device_code grant, no redirect_uris)
   Device->>Kit: POST /oauth/device_authorization: client_id, scope
   Kit-->>Device: device_code, user_code BDKM-QXTW, verification_uri, verification_uri_complete, expires_in 600, interval 5
   Owner->>Kit: GET /oauth/device or /oauth/device?user_code= (signed in, a page like /oauth/authorize), types the code
+  Owner->>Kit: POST /oauth/device user_code (same-origin)
+  Kit-->>Owner: which device asks, with Allow and Deny
   Owner->>Kit: POST /oauth/device user_code, decision allow or deny (same-origin)
   loop every interval
     Device->>Kit: POST /oauth/token grant_type urn:ietf:params:oauth:grant-type:device_code, device_code, client_id
