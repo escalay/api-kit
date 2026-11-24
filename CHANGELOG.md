@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.30.0](https://github.com/escalay/api-kit/compare/v1.29.0...v1.30.0) (2026-11-24)
+
+
+### New
+
+* **oauth:** what a sharing part needs, and fewer stored rows ([#95](https://github.com/escalay/api-kit/issues/95)) ([e12394f](https://github.com/escalay/api-kit/commit/e12394f3391c1150d05e7f813eafbeb291d85732))
+
+
+### Fixed
+
+* eleven bugs found in the 1.29 review ([#93](https://github.com/escalay/api-kit/issues/93)) ([ce19965](https://github.com/escalay/api-kit/commit/ce199657ae09525d7a79a83012de147069d84720))
+
+
+### Documentation
+
+* a map of every part and one README shape ([#96](https://github.com/escalay/api-kit/issues/96)) ([3fe166e](https://github.com/escalay/api-kit/commit/3fe166ee63440086f689ade86dcba86dc862ad6e))
+* name 1.30.0 in the upgrade notes ([#98](https://github.com/escalay/api-kit/issues/98)) ([96fb639](https://github.com/escalay/api-kit/commit/96fb639971c9ec9c5658ded81ac84e5161ad2f2f))
+* **skills:** cover every part, a maintainer skill, and sharing rules ([#97](https://github.com/escalay/api-kit/issues/97)) ([9c05c6d](https://github.com/escalay/api-kit/commit/9c05c6d3910e840b13ae378742691f2f02e2c85a))
+
 ## [1.29.0](https://github.com/escalay/api-kit/compare/v1.28.0...v1.29.0) (2026-11-23)
 
 
