@@ -14,7 +14,7 @@ import { guideSkills, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMc
 import { guideGaps, guideRoutes, lintOpenApi, toolRoutes } from '../src/testing/index.js'
 import { migrate, openDb } from '../src/db/index.js'
 import { OAUTH_MIGRATIONS } from '../src/oauth/schema.js'
-import { memoryOAuthStore } from '../src/oauth/index.js'
+import { createOAuth, generateOAuthKey, memoryOAuthStore } from '../src/oauth/index.js'
 import { approvedCode, oauthApp, signedIn } from './oauth-store-contract.js'
 
 const { key, hash } = mintApiKey('test')
@@ -1072,6 +1072,54 @@ describe('the app template’s container', () => {
     }
     expect(imported).toContain('brand')
     for (const folder of imported) expect(copied, `templates/app/Dockerfile copies ${folder}/`).toContain(folder)
+  })
+})
+
+describe('the guide under many origins', () => {
+  const FILES = { 'llms.txt': '# Apps at {{origin}}, {{counts.apps}} of them\n', 'skills/apps/SKILL.md': '---\nname: apps\ndescription: Use when finding apps at {{origin}}.\n---\n\n# {{counts.apps}} apps\n', 'skills/apps/references/find.md': '# Find one\n' }
+  const guided = async ({ publicOrigin }: { publicOrigin?: string } = {}) => {
+    const oauth = publicOrigin ? createOAuth({ name: 'Apps', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null, publicOrigin }) : undefined
+    const app = createAgentApi({ title: 'Apps', version: '1.0.0', description: 'Apps.', tags: [], auth: { realm: 'apps', keys: parseApiKeys('') }, ...(oauth ? { oauth } : {}) })
+    const state = { apps: 2, varsCalls: 0 }
+    serveGuide(app, { files: FILES, vars: () => ((state.varsCalls += 1), { counts: { apps: state.apps } }), full: ['llms.txt'] })
+    const specFetches = vi.spyOn(app, 'request')
+    const fetchedSpecs = () => specFetches.mock.calls.filter(([path]) => path === '/openapi.json').length
+    const from = (host: string, path = '/llms.txt') => app.request(path, { headers: { 'x-forwarded-proto': 'https', 'x-forwarded-host': host } })
+    return { app, state, fetchedSpecs, from }
+  }
+
+  it('names the public origin whatever host a caller forwards, when publicOrigin is set', async () => {
+    const { from, fetchedSpecs } = await guided({ publicOrigin: 'https://apps.example.test' })
+    for (const host of ['elsewhere.example.test', 'other.example.test']) {
+      const text = await (await from(host)).text()
+      expect(text).toBe('# Apps at https://apps.example.test, 2 of them\n')
+    }
+    expect(fetchedSpecs()).toBe(1)
+  })
+
+  it('keeps the spec for a bounded number of origins when any caller can name one', async () => {
+    const { from, fetchedSpecs } = await guided()
+    for (let n = 1; n <= 20; n++) expect(await (await from(`host${n}.example.test`)).text()).toContain(`https://host${n}.example.test`)
+    expect(fetchedSpecs()).toBe(20)
+    await from('host20.example.test')
+    expect(fetchedSpecs()).toBe(20)
+    // The first origin was let go long ago: its spec is fetched again
+    await from('host1.example.test')
+    expect(fetchedSpecs()).toBe(21)
+  })
+
+  it('renders the skills discovery once per origin, and again when the guide\'s values change', async () => {
+    const { from, state } = await guided({ publicOrigin: 'https://apps.example.test' })
+    const index = async () => (await from('apps.example.test', '/.well-known/agent-skills/index.json')).json()
+    const first = await index()
+    const calls = state.varsCalls
+    expect(await index()).toEqual(first)
+    expect((await from('apps.example.test', '/.well-known/agent-skills/apps.tar.gz')).status).toBe(200)
+    // Each request reads the values once, to see whether they changed; nothing is rendered again
+    expect(state.varsCalls).toBe(calls + 2)
+    state.apps = 3
+    const changed = await index()
+    expect(changed.skills[0].digest).not.toBe(first.skills[0].digest)
   })
 })
 
