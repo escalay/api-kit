@@ -20,7 +20,7 @@ export type LinkTarget = string | { path: string; title?: string; templated?: bo
 
 /** A bare host and optional port: a name of unreserved characters (RFC 3986), an IPv4 address or a bracketed IPv6 one. */
 const BARE_HOST = /^(?:[\w.~-]+|\[[\da-f:.]+\])(?::\d{1,5})?$/i
-/** The first item of a forwarded header, the one the first proxy wrote. */
+/** The first item of a forwarded header, which a client can set when proxies append: set `publicOrigin`. */
 const firstOf = (value: string | null) => value?.split(',')[0]?.trim()
 
 /**

@@ -34,7 +34,7 @@ describe('core parts', () => {
       [{ 'x-forwarded-host': 'app_1.internal' }, 'http://app_1.internal'],
       [{ 'x-forwarded-host': '203.0.113.7' }, 'http://203.0.113.7'],
       [{ 'x-forwarded-host': '[::1]:3000' }, 'http://[::1]:3000'],
-      // A list: the first item, the host the first proxy saw
+      // A list: the first item (a client can set it when proxies append; a bare host only)
       [{ 'x-forwarded-host': 'first.example.test, second.example.test', 'x-forwarded-proto': 'HTTPS, http' }, 'https://first.example.test'],
     ]
     for (const [headers, origin] of taken) expect(originWith(headers), JSON.stringify(headers)).toBe(origin)
