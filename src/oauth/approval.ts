@@ -45,9 +45,10 @@ export type SignInGrant = {
 }
 
 /**
- * What `onRevoke` hears when a grant ends: `revoked` (`revokeGrant`, or a refresh token at `/oauth/revoke`), `replayed`
- * (a used code or refresh token sent again), `withdrawn` (`onGrant` said no), `client_revoked` (`revokeClient`: every
- * grant of the client, none named). `client` is absent where the kit does not know it (`revokeGrant`).
+ * What `onRevoke` hears for every grant the kit ends: `revoked` (`revokeGrant`, or a refresh token at `/oauth/revoke`),
+ * `replayed` (a used code or refresh token sent again), `withdrawn` (`onGrant` said no), `client_revoked`
+ * (`revokeClient`: every grant of the client, none named). `client` is absent where the kit does not know it
+ * (`revokeGrant`). A grant that lapses (its refresh token unused for 30 days) is not told: nothing ends it.
  */
 export type SignInRevoked = { grant?: string; client?: string; reason: 'revoked' | 'replayed' | 'withdrawn' | 'client_revoked' }
 

@@ -176,7 +176,8 @@ every first token in `onGrant`:
   withdrawn: start again"), the code or device code spent, the grant ended (`onRevoke` hears `withdrawn`). It is not
   asked on refresh or jwt-bearer: judge later requests in `accepts`. An app that keeps its own rows per grant makes
   them here and refuses a token whose grant has none.
-- `onRevoke(revoked)` hears every grant that ends, after the kit has ended it: `grant`, `client` and `reason`.
+- `onRevoke(revoked)` hears every grant the kit ends, after it has ended it: `grant`, `client` and `reason`. A grant
+  that lapses (its refresh token unused for 30 days) is not told: nothing ends it, its tokens just expire.
   `revoked`: `revokeGrant` (no `client`: the kit keeps no grant-to-client index) or a refresh token at `/oauth/revoke`.
   `replayed`: a used code or refresh token sent again, its row kept or not. `withdrawn`: `onGrant` said no.
   `client_revoked`: `revokeClient`, naming the client and no grant, since it ends every grant of the client. Revoking
@@ -187,7 +188,10 @@ every first token in `onGrant`:
 **Mirror grants with `onGrant` and `onRevoke`.** An app that lists who holds access (a space's members, their agents)
 makes its row when `onGrant` says yes and drops it when `onRevoke` names its grant, or every grant of a client on
 `client_revoked`. Its `accepts` refuses a token whose grant has no row, so a row the app dropped stops the token on its
-next request, whatever the kit's markers say.
+next request, whatever the kit's markers say. A lapsed grant is never named, so the app ages its own rows: `accepts`
+writes the row's last-seen time (every request with the grant's tokens passes there), and a row with none for 30 days
+is dropped with `revokeGrant(grant)`. A grant that refreshed but made no request in those 30 days is ended that way
+too, so its client signs in again rather than holding tokens no row backs.
 
 An app that approves by an invite typed on its own page (`test/oauth.test.ts` runs it as written):
 

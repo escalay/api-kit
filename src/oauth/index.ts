@@ -109,9 +109,10 @@ export type OAuthConfig = {
    */
   onGrant?: (grant: SignInGrant, c: Context) => Promise<boolean>
   /**
-   * Hears every grant that ends, and why (`SignInRevoked`), after the kit has ended it: where an app drops the row it
-   * made in `onGrant`. At least once: a grant ended again (a code sent a third time) is told again. A throw is logged,
-   * never answered, so it can't undo or fail a revoke.
+   * Hears every grant the kit ends, and why (`SignInRevoked`), after it has ended it: where an app drops the row it
+   * made in `onGrant`. A grant that lapses (its refresh token unused for 30 days) is not told: the app ages its own
+   * rows. At least once: a grant ended again (a code sent a third time) is told again. A throw is logged, never
+   * answered, so it can't undo or fail a revoke.
    *
    * @example
    * onRevoke: async ({ grant, reason }) => grant && members.dropGrant(grant, reason)
