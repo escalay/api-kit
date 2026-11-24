@@ -178,6 +178,17 @@ describe('invites', () => {
     await makeInvite(byKey, 'bakes')
   })
 
+  it('stop at 100 open when many are made at once', async () => {
+    const { byKey, db } = await sharingApi()
+    const repo = sharingRepo(db)
+    for (let index = 0; index < 95; index++) await repo.addInvite(inviteRow('sp_soups', new Date(), `cap-${index}`))
+    const answers = await Promise.all(Array.from({ length: 20 }, (_, index) => byKey('/api/spaces/soups/invites', { method: 'POST', body: { label: `Guest ${index}` } })))
+    const statuses = answers.map((answer) => answer.status)
+    expect([statuses.filter((status) => status === 201).length, statuses.filter((status) => status === 409).length]).toEqual([5, 15])
+    const sharing = (await (await byKey('/api/spaces/soups/sharing')).json()) as { openInvites: number }
+    expect(sharing.openInvites).toBe(100)
+  })
+
   it('make a new code when one is taken', async () => {
     const { byKey } = await sharingApi()
     const first = await makeInvite(byKey)

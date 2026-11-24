@@ -15,11 +15,9 @@ import type { InviteWithMember, NewInvite, SharingRepo } from './repo.js'
 import type { SharingRoutes } from './routes.js'
 import type { Lifetime, Scope } from './schema.js'
 import { codeHashOf, linkHashOf, newInviteCode, newLinkToken } from './secrets.js'
-import { askingStateOf, inviteStateOf, redeemByOf } from './states.js'
+import { askingStateOf, inviteStateOf, MAX_OPEN_INVITES, redeemByOf } from './states.js'
 
 const NO_STORE = { 'cache-control': 'no-store' }
-/** Open invites a space may hold at once. */
-export const MAX_OPEN_INVITES = 100
 /** Fresh links and codes tried when the code made is taken. */
 const CODE_TRIES = 3
 /** What an agent may give: never until revoked (decision 17). */
@@ -125,13 +123,16 @@ export const sharingHandlers = (config: SharingConfig, oauth: Pick<OAuth, 'rootO
     _links: linksOf(originOf(c), { self: `${spacePath(space)}/sharing`, invites: { path: invitesPath(space), title: 'POST { label } to invite someone' } }),
   })
 
-  /** Adds the invite with a fresh link and code; a code already taken gets new ones, up to 3 tries. */
-  const addInvite = async (invite: Omit<NewInvite, 'linkHash' | 'codeHash'>) => {
+  const spaceIsFull = (space: Space) => new ProblemError('conflict', { detail: `${space.title} has ${MAX_OPEN_INVITES} open invites: revoke some (GET ${invitesPath(space)}) before making more.` })
+
+  /** Adds the invite with a fresh link and code; a 409 when the space is full, and a code already taken gets new ones, up to 3 tries. */
+  const addInvite = async (space: Space, invite: Omit<NewInvite, 'linkHash' | 'codeHash'>) => {
     for (let attempt = 0; attempt < CODE_TRIES; attempt++) {
       const token = newLinkToken()
       const code = newInviteCode()
       const id = await repo.addInvite({ ...invite, linkHash: linkHashOf(config.keys, token), codeHash: codeHashOf(config.keys, code) })
       if (id) return { id, token, code }
+      if ((await repo.countOpenInvites(space.id, new Date(invite.createdAt))) >= MAX_OPEN_INVITES) throw spaceIsFull(space)
     }
     throw new Error(`sharing: ${CODE_TRIES} invite codes in a row were taken; the code maker is broken`)
   }
@@ -140,10 +141,8 @@ export const sharingHandlers = (config: SharingConfig, oauth: Pick<OAuth, 'rootO
   const answerNewInvite = async (c: Context, sharer: Sharer, space: Space, wanted: InviteWanted) => {
     const lifetime = lifetimeFor(sharer, wanted.lifetime)
     const now = new Date()
-    if ((await repo.countOpenInvites(space.id, now)) >= MAX_OPEN_INVITES)
-      throw new ProblemError('conflict', { detail: `${space.title} has ${MAX_OPEN_INVITES} open invites: revoke some (GET ${invitesPath(space)}) before making more.` })
     const row = { spaceId: space.id, label: wanted.label, invitedBy: sharer.by, ...makerOf(sharer), scope: wanted.scope, lifetime, replacesMemberId: wanted.replacesMemberId, createdAt: now.toISOString(), redeemBy: redeemByOf(now) }
-    const { id, token, code } = await addInvite(row)
+    const { id, token, code } = await addInvite(space, row)
     const link = `${oauth.issuerOf(c)}/sharing/join/${token}`
     showOnce(c, `This Idempotency-Key already made invite ${id} for ${wanted.label} at ${space.title} (GET ${invitesPath(space)}). Its link and code were shown once, in that answer, and are never shown again. Lost them? Revoke it (DELETE ${invitesPath(space)}/${id}) and make another with a new Idempotency-Key.`)
     const card = cardOf(originOf(c), space, { ...row, id, revokedAt: null, memberId: null }, now)

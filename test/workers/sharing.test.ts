@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { migrate, testDb } from '../../src/index.js'
-import { codeHashOf, newInviteCode, sharingKeys, sharingRepo, SHARING_MIGRATIONS } from '../../src/sharing/index.js'
+import { codeHashOf, MAX_OPEN_INVITES, newInviteCode, sharingKeys, sharingRepo, SHARING_MIGRATIONS } from '../../src/sharing/index.js'
 import { at, DAY, inviteRow, memberRow, requestRow } from '../sharing-rows.js'
 
 const NOW = new Date('2026-03-12T09:00:00.000Z')
@@ -37,6 +37,13 @@ describe('the sharing tables on D1', () => {
     const claims = await Promise.all([repo.claimRequest(requestId, memberRow('sp_soups', NOW, 'd1-grant-d'), NOW), repo.claimRequest(requestId, memberRow('sp_soups', NOW, 'd1-grant-e'), NOW)])
     expect(claims.filter(Boolean)).toHaveLength(1)
     expect(await repo.claimRequest(requestId, memberRow('sp_soups', NOW, 'd1-grant-f'), at(NOW, DAY))).toBeNull()
+  })
+
+  it('add no invite past 100 open at a space when many are made at once', async () => {
+    const repo = sharingRepo(await sharingDb())
+    const added = await Promise.all(Array.from({ length: 110 }, (_, index) => repo.addInvite(inviteRow('sp_d1_cap', NOW, `d1-cap-${index}`))))
+    expect(added.filter(Boolean)).toHaveLength(MAX_OPEN_INVITES)
+    expect(await repo.countOpenInvites('sp_d1_cap', NOW)).toBe(MAX_OPEN_INVITES)
   })
 
   it('derive the keys and hash a code inside workerd', () => {

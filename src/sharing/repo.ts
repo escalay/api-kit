@@ -3,7 +3,8 @@
  * an id from a route also takes the space (`and space_id = ?`), so an id from one space is never found at another.
  * Each once-only decision is one statement (`insert … select … where`, `update … where … returning`), with no
  * transaction, so it holds on node:sqlite, libSQL and D1 alike; a statement that loses a race answers "no row", never
- * throws. Times come in as `Date` and are kept as ISO text.
+ * throws. A limit is checked in the statement that writes past it (an invite past `MAX_OPEN_INVITES`), never by a
+ * count read before. Times come in as `Date` and are kept as ISO text.
  *
  * @example
  * const repo = sharingRepo(db)
@@ -11,9 +12,10 @@
  */
 import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm'
 import { newId } from '../core/ids.js'
-import type { SQLiteColumn } from 'drizzle-orm/sqlite-core'
+import type { SQLiteColumn, SQLiteTable } from 'drizzle-orm/sqlite-core'
 import type { Db } from '../db/index.js'
 import { sharingInvites, sharingMembers, sharingRequests, sharingSpaces, type EndedReason, type Lifetime, type Scope } from './schema.js'
+import { MAX_OPEN_INVITES } from './states.js'
 
 export type SpaceRow = typeof sharingSpaces.$inferSelect
 export type InviteRow = typeof sharingInvites.$inferSelect
@@ -32,9 +34,9 @@ export type PageAt = { after?: string; limit: number }
 
 const iso = (at: Date) => at.toISOString()
 
-/** A member row's values in the table's column order: what `insert … select` writes. */
-const memberValuesOf = (row: MemberRow): SQL => {
-  const keys = Object.keys(getTableColumns(sharingMembers)) as (keyof MemberRow)[]
+/** A row's values in its table's column order: what `insert … select` writes. */
+const valuesOf = <Row extends Record<string, unknown>>(table: SQLiteTable, row: Row): SQL => {
+  const keys = Object.keys(getTableColumns(table)) as (keyof Row)[]
   return sql.join(keys.map((key) => sql`${row[key]}`), sql`, `)
 }
 
@@ -50,6 +52,8 @@ export const sharingRepo = (db: Db) => {
   const redeemed = sql`exists (select 1 from ${sharingMembers} where ${sharingMembers.inviteId} = ${sharingInvites.id})`
   const joined = sql`exists (select 1 from ${sharingMembers} where ${sharingMembers.requestId} = ${sharingRequests.id})`
   const unrevokedOpen = and(isNull(sharingInvites.revokedAt), sql`not ${redeemed}`)
+  /** A space's invites that are open: not redeemed, not revoked, still in time. */
+  const openAt = (spaceId: string, now: string) => and(eq(sharingInvites.spaceId, spaceId), unrevokedOpen, sql`${sharingInvites.redeemBy} > ${now}`)
   const grantsOf = (rows: { grantId: string }[]) => rows.map((row) => row.grantId)
   const endedColumns = { id: sharingMembers.id, grantId: sharingMembers.grantId, spaceId: sharingMembers.spaceId }
   const countWaiting = async (who: SQL, now: Date) => {
@@ -84,9 +88,18 @@ export const sharingRepo = (db: Db) => {
 
     // Invites
 
-    /** Adds an invite and returns its id; null when its link or code hash is already taken (make new ones and retry). */
+    /**
+     * Adds an invite and returns its id, one statement: written only while its space holds fewer than
+     * `MAX_OPEN_INVITES` open at the invite's `createdAt`. Null when the space is full, or when its link or code hash
+     * is already taken (make new ones and retry); `countOpenInvites` tells the two apart.
+     */
     addInvite: async (invite: NewInvite): Promise<string | null> => {
-      const [added] = await db.insert(sharingInvites).values({ ...invite, id: newId('inv'), revokedAt: null }).onConflictDoNothing().returning({ id: sharingInvites.id })
+      const row: InviteRow = { ...invite, id: newId('inv'), revokedAt: null }
+      const openNow = sql`(select count(*) from ${sharingInvites} where ${openAt(invite.spaceId, invite.createdAt)})`
+      const [added] = await db.insert(sharingInvites)
+        .select(sql`select ${valuesOf(sharingInvites, row)} where ${openNow} < ${MAX_OPEN_INVITES}`)
+        .onConflictDoNothing()
+        .returning({ id: sharingInvites.id })
       return added?.id ?? null
     },
     /** An invite of this space by its id. */
@@ -104,7 +117,7 @@ export const sharingRepo = (db: Db) => {
       invitesWithMember().where(and(eq(sharingInvites.spaceId, spaceId), before(sharingInvites.id, page.after))).orderBy(desc(sharingInvites.id)).limit(page.limit),
     /** How many of a space's invites are open: not redeemed, not revoked, still in time. */
     countOpenInvites: async (spaceId: string, now: Date) => {
-      const [row] = await db.select({ open: sql<number>`count(*)`.mapWith(Number) }).from(sharingInvites).where(and(eq(sharingInvites.spaceId, spaceId), unrevokedOpen, sql`${sharingInvites.redeemBy} > ${iso(now)}`))
+      const [row] = await db.select({ open: sql<number>`count(*)`.mapWith(Number) }).from(sharingInvites).where(openAt(spaceId, iso(now)))
       return row?.open ?? 0
     },
     /** Revokes an invite of this space that no one redeemed; false when it is not there, redeemed or revoked already. */
@@ -174,7 +187,7 @@ export const sharingRepo = (db: Db) => {
     claimInvite: async (inviteId: string, member: NewMember, now: Date): Promise<string | null> => {
       const row = newMemberRow(member, { via: 'invite', inviteId, requestId: null })
       const [added] = await db.insert(sharingMembers)
-        .select(sql`select ${memberValuesOf(row)} from ${sharingInvites} where ${and(eq(sharingInvites.id, inviteId), eq(sharingInvites.spaceId, member.spaceId), sql`${sharingInvites.redeemBy} > ${iso(now)}`, unrevokedOpen)}`)
+        .select(sql`select ${valuesOf(sharingMembers, row)} from ${sharingInvites} where ${and(eq(sharingInvites.id, inviteId), eq(sharingInvites.spaceId, member.spaceId), sql`${sharingInvites.redeemBy} > ${iso(now)}`, unrevokedOpen)}`)
         .onConflictDoNothing()
         .returning({ id: sharingMembers.id })
       return added?.id ?? null
@@ -183,7 +196,7 @@ export const sharingRepo = (db: Db) => {
     claimRequest: async (requestId: string, member: NewMember, now: Date): Promise<string | null> => {
       const row = newMemberRow(member, { via: 'request', inviteId: null, requestId })
       const [added] = await db.insert(sharingMembers)
-        .select(sql`select ${memberValuesOf(row)} from ${sharingRequests} where ${and(eq(sharingRequests.id, requestId), eq(sharingRequests.spaceId, member.spaceId), eq(sharingRequests.state, 'approved'), sql`${sharingRequests.expiresAt} > ${iso(now)}`, sql`not ${joined}`)}`)
+        .select(sql`select ${valuesOf(sharingMembers, row)} from ${sharingRequests} where ${and(eq(sharingRequests.id, requestId), eq(sharingRequests.spaceId, member.spaceId), eq(sharingRequests.state, 'approved'), sql`${sharingRequests.expiresAt} > ${iso(now)}`, sql`not ${joined}`)}`)
         .onConflictDoNothing()
         .returning({ id: sharingMembers.id })
       return added?.id ?? null

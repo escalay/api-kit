@@ -72,11 +72,11 @@ may share, and its issuer (`publicOrigin`) names invite links.
 |---|---|
 | `index.ts` | `createSharing` (the options checked: `relay`, `mcpPath`, `neverKept`, `config`), `registerSharing`, `SHARING_TAG`, and re-exports the files below |
 | `routes.ts` | `sharingRoutes`: the owner routes as OpenAPI contracts (below); `PLAIN_TEXT`, the label rule (no control, bidi or zero-width characters) |
-| `handlers.ts` | the handlers; `sharerOf`, who may share (`Sharer`), and `MAX_OPEN_INVITES` (100) |
+| `handlers.ts` | the handlers; `sharerOf`, who may share (`Sharer`) |
 | `tools.ts` | `sharingTools`: the MCP tools for the owner routes |
 | `schema.ts` | the Drizzle tables `sharingSpaces`, `sharingInvites`, `sharingRequests`, `sharingMembers`, and `SHARING_MIGRATIONS` (step 1: the four tables and ten indexes); what each column means is in its JSDoc |
 | `repo.ts` | `sharingRepo(db)`: every statement over the tables, nothing about HTTP (below) |
-| `states.ts` | the named states: `inviteStateOf`, `requestStateOf`, `memberStateOf`, `memberListingOf`, `askingStateOf`; the times `redeemByOf`, `memberExpiresAtOf`, `REDEEM_WITHIN` (a day), `UNSEEN_FOR` (30 days), `UNANSWERED_PAUSE` (10) |
+| `states.ts` | the named states: `inviteStateOf`, `requestStateOf`, `memberStateOf`, `memberListingOf`, `askingStateOf`; the times `redeemByOf`, `memberExpiresAtOf`, `REDEEM_WITHIN` (a day), `UNSEEN_FOR` (30 days), `UNANSWERED_PAUSE` (10), `MAX_OPEN_INVITES` (100) |
 | `secrets.ts` | `sharingKeys`, `newLinkToken` (192 bits), `newInviteCode` (`BDKM-QXTW`, from `CODE_ALPHABET`), `normalisedCode`, `newShownCode` (6 digits), and what the tables keep instead: `linkHashOf`, `codeHashOf`, `addressKeyOf` (HMACs), `ticketHashOf` (SHA-256) |
 
 The owner routes (`{path}` default `/api/spaces`) and their tools:
@@ -94,7 +94,7 @@ The owner routes (`{path}` default `/api/spaces`) and their tools:
 | Table | Statements |
 |---|---|
 | `sharing_spaces` | `spaceAt`, `setAskToJoin` (clears a pause), `noteUnanswered`, `noteAnswered`, `forgetSpace` |
-| `sharing_invites` | `addInvite` (null on a link or code hash already taken), `inviteAt`, `inviteByLink`, `inviteByCodeAt`, `inviteByCodeAnywhere` (only for a client that named no space), `listInvites`, `countOpenInvites`, `revokeInvite`, `revokeInvitesReplacing`, `revokeInvitesMadeByGrant`, `revokeInvitesMadeByClient`, `revokeInvitesOf` |
+| `sharing_invites` | `addInvite` (null at 100 open, or on a link or code hash already taken), `inviteAt`, `inviteByLink`, `inviteByCodeAt`, `inviteByCodeAnywhere` (only for a client that named no space), `listInvites`, `countOpenInvites`, `revokeInvite`, `revokeInvitesReplacing`, `revokeInvitesMadeByGrant`, `revokeInvitesMadeByClient`, `revokeInvitesOf` |
 | `sharing_requests` | `addRequest` (null on a ticket that already asked), `requestAt`, `requestByTicket`, `listRequests`, `countWaitingAt`, `countWaitingFrom` (an address), `approveRequest`, `refuseRequest`, `refuseWaitingAt` |
 | `sharing_members` | `claimInvite`, `claimRequest`, `addOwnerMember`, `memberByGrant`, `memberAt`, `listMembers`, `noteSeen`, `endMember`, `endMemberOfGrant`, `endMembersOfClient`, `endMembersOf`, `deleteMemberOfGrant` |
 | aging | `endExpiredMembers`, `endLapsedMembers`, `deleteEndedMembers`, `deleteClosedInvites`, `deleteClosedRequests` |
@@ -113,8 +113,9 @@ sequenceDiagram
   R->>R: sharerOf(caller): the owner, a fixed key, or a root token (else 404)
   R->>S: 'soups' (after spaceName)
   S-->>R: { id, name, title } (null: the same 404)
-  R->>R: an agent gives 7 or 30 days only (else 400), 100 open is a 409
-  R->>D: addInvite with HMACs of a new link and code (a taken code: new ones, 3 tries)
+  R->>R: an agent gives 7 or 30 days only (else 400)
+  R->>D: addInvite with HMACs of a new link and code, only while under 100 open
+  D-->>R: null: 100 open is a 409, else a taken code gets new ones (3 tries)
   R->>R: showOnce: Idempotency-Key keeps only "made invite inv_…"
   R-->>O: 201 link, code, message (shown once, no-store)
 ```
@@ -180,7 +181,9 @@ stateDiagram-v2
 - **The claim is the insert.** `claimInvite` and `claimRequest` are one `insert … select … where` each: the member is
   written only while the invite is of the member's space, unrevoked, in time and unredeemed (the ask: approved, in
   time, unused). `invite_id`, `request_id` and `grant_id` are unique, so a racing second claim writes nothing and
-  answers null, never throws. No statement uses a transaction: each holds on node:sqlite, libSQL and D1.
+  answers null, never throws. So is the cap: `addInvite` writes only while the space holds fewer than 100 open
+  invites, so invites made at once never pass it. No statement uses a transaction: each holds on node:sqlite, libSQL
+  and D1.
 - **An id never crosses spaces.** Every statement taking an id a route names also takes the space
   (`and space_id = ?`).
 - **Ending is not deleting.** A removed, replaced or revoked member's row stays (ended, with its reason) until aging
@@ -204,7 +207,7 @@ stateDiagram-v2
 | 409 on `createInvite` | 100 open invites at the space; or `shown_once`: a retry with the same Idempotency-Key (the invite was made) |
 | 409 on `updateSharing` | the app's `askToJoin` option is off |
 | 409 on `revokeInvite` | the invite was used already |
-| `addInvite` answers null | its link or code hash is taken: `createInvite` makes new ones, then fails after 3 |
+| `addInvite` answers null | the space holds 100 open invites (`createInvite` answers 409), or its link or code hash is taken: `createInvite` makes new ones, then fails after 3 |
 | `claimInvite` answers null | the invite is spent, revoked, past `redeem_by`, of another space, or the grant already has a member |
 | `claimRequest` answers null | the ask is not approved, lapsed, of another space, or already joined |
 | `approveRequest` or `refuseRequest` answers false | the ask is decided, joined, lapsed, or of another space |
@@ -219,12 +222,13 @@ stateDiagram-v2
 ## Tests
 
 - `test/sharing.test.ts`: the migration's tables and indexes, every named state as a table, the secrets, both claims
-  under a race, an id from one space at another for every by-id statement, and no table holding a secret.
+  and the 100-open cap under a race, an id from one space at another for every by-id statement, and no table holding a secret.
 - `test/sharing-owner.test.ts`: who may share as a table; invites made, listed, paged and revoked; the same 404 at
-  every route for strangers, missing, cased and encoded names, and another space's id; agents' lifetimes and makers;
+  every route for strangers, missing, cased and encoded names, and another space's id; the cap with invites made at
+  once; agents' lifetimes and makers;
   an Idempotency-Key retry (memory and database guards, and through MCP) keeping no link or code; `lintOpenApi`,
   `toolRoutes`, `toolsRun`, `cliGaps`.
-- `test/workers/sharing.test.ts`: the migration and both claims on D1, the keys inside workerd.
+- `test/workers/sharing.test.ts`: the migration, both claims and the cap on D1, the keys inside workerd.
 
 ## Upgrading
 

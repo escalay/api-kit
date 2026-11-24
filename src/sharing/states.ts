@@ -19,6 +19,8 @@ export const REDEEM_WITHIN = DAY
 export const UNSEEN_FOR = 30 * DAY
 /** Asks in a row that lapse or are refused unanswered before asking pauses. */
 export const UNANSWERED_PAUSE = 10
+/** Open invites a space may hold at once. */
+export const MAX_OPEN_INVITES = 100
 
 const LIFETIME_DAYS: Record<Exclude<Lifetime, 'until_revoked'>, number> = { '7d': 7, '30d': 30 }
 

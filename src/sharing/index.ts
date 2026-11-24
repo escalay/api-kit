@@ -27,12 +27,12 @@ import { sharingRoutes } from './routes.js'
 import { SHARING_MIGRATIONS } from './schema.js'
 import { sharingKeys, type SharingKeys } from './secrets.js'
 
-export { MAX_OPEN_INVITES, sharerOf, type Sharer, type SharerFacts } from './handlers.js'
+export { sharerOf, type Sharer, type SharerFacts } from './handlers.js'
 export { sharingRepo, type InviteRow, type InviteWithMember, type MemberRow, type NewInvite, type NewMember, type NewRequest, type PageAt, type RequestRow, type RequestWithMember, type SharingRepo, type SpaceRow } from './repo.js'
 export { PLAIN_TEXT, sharingRoutes, type SharingRoutes } from './routes.js'
 export { sharingInvites, sharingMembers, sharingRequests, sharingSpaces, SHARING_MIGRATIONS, type EndedReason, type Lifetime, type Scope } from './schema.js'
 export { addressKeyOf, CODE_ALPHABET, codeHashOf, linkHashOf, newInviteCode, newLinkToken, newShownCode, normalisedCode, sharingKeys, ticketHashOf, type SharingKeys } from './secrets.js'
-export { askingStateOf, inviteStateOf, memberExpiresAtOf, memberListingOf, memberStateOf, redeemByOf, requestStateOf, REDEEM_WITHIN, UNANSWERED_PAUSE, UNSEEN_FOR, type AskingState, type InviteState, type MemberListing, type MemberState, type RequestState } from './states.js'
+export { askingStateOf, inviteStateOf, MAX_OPEN_INVITES, memberExpiresAtOf, memberListingOf, memberStateOf, redeemByOf, requestStateOf, REDEEM_WITHIN, UNANSWERED_PAUSE, UNSEEN_FOR, type AskingState, type InviteState, type MemberListing, type MemberState, type RequestState } from './states.js'
 export { sharingTools } from './tools.js'
 
 export const SHARING_TAG = { name: 'Sharing', description: 'Invites to a space, and how it is shared: for the owner, their deployment keys and their own agents.' }

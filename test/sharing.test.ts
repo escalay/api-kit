@@ -8,6 +8,7 @@ import {
   codeHashOf,
   inviteStateOf,
   linkHashOf,
+  MAX_OPEN_INVITES,
   memberExpiresAtOf,
   memberListingOf,
   memberStateOf,
@@ -251,6 +252,19 @@ describe('an invite claim', () => {
     expect(await repo.addInvite(inviteRow('sp_soups', NOW, 'claim', { linkHash: 'a fresh link' }))).toBeNull()
     expect(await repo.addInvite(inviteRow('sp_bakes', NOW, 'claim', { codeHash: 'a fresh code' }))).toBeNull()
     expect(await repo.addInvite(inviteRow('sp_soups', NOW, 'fresh'))).toEqual(expect.stringMatching(/^inv_/))
+  })
+
+  it('adds no invite past 100 open at a space, even all at once, and counts only open ones', async () => {
+    const { repo } = await opened()
+    const redeemed = (await repo.addInvite(inviteRow('sp_soups', NOW, 'redeemed')))!
+    await repo.claimInvite(redeemed, memberRow('sp_soups', NOW, 'grant-redeemed'), NOW)
+    await repo.revokeInvite('sp_soups', (await repo.addInvite(inviteRow('sp_soups', NOW, 'revoked')))!, NOW)
+    await repo.addInvite(inviteRow('sp_soups', at(NOW, -DAY), 'late'))
+    const open = await repo.countOpenInvites('sp_soups', NOW)
+    const added = await Promise.all(Array.from({ length: 110 - open }, (_, index) => repo.addInvite(inviteRow('sp_soups', NOW, `cap-${index}`))))
+    expect(added.filter(Boolean)).toHaveLength(MAX_OPEN_INVITES - open)
+    expect(await repo.countOpenInvites('sp_soups', NOW)).toBe(MAX_OPEN_INVITES)
+    expect(await repo.addInvite(inviteRow('sp_bakes', NOW, 'elsewhere'))).toEqual(expect.stringMatching(/^inv_/))
   })
 })
 
