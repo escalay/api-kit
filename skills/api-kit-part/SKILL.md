@@ -86,7 +86,7 @@ A browser part is one file in `src/browser/`, with `meta: { "entry": true, "web"
 - **The map.** `docs/PARTS.md` is generated from `registry.json`: run `pnpm parts` after changing a part's
   registry item (`test/parts.test.mjs` fails while it is stale), and give the part a row in its goal table in
   `scripts/parts.mjs` when it serves a new goal. The `api-kit-build` skill names every part by goal: add the new one there
-  (a test checks every part is named in some skill), and the `AGENTS.md` layout table gets its row.
+  (a test checks every part is named in some skill). `AGENTS.md` names no part: it points at `docs/PARTS.md`.
 - **The release note.** The pull request's title is the line in the release notes: `feat(reminders): …` for a new
   part or option, `fix(<part>): …` for a fix. A change an app must act on (a new migration step, a renamed export, a
   changed default) gets its entry in `docs/upgrading.md` and says so in the part's README. Existing apps keep
