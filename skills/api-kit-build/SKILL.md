@@ -52,7 +52,7 @@ part, what it needs and the order to add them: the kit's `docs/PARTS.md`):
 | Saved collections of the app's items | `boards`; in the browser `boards-client`, `boards-react` |
 | Features the owner can switch off | `switches` (in every new app); in the browser `switches-client`, `switches-react`, `switches-ui` |
 | A daily anonymous usage report | `telemetry` |
-| A public front page and a browser app under `/app` | `web` |
+| A public front page and a browser app under `/app` | `web` (Node only; on Workers the `app` preset serves `web/`) |
 | One name and icon on every surface | `brand`, then `npx @escalay/kit brand` |
 
 Add one with `npx @escalay/kit add <part> --dir src/kit --install` (browser parts take `--web-dir`), then read its

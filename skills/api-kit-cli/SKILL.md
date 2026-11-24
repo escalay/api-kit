@@ -1,6 +1,6 @@
 ---
 name: api-kit-cli
-description: Use when giving an API built on the Escalay api-kit its command line, naming its MCP tools as commands, writing a job (one command for a playbook step), or fixing what cliGaps reports. Covers kit sdk / kit cli, names, examples, jobs, the snapshot and sign-in; and every command of the kit's own CLI (npx @escalay/kit: init and its presets, add, update, doctor, feature, guide, repo, button, brand, license), what each does and when to run it.
+description: Use when giving an API built on the Escalay api-kit its command line, naming its MCP tools as commands, writing a job (one command for a playbook step), or fixing what cliGaps reports. Covers kit sdk / kit cli, names, examples, jobs, the snapshot and sign-in; and every command of the kit's own CLI (npx @escalay/kit - init and its presets, add, update, doctor, feature, guide, repo, button, brand, license), what each does and when to run it.
 ---
 
 # The app's command line
@@ -123,7 +123,7 @@ default; `--app` is the app's folder, `.` by default.
 | `kit doctor` | missing, edited and behind files, `cliGaps`, notes (exits 1 with a fix per line) |
 | `kit adopt` | writes `kit.json` for parts the shadcn CLI copied |
 | `kit feature <plural-name>` | a feature folder; `--switch` lists it in the catalog so the owner can switch it off |
-| `kit guide` | `guide/` as `src/guide.gen.ts` (what `pnpm guide` runs) |
+| `kit guide` | `guide/` as `src/guide.gen.ts`, for Workers (an app made by `init` runs `pnpm guide`, which writes the same) |
 | `kit sdk`, `kit cli` | the client and the command line (above) |
 | `kit repo check\|apply` | the GitHub repository's settings and rules for `main` (§20), through `gh` |
 | `kit button` | the Deploy to Cloudflare button: `--check` what would stop a stranger's deploy, `--write` into the README, `--smoke` a real deploy |

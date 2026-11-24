@@ -1297,7 +1297,10 @@ describe('the skills', () => {
       const [, frontmatter = ''] = text.match(/^---\n([\s\S]*?)\n---\n/) ?? []
       expect(frontmatter, name).toContain(`name: ${name}\n`)
       expect(frontmatter, name).toMatch(/^description: Use when /m)
-      expect(frontmatter.match(/^description: (.*)$/m)![1]!.length, name).toBeLessThanOrEqual(1024)
+      const description = frontmatter.match(/^description: (.*)$/m)![1]!
+      expect(description.length, name).toBeLessThanOrEqual(1024)
+      // A plain YAML scalar: a colon-space or a space-hash inside makes the frontmatter unreadable, and the skill never loads
+      expect(description, name).not.toMatch(/: | #/)
       expect(text.split('\n').length, name).toBeLessThanOrEqual(150)
       expect(text, name).toMatch(/`pnpm test|`npx @escalay\/kit doctor`|^pnpm release:check/m)
       // Only commands the CLI has
