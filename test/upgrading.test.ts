@@ -153,6 +153,13 @@ describe('kit upgrading', () => {
     for (const later of ['- the next', '- after the next']) expect(printed, later).not.toContain(later)
   })
 
+  it('gives the exact import line wherever a note asks an older app to add code', () => {
+    // A trial agent acting on a note had to work out the import from a folder name
+    const asks = UPGRADING.split(/\n(?=- |### |## )/).filter((note) => /an older app adds\b/i.test(note))
+    expect(asks.length).toBeGreaterThan(1)
+    for (const note of asks) expect(note, note.slice(0, 80)).toMatch(/import \{ \w+(, \w+)* \} from\s+'\.\.\/src\/kit\/[\w-]+\/index\.js'/)
+  })
+
   it('links the changelog where an app can open it: the npm package ships docs/ without CHANGELOG.md', () => {
     const links = [...UPGRADING.matchAll(/\]\(([^)#]*CHANGELOG[^)]*)\)/g)].map(([, link]) => link)
     expect(links.length).toBeGreaterThan(0)

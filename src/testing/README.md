@@ -64,11 +64,12 @@ expect(cliGaps({ tools, resources, jobs })).toEqual([])
 | `flagsOf(schema)` | an input schema's properties as the CLI's flags (`{ name, key, type, description, required, multiple, enum?, default? }`), positional ones included |
 | `softAuthenticator()` | a software passkey: `register(options, origin)` and `login(options, origin)` answer the WebAuthn ceremonies the way a phone would, so claim → register → verify → login → verify runs in CI (the people and setup parts). `options` is the one inside the options route's `{ challengeId, options }`; `challengeId` goes back with the answer (the people README's test) |
 | `approveSignIn(app, query, { headers, decision, form })` | approves an OAuth sign-in the way a browser does: it opens `/oauth/authorize`, keeps the ticket cookie the page sets, and posts a form on it same-origin with that cookie: the kit's consent form with `decision`, or with `form` the app's own (`{ action: '/sharing/join', fields: { code: 'BDKM-QXTW' } }`). It returns the answer: the 302 to the client, or the app's page |
+| `callMcp(app, method, { path, params, bearer, headers })` | one MCP request over HTTP as an agent sends it on spec 2026-07-28: `mcp-protocol-version` and the body's `_meta`, `mcp-method`, `mcp-name` for a call, JSON and an event stream accepted. Returns `{ status, text, result, error }` (`McpAnswer`), `result` null unless a 200: `callMcp(app, 'tools/call', { path: '/s/soups/mcp', bearer, params: { name: 'view_shelf', arguments: {} } })` |
 | `connectAgent(app, { address, approve, redirect, scope, name })` | a third-party agent signing in at `address` (`/mcp`, or a space's) as an MCP client does: the 401's `resource_metadata`, `/oauth/register`, `/oauth/authorize` with PKCE, `approve(query)` for the person's click (`approveSignIn`), then the code at `/oauth/token`. Returns `{ page, html, tokens }`, `tokens` null when the click gave no code (a friend's agent joining with an invite's code: the sharing README, Wire it); `AgentConnection` is its type |
 
 | File | What |
 |---|---|
-| `index.ts` | the checks, `approveSignIn`, `connectAgent`, and the exports of the other two |
+| `index.ts` | the checks, `approveSignIn`, `connectAgent`, `callMcp`, and the exports of the other two |
 | `cli.ts` | `cliGaps`, `cliSnapshot`, `flagsOf` |
 | `authenticator.ts` | `softAuthenticator` |
 

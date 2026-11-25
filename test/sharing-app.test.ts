@@ -4,26 +4,22 @@
  * page (`form`); then a shelf's token is refused at another shelf, a spent invite is refused, a removed member's
  * token is refused, and a shelf that exists and one that does not answer alike.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ONLY_ITS_SPACE } from '../src/sharing/index.js'
-import { approveSignIn, connectAgent } from '../src/testing/index.js'
+import { approveSignIn, callMcp, connectAgent } from '../src/testing/index.js'
 import { CLIENT_A, ORIGIN, OWNER, OWNER_KEY, READER_KEY, recipeBox, SAMPLE_APP, shelfAddress, type RecipeBox } from './sharing-fixture.js'
 
-const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} }
 const AS_OWNER = { 'x-test-owner': OWNER }
 const json = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
 type ToolResult = { isError?: boolean; content: { text: string }[] }
 
-/** Calls an MCP tool at `at` with a bearer, as an agent does: the answer's status and, on a 200, its result. */
+/** Calls an MCP tool at `at` with a bearer, as an agent does (the testing part's `callMcp`): the answer's status and, on a 200, its result. */
 const callTool = async (box: RecipeBox, at: string, bearer: string, name: string, args: Record<string, unknown> = {}) => {
-  const answer = await box.app.request(at, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': name },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args, _meta: META } }),
-  })
-  const text = await answer.text()
-  return { status: answer.status, text, result: answer.status === 200 ? ((JSON.parse(text) as { result: ToolResult }).result) : null }
+  const { status, text, result } = await callMcp(box.app, 'tools/call', { path: at, bearer, params: { name, arguments: args } })
+  return { status, text, result: result as ToolResult | null }
 }
 const toolText = async (...args: Parameters<typeof callTool>) => {
   const { status, text, result } = await callTool(...args)
@@ -90,6 +86,23 @@ describe('a recipe box shares its shelves', () => {
     for (const path of ['/api/shelves/bakes/recipes', '/api/spaces/soups/invites', '/api/spaces/soups/members']) expect([path, (await call(path)).status]).toEqual([path, 401])
     expect((await callTool(box, '/mcp', sam, 'list_members', { space: 'soups' })).status).toBe(401)
     expect(box.recipes.get('bakes')).toEqual(['Rye bread'])
+  })
+
+  it('answers each refusal with the status REFERENCE.md’s table gives it', async () => {
+    const { box, sam } = await samAtSoups()
+    const reference = readFileSync(join(import.meta.dirname, '../src/sharing/REFERENCE.md'), 'utf8')
+    const row = (caller: string, asks: string) => reference.split('\n').find((line) => line.startsWith(`| ${caller} | ${asks}`))!.split(' | ').at(-1)!
+    // A read-only member writing over REST, and through the space's tool
+    const rest = await box.app.request('/api/shelves/soups/recipes', { method: 'POST', headers: { authorization: `Bearer ${sam}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Pea soup' }) })
+    expect(row('a token with `read` only', 'a write over REST')).toMatch(/^403 `forbidden`, `error="insufficient_scope"`/)
+    expect([rest.status, (await rest.json()).code, rest.headers.get('www-authenticate')]).toEqual([403, 'forbidden', expect.stringContaining('error="insufficient_scope"')])
+    expect(row('a token with `read` only', 'a write through')).toMatch(/^200, the tool's result `isError`/)
+    const tool = await callTool(box, '/box/soups/mcp', sam, 'add_recipe', { name: 'Pea soup' })
+    expect([tool.status, tool.result?.isError, tool.result?.content[0]?.text]).toEqual([200, true, expect.stringContaining('403')])
+    // At another shelf, existing or not, and at the owner's MCP
+    expect(row('a member’s token (it holds one space)'.replace('’', "'"), 'another space')).toMatch(/^401, `ONLY_ITS_SPACE`/)
+    for (const at of ['/box/bakes/mcp', '/box/pies/mcp', '/mcp']) expect([at, (await callTool(box, at, sam, 'list_recipes')).status]).toEqual([at, 401])
+    expect(box.recipes.get('soups')).toEqual(['Leek soup'])
   })
 
   it('refuses a spent invite: a second app typing the same code gets the code page again, and nothing', async () => {

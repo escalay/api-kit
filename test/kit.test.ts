@@ -11,7 +11,7 @@ import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { createAgentApi, errorHandler, problemResponse, rateLimit, sortQuery, decodeCursor, originOf, fillTemplate, guideFiles, guideModuleSource, HAL_JSON, linksOf, LinksSchema, mintApiKey, pageOf, pageSchema, parseApiKeys, pathWith, problemResponses, ProblemError, serveAiCatalog, serveGuide, snapshotEtag, tarGz, wantsMarkdown } from '../src/index.js'
 import { guideSkillProblems, guideSkills, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp, routeOf } from '../src/mcp/index.js'
-import { guideGaps, guideRoutes, lintOpenApi, toolRoutes } from '../src/testing/index.js'
+import { callMcp, guideGaps, guideRoutes, lintOpenApi, toolRoutes } from '../src/testing/index.js'
 import { migrate, openDb } from '../src/db/index.js'
 import { OAUTH_MIGRATIONS } from '../src/oauth/schema.js'
 import { createOAuth, generateOAuthKey, memoryOAuthStore } from '../src/oauth/index.js'
@@ -396,6 +396,28 @@ describe('the copy-in CLI', () => {
   const KIT_VERSION: string = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')).version
   const cli = (cwd: string, ...args: string[]) => spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), ...args], { cwd, encoding: 'utf8' })
   const hashOfText = (text: string) => createHash('sha256').update(text).digest('hex')
+  /** A friend's agent joins Soups with its code, as the sharing README's test line says, and loses it with the shelf. */
+  const SHARING_FRIEND_TEST = `import { expect, it } from 'vitest'
+import { createApp } from '../src/app.js'
+import { generateOAuthKey, hashApiKey, testDb } from '../src/kit/index.js'
+import { approveSignIn, callMcp, connectAgent } from '../src/kit/testing/index.js'
+
+const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
+const env = { API_KEYS: \`owner:\${hashApiKey('owner-key')}\`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
+it('lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', async () => {
+  const app = await createApp({ db: await testDb(), env, address: 'socket' })
+  const shelf = async (name: string) => ((await (await app.request('/api/shelves', { method: 'POST', headers, body: JSON.stringify({ name }) })).json()) as { id: string }).id
+  const [soups, bakes] = [await shelf('Soups'), await shelf('Bakes')]
+  const invite = await app.request(\`/api/spaces/\${soups}/invites\`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'sam' }, body: JSON.stringify({ label: 'Sam' }) })
+  const { code, address } = (await invite.json()) as { code: string; address: string }
+  const { tokens } = await connectAgent(app, { address, approve: (query) => approveSignIn(app, query, { form: { action: '/sharing/join', fields: { code } } }) })
+  const view = (at: string) => callMcp(app, 'tools/call', { path: at, bearer: tokens!.access_token, params: { name: 'view_shelf', arguments: {} } })
+  expect((await view(new URL(address).pathname)).text).toContain('Soups')
+  expect((await view(\`/s/\${bakes}/mcp\`)).status).toBe(401)
+  expect((await app.request(\`/api/shelves/\${soups}\`, { method: 'DELETE', headers })).status).toBe(204)
+  expect((await view(\`/s/\${soups}/mcp\`)).status).toBe(401)
+})
+`
   const kitText = (file: string) => readFile(join(import.meta.dirname, '..', 'src', file), 'utf8')
 
   it('writes the guide folder as a module that serves the same guide (for Workers)', async () => {
@@ -413,6 +435,22 @@ describe('the copy-in CLI', () => {
     serveGuide(fromFolder, { dir, vars: () => ({ counts: { apps: 2 } }), full: ['llms.txt'] })
     expect(await (await fromModule.request('/llms.txt')).text()).toBe(await (await fromFolder.request('/llms.txt')).text())
     expect((await app.request('/llms.txt', { headers: auth })).status).toBe(200)
+  })
+
+  it('prints a dev key and the API_KEYS line that lets it in, keeping nothing', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-key-'))
+    const made = cli(parent, 'key')
+    expect(made.status, made.stderr).toBe(0)
+    const [, key] = /^Key       (\S+)$/m.exec(made.stdout)!
+    expect(key).toMatch(/^dev_[\w-]{32}$/)
+    expect(made.stdout).toContain(`\nAPI_KEYS=dev:${hashOfText(key!)}\n`)
+    // The app takes the line as it is
+    expect([...parseApiKeys(`dev:${hashOfText(key!)}`).values()]).toEqual(['dev'])
+    const named = cli(parent, 'key', 'reader')
+    expect(named.stdout).toMatch(/^Key       reader_[\w-]{32}$/m)
+    expect(named.stdout).toMatch(/^API_KEYS=reader:[0-9a-f]{64}$/m)
+    expect(cli(parent, 'key', 'Bad Name').stderr).toContain('a key name is lowercase')
+    expect(await readdir(parent)).toEqual([])
   })
 
   it('copies modules with what they require, a generated index and a lock of hashes', async () => {
@@ -604,6 +642,32 @@ describe('the copy-in CLI', () => {
     // Taking the kit's file drops the record
     cli(app, 'update', '--force', '--all')
     expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).kept).toBeUndefined()
+  })
+
+  it('names doctor --keep after update and upgrading leave edits, and diff --patch shows only changed files, app to kit', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'pagination')
+    await writeFile(join(app, 'src/kit/core/hal.ts'), '// ours\n')
+    await writeFile(join(app, 'src/kit/pagination/index.ts'), '// older\n')
+    const lock = JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8'))
+    await writeFile(join(app, 'src/kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1', files: { ...lock.files, 'pagination/index.ts': hashOfText('// older\n') } }))
+    const patch = cli(app, 'diff', '--patch')
+    expect(patch.stdout).not.toMatch(/^ +unchanged /m)
+    expect(patch.stdout).toMatch(/^ +you edited +core\/hal\.ts$/m)
+    expect(patch.stdout).toMatch(/^ +and \d+ unchanged$/m)
+    // Each side named, in the direction update goes: from the app's file to the kit's
+    expect(patch.stdout).toContain(`# core/hal.ts, you edited it: - the app's, + kit ${KIT_VERSION}'s; update keeps the app's (--force takes the kit's)\n`)
+    expect(patch.stdout).toContain('--- app/core/hal.ts\n+++ kit/core/hal.ts\n')
+    expect(patch.stdout).toContain(`# pagination/index.ts, the kit changed it: - the app's, + kit ${KIT_VERSION}'s; update takes this\n`)
+    expect(patch.stdout).toMatch(/^-\/\/ older$/m)
+    expect(patch.stdout).not.toContain(tmpdir())
+    const keep = "Kept edits: `kit doctor --dir src/kit --keep core/hal.ts` records it as the app's, so doctor notes it instead of failing"
+    expect(cli(app, 'upgrading').stdout.trim().split('\n').at(-1)).toBe(keep)
+    const updated = cli(app, 'update')
+    expect(updated.stdout.trim().split('\n').at(-1)).toBe(keep)
+    expect(cli(app, 'doctor', '--keep', 'core/hal.ts').status).toBe(0)
+    // Once kept, neither names it again
+    expect(cli(app, 'update').stdout).not.toContain('Kept edits')
   })
 
   it('prints no pnpm add for what package.json already has', async () => {
@@ -950,6 +1014,8 @@ describe('the copy-in CLI', () => {
       // and the line before it gives the coding agent the kit's skills, first, so it reads them before it builds
       // -y: without it the installer stops to ask, which an agent's shell never answers
       expect(made.stdout).toMatch(/^Skills first: npx skills add escalay\/api-kit -y .*\nNext: /m)
+      // and that doctor fails on a new app until the starter's text is the product's, with the commands that render the brand
+      expect(made.stdout).toContain("Doctor: `npx @escalay/kit doctor` fails on a new app until the starter's text is yours: the product skill's description (guide/skills/demo-api/SKILL.md), brand/brand.ts's, and each switch's in src/features/catalog.ts; then `pnpm add -D @resvg/resvg-js` and `npx @escalay/kit brand` render the brand")
       const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
@@ -978,6 +1044,8 @@ describe('the copy-in CLI', () => {
       // The text the starter leaves for the app to write fails doctor until it is written
       expect(doctor.status).toBe(1)
       const starterLines = (text: string) => text.split('\n').filter((line) => line.startsWith('starter  '))
+      // Under one heading that says they are expected on a new app
+      expect(doctor.stdout.split('\n').find((line) => line.startsWith('starter  ')) && doctor.stdout).toContain("Expected on a new app: the starter's text, until it is yours (doctor passes once each is written and `kit brand` has rendered the brand):\nstarter  ")
       expect(starterLines(doctor.stdout)).toEqual([
         'starter  guide/skills/demo-api/SKILL.md: its description is still the starter’s ("Replace this line with"): say when an agent should use the product, in its users’ words',
         'starter  brand/brand.ts: its description is still the starter’s (", an agent-ready API."): say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`',
@@ -1060,7 +1128,26 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+18 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+19 passed/)
+      // AGENTS.md's Try it, as written: a key from `kit key`, the REST call and the MCP call it gives
+      const agents = await readFile(join(app, 'AGENTS.md'), 'utf8')
+      const tryIt = agents.slice(agents.indexOf('## Try it'), agents.indexOf('## How changes ship'))
+      expect(tryIt).toContain('- Node: `API_KEYS=dev:<hash> pnpm dev`, at http://localhost:4400')
+      expect(tryIt).toContain('- Workers: the line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm dev:worker`, at http://localhost:8787')
+      expect(tryIt).toMatch(/^BASE=http:\/\/localhost:4400\n/m)
+      const keyed = cli(parent, 'key')
+      const [, key] = /^Key {7}(\S+)$/m.exec(keyed.stdout)!
+      const [, keys] = /^API_KEYS=(\S+)$/m.exec(keyed.stdout)!
+      const { createApp: createDemo } = await import(join(app, 'src/app.ts'))
+      const { testDb } = await import(join(app, 'src/kit/index.ts'))
+      const demo = await createDemo({ db: await testDb(), env: { API_KEYS: keys } })
+      const [rest, mcp] = [...tryIt.matchAll(/^curl ((?:.*\\\n)*.*)$/gm)].map(([, call]) => call!.replaceAll('\\\n', ' '))
+      const pathOf = (call: string) => /"\$BASE(\/[^"]*)"/.exec(call)![1]!
+      expect((await demo.request(pathOf(rest!), { headers: { authorization: `Bearer ${key}` } })).status).toBe(200)
+      const sent = Object.fromEntries([...mcp!.matchAll(/-H ['"]([^:]+): ([^'"]+)['"]/g)].map(([, name, value]) => [name, value!.replace('$KEY', key!)]))
+      const called = await demo.request(pathOf(mcp!), { method: 'POST', headers: sent, body: /-d '([^']+)'/.exec(mcp!)![1] })
+      expect(called.status).toBe(200)
+      expect(JSON.stringify(await called.json())).toContain('None yet.')
 
       // The client and its command line: `kit sdk` makes both; the CLI compiles on its own and offers the app's tools
       const sdk = cli(parent, 'sdk', '--app', 'demo-api')
@@ -1161,6 +1248,11 @@ describe('the copy-in CLI', () => {
         expect(scripts.check).toMatch(/^pnpm typecheck && pnpm lint && \(oxfmt --check \|\| \(echo 'Not formatted: run pnpm format' >&2 && exit 1\)\)/)
         expect(scripts.check.includes('scripts/migrations.ts --check'), name).toBe(name !== 'box-api')
         expect(scripts.check).not.toContain('vite build')
+        // AGENTS.md says what this app's check runs, and no more
+        const gateLine = (await agentsOf(name)).split('\n').filter((line) => line.startsWith('- `pnpm gate`'))
+        expect(gateLine, name).toHaveLength(1)
+        expect(gateLine[0]!.includes('`migrations/`'), name).toBe(scripts.check.includes('scripts/migrations.ts --check'))
+        expect(gateLine[0]!.includes('the build'), name).toBe(false)
         expect(await readFile(join(parent, name, '.githooks/pre-push'), 'utf8')).toContain('exec pnpm gate')
         expect(statSync(join(parent, name, '.githooks/pre-push')).mode & 0o111, `${name}: the hook is executable`).not.toBe(0)
         // Ready for the Deploy to Cloudflare button: no ids to leave out, a form description for each setting, the block in the README
@@ -1224,6 +1316,10 @@ describe('the copy-in CLI', () => {
       const owner = wiring.slice(0, wiring.indexOf('  }') + 1).join('\n')
       const auth = wiring.find((line) => line.startsWith('    auth: '))!.replace("realm: 'postbox'", "realm: 'team-api'")
       await edit('src/app.ts', 'FEATURES_OFF?: string }', 'FEATURES_OFF?: string; SETUP_CODE?: string }')
+      // and in the container's allowlist, as the printed step says (the app's test/env.test.ts holds them in step)
+      const passSetupCode = '${SETUP_CODE:+SETUP_CODE="$SETUP_CODE"}'
+      expect(added.stdout).toContain(`Setting SETUP_CODE (the code the first person types to claim the deployment, a secret: \`openssl rand -base64 18\`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${passSetupCode}\n`)
+      await edit('container/entrypoint.sh', ' \\\n  node_modules/.bin/tsx', ` ${passSetupCode} \\\n  node_modules/.bin/tsx`)
       await edit('src/app.ts', "    auth: { realm: 'team-api', keys: parseApiKeys(env.API_KEYS), access },", auth)
       await edit('src/app.ts', '  const owner = access ? accessOwner(access) : async () => null', owner)
       await edit('src/app.ts', 'featureTools, parseApiKeys,', 'featureTools, parseApiKeys, PEOPLE_OPEN_PATHS, personOf, roleOf, sessionOf, SETUP_OPEN_PATHS,')
@@ -1265,10 +1361,10 @@ describe('the copy-in CLI', () => {
       expect(added.status, added.stderr).toBe(0)
       const steps = added.stdout.split('\n').filter((line) => /^(Wire|Setting|Schedule)[: ]/.test(line))
       expect(steps).toEqual([
-        'Wire sharing: src/kit/sharing/README.md › Wire it',
+        'Wire sharing: src/kit/sharing/README.md › Wire it; or `kit add sharing --wire --spaces <feature>` writes it all, settings too',
         "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one): add it to .dev.vars.example, vitest.config.ts's miniflare bindings as OAUTH_SIGNING_KEY: await generateOAuthKey() (import { generateOAuthKey } from './src/kit/index.js')",
-        "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings as SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only'",
-        "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings as PUBLIC_ORIGIN: 'https://api.test'",
+        "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${SHARING_SECRET:+SHARING_SECRET=\"$SHARING_SECRET\"}, vitest.config.ts's miniflare bindings as SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only'",
+        "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${PUBLIC_ORIGIN:+PUBLIC_ORIGIN=\"$PUBLIC_ORIGIN\"}, vitest.config.ts's miniflare bindings as PUBLIC_ORIGIN: 'https://api.test'",
         'Schedule: "triggers": { "crons": ["17 * * * *"] } in wrangler.jsonc, and a scheduled handler in src/worker.ts that calls sharing\'s sweep()',
         "Schedule: src/server.ts calls sharing's sweep() on a timer (hourly is enough)",
       ])
@@ -1316,35 +1412,19 @@ describe('the copy-in CLI', () => {
         const text = await readFile(config, 'utf8')
         await writeFile(config, (imported ? `${imported}\n` : '') + text.replace("TEST_MIGRATIONS: await readD1Migrations('./migrations')", `$&, ${binding}`))
       }
+      // and each in the container's allowlist, as printed
+      const entrypoint = join(app, 'container/entrypoint.sh')
+      for (const step of steps) {
+        const line = /container\/entrypoint\.sh as (\$\{\w+:\+\w+="\$\w+"\})/.exec(step)?.[1]
+        if (line) await writeFile(entrypoint, (await readFile(entrypoint, 'utf8')).replace(' \\\n  node_modules/.bin/tsx', ` ${line} \\\n  node_modules/.bin/tsx`))
+      }
       const wrangler = join(app, 'wrangler.jsonc')
       await writeFile(wrangler, (await readFile(wrangler, 'utf8')).replace(/^(\s*"compatibility_date": .*)$/m, '$1\n  "triggers": { "crons": ["17 * * * *"] },'))
       expect(cli(app, 'add', 'sharing').stdout).not.toMatch(/^Schedule: "triggers"/m)
       // A friend's agent joins Soups with its code, as the README's test line says, and loses it with the shelf
       await writeFile(
         join(app, 'test/sharing.test.ts'),
-        `import { expect, it } from 'vitest'
-import { createApp } from '../src/app.js'
-import { generateOAuthKey, hashApiKey, testDb } from '../src/kit/index.js'
-import { approveSignIn, connectAgent } from '../src/kit/testing/index.js'
-
-const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
-const env = { API_KEYS: \`owner:\${hashApiKey('owner-key')}\`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
-const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} }
-
-it('lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', async () => {
-  const app = await createApp({ db: await testDb(), env, address: 'socket' })
-  const shelf = async (name: string) => ((await (await app.request('/api/shelves', { method: 'POST', headers, body: JSON.stringify({ name }) })).json()) as { id: string }).id
-  const [soups, bakes] = [await shelf('Soups'), await shelf('Bakes')]
-  const invite = await app.request(\`/api/spaces/\${soups}/invites\`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'sam' }, body: JSON.stringify({ label: 'Sam' }) })
-  const { code, address } = (await invite.json()) as { code: string; address: string }
-  const { tokens } = await connectAgent(app, { address, approve: (query) => approveSignIn(app, query, { form: { action: '/sharing/join', fields: { code } } }) })
-  const view = (at: string) => app.request(at, { method: 'POST', headers: { authorization: \`Bearer \${tokens!.access_token}\`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': 'view_shelf' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'view_shelf', arguments: {}, _meta: META } }) })
-  expect(await (await view(new URL(address).pathname)).text()).toContain('Soups')
-  expect((await view(\`/s/\${bakes}/mcp\`)).status).toBe(401)
-  expect((await app.request(\`/api/shelves/\${soups}\`, { method: 'DELETE', headers })).status).toBe(204)
-  expect((await view(\`/s/\${soups}/mcp\`)).status).toBe(401)
-})
-`,
+        SHARING_FRIEND_TEST,
       )
       const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
       expect(migrations.status, migrations.stderr).toBe(0)
@@ -1364,6 +1444,138 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     }
   }, 120_000)
 
+  it('wires people, setup, boards and sharing with add --wire into a formatted app, once, and both READMEs’ tests pass', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-wire-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    // What `pnpm format` formats in the app, with its own settings, each file named: the kit's .gitignore has test/.generated,
+    // so oxfmt walks past every folder there
+    const format = async (app: string) => {
+      const files = (await readdir(app, { recursive: true })).filter((path) => /^(src|test)[\\/].*\.ts$/.test(path) && !/^src[\\/]kit[\\/]|\.gen\.ts$/.test(path))
+      const formatted = spawnSync(bin('oxfmt'), ['-c', '.oxfmtrc.json', ...files, 'vitest.config.ts'], { cwd: app, encoding: 'utf8' })
+      expect(formatted.status, formatted.stdout + formatted.stderr).toBe(0)
+    }
+    /** Every file outside src/kit and node_modules, hashed: what --wire may change. */
+    const treeOf = async (app: string) => {
+      const files = (await readdir(app, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile() && !/[\\/](src[\\/]kit|node_modules)([\\/]|$)/.test(join(entry.parentPath, entry.name).slice(app.length)))
+      return Object.fromEntries(await Promise.all(files.map(async (entry) => [join(entry.parentPath, entry.name).slice(app.length + 1), hashOfText(await readFile(join(entry.parentPath, entry.name), 'utf8'))])))
+    }
+    const checked = async (app: string) => {
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+      return tests.stdout
+    }
+    try {
+      expect(cli(parent, 'init', 'wired', '--no-install').status).toBe(0)
+      const app = join(parent, 'wired')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      expect(cli(app, 'feature', 'recipes', '--fields', 'name:string').status).toBe(0)
+      expect(cli(app, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      // Refused before anything is copied: a feature to work over is named, and exists
+      const before = await treeOf(app)
+      expect(cli(app, 'add', 'sharing', '--wire').stderr).toContain('--wire sharing needs --spaces <feature>, the feature whose rows are the spaces')
+      expect(cli(app, 'add', 'boards', '--wire', '--items', 'books').stderr).toContain('--items books: no src/features/books/')
+      expect(existsSync(join(app, 'src/kit/sharing'))).toBe(false)
+      expect(await treeOf(app)).toEqual(before)
+      // As an installed app has it: formatted, the long Env type wrapped
+      await format(app)
+      expect(await read('src/app.ts')).toMatch(/^export type Env = \{\n/m)
+      const wired = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves')
+      expect(wired.status, wired.stdout + wired.stderr).toBe(0)
+      expect(wired.stdout).toMatch(/^Wired people, setup, boards, sharing: /m)
+      // people's dependency, which --wire leaves to pnpm add, comes first in Next
+      expect(wired.stdout).toContain('Next: pnpm add @simplewebauthn/server@^14.1.0 && pnpm format && pnpm migrations && pnpm test')
+      expect(wired.stdout).not.toMatch(/^(Wire|Setting|Schedule)[: ]/m)
+      // Twice, formatted or not, changes nothing
+      const once = await treeOf(app)
+      const again = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves')
+      expect(again.stdout).toContain('Wired already: people, setup, boards, sharing; nothing changed')
+      expect(await treeOf(app)).toEqual(once)
+      await format(app)
+      const formatted = await treeOf(app)
+      expect(cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves').stdout).toContain('Wired already')
+      expect(await treeOf(app)).toEqual(formatted)
+      // people's sign-in as its README tests it, the owner switching a feature, and the sharing friend's agent
+      const people = await read('src/kit/people/README.md')
+      const flow = people.slice(people.indexOf('// test/owner.test.ts')).split('```')[0]!
+      expect(cli(app, 'feature', 'things', '--switch').status).toBe(0)
+      await writeFile(join(app, 'test/owner.test.ts'), `${flow}\nit('lets the owner signed in by passkey switch a feature off', async () => {\n  expect(await send('PATCH', '/api/features/things', { on: false })).toMatchObject({ key: 'things', on: false })\n})\n`)
+      await writeFile(join(app, 'test/sharing.test.ts'), SHARING_FRIEND_TEST)
+      const ran = await checked(app)
+      for (const name of ['claims the deployment, makes a passkey, signs in again, and approves an agent', 'lets the owner signed in by passkey switch a feature off', 'lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', 'runs every MCP tool against its route', 'passes every setting Env in src/app.ts reads through container/entrypoint.sh, and nothing else']) expect(ran, name).toContain(name)
+      // What it wired, doctor finds: the sweep, the container's settings; and the deploy form describes each setting
+      const doctor = cli(app, 'doctor')
+      expect(doctor.stdout).not.toMatch(/sharing part, but|^env {6}/m)
+      const ready = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), 'button', '--check'], { cwd: app, encoding: 'utf8', env: { ...process.env, PATH: '/usr/bin:/bin' } })
+      expect(ready.stdout, ready.stderr).toContain('is ready for the Deploy to Cloudflare button')
+
+      // The other order, a part at a time: sharing, then people and setup
+      expect(cli(parent, 'init', 'later', '--no-install').status).toBe(0)
+      const later = join(parent, 'later')
+      expect(cli(later, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      await format(later)
+      const sharingOnly = cli(later, 'add', 'sharing', '--wire', '--spaces', 'shelves')
+      expect(sharingOnly.status).toBe(0)
+      // A part whose dependencies package.json has leaves Next as it was
+      expect(sharingOnly.stdout).toContain('Next: pnpm format && pnpm migrations && pnpm test')
+      await format(later)
+      expect(cli(later, 'add', 'setup', 'people', '--wire').status).toBe(0)
+      const auth = (await readFile(join(later, 'src/app.ts'), 'utf8')).replace(/\s+/g, ' ')
+      for (const open of ['...PEOPLE_OPEN_PATHS', '...SETUP_OPEN_PATHS', '...(sharing ? SHARING_OPEN_PATHS : [])', 'session: sessionOf(db)']) expect(auth, open).toContain(open)
+      expect(await readFile(join(later, 'src/features/index.ts'), 'utf8')).toMatch(/ {2}people,\n {2}setup,\n/)
+      await writeFile(join(later, 'test/sharing.test.ts'), SHARING_FRIEND_TEST)
+      expect(await checked(later)).toContain('lets a friend’s agent read the shelf it was invited to')
+
+      // An app made before the markers: told every edit, and nothing outside src/kit changes
+      expect(cli(parent, 'init', 'older', '--no-install').status).toBe(0)
+      const older = join(parent, 'older')
+      for (const path of ['src/app.ts', 'src/server.ts', 'src/worker.ts', 'wrangler.jsonc', 'vitest.config.ts']) await writeFile(join(older, path), (await readFile(join(older, path), 'utf8')).replace(/^\s*\/\/ kit:(?!features|imports$).*\n/gm, '').replace(/^\/\/ kit:imports .*\n/m, ''))
+      const untouched = await treeOf(older)
+      const told = cli(older, 'add', 'people', 'setup', '--wire')
+      expect(told.status).toBe(1)
+      expect(told.stdout).toContain('Wired nothing: this app has no wiring markers')
+      expect(told.stdout).toContain("src/app.ts, in place of the statement that starts `const owner =`:\n      const owner = async (c: Context) => {")
+      expect(told.stdout).toContain('src/features/people/index.ts, new:')
+      // Each setting as add prints it, only where the app lacks it, with the container's line
+      expect(told.stdout).toContain('Setting SETUP_CODE (the code the first person types to claim the deployment, a secret: `openssl rand -base64 18`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${SETUP_CODE:+SETUP_CODE="$SETUP_CODE"}')
+      expect(await treeOf(older)).toEqual(untouched)
+      // Even a part whose edits need no marker of their own writes nothing there
+      for (const parts of [['setup'], ['boards', '--items', 'notes']]) {
+        const alone = cli(older, 'add', ...parts, '--wire')
+        expect([parts[0], alone.status, alone.stdout]).toEqual([parts[0], 1, expect.stringContaining('Wired nothing: this app has no wiring markers')])
+        expect(await treeOf(older)).toEqual(untouched)
+      }
+
+      // Each runtime alone: Node (no worker.ts, no D1) and Workers (no server.ts, no container)
+      for (const runtime of ['node', 'cloudflare']) {
+        expect(cli(parent, 'init', `only-${runtime}`, '--runtime', runtime, '--no-install').status).toBe(0)
+        const one = join(parent, `only-${runtime}`)
+        expect(cli(one, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+        await format(one)
+        const done = cli(one, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'notes', '--spaces', 'shelves')
+        expect([runtime, done.status, done.stderr]).toEqual([runtime, 0, ''])
+        if (runtime === 'node') expect(await readFile(join(one, 'src/server.ts'), 'utf8')).toContain('sharingOf(app)?.sweep()')
+        else expect(await readFile(join(one, 'src/worker.ts'), 'utf8')).toContain('scheduled: ')
+        await writeFile(join(one, 'test/sharing.test.ts'), SHARING_FRIEND_TEST)
+        if (runtime === 'cloudflare') expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: one, encoding: 'utf8' }).status).toBe(0)
+        for (const project of ['tsconfig.json', ...(runtime === 'node' ? [] : ['test/workers/tsconfig.json'])]) {
+          const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: one, encoding: 'utf8' })
+          expect(typecheck.status, `${runtime} ${project}: ${typecheck.stdout}`).toBe(0)
+        }
+        const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: one, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+        expect(tests.status, `${runtime}: ${tests.stdout}${tests.stderr}`).toBe(0)
+      }
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 240_000)
+
   it('makes a feature with a field of fixed values, its own singular and no delete, that passes its own tests', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-shapes-${process.pid}`)
     await rm(parent, { recursive: true, force: true })
@@ -1379,12 +1591,23 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
         ['status:enum(To-Read|done)', 'a field is <name>:<type>'],
         ["status:enum(a|b'c)", 'a field is <name>:<type>'],
         ['status:enum(done|done)', 'status names done twice'],
+        [', ', '--fields names no field'],
       ]) expect(cli(app, 'feature', 'books', '--fields', spec!).stderr, spec).toContain(error)
       expect(cli(app, 'feature', 'books', '--singular', 'Book').stderr).toContain('"Book" isn\'t a kebab-case name like book or reading-list')
       expect(existsSync(join(app, 'src/features/books'))).toBe(false)
       // The naive singular is said, with how to name another
       const naive = cli(app, 'feature', 'leaves', '--fields', 'name:string')
       expect(naive.stdout).toContain('each one a leave (--singular names it otherwise)')
+      // What to run next, and where an action beyond the five routes is shown
+      expect(naive.stdout.trim().split('\n').slice(-2)).toEqual([
+        'Next: pnpm format (what feature writes is in the kit\'s long-line style), then pnpm test',
+        'An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; one inside another (recipes on a shelf): `kit feature <name> --under <parent>`',
+      ])
+      // Fields split by commas as well as spaces, a stray comma ignored; then taken out again
+      const commas = cli(app, 'feature', 'tasks', '--fields', 'title:string,status:enum(todo|done), due:int?,')
+      expect(commas.status, commas.stderr).toBe(0)
+      expect(await read('src/features/tasks/schema.ts')).toContain("status: text('status', { enum: ['todo', 'done'] }).notNull(),")
+      expect(cli(app, 'feature', 'tasks', '--remove').status).toBe(0)
       const made = cli(app, 'feature', 'shelves', '--singular', 'shelf', '--no-remove', '--fields', 'name:string status:enum(to-read|reading|done) mood:enum(calm|busy)?')
       expect(made.status, made.stderr).toBe(0)
       expect(made.stdout).toContain('each one a shelf')
@@ -1435,8 +1658,178 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--project', 'node', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
       expect(tests.stdout).toContain('makes, lists and changes a shelf')
+      // Its MCP lines name the fields an agent filters on (an enum, a short one), so list_shelves shows which is done
+      const { shelvesTools } = await import(join(app, 'src/features/shelves/tools.ts'))
+      const tool = (name: string) => shelvesTools.find((one: { name: string }) => one.name === name)
+      const row = { id: 's1', name: 'Fiction', status: 'done', mood: null, createdAt: '2026-11-25T10:00:00Z', updatedAt: '2026-11-25T10:00:00Z' }
+      expect(tool('list_shelves').summarize({ _embedded: { shelves: [row] }, _links: {} }, {})).toBe('Fiction · status done · mood – · id s1 · changed 2026-11-25')
+      expect(tool('update_shelf').summarize({ ...row, mood: 'calm' }, {})).toBe('Changed: Fiction · status done · mood calm · id s1 · changed 2026-11-25')
       expect(tests.stdout).toMatch(/books\.test\.ts > books > makes, lists, changes and deletes a book/)
       expect(tests.stdout).toContain('runs every MCP tool against its route')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('keeps the container’s env allowlist and Env in step: a test in every new app, and a doctor finding each way', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-env-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'env-api', '--runtime', 'node', '--no-install').status).toBe(0)
+      expect(cli(parent, 'init', 'edge-env', '--runtime', 'cloudflare', '--no-install').status).toBe(0)
+      const app = join(parent, 'env-api')
+      const entrypoint = join(app, 'container/entrypoint.sh')
+      const starter = await readFile(entrypoint, 'utf8')
+      // The starter passes what its Env reads, FEATURES_OFF too
+      expect(starter).toContain('${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"}')
+      const envLines = (text: string) => text.split('\n').filter((line) => line.startsWith('env      '))
+      expect(envLines(cli(app, 'doctor').stdout)).toEqual([])
+      // A Worker has no container, so no such test
+      expect(existsSync(join(parent, 'edge-env/test/env.test.ts'))).toBe(false)
+      const run = () => spawnSync(bin('vitest'), ['run', '--root', '.', 'test/env.test.ts'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(run().status, run().stdout).toBe(0)
+      // doctor and the app's test read by one rule: Env's members with comments taken out, and process.env in every
+      // file under src/, so a word before a colon in a comment is no setting, and a key a feature reads is read
+      const appTs = join(app, 'src/app.ts')
+      const oneLineEnv = 'export type Env = { API_KEYS?: string; OAUTH_SIGNING_KEY?: string; ACCESS_TEAM?: string; ACCESS_AUD?: string; PUBLIC_HOST?: string; FEATURES_OFF?: string }'
+      const starterApp = await readFile(appTs, 'utf8')
+      expect(starterApp).toContain(oneLineEnv)
+      const commentedEnv = [
+        'export type Env = {',
+        '  API_KEYS?: string; OAUTH_SIGNING_KEY?: string',
+        '  /* ACCESS_TEAM and ACCESS_AUD: both, or neither. note: see {access} */',
+        '  ACCESS_TEAM?: string',
+        '  ACCESS_AUD?: string',
+        '  PUBLIC_HOST?: string // the host, e.g. api.example.com: behind a proxy only',
+        '  // FEATURES_OFF: a comma list',
+        '  FEATURES_OFF?: string // optional, e.g. the first-run code: only set in prod',
+        '}',
+      ].join('\n')
+      await writeFile(appTs, starterApp.replace(oneLineEnv, commentedEnv))
+      await mkdir(join(app, 'src/features/billing'), { recursive: true })
+      await writeFile(join(app, 'src/features/billing/stripe.ts'), "export const stripeKeys = () => [process.env.STRIPE_KEY, process.env['STRIPE_WEBHOOK'], process.env[\"STRIPE_PRICE\"]]\n")
+      await writeFile(entrypoint, starter.replace('${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ', '${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ${STRIPE_KEY:+STRIPE_KEY="$STRIPE_KEY"} ${STRIPE_WEBHOOK:+STRIPE_WEBHOOK="$STRIPE_WEBHOOK"} ${STRIPE_PRICE:+STRIPE_PRICE="$STRIPE_PRICE"} '))
+      expect(envLines(cli(app, 'doctor').stdout)).toEqual([])
+      const ruled = run()
+      expect(ruled.status, ruled.stdout).toBe(0)
+      await writeFile(appTs, starterApp)
+      await rm(join(app, 'src/features/billing'), { recursive: true })
+      await writeFile(entrypoint, starter)
+      // A setting Env gains that the container never passes, and one the container passes that nothing reads
+      await writeFile(appTs, (await readFile(appTs, 'utf8')).replace('FEATURES_OFF?: string }', 'FEATURES_OFF?: string; SETUP_CODE?: string }'))
+      await writeFile(entrypoint, starter.replace('${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ', '${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ${OLD_TOKEN:+OLD_TOKEN="$OLD_TOKEN"} '))
+      const doctor = cli(app, 'doctor')
+      expect(doctor.status).toBe(1)
+      expect(envLines(doctor.stdout)).toEqual([
+        'env      container/entrypoint.sh: passes no SETUP_CODE, which Env in src/app.ts reads, so the container never sees it: add ${SETUP_CODE:+SETUP_CODE="$SETUP_CODE"} before node_modules/.bin/tsx',
+        'env      container/entrypoint.sh: passes OLD_TOKEN, which neither Env in src/app.ts nor any file under src/ reads: take ${OLD_TOKEN:+OLD_TOKEN="$OLD_TOKEN"} out, or add it to Env',
+      ])
+      const failed = run()
+      expect(failed.status).toBe(1)
+      expect(failed.stdout + failed.stderr).toContain('SETUP_CODE')
+      expect(failed.stdout + failed.stderr).toContain('OLD_TOKEN')
+      // An app made before test/env.test.ts (1.33.0 never passed FEATURES_OFF) gets notes, not failures, so doctor stays as it was
+      const toFix = (stdout: string) => Number(/^(\d+) to fix in /m.exec(stdout)?.[1] ?? 0)
+      await writeFile(appTs, (await readFile(appTs, 'utf8')).replace('FEATURES_OFF?: string; SETUP_CODE?: string }', 'FEATURES_OFF?: string }'))
+      await writeFile(entrypoint, starter.replace('${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ', ''))
+      const withTest = cli(app, 'doctor').stdout
+      expect(envLines(withTest)).toHaveLength(1)
+      await rm(join(app, 'test/env.test.ts'))
+      const older = cli(app, 'doctor').stdout
+      expect(envLines(older)).toEqual([])
+      expect(older).toContain('note     env container/entrypoint.sh: passes no FEATURES_OFF, which Env in src/app.ts reads, so the container never sees it: add ${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} before node_modules/.bin/tsx (a failure once the app has test/env.test.ts, which a new app from `kit init` has)')
+      expect(toFix(older)).toBe(toFix(withTest) - 1)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('removes a feature whole with feature --remove: its folder, its lines, its switch and, on Workers, its migrations', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-remove-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'tidy-api', '--no-install').status).toBe(0)
+      const app = join(parent, 'tidy-api')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      expect(cli(app, 'feature', 'books', '--switch').status).toBe(0)
+      expect(cli(app, 'feature', 'reading-lists').status).toBe(0)
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      const [index, catalog] = [await read('src/features/index.ts'), await read('src/features/catalog.ts')]
+      const removed = cli(app, 'feature', '--remove', 'notes')
+      expect(removed.status, removed.stderr).toBe(0)
+      expect(removed.stdout).toContain('Removed src/features/notes/ and its lines in src/features/index.ts')
+      expect(removed.stdout).toContain('Next: pnpm migrations (it removes notes’s files from migrations/), then pnpm test')
+      expect(existsSync(join(app, 'src/features/notes'))).toBe(false)
+      expect(await read('src/features/index.ts')).toBe(index.replace("import { feature as notes } from './notes/index.js'\n", '').replace('  notes,\n', ''))
+      // A switched feature leaves the catalog too; a kebab name by its camel spelling
+      expect(cli(app, 'feature', '--remove', 'books').stdout).toContain('and its switch in src/features/catalog.ts')
+      expect(await read('src/features/catalog.ts')).toBe(catalog.replace(/^ {2}'books': .*\n/m, ''))
+      expect(cli(app, 'feature', '--remove', 'reading-lists').status).toBe(0)
+      expect(await read('src/features/index.ts')).not.toMatch(/notes|books|readingLists/)
+      // Twice: nothing to remove, said so
+      const again = cli(app, 'feature', '--remove', 'notes')
+      expect([again.status, again.stderr]).toEqual([1, 'kit: no feature notes here: src/features/notes/ is gone and src/features/index.ts lists no ./notes/index.js\n'])
+      expect(cli(app, 'feature', '--remove', 'switches').stderr).toContain('switches is the starter’s own feature')
+      const pruned = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
+      expect(pruned.stdout).toMatch(/Removed \S+_notes_1\.sql/)
+      expect((await readdir(join(app, 'migrations'))).filter((file) => /notes|books|reading-lists/.test(file))).toEqual([])
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--project', 'node'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('nests a feature under another with feature --under: listed and made under its parent, 404 for an unknown one, tools that take it', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-under-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'nest-api', '--bare', '--no-install').status).toBe(0)
+      const app = join(parent, 'nest-api')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      expect(cli(app, 'feature', 'reading-lists', '--fields', 'title:string').status).toBe(0)
+      expect(cli(app, 'feature', 'pies', '--under', 'books').stderr).toContain('--under books: no src/features/books/ made by `kit feature`')
+      expect(cli(app, 'feature', 'pies', '--under', 'pies').stderr).toContain('--under names another feature')
+      expect(existsSync(join(app, 'src/features/pies'))).toBe(false)
+      const made = cli(app, 'feature', 'books', '--under', 'reading-lists', '--fields', 'title:string status:enum(to-read|done)')
+      expect(made.status, made.stderr).toBe(0)
+      expect(made.stdout).toContain('under reading-lists: GET and POST /api/reading-lists/{readingList}/books, each book with its readingListId')
+      expect(await read('src/features/books/schema.ts')).toContain('"reading_list_id" text not null references reading_lists(id), "title" text not null')
+      expect(await read('src/features/books/routes.ts')).toContain("path: '/api/reading-lists/{readingList}/books'")
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--project', 'node', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+      for (const name of ['answers 404 for a reading list that does not exist', 'makes, lists, changes and deletes a book', 'runs every MCP tool against its route']) expect(tests.stdout, name).toContain(name)
+      // Over HTTP and MCP, as an agent uses it
+      const { createApp: createNest } = await import(join(app, 'src/app.ts'))
+      const { hashApiKey: hashOf, testDb: dbOf } = await import(join(app, 'src/kit/index.ts'))
+      const nest = await createNest({ db: await dbOf(), env: { API_KEYS: `tester:${hashOf('nest-key')}` } })
+      const headers = { authorization: 'Bearer nest-key', 'content-type': 'application/json' }
+      const post = async (path: string, body: object) => nest.request(path, { method: 'POST', headers, body: JSON.stringify(body) })
+      const [mine, other] = await Promise.all(['Mine', 'Other'].map(async (title) => ((await (await post('/api/reading-lists', { title })).json()) as { id: string }).id))
+      const book = await post(`/api/reading-lists/${mine}/books`, { title: 'Dune', status: 'done' })
+      expect([book.status, await book.json()]).toEqual([201, expect.objectContaining({ title: 'Dune', readingListId: mine })])
+      expect((await (await nest.request(`/api/reading-lists/${other}/books`, { headers })).json()).count).toBe(0)
+      const unknown = await post('/api/reading-lists/nope/books', { title: 'Lost', status: 'done' })
+      expect([unknown.status, (await unknown.json()).detail]).toEqual([404, 'No reading list nope. GET /api/reading-lists lists them.'])
+      const listed = await callMcp(nest, 'tools/call', { bearer: 'nest-key', params: { name: 'list_books', arguments: { reading_list: mine } } })
+      expect((listed.result?.content as { text: string }[])[0]!.text).toMatch(/^Dune · status done · id /)
+      const tool = (await callMcp(nest, 'tools/list', { bearer: 'nest-key' })).result!.tools as { name: string; inputSchema: { required?: string[] } }[]
+      expect(tool.find((one) => one.name === 'create_book')!.inputSchema.required).toContain('reading_list')
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
@@ -1534,6 +1927,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       expect(await read('wrangler.jsonc')).toContain('"assets": { "not_found_handling": "single-page-application", "run_worker_first": ["/*", "!/app/*"] },')
       expect(await read('wrangler.jsonc')).not.toMatch(/account_id": "[0-9a-f]/)
       expect(manifest.scripts.check).toMatch(/scripts\/migrations\.ts --check && vite build$/)
+      expect((await read('AGENTS.md')).split('\n').filter((line) => line.startsWith('- `pnpm gate`'))).toEqual(['- `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format, `migrations/` and the build) and `pnpm test`.'])
       expect(await read('src/app.ts')).toContain("    home: 'app',\n")
       expect(await read('web/routes/index.tsx')).toContain('>Desk</h1>')
       const agents = await read('AGENTS.md')
@@ -1934,10 +2328,24 @@ describe('the skills', () => {
     expect(unnamed).toEqual([])
   })
 
+  it('says `--wire` first wherever a part --wire wires says how to wire it', async () => {
+    const items: { name: string; meta?: { wiring?: { code?: string; wire?: object } } }[] = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8')).items
+    const wired = items.filter(({ meta }) => meta?.wiring?.wire)
+    expect(wired.map(({ name }) => name).sort()).toEqual(['boards', 'people', 'setup', 'sharing'])
+    for (const { name, meta } of wired) {
+      const readme = await readFile(join(kitDir, 'src', name, 'README.md'), 'utf8')
+      const heading = meta!.wiring!.code ? `## ${meta!.wiring!.code}\n` : '### In an app made by `kit init`\n'
+      const section = readme.slice(readme.indexOf(heading))
+      expect(section.slice(0, section.indexOf('```')), name).toMatch(new RegExp(`kit add [^\`]*\\b${name}\\b[^\`]*--wire`))
+    }
+  })
+
   it('api-kit-part names every meta.wiring field the registry uses', async () => {
     const skill = (await skillTexts())['api-kit-part']!
     const wired: { meta?: { wiring?: Record<string, unknown> & { settings?: Record<string, string>[]; cron?: Record<string, string> } } }[] = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8')).items
-    const fields = new Set(wired.flatMap(({ meta }) => (meta?.wiring ? [...Object.keys(meta.wiring), ...(meta.wiring.settings ?? []).flatMap(Object.keys), ...Object.keys(meta.wiring.cron ?? {})] : [])))
+    type Wire = { over?: Record<string, string>; features?: Record<string, string>[]; edits?: Record<string, unknown>[] }
+    const wireFields = (wire?: Wire) => (wire ? [...Object.keys(wire), ...Object.keys(wire.over ?? {}), ...(wire.features ?? []).flatMap(Object.keys), ...(wire.edits ?? []).flatMap(Object.keys)] : [])
+    const fields = new Set(wired.flatMap(({ meta }) => (meta?.wiring ? [...Object.keys(meta.wiring), ...(meta.wiring.settings ?? []).flatMap(Object.keys), ...Object.keys(meta.wiring.cron ?? {}), ...wireFields(meta.wiring.wire as Wire | undefined)] : [])))
     expect(fields.size).toBeGreaterThan(0)
     expect([...fields].filter((field) => !skill.includes(`\`${field}\``))).toEqual([])
   })
@@ -2093,6 +2501,24 @@ describe('MCP (2026-07-28)', () => {
     expect(greeting.result).toMatchObject({ protocolVersion: '2026-07-28', capabilities: { tools: { listChanged: true } }, serverInfo: { name: expect.any(String) } })
     expect(greeting.result.instructions).toMatch(/^Find apps\.[\s\S]*no initialize or session is needed/)
     expect((await rpc(app, 'initialize', {}, {})).status).toBe(401)
+  })
+
+  it('takes the same requests through the testing part’s callMcp, which sets every header and the _meta', async () => {
+    const { app } = await sampleApi()
+    const bearer = auth.authorization.slice('Bearer '.length)
+    const greeting = await callMcp(app, 'initialize', { bearer, params: { protocolVersion: '2026-07-28', capabilities: {}, clientInfo: { name: 'agent', version: '1' } } })
+    expect([greeting.status, greeting.result?.protocolVersion]).toEqual([200, '2026-07-28'])
+    const listed = await callMcp(app, 'tools/list', { bearer })
+    expect((listed.result?.tools as { name: string }[]).map((tool) => tool.name)).toContain('get_app')
+    const called = await callMcp(app, 'tools/call', { bearer, params: { name: 'get_app', arguments: { id: 'a2' } } })
+    expect(called.result?.content).toEqual([{ type: 'text', text: 'Bravo (a2)' }])
+    // A refusal is an answer: its status and text, no result
+    const refused = await callMcp(app, 'tools/list')
+    expect([refused.status, refused.result]).toEqual([401, null])
+    expect(refused.text).toContain('unauthorized')
+    // Any path and headers: a space's MCP, a forwarded host
+    const proxied = await callMcp(app, 'tools/call', { path: '/mcp', headers: { ...auth, 'x-forwarded-proto': 'https', 'x-forwarded-host': 'apps.example' }, params: { name: 'get_app', arguments: { id: 'a1' } } })
+    expect((proxied.result?.structuredContent as { _links: { self: { href: string } } })._links.self.href).toBe('https://apps.example/api/v1/apps/a1')
   })
 
   it('reads a resource through the routes: JSON as text, an image as a blob', async () => {

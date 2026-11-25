@@ -403,7 +403,8 @@ fact, steps with checkable done-when criteria.
 - Each app's secrets live in your secret store, scoped to that app (`API_KEY_<CLIENT>` values, `API_KEYS` hashes,
   capped model keys, a read-only storage key). Values never enter a repo, doc, commit or transcript.
 - On your host as a container: the API runs with an allowlisted env (`container/entrypoint.sh`), behind Cloudflare
-  Access with the bypass paths above; a separate job syncs any read-only store in.
+  Access with the bypass paths above; a separate job syncs any read-only store in. The allowlist passes every key of
+  the app's `Env` and nothing it never reads (a new app's `test/env.test.ts`, and `kit doctor`).
 - **Or on Cloudflare Workers** (`init --runtime cloudflare|both`): `wrangler.jsonc` holds no `account_id` and no
   resource ids (`pnpm run deploy:env` takes yours from the environment: `CLOUDFLARE_ACCOUNT_ID`, `D1_<BINDING>_ID`), D1 is the database, secrets go in with `wrangler secret put` (locally
   `.dev.vars`), and `pnpm run deploy` (never `pnpm deploy`, pnpm's own command) writes the guide module and the D1 migration files, applies them, then deploys.

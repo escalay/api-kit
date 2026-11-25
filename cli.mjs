@@ -9,7 +9,14 @@
  *   kit <command> --help                      that command's lines from this list (-h too)
  *   kit list                                  parts, what they need, which are installed; then the root items
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
- *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
+ *   kit add people setup boards sharing --wire [--items <feature>] [--spaces <feature>]
+ *                                             --wire also wires each part into an app made by init: its feature files,
+ *                                             src/app.ts, server.ts, worker.ts, the settings' files, at the markers init
+ *                                             leaves; twice changes nothing. An app without them (or with the kit's
+ *                                             lines changed) is told the edits and nothing is written. boards takes
+ *                                             --items (the feature on its boards), sharing --spaces (its spaces)
+ *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both; --patch: only the changed
+ *                                             files, each from the app's (-, app/) to the kit's (+, kit/), as update goes
  *   kit update [part…] [--dir src/kit] [--force [--all]]
  *                                             --force takes the kit's file over your edit in the parts named (`kit` names
  *                                             the generated index.ts), and names each edit it overwrites or keeps; naming
@@ -27,12 +34,18 @@
  *                                             container) and/or Workers (worker.ts, D1); then pnpm install, format and
  *                                             migrations, so its gate passes as made (--no-install leaves them to you).
  *                                             It never asks; --yes is accepted
- *   kit feature <plural-name> [--app .] [--switch] [--singular <name>] [--no-remove] [--fields "name:string minutes:int tags:string[] notes:text?"]
+ *   kit feature <plural-name> [--app .] [--switch] [--singular <name>] [--no-remove] [--under <parent>] [--fields "name:string minutes:int tags:string[] notes:text?"]
  *                                             a new feature folder (schema, repo, routes, handlers, tools), listed;
  *                                             --switch lists it in src/features/catalog.ts so an owner can switch it off;
  *                                             --fields gives its own fields (string, text, int, number, bool, string[],
- *                                             enum(a|b|c); ? when it may be left out) instead of a title and a body;
- *                                             --singular names one (shelves → shelf); --no-remove leaves out delete
+ *                                             enum(a|b|c); ? when it may be left out; split by spaces or commas)
+ *                                             instead of a title and a body;
+ *                                             --singular names one (shelves → shelf); --no-remove leaves out delete;
+ *                                             --under shelves lists and makes them at /api/shelves/{shelf}/<plural-name>,
+ *                                             each with its shelfId (a foreign key), 404 for a shelf that isn't there
+ *   kit feature --remove <plural-name> [--app .]
+ *                                             takes a feature out: its folder, its lines in src/features/index.ts and
+ *                                             catalog.ts; then `pnpm migrations` drops its D1 files
  *   kit guide [--from guide] [--out src/guide.gen.ts]  the guide folder as a module (GUIDE_FILES), for Workers
  *   kit sdk [--app .] [--package name] [--bin name]
  *                                             a typed TypeScript client in sdk/: generated types, a fetch-only core,
@@ -54,6 +67,8 @@
  *   kit brand [--app .] [--check]             brand/ (brand.ts, icon.svg, icon-dark.svg) rendered into src/brand.gen.ts: the
  *                                             favicon, PNG icons and OG card, committed (needs @resvg/resvg-js in the app);
  *                                             --check exits 1 when brand/ changed since. `kit add brand` scaffolds brand/
+ *   kit key [name]                            a key to try the app with (`dev` unless named) and its API_KEYS line: the
+ *                                             key printed once, the line for .dev.vars or `API_KEYS=… pnpm dev`; kept nowhere
  *   kit license keys [--out <folder>]        a product's signing key pair: the private key into <folder>/license-private.jwk
  *                                             (0600, keep it in a secret store), the public JWK printed for the app's code
  *   kit license mint --private <file> --product <name> --licensee <who> --plan <plan> [--grants a,b] [--days 365] [--instance <id>]
@@ -66,7 +81,7 @@
  * import { createAgentApi } from './kit/index.js'      // in the app
  */
 import { spawnSync } from 'node:child_process'
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { createRequire } from 'node:module'
@@ -113,7 +128,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set(['--fields', '--singular', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
+const VALUE_FLAGS = new Set([...ITEMS.flatMap((item) => item.meta?.wiring?.wire?.over?.flag ?? []), '--fields', '--singular', '--under', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 /** The app the kit folder belongs to: `--app`, else the nearest folder at or above `--dir` with a package.json; null when none. */
@@ -263,6 +278,14 @@ const findingsOf = (lock) => {
     ...behind.map((part) => `behind   ${part} was copied from kit ${lock.version} and kit ${VERSION} changed it: \`kit diff --dir ${dirArg} --patch\`, then \`kit update --dir ${dirArg}\``),
     ...(lock.version !== VERSION && !behind.length && !kept.length ? [`behind   kit.json says kit ${lock.version}, this is ${VERSION} with the same files: \`kit update --dir ${dirArg}\` records it`] : []),
   ]
+}
+
+/** The line `update` and `upgrading` end with while edits are left that doctor would fail: the `doctor --keep` for them. */
+const keepLineOf = (lock) => {
+  const kept = keptOf(lock)
+  const files = statusOf(lock, expectedFiles(lock.modules.filter((name) => REGISTRY[name]), lock.webDir)).filter(({ file, state }) => state === 'you edited' && kept[file] === undefined).map(({ file }) => file)
+  const it = files.length === 1 ? 'it' : 'them'
+  return files.length ? [`Kept edits: \`kit doctor --dir ${dirArg} --keep ${files.join(' ')}\` records ${it} as the app's, so doctor notes ${it} instead of failing`] : []
 }
 
 /** `doctor --keep <file…>`: records each edited file's hash as kept, so doctor counts it no more while it stays so. */
@@ -507,9 +530,11 @@ const SAMPLE_FIELDS = 'title:string body:text?'
 /** Names a feature's own fields can't take: the kit's, and the list's and the command line's flags. */
 const OWN_FIELDS = ['id', 'createdAt', 'updatedAt', 'limit', 'cursor', 'json', 'yes', 'dryRun', 'input', 'timeout', 'profile', 'help']
 
-/** `name:string minutes:int tags:string[] status:enum(to-read|done) notes:text?`, read: each field's name, type, and whether it may be left out. */
-const fieldsOf = (spec) =>
-  spec.trim().split(/\s+/).map((field) => {
+/** `name:string minutes:int tags:string[] status:enum(to-read|done) notes:text?` (or split by commas), read: each field's name, type, and whether it may be left out. */
+const fieldsOf = (spec) => {
+  const given = spec.split(/[\s,]+/).filter(Boolean)
+  if (!given.length) fail(`--fields names no field: give at least one, like "${SAMPLE_FIELDS}"`)
+  return given.map((field) => {
     const [, name, type, values, optional] = field.match(/^([a-z][a-zA-Z0-9]*):([a-z]+(?:\[\])?|enum\(([a-z0-9][a-z0-9_-]*(?:\|[a-z0-9][a-z0-9_-]*)*)\))(\?)?$/) ?? []
     if (!values && !FIELD_TYPES[type]) fail(`${field}: a field is <name>:<type>, the type one of ${Object.keys(FIELD_TYPES).join(', ')}, enum(a|b|c) (lowercase values, a-z 0-9 - _), and ? after it when it may be left out (notes:text?)`)
     if (OWN_FIELDS.includes(name)) fail(`${name} is the kit’s own field or flag: name it something else`)
@@ -520,6 +545,7 @@ const fieldsOf = (spec) =>
     if (fields.findIndex((other) => other.name === field.name) !== index) fail(`${field.name} is named twice: give each field its own name`)
     return field
   })
+}
 
 const snakeOf = (name) => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
 const literal = (value) => JSON.stringify(value).replaceAll('"', "'")
@@ -543,15 +569,45 @@ const fieldVarsOf = (fields) => {
     __card_fields__: fields.map((field) => `${field.name}: ${field.type}${field.optional ? ' | null' : ''}`).join('; '),
     __detail_lines__: fields.map((field) => `\`${field.name}: \${row.${field.name}${field.type === 'string[]' ? `${field.optional ? '?' : ''}.join(', ')` : ''}${field.optional ? " ?? '–'" : ''}}\``).join(', '),
     __first__: first.name,
+    // Short fields after the first, each named: long text and lists stay for get_<one>
+    __line_fields__: fields.slice(1).filter((field) => field.type !== 'string[]' && field.input !== FIELD_TYPES.text.input).map((field) => ` · ${snakeOf(field.name).replaceAll('_', ' ')} \${row.${field.name}${field.optional ? " ?? '–'" : ''}}`).join(''),
     __sample__: `{ ${fields.map((field) => `${field.name}: ${literal(field.made)}`).join(', ')} }`,
+    __sample_entries__: fields.map((field) => `${field.name}: ${literal(field.made)}`).join(', '),
     __patch_entries__: `${last.name}: ${literal(last.changed)}`,
     __create_flags__: fields.filter((field) => !field.optional).map((field) => flagOf(field)).join(' '),
     __edit_flags__: flagOf(last, last.changed),
   }
 }
 
-const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS, singular, remove = true } = {}) => {
-  const vars = { ...namesOf(name, singular), ...fieldVarsOf(fieldsOf(fieldSpec)) }
+/**
+ * The spellings a feature nested under `parent` needs (`--under`): the parent's path, its id's field and column, its
+ * tool argument, and the field vars with that column added (in the table, the answer and the card, never the input).
+ */
+const underVarsOf = (root, parent, name, fieldVars) => {
+  if (parent === name) fail('--under names another feature: the one this feature lives inside')
+  const routes = textOf(join(root, 'src/features', parent, 'routes.ts')) ?? fail(`--under ${parent}: no src/features/${parent}/ made by \`kit feature\` (make it first)`)
+  const Singular = /export const (\w+)Schema = /.exec(routes)?.[1] ?? fail(`--under ${parent}: its routes.ts exports no <Singular>Schema`)
+  const names = namesOf(parent, Singular.replace(/[A-Z]/g, (letter, at) => `${at ? '-' : ''}${letter.toLowerCase()}`))
+  const param = Singular[0].toLowerCase() + Singular.slice(1)
+  const field = `${param}Id`
+  return {
+    __parent__: parent,
+    __parent_camel__: names.__camel__,
+    __parent_param__: param,
+    __parent_id__: field,
+    __parent_label__: names.__label__,
+    __parent_snake__: names.__snake__,
+    __parent_snake_singular__: names.__snake_singular__,
+    __columns__: `  ${field}: text('${snakeOf(field)}').notNull(),\n${fieldVars.__columns__}`,
+    __sql_columns__: `"${snakeOf(field)}" text not null references ${names.__table__}(id), ${fieldVars.__sql_columns__}`,
+    __out_fields__: `${field}: z.string(), ${fieldVars.__out_fields__}`,
+    __card_fields__: `${field}: string; ${fieldVars.__card_fields__}`,
+  }
+}
+
+const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS, singular, remove = true, next = true, under } = {}) => {
+  const fieldVars = fieldVarsOf(fieldsOf(fieldSpec))
+  const vars = { ...namesOf(name, singular), ...fieldVars, ...(under ? underVarsOf(root, under, name, fieldVars) : {}) }
   const list = join(root, 'src/features/index.ts')
   if (!existsSync(list)) fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
   const folder = join(root, 'src/features', name)
@@ -571,7 +627,7 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
   }
   copyTemplate(join(KIT, 'templates/feature'), folder, vars, (file) => (file === 'feature.test.ts' ? `${name}.test.ts` : file))
   // Delete is a route, a handler, a repo call, a tool and a sample: all or none
-  for (const file of readdirSync(folder)) writeFileSync(join(folder, file), keepMarked(readFileSync(join(folder, file), 'utf8'), { 'feature:remove': remove, 'feature:no-remove': !remove }))
+  for (const file of readdirSync(folder)) writeFileSync(join(folder, file), keepMarked(readFileSync(join(folder, file), 'utf8'), { 'feature:remove': remove, 'feature:no-remove': !remove, 'feature:under': Boolean(under), 'feature:flat': !under }))
   writeFileSync(list, text.replace('// kit:imports', `import { feature as ${vars.__camel__} } from './${name}/index.js'\n// kit:imports`).replace('  // kit:features', `  ${vars.__camel__},\n  // kit:features`))
   if (switchable) {
     const catalog = join(root, 'src/features/catalog.ts')
@@ -582,6 +638,46 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
     writeFileSync(index, readFileSync(index, 'utf8').replace(`  name: '${name}',`, `  name: '${name}',\n  switch: '${name}',`))
   }
   console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test${remove ? '' : '; no delete'}), each one a ${vars.__label__}${singular ? '' : ' (--singular names it otherwise)'}, and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
+  if (under) console.log(`under ${under}: GET and POST /api/${under}/{${vars.__parent_param__}}/${name}, each ${vars.__label__} with its ${vars.__parent_id__}; one by its id at /api/${name}/{id}; a ${vars.__parent_label__} that isn't there is a 404, and the tools take ${vars.__parent_snake_singular__}`)
+  // init says its own Next line
+  if (!next) return
+  console.log("Next: pnpm format (what feature writes is in the kit's long-line style), then pnpm test")
+  console.log('An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; one inside another (recipes on a shelf): `kit feature <name> --under <parent>`')
+}
+
+/**
+ * Takes a feature out whole: its folder, its import and list lines in src/features/index.ts, its switch in catalog.ts,
+ * and (the app's script does it) its migrations/ files. Names what still mentions it elsewhere.
+ */
+const removeFeature = (root, name) => {
+  namesOf(name)
+  if (name === 'switches') fail('switches is the starter’s own feature: the owner switches the others with it')
+  const list = join(root, 'src/features/index.ts')
+  const folder = join(root, 'src/features', name)
+  const text = textOf(list) ?? fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
+  const imported = new RegExp(`^import \\{ feature as (\\w+) \\} from '\\./${name}/index\\.js'\\n`, 'm').exec(text)
+  if (!imported && !existsSync(folder)) fail(`no feature ${name} here: src/features/${name}/ is gone and src/features/index.ts lists no ./${name}/index.js`)
+  rmSync(folder, { recursive: true, force: true })
+  const local = imported?.[1]
+  const listed = local ? text.replace(imported[0], '').replace(new RegExp(`^ {2}${local},\\n`, 'm'), '') : text
+  writeFileSync(list, listed)
+  const stillListed = local && new RegExp(`\\b${local}\\b`).test(listed)
+  const catalog = join(root, 'src/features/catalog.ts')
+  const entry = new RegExp(`^ {2}'${name}': \\{.*\\},\\n`, 'm')
+  const switched = entry.test(textOf(catalog) ?? '')
+  if (switched) writeFileSync(catalog, textOf(catalog).replace(entry, ''))
+  console.log(`Removed src/features/${name}/ and its lines in src/features/index.ts${switched ? ', and its switch in src/features/catalog.ts' : ''}`)
+  if (stillListed) console.log(`src/features/index.ts still names ${local}: take it out of FEATURES by hand`)
+  // What else still reaches into it: another feature over its rows, a test of its own outside the folder
+  const mentions = ['src', 'test', 'web'].filter((top) => existsSync(join(root, top))).flatMap((top) =>
+    readdirSync(join(root, top), { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name) && !join(entry.parentPath, entry.name).includes(`${join('src', 'kit')}`))
+      .map((entry) => join(entry.parentPath, entry.name))
+      .filter((path) => readFileSync(path, 'utf8').includes(`/${name}/`)),
+  )
+  for (const path of mentions) console.log(`${relative(root, path)} still imports from ${name}/: change it before the gate`)
+  const workers = existsSync(join(root, 'scripts/migrations.ts'))
+  console.log(`Next: ${workers ? `pnpm migrations (it removes ${name}’s files from migrations/), then ` : ''}pnpm test`)
 }
 
 /**
@@ -771,6 +867,42 @@ const skillFindings = async (root) => {
   if (Object.keys(skills).length) await sdk.SkillsExtension.load(sdk.memorySkillFiles(skills), { onWarning: ({ path, message }) => findings.push(`skill    guide/skills/${path === '.' ? '' : path}: ${message}`) })
   return { findings, notes: [] }
 }
+
+/**
+ * The members of `Env` in src/app.ts (its body read with comments taken out, one name per member), every
+ * `process.env.NAME` or `process.env['NAME']` in a file under src/, and what container/entrypoint.sh passes; null
+ * without a container. templates/app/test/env.test.ts reads by the same rule.
+ */
+const envKeysOf = (root) => {
+  const [app, entrypoint] = ['src/app.ts', 'container/entrypoint.sh'].map((path) => textOf(join(root, path)))
+  const start = app && /export type Env = \{/.exec(app)
+  if (!start || !entrypoint) return null
+  const body = app.slice(start.index + start[0].length).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').split('}')[0]
+  const sources = readdirSync(join(root, 'src'), { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name))
+  const read = sources.flatMap((entry) => [...readFileSync(join(entry.parentPath, entry.name), 'utf8').matchAll(/process\.env(?:\.(\w+)|\[\s*['"](\w+)['"]\s*\])/g)].map(([, dotted, quoted]) => dotted ?? quoted))
+  return {
+    env: body.split(/[;,\n]/).flatMap((member) => /^\s*(\w+)\??\s*:/.exec(member)?.[1] ?? []),
+    read,
+    passed: [...entrypoint.matchAll(/\$\{(\w+):\+/g)].map(([, key]) => key),
+  }
+}
+/** The shell for passing one setting through the entrypoint, only when it is set. */
+const passLine = (key) => `\${${key}:+${key}="$${key}"}`
+
+/** The container's allowlist against what the app reads, each way: findings in an app with test/env.test.ts, notes in one made before it. */
+const envFindings = (root) => {
+  const keys = envKeysOf(root)
+  if (!keys) return { findings: [], notes: [] }
+  const lines = [
+    ...keys.env.filter((key) => !keys.passed.includes(key)).map((key) => `container/entrypoint.sh: passes no ${key}, which Env in src/app.ts reads, so the container never sees it: add ${passLine(key)} before node_modules/.bin/tsx`),
+    ...keys.passed.filter((key) => !keys.env.includes(key) && !keys.read.includes(key)).map((key) => `container/entrypoint.sh: passes ${key}, which neither Env in src/app.ts nor any file under src/ reads: take ${passLine(key)} out, or add it to Env`),
+  ]
+  if (existsSync(join(root, 'test/env.test.ts'))) return { findings: lines.map((line) => `env      ${line}`), notes: [] }
+  return { findings: [], notes: lines.map((line) => `note     env ${line} (a failure once the app has test/env.test.ts, which a new app from \`kit init\` has)`) }
+}
+
+/** What doctor prints above the starter's lines. */
+const STARTER_HEADING = "Expected on a new app: the starter's text, until it is yours (doctor passes once each is written and `kit brand` has rendered the brand):"
 
 /** One line for each file that still holds the starter's text. */
 const starterFindings = (root) =>
@@ -1487,11 +1619,17 @@ const wiringOf = (parts) => {
     const from = `../${relative(root ?? dir, dir).split('\\').join('/')}/${REGISTRY[name].entry ? `${name}/` : ''}index.js`
     return [
       ...wiringStepsOf(name, root),
-      ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts${keepsTables ? ' (its migrations reach migrations/ through it: add no line to scripts/migrations.ts)' : ''}, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}`] : []),
+      ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts${keepsTables ? ' (its migrations reach migrations/ through it: add no line to scripts/migrations.ts)' : ''}, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}${wireHint(name)}`] : []),
       // A wrapped part's feature lists its steps: a line here too wrote every step twice
       ...(keepsTables && !wrapped && migrations !== null && !migrations.includes(constant) ? [`scripts/migrations.ts lacks ${name}'s tables: \`import { ${constant} } from '${from}'\` and \`['${name}', ${constant}]\` in its sets, then \`pnpm migrations\` writes their D1 files`] : []),
     ]
   })
+}
+
+/** For a part `--wire` can wire: the command that writes what its Wire line says. */
+const wireHint = (name) => {
+  const over = REGISTRY[name].wiring?.wire?.over
+  return REGISTRY[name].wiring?.wire ? `; or \`kit add ${name} --wire${over ? ` ${over.flag} <feature>` : ''}\` writes it all, settings too` : ''
 }
 
 /** Where an app made by `init` lists a setting, each file named as the step says it. */
@@ -1513,7 +1651,8 @@ const wiringStepsOf = (name, root) => {
   const lacking = (path, text) => existsSync(join(root, path)) && !textOf(join(root, path)).includes(text)
   const settings = (wiring.settings ?? []).flatMap(({ name: setting, what, test, testImport }) => {
     // The workerd tests get a value that works there: their origin, a key made as they start
-    const files = SETTING_FILES.filter(([path]) => lacking(path, setting)).map(([path, where]) => (path === 'vitest.config.ts' && test ? `${where} as ${setting}: ${test}${testImport ? ` (${testImport})` : ''}` : where))
+    // A setting without a test value needs none in the workerd tests' bindings
+    const files = SETTING_FILES.filter(([path]) => lacking(path, setting) && (test || path !== 'vitest.config.ts')).map(([path, where]) => (path === 'vitest.config.ts' ? `${where} as ${setting}: ${test}${testImport ? ` (${testImport})` : ''}` : path === 'container/entrypoint.sh' ? `${where} as ${passLine(setting)}` : where))
     return files.length ? [`Setting ${setting} (${what}): add it to ${files.join(', ')}`] : []
   })
   const cron = wiring.cron
@@ -1523,7 +1662,8 @@ const wiringStepsOf = (name, root) => {
         ...(lacking('src/server.ts', cron.calls) ? [`Schedule: src/server.ts calls ${name}'s ${cron.calls} on a timer (hourly is enough)`] : []),
       ]
     : []
-  return [`Wire ${name}: ${dirArg}/${readme} › ${wiring.code}`, ...settings, ...schedules]
+  // A part wired as a feature of its own has its Wire line from wiringOf
+  return [...(wiring.code ? [`Wire ${name}: ${dirArg}/${readme} › ${wiring.code}${wireHint(name)}`] : []), ...settings, ...schedules]
 }
 
 /** Runs each pnpm step in a new app until one fails; returns the steps left, that one first. Without pnpm, all of them. */
@@ -1543,6 +1683,314 @@ const runFirst = (root, steps) => {
   return []
 }
 
+// ---- Wiring a part into an app made by init: `add <part> --wire` ----
+
+/** Where each marker an init template carries sits, as a person reads it: an older app is told the place, not the marker. */
+const MARKER_PLACES = {
+  'kit:imports': 'after the imports',
+  'kit:module': 'before `export const VERSION`',
+  'kit:setup': 'after `const owner`',
+  'kit:mounts': 'after `mountMcp(app, { factory`',
+  'kit:handlers': 'after `fetch:`',
+  'kit:schedule': 'after `serve(`',
+  'kit:triggers': 'after `"compatibility_flags"`',
+  'kit:features': 'in `FEATURES`',
+}
+/** The markers each file of a new app carries for `--wire`: an app missing any, in a file it has, was made before them. */
+const WIRE_MARKERS = {
+  'src/app.ts': ['kit:imports', 'kit:module', 'kit:setup', 'kit:mounts'],
+  'src/server.ts': ['kit:imports', 'kit:schedule'],
+  'src/worker.ts': ['kit:imports', 'kit:handlers'],
+  'wrangler.jsonc': ['kit:triggers'],
+  'vitest.config.ts': ['kit:imports'],
+}
+/** Text with its layout taken out: the same code before and after `pnpm format` (whitespace, semicolons, trailing commas). */
+const squash = (text) => text.replace(/[\s;]+/g, '').replace(/,(?=[)\]}])/g, '')
+/** How far a line opens brackets, outside strings and comments. */
+const depthOf = (line) => {
+  let depth = 0
+  let quote = null
+  for (let at = 0; at < line.length; at++) {
+    const char = line[at]
+    if (quote) {
+      if (char === '\\') at++
+      else if (char === quote) quote = null
+    } else if (char === '/' && line[at + 1] === '/') break
+    else if (`'"\``.includes(char)) quote = char
+    else if ('([{'.includes(char)) depth++
+    else if (')]}'.includes(char)) depth--
+  }
+  return depth
+}
+/** The lines of the one statement (or property) that starts with `start`, however the formatter wrapped it; null when none or several. */
+const statementAt = (lines, start) => {
+  const starts = lines.flatMap((line, index) => (line.trimStart().startsWith(start) ? [index] : []))
+  if (starts.length !== 1) return null
+  let depth = 0
+  for (let end = starts[0]; end < lines.length; end++) {
+    depth += depthOf(lines[end])
+    const next = lines[end + 1]?.trimStart() ?? ''
+    if (depth <= 0 && !/(=|=>|\?|&&|\|\|)$/.test(lines[end].trimEnd()) && !/^(\?|:|\.|&&|\|\|)/.test(next)) return { from: starts[0], to: end + 1 }
+  }
+  return null
+}
+/** Splits a list's text at its top-level commas. */
+const topLevel = (text) => {
+  const parts = []
+  let depth = 0
+  let quote = null
+  let from = 0
+  for (let at = 0; at < text.length; at++) {
+    const char = text[at]
+    if (quote) {
+      if (char === '\\') at++
+      else if (char === quote) quote = null
+    } else if (`'"\``.includes(char)) quote = char
+    else if ('([{'.includes(char)) depth++
+    else if (')]}'.includes(char)) depth--
+    else if (char === ',' && depth === 0) {
+      parts.push(text.slice(from, at))
+      from = at + 1
+    }
+  }
+  return [...parts, text.slice(from)].map((part) => part.trim()).filter(Boolean)
+}
+/** The span of the bracketed text opening at `open` (its index), closing bracket included. */
+const closingOf = (text, open) => {
+  for (let at = open, depth = 0, quote = null; at < text.length; at++) {
+    const char = text[at]
+    if (quote) {
+      if (char === '\\') at++
+      else if (char === quote) quote = null
+    } else if (`'"\``.includes(char)) quote = char
+    else if ('([{'.includes(char)) depth++
+    else if (')]}'.includes(char) && --depth === 0) return at
+  }
+  return -1
+}
+const keyOfEntry = (entry) => (entry.startsWith('...') ? null : /^(\w+)\s*(?::|$)/.exec(entry)?.[1] ?? null)
+const valueOfEntry = (entry) => (entry.includes(':') ? entry.slice(entry.indexOf(':') + 1).trim() : entry)
+/** An object literal's entries with `wanted` applied (see registry.json's meta.wiring.wire); null on an entry the app changed. */
+const mergeEntries = (entries, wanted) => {
+  const out = [...entries]
+  const find = (key) => out.findIndex((entry) => keyOfEntry(entry) === key)
+  for (const want of wanted) {
+    if (want.spread) {
+      if (!out.some((entry) => squash(entry) === squash(want.spread))) out.push(want.spread)
+      continue
+    }
+    const at = find(want.key)
+    const render = (value) => (value === want.key ? want.key : `${want.key}: ${value}`)
+    if (want.append) {
+      if (at < 0) {
+        out.push(`${want.key}: [${want.append.join(', ')}]`)
+        continue
+      }
+      const value = valueOfEntry(out[at])
+      const items = value.startsWith('[') && value.endsWith(']') ? topLevel(value.slice(1, -1)) : [`...${value}`]
+      const added = [...items, ...want.append.filter((item) => !items.some((one) => squash(one) === squash(item)))]
+      out[at] = `${want.key}: [${added.join(', ')}]`
+      continue
+    }
+    if (at < 0) out.push(render(want.value))
+    else if (squash(valueOfEntry(out[at])) === squash(want.value)) continue
+    else if (want.was !== undefined && squash(valueOfEntry(out[at])) === squash(want.was)) out[at] = render(want.value)
+    else return null
+  }
+  return out
+}
+/** A setting's line for container/entrypoint.sh, before the command it starts. */
+const withEntrypointLine = (text, key) => text.replace(/ \\\n(\s*node_modules\/\.bin\/tsx)/, ` ${passLine(key)} \\\n$1`)
+
+/** The app's spellings a part's wiring fills in, and the feature it works over (`--items`, `--spaces`): names from its routes. */
+const wireVarsOf = (root, over) => {
+  const pkg = JSON.parse(textOf(join(root, 'package.json')) ?? '{}')
+  const name = basename(pkg.name ?? basename(root))
+  const title = /^\s*title: '([^']*)'/m.exec(textOf(join(root, 'brand/brand.ts')) ?? '')?.[1] ?? name.split(/[-_.]/).filter(Boolean).map(capital).join(' ')
+  if (!over) return { __name__: name, __title__: title }
+  const routes = textOf(join(root, 'src/features', over, 'routes.ts')) ?? ''
+  const singular = /export const (\w+)Schema = /.exec(routes)?.[1]
+  const names = namesOf(over, singular?.replace(/[A-Z]/g, (letter, at) => `${at ? '-' : ''}${letter.toLowerCase()}`))
+  const first = /\.object\(\{\s*id: z\.string\(\),\s*(\w+):/.exec(routes)?.[1] ?? 'id'
+  return { ...Object.fromEntries(Object.entries(names).map(([key, value]) => [`__over_${key.slice(2)}`, value])), __over_first__: first, __name__: name, __title__: title }
+}
+const fillVars = (text, vars) => Object.entries(vars).reduce((filled, [key, value]) => filled.replaceAll(key, value), text)
+const fillDeep = (value, vars) => (typeof value === 'string' ? fillVars(value, vars) : Array.isArray(value) ? value.map((one) => fillDeep(one, vars)) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, one]) => [key, fillDeep(one, vars)])) : value)
+
+/** What `--wire` refuses before copying anything: an app not made by init, a part with nothing to wire, a missing feature to work over. */
+const wireProblems = (root, parts) => {
+  if (!root || !existsSync(join(root, 'src/app.ts')) || !existsSync(join(root, 'src/features/index.ts'))) return [`--wire wires an app made by \`kit init\` (src/app.ts and src/features/index.ts); without them, follow each part's README › Wire it`]
+  return parts.flatMap((name) => {
+    const wire = REGISTRY[name]?.wiring?.wire
+    if (!wire) return [`${name} has nothing for --wire to write: its README says how to use it`]
+    if (!wire.over) return []
+    const over = valueOf(wire.over.flag)
+    if (!over) return [`--wire ${name} needs ${wire.over.flag} <feature>, ${wire.over.what} (\`${wire.over.example}\` makes one)`]
+    if (!existsSync(join(root, 'src/features', over, 'routes.ts'))) return [`${wire.over.flag} ${over}: no src/features/${over}/ made by \`kit feature\` (\`${wire.over.example}\` makes one)`]
+    return []
+  })
+}
+
+/**
+ * Plans every edit `--wire` makes for the parts, in memory and in order, so two parts editing one statement compose:
+ * the files it would write, each edit described for a person, the markers an older app lacks, and the edits that met
+ * code the app changed. Nothing is written here.
+ */
+const planWiring = (root, parts) => {
+  const texts = new Map()
+  const read = (path) => (texts.has(path) ? texts.get(path) : textOf(join(root, path)))
+  const write = (path, text) => texts.set(path, text)
+  const said = []
+  const missing = new Set(Object.entries(WIRE_MARKERS).flatMap(([path, markers]) => (read(path) === null ? [] : markers.filter((marker) => !read(path).split('\n').some((line) => line.trim().startsWith(`// ${marker}`))).map((marker) => `${path} (${marker})`))))
+  const conflicts = []
+  const markerIn = (path, marker) => {
+    const lines = read(path).split('\n')
+    const at = lines.findIndex((line) => line.trim().startsWith(`// ${marker}`))
+    if (at < 0) missing.add(`${path} (${marker})`)
+    return at
+  }
+  const insertAt = (path, marker, lines) => {
+    const text = read(path)
+    if (squash(text).includes(squash(lines.join('\n')))) return
+    const all = text.split('\n')
+    const at = markerIn(path, marker)
+    if (at >= 0) write(path, [...all.slice(0, at), ...lines, ...all.slice(at)].join('\n'))
+  }
+  for (const part of parts) {
+    const { wire, settings = [], cron } = REGISTRY[part].wiring
+    const over = wire.over ? valueOf(wire.over.flag) : undefined
+    const vars = wireVarsOf(root, over)
+    const steps = []
+    const note = (line, body = []) => steps.push([line, ...body.map((one) => `    ${one}`)].join('\n'))
+    for (const target of wire.files ?? []) {
+      const path = fillVars(target, vars)
+      const text = fillVars(readFileSync(join(KIT, 'templates/wire', part, target), 'utf8'), vars)
+      note(`${path}, new:`, text.trimEnd().split('\n'))
+      const there = read(path)
+      if (there === null) write(path, text)
+      else if (squash(there) !== squash(text)) conflicts.push(`${path} exists and differs from what --wire writes`)
+    }
+    for (const { name, before } of wire.features ?? []) {
+      const camel = namesOf(name).__camel__
+      const path = 'src/features/index.ts'
+      note(`${path}: \`import { feature as ${camel} } from './${name}/index.js'\` with the imports, and \`${camel},\` in FEATURES${before ? `, before ${before}` : ''}`)
+      if (read(path).includes(`from './${name}/index.js'`)) continue
+      insertAt(path, 'kit:imports', [`import { feature as ${camel} } from './${name}/index.js'`])
+      const lines = read(path).split('\n')
+      const ahead = before ? lines.findIndex((line) => line.trim() === `${namesOf(before).__camel__},`) : -1
+      if (ahead >= 0) write(path, [...lines.slice(0, ahead), `  ${camel},`, ...lines.slice(ahead)].join('\n'))
+      else insertAt(path, 'kit:features', [`  ${camel},`])
+    }
+    for (const edit of fillDeep(wire.edits ?? [], vars)) {
+      const text = read(edit.file)
+      // A runtime the app doesn't have: no worker.ts on Node alone, no server.ts on Workers alone
+      if (text === null) continue
+      if (edit.if && !text.includes(edit.if)) continue
+      const lines = text.split('\n')
+      if (edit.import) {
+        note(`${edit.file}: \`import { ${edit.names.join(', ')} } from '${edit.import}'\`${edit.import.startsWith('.') ? ' (into its import from there, when it has one)' : ''}`)
+        const end = lines.findIndex((line) => line.includes(`from '${edit.import}'`))
+        let start = end
+        while (start > 0 && !lines[start].startsWith('import')) start--
+        const statement = end >= 0 ? lines.slice(start, end + 1).join('\n') : ''
+        const [, typeOnly, list] = /^import (type )?\{([\s\S]*)\} from/.exec(statement) ?? []
+        if (list === undefined || (typeOnly && edit.names.some((one) => !one.startsWith('type ')))) {
+          const allTypes = edit.names.every((one) => one.startsWith('type '))
+          insertAt(edit.file, 'kit:imports', [`import ${allTypes ? 'type ' : ''}{ ${edit.names.map((one) => (allTypes ? one.slice(5) : one)).join(', ')} } from '${edit.import}'`])
+          continue
+        }
+        const have = topLevel(list)
+        const bare = (one) => one.replace(/^type /, '')
+        const wanted = edit.names.filter((one) => !have.some((had) => bare(had) === bare(one)))
+        if (!wanted.length) continue
+        const merged = [...have.filter((one) => !one.startsWith('type ')), ...wanted.filter((one) => !one.startsWith('type ')), ...have.filter((one) => one.startsWith('type ')), ...wanted.filter((one) => one.startsWith('type '))]
+        write(edit.file, [...lines.slice(0, start), `import ${typeOnly ?? ''}{ ${merged.join(', ')} } from '${edit.import}'`, ...lines.slice(end + 1)].join('\n'))
+        continue
+      }
+      if (edit.at) {
+        note(`${edit.file}, ${MARKER_PLACES[edit.at]}:`, edit.lines)
+        insertAt(edit.file, edit.at, edit.lines)
+        continue
+      }
+      if (edit.line) {
+        note(`${edit.file}, in place of the line \`${edit.line}\`:`, edit.to)
+        if (squash(text).includes(squash(edit.to.join('\n')))) continue
+        const at = lines.flatMap((line, index) => (squash(line) === squash(edit.line) ? [index] : []))
+        if (at.length !== 1) conflicts.push(`${edit.file}: no line \`${edit.line}\` as the kit wrote it`)
+        else write(edit.file, [...lines.slice(0, at[0]), ...edit.to, ...lines.slice(at[0] + 1)].join('\n'))
+        continue
+      }
+      const span = statementAt(lines, edit.statement)
+      const statement = span && lines.slice(span.from, span.to).join('\n')
+      const swap = (next) => write(edit.file, [...lines.slice(0, span.from), ...next.split('\n'), ...lines.slice(span.to)].join('\n'))
+      if (edit.object) {
+        note(`${edit.file}, in \`${edit.object.replace(/[:(]$/, '')}\`'s { … } (the statement that starts \`${edit.statement}\`): ${edit.entries.map((want) => want.spread ?? (want.append ? `${want.key}: [${want.append.join(', ')}] (added to its list)` : `${want.key}: ${want.value}${want.was ? ` (in place of ${want.was})` : ''}`)).join(', ')}`)
+        const open = statement ? statement.indexOf('{', statement.indexOf(edit.object) + edit.object.length - 1) : -1
+        const close = open >= 0 && statement.indexOf(edit.object) >= 0 ? closingOf(statement, open) : -1
+        const merged = close > 0 ? mergeEntries(topLevel(statement.slice(open + 1, close)), edit.entries) : null
+        if (!merged) conflicts.push(`${edit.file}: the statement that starts \`${edit.statement}\` is not as the kit wrote it`)
+        else if (squash(`{${merged.join(',')}}`) !== squash(statement.slice(open, close + 1))) swap(`${statement.slice(0, open)}{ ${merged.join(', ')} }${statement.slice(close + 1)}`)
+        continue
+      }
+      note(`${edit.file}, in place of the statement that starts \`${edit.statement}\`:`, edit.to)
+      if (statement && squash(statement) === squash(edit.to.join('\n'))) continue
+      if (statement && squash(statement) === squash(edit.was)) swap(edit.to.join('\n'))
+      else conflicts.push(`${edit.file}: the statement that starts \`${edit.statement}\` is not as the kit wrote it`)
+    }
+    // Each setting where an app made by init lists them, only where it lacks it
+    for (const { name: key, what, test, testImport } of settings) {
+      const app = read('src/app.ts')
+      const span = statementAt(app.split('\n'), 'export type Env =')
+      if (span) {
+        const lines = app.split('\n')
+        const env = lines.slice(span.from, span.to).join('\n')
+        const members = topLevel(env.slice(env.indexOf('{') + 1, env.lastIndexOf('}')).replace(/;|\n/g, ','))
+        if (!members.some((member) => member.startsWith(`${key}?`) || member.startsWith(`${key}:`))) write('src/app.ts', [...lines.slice(0, span.from), `export type Env = { ${[...members, `${key}?: string`].join('; ')} }`, ...lines.slice(span.to)].join('\n'))
+      } else conflicts.push('src/app.ts: no `export type Env =`')
+      const entrypoint = read('container/entrypoint.sh')
+      if (entrypoint !== null && !entrypoint.includes(`\${${key}:+`)) write('container/entrypoint.sh', withEntrypointLine(entrypoint, key))
+      const vars = read('.dev.vars.example')
+      if (vars !== null && !dotenvNames(vars).includes(key)) write('.dev.vars.example', `${vars.trimEnd()}\n${key}=""\n`)
+      const pkg = JSON.parse(read('package.json') ?? '{}')
+      if (pkg.cloudflare?.bindings && !pkg.cloudflare.bindings[key]) write('package.json', `${JSON.stringify({ ...pkg, cloudflare: { ...pkg.cloudflare, bindings: { ...pkg.cloudflare.bindings, [key]: { description: `${capital(what)}.` } } } }, null, 2)}\n`)
+      const config = read('vitest.config.ts')
+      const anchor = "TEST_MIGRATIONS: await readD1Migrations('./migrations')"
+      if (test && config?.includes(anchor) && !config.includes(`${key}:`)) {
+        write('vitest.config.ts', config.replace(anchor, `${anchor}, ${key}: ${test}`))
+        if (testImport) insertAt('vitest.config.ts', 'kit:imports', [testImport])
+      }
+    }
+    // The settings and schedule as `add` prints them: each file named only where the app lacks it
+    for (const step of wiringStepsOf(part, root).filter((line) => !line.startsWith('Wire '))) note(step)
+    if (cron && read('wrangler.jsonc') !== null) {
+      if (!read('wrangler.jsonc').includes('"crons"')) insertAt('wrangler.jsonc', 'kit:triggers', [`  "triggers": { "crons": ["${cron.schedule}"] },`])
+    }
+    said.push([part, steps])
+  }
+  const changed = [...texts].filter(([path, text]) => text !== textOf(join(root, path)))
+  return { changed, said, missing: [...missing], conflicts }
+}
+
+/** `add --wire`: writes the plan, or, in an app without the markers or with code the kit did not write, prints it and writes nothing. `install` is the `pnpm add` its Next line starts with, if any. */
+const wireParts = (root, parts, install = null) => {
+  const { changed, said, missing, conflicts } = planWiring(root, parts)
+  if (missing.length || conflicts.length) {
+    const why = missing.length ? `this app has no wiring markers (made before kit ${VERSION}'s init): ${missing.join(', ')}` : conflicts.join('; ')
+    console.log(`Wired nothing: ${why}. The edits, to make by hand:`)
+    for (const [part, steps] of said) console.log(`\n${part}:\n${steps.map((step) => `  ${step}`).join('\n')}`)
+    process.exitCode = 1
+    return
+  }
+  for (const [path, text] of changed) {
+    mkdirSync(dirname(join(root, path)), { recursive: true })
+    writeFileSync(join(root, path), text)
+  }
+  if (!changed.length) return console.log(`Wired already: ${parts.join(', ')}; nothing changed`)
+  console.log(`Wired ${parts.join(', ')}: ${changed.map(([path]) => path).join(', ')}`)
+  const workers = existsSync(join(root, 'scripts/migrations.ts'))
+  console.log(`Next: ${install ? `${install} && ` : ''}pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test (each part's README says what it does; its settings are in .dev.vars.example${existsSync(join(root, 'container/entrypoint.sh')) ? ' and container/entrypoint.sh' : ''})`)
+}
+
 const commands = {
   help: () => console.log(HELP),
 
@@ -1557,6 +2005,12 @@ const commands = {
 
   add: () => {
     if (!names.length) fail('name the modules to add, e.g. `add core guide mcp`')
+    // --wire checks everything it needs before anything is copied
+    const wiring = flags.has('--wire') ? appRootOf() : null
+    if (flags.has('--wire')) {
+      const problems = wireProblems(wiring, names)
+      if (problems.length) fail(problems.join('\n'))
+    }
     const lock = readLock()
     const webDir = webDirArg ?? lock?.webDir
     const modules = withRequired([...(lock?.modules ?? []), ...names])
@@ -1590,7 +2044,8 @@ const commands = {
       for (const line of ignored.todo) console.log(line)
       console.log(`Brand: ${RESVG_INSTALL} && \`kit brand\` renders ${BRAND_MODULE}, then createAgentApi({ …, brand: createBrand(BRAND, BRAND_ASSETS) }) (src/kit/brand/README.md)`)
     }
-    for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
+    if (wiring) wireParts(wiring, names, !flags.has('--install') && installCommand(modules).startsWith('pnpm add') ? installCommand(modules) : null)
+    else for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
     if (flags.has('--install')) install(modules)
     else console.log(`Dependencies: ${installCommand(modules)}`)
     const entries = modules.filter((name) => REGISTRY[name].entry).map((name) => keyOf(name, REGISTRY[name].files.find((file) => file.endsWith('/index.ts')) ?? REGISTRY[name].files[0], webDir))
@@ -1607,16 +2062,33 @@ const commands = {
 
   diff: () => {
     const lock = readLock() ?? fail(`no kit.json in ${dirArg}; add modules first`)
-    const statuses = statusOf(lock, expectedFiles(lock.modules, lock.webDir))
-    console.log(`Kit ${lock.version} in ${dirArg} → kit ${VERSION}`)
-    for (const { file, state } of statuses) console.log(`  ${state.padEnd(15)} ${file}`)
-    if (flags.has('--patch'))
-      for (const { file, changed } of statuses.filter((status) => status.state !== 'unchanged' && status.state !== 'missing')) {
-        if (!changed && file === 'index.ts') continue
-        const upstream = file === 'index.ts' ? null : join(KIT, 'src', sourceOf(file))
-        if (upstream) spawnSync('git', ['--no-pager', 'diff', '--no-index', '--no-color', upstream, pathOf(file, lock.webDir)], { stdio: 'inherit' })
-      }
+    const expected = expectedFiles(lock.modules, lock.webDir)
+    const statuses = statusOf(lock, expected)
     const changed = statuses.filter((status) => status.state !== 'unchanged')
+    const patch = flags.has('--patch')
+    console.log(`Kit ${lock.version} in ${dirArg} → kit ${VERSION}`)
+    // With the patches, only the files they are about
+    for (const { file, state } of patch ? changed : statuses) console.log(`  ${state.padEnd(15)} ${file}`)
+    if (patch && changed.length < statuses.length) console.log(`  and ${statuses.length - changed.length} unchanged`)
+    if (patch) {
+      // Each side copied under app/ and kit/, so the patch names them and reads as update would change the app's file
+      const sides = join(tmpdir(), `kit-diff-${process.pid}`)
+      const said = { 'you edited': "you edited it: - the app's, + kit VERSION's; update keeps the app's (--force takes the kit's)", 'both changed': "you edited it and the kit changed it: - the app's, + kit VERSION's; update keeps the app's (--force takes the kit's)", 'kit changed': "the kit changed it: - the app's, + kit VERSION's; update takes this", 'dropped by kit': 'no longer in the kit: update stops tracking it', 'new in kit': "new in the kit: update writes it" }
+      try {
+        for (const { file, state } of changed.filter(({ state }) => state !== 'missing')) {
+          const [app, kit] = ['app', 'kit'].map((side) => join(sides, side, sourceOf(file)))
+          for (const [path, text] of [[app, textOf(pathOf(file, lock.webDir))], [kit, expected[file] ?? null]]) {
+            mkdirSync(dirname(path), { recursive: true })
+            writeFileSync(path, text ?? '')
+          }
+          console.log(`\n# ${sourceOf(file)}, ${said[state].replace('VERSION', VERSION)}`)
+          const shown = spawnSync('git', ['--no-pager', 'diff', '--no-index', '--no-color', '--no-prefix', `app/${sourceOf(file)}`, `kit/${sourceOf(file)}`], { cwd: sides, encoding: 'utf8' })
+          process.stdout.write(shown.stdout)
+        }
+      } finally {
+        rmSync(sides, { recursive: true, force: true })
+      }
+    }
     process.exitCode = changed.length ? 1 : 0
   },
 
@@ -1641,9 +2113,9 @@ const commands = {
       mkdirSync(join(root, 'migrations'), { recursive: true })
     }
     if (preset === 'app') copyTemplate(join(KIT, 'templates/preset-app'), root, vars)
-    if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container']) rmSync(join(root, path), { recursive: true, force: true })
+    if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container', 'test/env.test.ts']) rmSync(join(root, path), { recursive: true, force: true })
     // Lines marked for one runtime or preset stay only in apps that have it
-    const keeps = { 'runtime:node': runtime !== 'cloudflare', 'runtime:workers': runtime !== 'node', 'preset:api': preset === 'api', 'preset:app': preset === 'app' }
+    const keeps = { 'runtime:node': runtime !== 'cloudflare', 'runtime:workers': runtime !== 'node', 'runtime:cloudflare': runtime === 'cloudflare', 'runtime:node-only': runtime === 'node', 'preset:api': preset === 'api', 'preset:app': preset === 'app' }
     for (const file of ['AGENTS.md', 'README.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts', '.github/workflows/ci.yml'].map((path) => join(root, path)).filter(existsSync))
       writeFileSync(file, keepMarked(readFileSync(file, 'utf8'), keeps).replaceAll('__worker_dev__', runtime === 'both' ? 'dev:worker' : 'dev'))
     // npm may drop the executable bit when it packs the kit
@@ -1674,7 +2146,7 @@ const commands = {
     // What the Deploy to Cloudflare form says about each setting (kit button --check wants one for each it asks)
     const cloudflare = runtime === 'node' ? {} : { cloudflare: { bindings: DEPLOY_FORM } }
     writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', packageManager: KIT_PACKAGE_MANAGER, engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps), ...cloudflare }, null, 2) + '\n')
-    if (!flags.has('--bare')) addFeature(root, 'notes', { singular: 'note' })
+    if (!flags.has('--bare')) addFeature(root, 'notes', { singular: 'note', next: false })
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
     // What makes the app pass its own gate as made: what init writes is in the kit's long-line style, and D1 needs migrations/
     const firstRun = [['install'], ['format'], ...(runtime === 'node' ? [] : [['migrations']])]
@@ -1683,6 +2155,8 @@ const commands = {
     console.log(`Skills first: npx skills add ${REPO} -y gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
     console.log(`Next: cd ${relative(process.cwd(), root)} && ${[...left.map((args) => `pnpm ${args.join(' ')}`), 'pnpm test', 'pnpm dev'].join(' && ')}`)
     console.log(`Brand: make brand/ yours, then ${RESVG_INSTALL} && \`npx @escalay/kit brand\` renders the favicon, PNG icons and OG card into ${BRAND_MODULE}`)
+    // A new app's first doctor fails on the starter's text: said before it runs
+    console.log(`Doctor: \`npx @escalay/kit doctor\` fails on a new app until the starter's text is yours: the product skill's description (guide/skills/${name}/SKILL.md), brand/brand.ts's, and each switch's in src/features/catalog.ts; then ${RESVG_INSTALL} and \`npx @escalay/kit brand\` render the brand`)
   },
 
   adopt,
@@ -1694,12 +2168,16 @@ const commands = {
     const root = lock ? appRootOf() : null
     const brand = root ? brandFindings(root, lock.modules.includes('brand')) : { findings: [], notes: lock?.modules.includes('brand') ? [`note     brand: no package.json above ${dirArg}: \`--app <app>\` names the app whose brand/ to check`] : [] }
     const skills = root ? await skillFindings(root) : { findings: [], notes: [] }
-    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...(root ? starterFindings(root) : [])] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
+    const env = root ? envFindings(root) : { findings: [], notes: [] }
+    const starter = lock && root ? starterFindings(root) : []
+    // The starter's lines last, under a heading of their own: a new app has them all
+    const starterLines = starter.length ? [STARTER_HEADING, ...starter] : []
+    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...env.findings, ...starter] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
     const texts = lock ? appTexts() : []
     const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
     const kept = lock ? keptEditsOf(lock) : []
     const keptLines = kept.map((file) => `kept     ${file}: an edit kit.json records as kept; \`kit diff --dir ${dirArg} --patch\` shows it`)
-    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...skills.notes, ...behindNotes, ...keptLines, ...findings]) console.log(line)
+    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...skills.notes, ...env.notes, ...behindNotes, ...keptLines, ...findings.slice(0, findings.length - starter.length), ...starterLines]) console.log(line)
     const withKept = kept.length ? `, with ${kept.length} kept ${kept.length === 1 ? 'edit' : 'edits'}` : ''
     console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
@@ -1837,6 +2315,15 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
 
   license: licenseCommand,
 
+  key: () => {
+    const [name = 'dev'] = names
+    if (!/^[a-z][a-z0-9-]*$/.test(name)) fail(`"${name}": a key name is lowercase letters, digits and -, like dev or reader`)
+    // As core's mintApiKey makes one, and parseApiKeys reads the line
+    const key = `${name}_${randomBytes(24).toString('base64url')}`
+    const line = `API_KEYS=${name}:${sha(key)}`
+    console.log(`Key       ${key}\n${line}\nShown once and kept nowhere: the app holds only the hash. On Node: \`${line} pnpm dev\`; on Workers: the line in .dev.vars. Then send \`authorization: Bearer <the key>\` (the app's AGENTS.md › Try it)`)
+  },
+
   brand: async () => {
     const root = resolve(process.cwd(), valueOf('--app') ?? '.')
     if (flags.has('--check')) {
@@ -1856,7 +2343,8 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
   feature: () => {
     const [name] = names
     if (!name) fail('name the feature, plural and kebab-case: feature reading-lists')
-    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, { switchable: flags.has('--switch'), fieldSpec: valueOf('--fields'), singular: valueOf('--singular'), remove: !flags.has('--no-remove') })
+    if (flags.has('--remove')) return removeFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name)
+    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, { switchable: flags.has('--switch'), fieldSpec: valueOf('--fields'), singular: valueOf('--singular'), remove: !flags.has('--no-remove'), under: valueOf('--under') })
   },
 
   update: () => {
@@ -1914,10 +2402,12 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     if (kept.length) {
       console.log(`${kept.length} ${kept.length === 1 ? 'file' : 'files'} kept at kit ${lock.version}: ${kept.join(', ')}. ${keptFix([...new Set(kept.map((file) => partOf(file, modules)))])}`)
       console.log(`Dependencies: ${installCommand(modules)}`)
+      for (const line of keepLineOf(readLock())) console.log(line)
       process.exitCode = 1
       return
     }
     console.log(`kit.json → ${VERSION}. Dependencies: ${installCommand(modules)}`)
+    for (const line of keepLineOf(readLock())) console.log(line)
   },
 
   upgrading: () => {
@@ -1927,7 +2417,11 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const markdown = readFileSync(join(KIT, 'docs/upgrading.md'), 'utf8')
     const folders = [...new Set(lock.modules.filter((name) => REGISTRY[name]).map(notesFolderOf))]
     const sections = folders.map((folder) => [folder, notesSince(markdown, folder, since)]).filter(([, notes]) => notes.length)
-    if (!sections.length) return console.log(`No upgrade notes for ${folders.join(', ')} after kit ${since} (this is kit ${VERSION})`)
+    if (!sections.length) {
+      console.log(`No upgrade notes for ${folders.join(', ')} after kit ${since} (this is kit ${VERSION})`)
+      for (const line of keepLineOf(lock)) console.log(line)
+      return
+    }
     console.log(`Upgrade notes for ${folders.join(', ')} after kit ${since}, up to kit ${VERSION} (the kit's docs/upgrading.md):`)
     // An edit kept over a fix holds the bug: the notes mark a fix `**Fixed` or `**Security`, per part, never per file
     const fixed = new Set(sections.filter(([, notes]) => notes.some((note) => /\*\*(Fixed|Security)\b/.test(note))).map(([folder]) => folder))
@@ -1938,6 +2432,8 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     if (overFixes.length) console.log('')
     for (const { file } of overFixes) console.log(`fix      ${file}: your edit, and the kit changed it since; ${notesFolderOf(partOf(file, known))}'s notes below name a fix: ${keptFix([partOf(file, known)])}`)
     for (const [folder, notes] of sections) console.log(`\n## ${folder}\n\n${notes.join('\n\n')}`)
+    const keep = keepLineOf(lock)
+    if (keep.length) console.log(`\n${keep[0]}`)
   },
 }
 

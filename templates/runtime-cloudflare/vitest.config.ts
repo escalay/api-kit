@@ -3,6 +3,7 @@ import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-plugin'
 import react from '@vitejs/plugin-react' // preset:app
 import { defineConfig } from 'vitest/config'
 import { TEST_KEY } from './test/workers/key.js'
+// kit:imports
 
 // Two projects, one app: `node` runs every test on Node; `workers` runs test/workers inside workerd, over D1 brought
 // up by the files in migrations/ (`pnpm migrations` writes them)

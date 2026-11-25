@@ -23,8 +23,8 @@ Node and Workers.
 
 ## Wire it
 
-An app made by `kit init` whose spaces are shelves (`kit feature shelves --singular shelf --fields "name:string"`);
-`kit add sharing` prints the settings and the schedule it lacks. Each block names its file and place:
+In an app made by `kit init` with shelves as spaces (`kit feature shelves --singular shelf --fields "name:string"`),
+`kit add sharing --wire --spaces shelves` writes it all. By hand (an older app), each block names its place:
 
 ```ts
 // src/features/shelves/spaces.ts, new: the shelves as spaces, each shelf's id its space's name
@@ -124,7 +124,7 @@ export const chained = (sharing: Sharing, mine: Hooks): Hooks => ({
 | `states.ts` | `inviteStateOf`, `memberStateOf`, `memberListingOf`; `redeemByOf`, `memberExpiresAtOf`, `REDEEM_WITHIN` (a day), `UNSEEN_FOR` (30 days), `MAX_OPEN_INVITES` (100) |
 | `secrets.ts` | `sharingKeys`, `newLinkToken` (192 bits), `newInviteCode` (`BDKM-QXTW`, from `CODE_ALPHABET`), `normalisedCode`; what the tables keep instead: `linkHashOf`, `codeHashOf`; what the limits count by: `addressKeyOf` (an HMAC), `ticketHashOf` (SHA-256) |
 
-The owner routes, each with its operationId, tool, command and answers: [REFERENCE.md](REFERENCE.md).
+Owner routes and answers; which refusal is a 401, which a 403: [REFERENCE.md](REFERENCE.md).
 
 ## Flows
 

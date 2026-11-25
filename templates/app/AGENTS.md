@@ -6,7 +6,7 @@ an MCP tool.
 
 ## Commands
 
-`pnpm install` · `pnpm test` · `pnpm typecheck` · `pnpm lint` (oxlint) · `pnpm format` (oxfmt) · `pnpm guide` (after editing `guide/`) · `npx @escalay/kit brand` (after editing `brand/`; needs `pnpm add -D @resvg/resvg-js`)
+`pnpm install` · `pnpm test` · `pnpm typecheck` · `pnpm lint` (oxlint) · `pnpm format` (oxfmt) · `pnpm guide` (after editing `guide/`) · `npx @escalay/kit brand` (after editing `brand/`; needs `pnpm add -D @resvg/resvg-js`; text in the OG card and the monogram takes this machine's sans-serif font)
 
 - `pnpm dev`: the API on Node at http://localhost:4400 (`/docs`, `/llms.txt`, `/mcp`) <!-- runtime:node -->
 - `pnpm __worker_dev__`: the Worker locally over a local D1 (`/docs`, `/llms.txt`, `/mcp`) <!-- preset:api --> <!-- runtime:workers -->
@@ -17,15 +17,41 @@ an MCP tool.
 - `npx skills add escalay/api-kit -y` (`-y`, or the installer stops to ask): the kit's skills for your coding agent: `api-kit-build` (parts, who may see what, a newer kit), `api-kit-feature` (a feature, its switch), `api-kit-review` (is it ready for agents), `api-kit-cli` (the command line, every `kit` command), `api-kit-skills` (this product's own skills). It installs `api-kit-part` and `npm-release` too, which are for the kit's own repository: leave them be
 
 A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string minutes:int tags:string[] notes:text?"`
-(its own fields in every file, `status:enum(to-read|done)` for fixed values; `kit feature --help` lists the types, `--singular` and `--no-remove`), then fill in what is its own. Removing one (the
-`notes` sample): delete `src/features/<name>/` and its lines in `src/features/index.ts` (and `catalog.ts`), then
-`pnpm guide`, and on Workers `pnpm migrations` (it removes the feature's files). A PATCH schema never takes `.default()`: it would overwrite what a PATCH leaves out.
+(its own fields in every file, `status:enum(to-read|done)` for fixed values; `kit feature --help` lists the types, `--singular`, `--no-remove` and `--under <parent>` for one inside another), then fill in what is its own. Removing one (the
+`notes` sample): `npx @escalay/kit feature --remove notes` (its folder, its lines in `src/features/index.ts` and
+`catalog.ts`), then on Workers `pnpm migrations` (it removes the feature's files). A PATCH schema never takes `.default()`: it would overwrite what a PATCH leaves out.
+
+## Try it
+
+Every route but discovery wants a key. `npx @escalay/kit key` prints one and its `API_KEYS=` line (the app keeps only
+the hash):
+
+- Node: `API_KEYS=dev:<hash> pnpm dev`, at http://localhost:4400 <!-- runtime:node -->
+- Workers: the line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm __worker_dev__`, at http://localhost:8787 <!-- preset:api --> <!-- runtime:workers -->
+- The line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm dev`, at http://localhost:5173 <!-- preset:app -->
+
+```bash
+KEY=dev_…   # the key it printed
+BASE=http://localhost:4400 # runtime:node
+BASE=http://localhost:8787 # preset:api # runtime:cloudflare
+BASE=http://localhost:5173 # preset:app
+curl -H "authorization: Bearer $KEY" "$BASE/api/notes?limit=5"
+# MCP is stateless (no initialize, no session): the protocol version and the method go in headers and in the body's _meta
+curl "$BASE/mcp" -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' -H 'mcp-method: tools/call' -H 'mcp-name: list_notes' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notes","arguments":{"limit":5},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+```
+
+`tools/list` takes the same headers with `mcp-method: tools/list` and no `mcp-name`. `notes` is the sample: use one of
+your own features' paths and tools once it is gone.
 
 ## How changes ship
 
-- `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format, `migrations/` and the build) and `pnpm test`.
+- `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format) and `pnpm test`. <!-- runtime:node-only -->
+- `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format, `migrations/`) and `pnpm test`. <!-- preset:api --> <!-- runtime:workers -->
+- `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format, `migrations/` and the build) and `pnpm test`. <!-- preset:app -->
   `git push` runs it first (`.githooks/pre-push`; `--no-verify` skips it once). When it fails: `pnpm format`,
-  `pnpm migrations`, then the error it names.
+  `pnpm migrations` (Workers), then the error it names.
 - A change goes in through a pull request whose title is a Conventional Commit (`feat: add notes`,
   `fix(notes): keep the order`): CI checks it, and the pull request is squash-merged, so the title is the commit on
   `main`. Merge only when every check is green. `npx @escalay/kit repo apply` sets the repository up that way once
@@ -55,7 +81,7 @@ A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string min
 | `web/`, `index.html`, `vite.config.ts` | the browser app, served under `/app`: `main.tsx` (entry), `router.tsx`, `routes/` (one file per page, TanStack Router; `routeTree.gen.ts` is written by Vite), `styles.css` (Tailwind), tests beside the code as `*.test.tsx`. Checked by `tsconfig.web.json` | <!-- preset:app -->
 | `src/features/index.ts` | `FEATURES`, the one list of features, and the `Feature` shape |
 | `src/features/<name>/` | one feature: `schema.ts` (tables + migration steps) · `repo.ts` (the only queries) · `routes.ts` (OpenAPI contracts) · `handlers.ts` (request → repo → HAL) · `tools.ts` (MCP tools) · `index.ts` (register, tools, sample tool arguments) · `<name>.test.ts` |
-| `src/kit/` | the copied kit, owned by this app; `kit.json` records its version, and each part's `README.md` says what it is for and its rules (start with `core`, `db`, `mcp`, `testing`). A newer kit: `npx @escalay/kit upgrading` prints what changed for these parts since `kit.json`'s version and what to do; then `diff --patch`, then `update` |
+| `src/kit/` | the copied kit, owned by this app; `kit.json` records its version, and each part's `README.md` says what it is for and its rules (start with `core`, `db`, `mcp`, `testing`). A newer kit: `npx @escalay/kit upgrading` prints what changed for these parts since `kit.json`'s version and what to do; then `diff --patch`, then `update`, then the `doctor --keep <files>` it ends with for the edits you keep |
 | `guide/` | the agent guide: templates whose `{{api.endpoints}}` and `{{mcp.tools}}` are generated from the code |
 | `brand/` | the brand: `brand.ts` (name, title, a description of at most 100 characters, the accent) and `icon.svg` (add `icon-dark.svg` for dark backgrounds); MCP, the Server Card, the docs, the A2A card, the guide's `{{brand.*}}` and the favicon all read it |
 | `src/brand.gen.ts` | `brand/` rendered (`npx @escalay/kit brand`): the favicon, PNG icons and OG card as base64, committed so nothing renders at runtime; the SVG alone until the first render. `npx @escalay/kit doctor` says when it is stale |
@@ -63,7 +89,7 @@ A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string min
 | `.agents/skills/` | skills for developing this repository (`.claude/skills` links here). Never served, and marked `metadata.internal: true` so installing from the repository does not offer them |
 | `skills.sh.json` | tells `npx skills add <this repository> -y` that the product's skill is in `guide/skills/` |
 | `test/api.test.ts` | every route linted, every MCP tool run (`toolsRun`), every guide placeholder filled |
-| `container/entrypoint.sh` | the env allowlist: the API sees only the variables it reads | <!-- runtime:node -->
+| `container/entrypoint.sh` | the env allowlist: the API sees only the variables it reads (`test/env.test.ts` keeps it equal to `Env`) | <!-- runtime:node -->
 
 ## Rules
 
@@ -74,7 +100,7 @@ A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string min
 - On Workers, run `pnpm migrations` after adding a step (it refuses to rewrite a shipped one). On a fresh local D1, `wrangler d1 migrations apply DB --local` before the first `wrangler dev`: files replayed over steps `migrate()` already ran must be idempotent. <!-- runtime:workers -->
 - Nothing runs at global scope that Workers refuse there (random values, I/O, timers): do it in `createApp` or a handler. <!-- runtime:workers -->
 - A new secret: `wrangler secret put <NAME>`, and locally `.dev.vars` (copy `.dev.vars.example`). <!-- runtime:workers -->
-- A new env var the API reads goes into `container/entrypoint.sh` too. <!-- runtime:node -->
+- A new env var the API reads goes into `Env` in `src/app.ts` and `container/entrypoint.sh` (`${NAME:+NAME="$NAME"}`): `test/env.test.ts` and `kit doctor` fail until both have it. <!-- runtime:node -->
 - The browser app owns `/app` and nothing else: `wrangler.jsonc` sends every other path to the Worker. It calls the API with same-origin `fetch` and holds no key. Import images and fonts from code (there is no `public/` folder), so they are built under `/app/assets/`. <!-- preset:app -->
 - `src/kit/` and generated files are left out of `pnpm lint` and `pnpm format`: the kit's copy must stay as the kit wrote it for `doctor` and `update`. What `init` and `feature` write is in the kit's long-line style, so run `pnpm format` after either.
 - The starter's text is the product's to replace: the product skill's description, `brand/brand.ts`'s description, and each feature's in `src/features/catalog.ts`. `npx @escalay/kit doctor` fails while any is left.

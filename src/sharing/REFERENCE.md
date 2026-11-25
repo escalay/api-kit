@@ -1,6 +1,7 @@
 # sharing: reference
 
-What the README leaves to this file, which ships beside it: the owner routes, the sign-in ladder and two more flows.
+What the README leaves to this file, which ships beside it: the owner routes, the refusals, the sign-in ladder and two
+more flows.
 
 ## The owner routes
 
@@ -17,6 +18,22 @@ The owner routes (`{path}` default `/api/spaces`), paged lists newest first (`?l
 | `GET {path}/{space}/members/{id}` | `getMember` | none | 200; 404 |
 | `DELETE {path}/{space}/members/{id}` | `removeMember` | `remove_member`, `member remove` | 204, again 204; 404 |
 | `POST {path}/{space}/members/{id}/invite-again` | `inviteAgain` | `invite_again`, `member reinvite` | 201 as `createInvite`; 400; 409 |
+
+## Refusals: 401 or 403
+
+A 401 is a token that can't be used here (sign in again, at the right address); a 403 is a caller the app knows asking
+for what it may not do; a 404 hides a space the caller may not see.
+
+| Caller | Asks for | Answer |
+|---|---|---|
+| a member's token (it holds one space) | another space's MCP or routes, that space existing or not | 401, `ONLY_ITS_SPACE` |
+| a member's token | the owner's `/mcp`, the owner routes, anything outside its space | 401 |
+| a member removed or swept, or of a space `forget` ended | anything | 401, on its next call |
+| a token with `read` only | a write over REST (an owner's `POST {path}/{space}/invites` too) | 403 `forbidden`, `error="insufficient_scope"` in `WWW-Authenticate` |
+| a token with `read` only | a write through a space's MCP tool | 200, the tool's result `isError` with that 403 |
+| a key that may not share the space | `{path}/{space}/…`, the space existing or not | 404, the same for both |
+| an app typing a wrong or spent code | the code page | 400, the page again, naming neither |
+| Approve or Continue as the owner from another site, or with the owner gone | `/sharing/owner`, `/sharing/as-owner` | 403, nothing spent |
 
 ## The ladder
 

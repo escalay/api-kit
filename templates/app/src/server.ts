@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { serve } from '@hono/node-server'
 import { createApp } from './app.js'
 import { openDb } from './kit/index.js'
+// kit:imports
 
 const stateDir = process.env.STATE_DIR ?? '.state'
 mkdirSync(stateDir, { recursive: true })
@@ -14,3 +15,4 @@ const db = await openDb(process.env.DATABASE_FILE ?? `file:${join(stateDir, 'sta
 const app = await createApp({ db, env: process.env, address: 'socket' })
 const port = Number(process.env.PORT ?? 4400)
 serve({ fetch: app.fetch, hostname: '0.0.0.0', port }, (info) => console.log(`__name__ → http://localhost:${info.port} (/docs, /llms.txt, /mcp)`))
+// kit:schedule

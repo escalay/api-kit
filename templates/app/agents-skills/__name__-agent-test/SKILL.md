@@ -19,8 +19,8 @@ REQUIRED:
 
 ## Steps
 
-1. **Start it:** `pnpm dev` with a test key in `.dev.vars` (`API_KEYS="me:<sha256 of the key>"`, from
-   `printf 'my-key' | shasum -a 256`), or point at a real deployment through a wrapper that injects the key
+1. **Start it:** `pnpm dev` with a test key: `npx @escalay/kit key` prints one and its `API_KEYS=` line (`AGENTS.md`
+   › Try it), or point at a real deployment through a wrapper that injects the key
    (`infisical run … -- bash -c 'curl -H "Authorization: Bearer $KEY" "$URL/llms.txt"'`), so the key never shows.
 2. **Set the scene** the job needs (data to find, something already broken) through the API.
 3. **Brief a fresh subagent, one per door:**

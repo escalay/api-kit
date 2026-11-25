@@ -463,7 +463,15 @@
       "meta": {
         "standard": [
           17
-        ]
+        ],
+        "wiring": {
+          "wire": {
+            "over": {"flag": "--items", "what": "the feature whose rows go on boards", "example": "kit feature recipes --fields \"name:string\""},
+            "files": ["src/features/boards/index.ts"],
+            "features": [{"name": "boards"}],
+            "edits": []
+          }
+        }
       }
     },
     {
@@ -580,7 +588,19 @@
       "meta": {
         "standard": [
           7
-        ]
+        ],
+        "wiring": {
+          "wire": {
+            "files": ["src/features/people/index.ts"],
+            "features": [{"name": "people", "before": "setup"}],
+            "edits": [
+              {"file": "src/app.ts", "import": "hono", "names": ["type Context"]},
+              {"file": "src/app.ts", "import": "./kit/index.js", "names": ["PEOPLE_OPEN_PATHS", "personOf", "roleOf", "sessionOf"]},
+              {"file": "src/app.ts", "statement": "const owner =", "was": "const owner = access ? accessOwner(access) : async () => null", "to": ["  const owner = async (c: Context) => {", "    const person = await personOf(c, db)", "    return person?.role === 'owner' ? person.email : access ? accessOwner(access)(c) : null", "  }"]},
+              {"file": "src/app.ts", "statement": "auth:", "object": "auth:", "entries": [{"key": "access", "was": "access", "value": "access && { ...access, roleOf: roleOf(db) }"}, {"key": "open", "append": ["...PEOPLE_OPEN_PATHS"]}, {"key": "session", "value": "sessionOf(db)"}]}
+            ]
+          }
+        }
       }
     },
     {
@@ -616,7 +636,20 @@
       "meta": {
         "standard": [
           7
-        ]
+        ],
+        "wiring": {
+          "settings": [
+            { "name": "SETUP_CODE", "what": "the code the first person types to claim the deployment, a secret: `openssl rand -base64 18`" }
+          ],
+          "wire": {
+            "files": ["src/features/setup/index.ts"],
+            "features": [{"name": "setup"}],
+            "edits": [
+              {"file": "src/app.ts", "import": "./kit/index.js", "names": ["SETUP_OPEN_PATHS"]},
+              {"file": "src/app.ts", "statement": "auth:", "object": "auth:", "entries": [{"key": "open", "append": ["...SETUP_OPEN_PATHS"]}]}
+            ]
+          }
+        }
       }
     },
     {
@@ -834,7 +867,33 @@
             { "name": "SHARING_SECRET", "what": "32 random bytes or more, a secret of its own: `openssl rand -base64 32`", "test": "'a sharing secret of thirty-two bytes or more, for tests only'" },
             { "name": "PUBLIC_ORIGIN", "what": "the origin people and agents reach the app at, createOAuth's publicOrigin", "test": "'https://api.test'" }
           ],
-          "cron": { "schedule": "17 * * * *", "calls": "sweep()" }
+          "cron": { "schedule": "17 * * * *", "calls": "sweep()" },
+          "wire": {
+            "over": {"flag": "--spaces", "what": "the feature whose rows are the spaces", "example": "kit feature shelves --singular shelf --fields \"name:string\""},
+            "files": ["src/features/__over_name__/spaces.ts"],
+            "edits": [
+              {"file": "src/features/__over_name__/index.ts", "line": "register: async (app, { db }) => {", "to": ["  register: async (app, { db, parts }) => {"], "if": "routes.remove"},
+              {"file": "src/features/__over_name__/index.ts", "line": "const handle = __over_camel__Handlers(__over_camel__Repo(db))", "to": ["    const repo = __over_camel__Repo(db)", "    // A deleted __over_label__ ends its members", "    const handle = __over_camel__Handlers({ ...repo, remove: async (id) => { await repo.remove(id); if (parts.sharing) await parts.sharing.forget(id) } })"], "if": "routes.remove"},
+              {"file": "src/app.ts", "import": "@hono/zod-openapi", "names": ["z"]},
+              {"file": "src/app.ts", "import": "./features/__over_name__/spaces.js", "names": ["spacesOf"]},
+              {"file": "src/app.ts", "import": "./kit/mcp/index.js", "names": ["mcpTool"]},
+              {"file": "src/app.ts", "import": "./kit/sharing/index.js", "names": ["createSharing", "registerSharing", "SHARING_OPEN_PATHS", "SHARING_TAG", "sharingTools", "type Sharing"]},
+              {"file": "src/app.ts", "statement": "export type Parts =", "was": "export type Parts = Record<string, never>", "to": ["export type Parts = { sharing?: Sharing }"]},
+              {"file": "src/app.ts", "at": "kit:module", "lines": ["// A __over_label__'s own MCP, at the address its invites name", "const SPACE_TOOLS = [mcpTool({ name: 'view___over_snake_singular__', title: 'This __over_label__', description: 'The __over_label__ this address shares.', input: z.object({}), call: (_, at) => ({ path: `/api/__over_name__/${encodeURIComponent(at?.params.space ?? '')}` }), summarize: (row: { __over_first__: unknown }) => String(row.__over_first__) })]"]},
+              {"file": "src/app.ts", "at": "kit:setup", "lines": ["  // Sharing is on once its settings are, so createApp({ db, env: {} }) stays plain", "  const sharing = env.OAUTH_SIGNING_KEY && env.SHARING_SECRET && env.PUBLIC_ORIGIN ? await createSharing({ db, secret: env.SHARING_SECRET, spaces: spacesOf(db), spaceOfPath: (path) => /^\\/api\\/__over_name__\\/([^/]+)/.exec(path)?.[1] ?? null, owner, fixedKeys: [...parseApiKeys(env.API_KEYS).values()] }) : undefined"]},
+              {"file": "src/app.ts", "statement": "const oauth =", "object": "createOAuth(", "entries": [{"spread": "...(sharing && { publicOrigin: env.PUBLIC_ORIGIN, limits: { store: await dbGuardStore(db) }, ...sharing.oauth })"}]},
+              {"file": "src/app.ts", "statement": "tags:", "was": "tags: FEATURES.map((feature) => feature.tag),", "to": ["    tags: [...FEATURES.map((feature) => feature.tag), ...(sharing ? [SHARING_TAG] : [])],"]},
+              {"file": "src/app.ts", "statement": "auth:", "object": "auth:", "entries": [{"key": "open", "append": ["...(sharing ? SHARING_OPEN_PATHS : [])"]}, {"spread": "...(sharing && { relay: ['/mcp', '/a2a', sharing.relay] })"}]},
+              {"file": "src/app.ts", "statement": "guards:", "object": "guards:", "entries": [{"spread": "...(sharing && { skip: sharing.neverKept })"}]},
+              {"file": "src/app.ts", "statement": "const parts: Parts =", "object": "const parts: Parts =", "entries": [{"key": "sharing", "value": "sharing"}]},
+              {"file": "src/app.ts", "statement": "const factory =", "object": "mcpServerFactory(", "entries": [{"key": "tools", "append": ["...(sharing ? sharingTools({ noun: '__over_label__' }) : [])"]}]},
+              {"file": "src/app.ts", "at": "kit:mounts", "lines": ["  if (sharing && oauth) await registerSharing(app, sharing, { oauth })", "  if (sharing) mountMcp(app, { path: sharing.mcpPath, factory: mcpServerFactory({ info: { name: '__name__', version: VERSION }, instructions: 'One __over_label__, shared with you.', tools: SPACE_TOOLS, callApi: inProcess(app) }), allowedHostnames: [env.PUBLIC_HOST ?? 'localhost', 'localhost', '127.0.0.1'] })"]},
+              {"file": "src/worker.ts", "import": "./kit/sharing/index.js", "names": ["sharingOf"]},
+              {"file": "src/worker.ts", "at": "kit:handlers", "lines": ["  scheduled: (_event, env, ctx) => ctx.waitUntil(appOf(env).then(async (app) => { const sharing = sharingOf(app); if (sharing) await sharing.sweep() })),"]},
+              {"file": "src/server.ts", "import": "./kit/sharing/index.js", "names": ["sharingOf"]},
+              {"file": "src/server.ts", "at": "kit:schedule", "lines": ["setInterval(() => void sharingOf(app)?.sweep().catch((error) => console.error('sharing sweep failed', error)), 3_600_000)"]}
+            ]
+          }
         }
       }
     },

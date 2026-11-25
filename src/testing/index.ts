@@ -12,6 +12,7 @@
  *   cliSnapshot     every command as the CLI package carries it (`commands.json`)
  *   approveSignIn   an OAuth approval as a browser makes it (ticket cookie, same-origin), on the kit's consent page or
  *                   an app's own form
+ *   callMcp         one MCP request over HTTP with every header and the `_meta` spec 2026-07-28 asks for
  *
  * @example
  * const doc = await (await app.request('/openapi.json')).json()
@@ -290,6 +291,42 @@ export const connectAgent = async (
   const answer = await app.request('/oauth/token', asForm({ grant_type: 'authorization_code', code, client_id, code_verifier: verifier, redirect_uri: redirect }))
   if (answer.status !== 200) throw new Error(`connectAgent: /oauth/token answered ${answer.status}: ${await answer.text()}`)
   return { page, html: '', tokens: (await answer.json()) as NonNullable<AgentConnection['tokens']> }
+}
+
+/** What `callMcp` returns: the answer's status and text, and on a 200 its JSON-RPC `result` or `error`. */
+export type McpAnswer = { status: number; text: string; result: Record<string, unknown> | null; error: { code: number; message: string } | null }
+
+const MCP_VERSION = '2026-07-28'
+
+/**
+ * One MCP request over HTTP, as an agent sends it on spec 2026-07-28: the version in `mcp-protocol-version` and in the
+ * body's `_meta`, the method in `mcp-method`, a call's tool (or a read's uri) in `mcp-name`, JSON and an event stream
+ * accepted, and `bearer` as the authorization. `path` is `/mcp` or a space's (`/s/soups/mcp`); `headers` go on too.
+ * No `initialize` is needed (the server is stateless), though it answers one.
+ *
+ * @example
+ * const { result } = await callMcp(app, 'tools/call', { bearer: token, path: '/s/soups/mcp', params: { name: 'view_shelf', arguments: {} } })
+ * expect(result?.content).toEqual([{ type: 'text', text: 'Soups' }])
+ * expect((await callMcp(app, 'tools/list', { path: '/s/bakes/mcp', bearer: token })).status).toBe(401)
+ */
+export const callMcp = async (app: RequestableApp, method: string, { path = '/mcp', params = {}, bearer, headers = {} }: { path?: string; params?: Record<string, unknown>; bearer?: string; headers?: Record<string, string> } = {}): Promise<McpAnswer> => {
+  const name = method === 'tools/call' || method === 'prompts/get' ? params.name : method === 'resources/read' ? params.uri : undefined
+  const answer = await app.request(path, {
+    method: 'POST',
+    headers: {
+      ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'mcp-protocol-version': MCP_VERSION,
+      'mcp-method': method,
+      ...(name === undefined ? {} : { 'mcp-name': String(name) }),
+      ...headers,
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: { ...params, _meta: { 'io.modelcontextprotocol/protocolVersion': MCP_VERSION, 'io.modelcontextprotocol/clientCapabilities': {} } } }),
+  })
+  const text = await answer.text()
+  const json = answer.status === 200 && text.startsWith('{') ? (JSON.parse(text) as { result?: Record<string, unknown>; error?: McpAnswer['error'] }) : {}
+  return { status: answer.status, text, result: json.result ?? null, error: json.error ?? null }
 }
 
 export { softAuthenticator } from './authenticator.js'
