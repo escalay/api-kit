@@ -117,7 +117,7 @@ describe('a recipe box shares its shelves', () => {
     expect((await box.app.request('/api/shelves/soups/recipes', { headers: { authorization: `Bearer ${sam}` } })).status).toBe(401)
   })
 
-  it('lets the owner approve an app at a shelf in one click, a grant locked to that shelf and never an owner token', async () => {
+  it('lets the owner approve an app at a shelf with the boxes the page ticks, a grant locked to that shelf and never an owner token', async () => {
     const box = await recipeBox()
     const owner = await ownerAgent(box)
     // At a known return the page's boxes start ticked, so the browser posts them
