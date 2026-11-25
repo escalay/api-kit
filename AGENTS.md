@@ -50,7 +50,7 @@ Every part is a folder under `src/`. A feature with routes and data keeps the on
 ## Commands
 
 `pnpm install` · `pnpm test` (both projects: `node`, and `workers` inside workerd; one alone: `--project <name>`) ·
-`pnpm typecheck` (Node, browser, Workers) · `pnpm test:starter` (needs the network) · `pnpm release:check` (needs the network) · `pnpm exec wrangler dev -c test/workers/wrangler.jsonc` (the probe app,
+`pnpm typecheck` (Node, browser, the browser tests that run the server (`test/tsconfig.ui.json`), Workers) · `pnpm test:starter` (needs the network) · `pnpm release:check` (needs the network) · `pnpm exec wrangler dev -c test/workers/wrangler.jsonc` (the probe app,
 for a look at the kit on Workers by hand)
 
 ## Using it from another repo
