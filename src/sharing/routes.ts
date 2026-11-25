@@ -1,4 +1,4 @@
-/** The owner's sharing routes as OpenAPI contracts: a space's settings, its invites made, listed, read and revoked, and its members listed, read, removed and invited again. */
+/** The owner's sharing routes as OpenAPI contracts: a space's sharing, its invites made, listed, read and revoked, and its members listed, read, removed and invited again. */
 import { createRoute, z } from '@hono/zod-openapi'
 import { HAL_JSON, LinksSchema } from '../core/hal.js'
 import { problemResponses } from '../core/problem.js'
@@ -18,13 +18,10 @@ export const sharingRoutes = ({ path, tag }: { path: string; tag: string }) => {
     .object({
       space: z.string().openapi({ description: 'The space’s name.', example: 'soups' }),
       title: z.string().openapi({ example: 'Soups' }),
-      askToJoin: z.enum(['off', 'on', 'paused']).openapi({ description: 'Whether people may ask to join: `paused` after 10 asks in a row went unanswered, until the switch is set again.' }),
-      askToJoinOffered: z.boolean().openapi({ description: 'Whether this app offers asking to join at all; when false, the switch answers 409.' }),
       openInvites: z.number().int().openapi({ description: 'Invites not yet used, revoked or expired.' }),
       _links: LinksSchema,
     })
-    .openapi('Sharing', { description: 'How a space is shared: asking to join, and how many invites are open.' })
-  const SharingPatchSchema = z.object({ askToJoin: z.boolean().openapi({ description: 'true lets people ask to join (and clears a pause); false refuses everyone waiting.' }) }).openapi('SharingPatch', { description: 'Asking to join, on or off.' })
+    .openapi('Sharing', { description: 'How a space is shared: how many invites are open.' })
   const InviteSchema = z
     .object({
       id: z.string().openapi({ example: 'inv_0mh2k1x9zabcdefghjk' }),
@@ -59,7 +56,7 @@ export const sharingRoutes = ({ path, tag }: { path: string; tag: string }) => {
       label: z.string().openapi({ description: 'Who it is: the invite’s label, or the app’s name when the owner approved it.', example: 'Sam' }),
       appName: z.string().openapi({ description: 'What the app calls itself: its own claim, never checked.' }),
       returnsTo: z.string().openapi({ description: 'Where the app returns: a host, a custom scheme, or `this computer`.' }),
-      via: z.enum(VIAS).openapi({ description: 'How it joined: an `invite`, an ask (`request`), or the `owner`’s approval.' }),
+      via: z.enum(VIAS).openapi({ description: 'How it joined: an `invite`, or the `owner`’s approval.' }),
       scope: z.enum(SCOPES),
       lifetime: z.enum(LIFETIMES),
       state: z.enum(['active', 'signed_out']).openapi({ description: '`signed_out` once its sign-in ended (revoked, expired, unused for 30 days, its app or space gone): invite it again.' }),
@@ -76,15 +73,9 @@ export const sharingRoutes = ({ path, tag }: { path: string; tag: string }) => {
   return {
     get: createRoute({
       method: 'get', path: `${at}/sharing`, operationId: 'getSharing', tags: [tag], summary: 'How a space is shared',
-      description: 'Whether people may ask to join the space, and how many invites are open. Only those who may share see it; to anyone else every space is 404.',
+      description: 'The space’s name and title, and how many invites are open. Only those who may share see it; to anyone else every space is 404.',
       request: { params: z.object({ space }) },
       responses: { 200: ok('The space’s sharing.', SharingSchema), ...problemResponses(401, 404) },
-    }),
-    update: createRoute({
-      method: 'patch', path: `${at}/sharing`, operationId: 'updateSharing', tags: [tag], summary: 'Switch asking to join',
-      description: 'Switches asking to join for the space. On clears a pause; off refuses everyone waiting. 409 when the app does not offer asking.',
-      request: { params: z.object({ space }), body: { required: true, content: { 'application/json': { schema: SharingPatchSchema } } } },
-      responses: { 200: ok('The space’s sharing.', SharingSchema), ...problemResponses(400, 401, 403, 404, 409) },
     }),
     createInvite: createRoute({
       method: 'post', path: `${at}/invites`, operationId: 'createInvite', tags: [tag], summary: 'Invite someone to a space',

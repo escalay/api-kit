@@ -1,5 +1,5 @@
-/** Rows for the sharing part's tests, on node:sqlite and D1: an invite, an ask and a member, at a space, in fixture names. */
-import type { NewInvite, NewMember, NewRequest } from '../src/sharing/index.js'
+/** Rows for the sharing part's tests, on node:sqlite and D1: an invite and a member, at a space, in fixture names. */
+import type { NewInvite, NewMember } from '../src/sharing/index.js'
 
 export const HOUR = 60 * 60 * 1000
 export const DAY = 24 * HOUR
@@ -19,20 +19,6 @@ export const inviteRow = (spaceId: string, now: Date, unique: string, change: Pa
   replacesMemberId: null,
   createdAt: now.toISOString(),
   redeemBy: at(now, DAY).toISOString(),
-  ...change,
-})
-
-/** A waiting ask from Ada at a space, its ticket held for a day. */
-export const requestRow = (spaceId: string, now: Date, unique: string, change: Partial<NewRequest> = {}): NewRequest => ({
-  spaceId,
-  ticketHash: `ticket-${unique}`,
-  addressKey: `address-${unique}`,
-  name: 'Ada',
-  shownCode: '042917',
-  appName: 'Sample',
-  returnsTo: 'client-a.example.test',
-  createdAt: now.toISOString(),
-  expiresAt: at(now, DAY).toISOString(),
   ...change,
 })
 

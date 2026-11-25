@@ -76,7 +76,6 @@ accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(calle
 | `resourcePath` | string | `'/s/{space}/mcp'` | the space's MCP address: one whole `{space}` segment with a segment after it; `relay` and `mcpPath` come from it |
 | `spaceName` | RegExp | `/^[a-z0-9][a-z0-9-]{0,62}$/` | what a space's name looks like, checked before any lookup |
 | `path` | string | `'/api/spaces'` | where the owner routes live: `{path}/{space}/…` |
-| `askToJoin` | boolean | `false` | whether asking to join exists at all; each space still switches it on |
 | `knownReturns` | `{ name, callback }[]` | `[]` | the apps it expects, by exact callback (https, or a custom scheme it trusts): named, not warned of. A loopback http redirect is always known |
 | `limits` | `{ store?, address? }` | `{ store: await dbGuardStore(db) }` | where typed codes are counted, and how the address is read; always on (`false` throws) |
 | `signInPath` | string | none | where the owner signs in, linked from "Sign in first" |
@@ -91,17 +90,16 @@ accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(calle
 | `signin.ts`, `owner.ts` | `approve`, `signInStepOf` (the ladder), `POST /sharing/join`; the owner's `POST /sharing/as-owner` and `/sharing/owner` |
 | `pages.ts`, `limits.ts`, `sweep.ts` | the pages; the code's limits; `sweep`, `forget` |
 | `routes.ts`, `handlers.ts`, `tools.ts` | `sharingRoutes` (below), `PLAIN_TEXT` (the label rule); `sharerOf` (`Sharer`); `sharingTools` |
-| `schema.ts` | the tables `sharingSpaces`, `sharingInvites`, `sharingRequests`, `sharingMembers`, and `SHARING_MIGRATIONS` (step 1: four tables, ten indexes); each column's meaning in its JSDoc |
+| `schema.ts` | the tables `sharingInvites`, `sharingMembers`, and `SHARING_MIGRATIONS` (step 1: two tables, seven indexes); each column's meaning in its JSDoc |
 | `repo.ts` | `sharingRepo(db)`: every statement over the tables, nothing about HTTP |
-| `states.ts` | `inviteStateOf`, `requestStateOf`, `memberStateOf`, `memberListingOf`, `askingStateOf`; `redeemByOf`, `memberExpiresAtOf`, `REDEEM_WITHIN` (a day), `UNSEEN_FOR` (30 days), `UNANSWERED_PAUSE` (10), `MAX_OPEN_INVITES` (100) |
-| `secrets.ts` | `sharingKeys`, `newLinkToken` (192 bits), `newInviteCode` (`BDKM-QXTW`, from `CODE_ALPHABET`), `normalisedCode`, `newShownCode` (6 digits); what the tables keep instead: `linkHashOf`, `codeHashOf`, `addressKeyOf` (HMACs), `ticketHashOf` (SHA-256) |
+| `states.ts` | `inviteStateOf`, `memberStateOf`, `memberListingOf`; `redeemByOf`, `memberExpiresAtOf`, `REDEEM_WITHIN` (a day), `UNSEEN_FOR` (30 days), `MAX_OPEN_INVITES` (100) |
+| `secrets.ts` | `sharingKeys`, `newLinkToken` (192 bits), `newInviteCode` (`BDKM-QXTW`, from `CODE_ALPHABET`), `normalisedCode`; what the tables keep instead: `linkHashOf`, `codeHashOf`; what the limits count by: `addressKeyOf` (an HMAC), `ticketHashOf` (SHA-256) |
 
 The owner routes (`{path}` default `/api/spaces`), paged lists newest first (`?limit&cursor`), and their tools:
 
 | Route | operationId | Tool, command | Answers |
 |---|---|---|---|
 | `GET {path}/{space}/sharing` | `getSharing` | `get_sharing`, `sharing view` | 200; 404 |
-| `PATCH {path}/{space}/sharing` `{ askToJoin }` | `updateSharing` | `set_ask_to_join`, `sharing edit` | 200 (off refuses everyone waiting); 409 |
 | `POST {path}/{space}/invites` `{ label, scope = 'read', lifetime = '30d' }` | `createInvite` | `create_invite`, `invite create` | 201 `link`, `code`, `message`, shown once; 400; 409 |
 | `GET {path}/{space}/invites` | `listInvites` | `list_invites`, `invite list` | 200, never a link or code |
 | `GET {path}/{space}/invites/{id}` | `getInvite` | none | 200, the card its `self` names; 404 |
@@ -242,9 +240,9 @@ stateDiagram-v2
   with the same Idempotency-Key: 409 `shown_once`); `neverKept` (`/sharing/*`) keeps the pages' answers out too.
 - **Never through A2A.** `sharingTools` go to the owner's MCP only. Each acts only on the user's word, and
   `create_invite` and `invite_again` return the message to send, never send it.
-- **The claim is the insert**: `claimInvite` and `claimRequest` are one `insert … select … where` each (unique
-  `invite_id`, `request_id`, `grant_id`), as `addInvite` holds the cap. No transaction.
-- **A revoke is always recorded**, as is `refuseRequest`, whatever member holds it: a revoked invite never reopens.
+- **The claim is the insert**: `claimInvite` is one `insert … select … where` (unique `invite_id`, `grant_id`), as
+  `addInvite` holds the cap. No transaction.
+- **A revoke is always recorded**, whatever member holds it: a revoked invite never reopens.
 - **No secret at rest**: links, codes and addresses as HMACs, tickets as SHA-256. The migration's SQL holds no comment
   or quote.
 - Standard: `docs/STANDARD.md` §7, §23
@@ -271,7 +269,6 @@ stateDiagram-v2
 | 404 "No member …" | removed, replaced, another space's, or made up |
 | 400 on `createInvite`, `inviteAgain` | a label empty, over 80 or not plain text (`PLAIN_TEXT`); an agent giving `until_revoked` |
 | 409 on `createInvite`, `inviteAgain` | 100 open at the space, or `shown_once` |
-| 409 on `updateSharing` | the app's `askToJoin` option is off |
 | 409 on `revokeInvite` | the invite was used already: revoked all the same, its member keeps access |
 | 400 `invalid_grant` "withdrawn" | `onGrant` said no: a space grant not from the part's pages, an invite not open at its space, more than it gives, a sharing approval at the root, or before `bind` |
 | 401 "works only at its own space" | a live space token anywhere but its space's name now, or a space `byId` misses |

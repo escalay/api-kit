@@ -16,7 +16,7 @@ import type { InviteWithMember, MemberRow, NewInvite, SharingRepo } from './repo
 import type { SharingRoutes } from './routes.js'
 import type { Lifetime, Scope } from './schema.js'
 import { codeHashOf, linkHashOf, newInviteCode, newLinkToken } from './secrets.js'
-import { askingStateOf, inviteStateOf, MAX_OPEN_INVITES, memberListingOf, memberStateOf, redeemByOf } from './states.js'
+import { inviteStateOf, MAX_OPEN_INVITES, memberListingOf, memberStateOf, redeemByOf } from './states.js'
 
 const NO_STORE = { 'cache-control': 'no-store' }
 /** Fresh links and codes tried when the code made is taken. */
@@ -149,8 +149,6 @@ export const sharingHandlers = (config: SharingConfig, bound: Bound, repo: Shari
   const summaryOf = async (c: Context, space: Space) => ({
     space: space.name,
     title: space.title,
-    askToJoin: askingStateOf(await repo.spaceAt(space.id)),
-    askToJoinOffered: config.askToJoin,
     openInvites: await repo.countOpenInvites(space.id, new Date()),
     _links: linksOf(originOf(c), { self: `${spacePath(space)}/sharing`, invites: { path: invitesPath(space), title: 'POST { label } to invite someone' } }),
   })
@@ -183,16 +181,6 @@ export const sharingHandlers = (config: SharingConfig, bound: Bound, repo: Shari
 
   const get: RouteHandler<SharingRoutes['get']> = async (c) => {
     const { space } = await sharingAt(c, c.req.valid('param').space)
-    return c.json(await summaryOf(c, space), 200, NO_STORE)
-  }
-
-  const update: RouteHandler<SharingRoutes['update']> = async (c) => {
-    const { askToJoin } = c.req.valid('json')
-    const { sharer, space } = await sharingAt(c, c.req.valid('param').space)
-    if (!config.askToJoin) throw new ProblemError('conflict', { detail: 'This app does not offer asking to join (its sharing option askToJoin is off): invite people instead.' })
-    const now = new Date()
-    await repo.setAskToJoin(space.id, askToJoin, now)
-    if (!askToJoin) await repo.refuseWaitingAt(space.id, sharer.by, now)
     return c.json(await summaryOf(c, space), 200, NO_STORE)
   }
 
@@ -283,5 +271,5 @@ export const sharingHandlers = (config: SharingConfig, bound: Bound, repo: Shari
     return answerNewInvite(c, sharer, space, { label: member.label, scope: member.scope, lifetime, replacesMemberId: member.id })
   }
 
-  return { get, update, createInvite, listInvites, getInvite, revokeInvite, listMembers, getMember, removeMember, inviteAgain }
+  return { get, createInvite, listInvites, getInvite, revokeInvite, listMembers, getMember, removeMember, inviteAgain }
 }

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { migrate, testDb } from '../../src/index.js'
 import { codeHashOf, MAX_OPEN_INVITES, newInviteCode, sharingKeys, sharingRepo, SHARING_MIGRATIONS } from '../../src/sharing/index.js'
 import { sharingGrantsContract } from '../sharing-grants-contract.js'
-import { at, DAY, inviteRow, memberRow, requestRow } from '../sharing-rows.js'
+import { inviteRow, memberRow } from '../sharing-rows.js'
 
 const NOW = new Date('2026-03-12T09:00:00.000Z')
 
@@ -15,11 +15,11 @@ const sharingDb = async () => {
 }
 
 describe('the sharing tables on D1', () => {
-  it('migrate into exactly the four tables and ten indexes the step names', async () => {
+  it('migrate into exactly the two tables and seven indexes the step names', async () => {
     const db = await sharingDb()
     const rows = await db.all<{ type: string; name: string }>(sql`select type, name from sqlite_master where name like 'sharing%' order by name`)
-    expect(rows.filter((row) => row.type === 'table').map((row) => row.name)).toEqual(['sharing_invites', 'sharing_members', 'sharing_requests', 'sharing_spaces'])
-    expect(rows.filter((row) => row.type === 'index')).toHaveLength(10)
+    expect(rows.filter((row) => row.type === 'table').map((row) => row.name)).toEqual(['sharing_invites', 'sharing_members'])
+    expect(rows.filter((row) => row.type === 'index')).toHaveLength(7)
   })
 
   it('make one member when two exchanges claim one invite at once', async () => {
@@ -29,15 +29,6 @@ describe('the sharing tables on D1', () => {
     expect(claims.filter(Boolean)).toHaveLength(1)
     expect((await repo.inviteAt('sp_soups', inviteId))?.memberId).toBe(claims.find(Boolean))
     expect(await repo.claimInvite(inviteId, memberRow('sp_bakes', NOW, 'd1-grant-c'), NOW)).toBeNull()
-  })
-
-  it('make one member when two exchanges claim one approved ask at once', async () => {
-    const repo = sharingRepo(await sharingDb())
-    const requestId = (await repo.addRequest(requestRow('sp_soups', NOW, 'd1-ask')))!
-    await repo.approveRequest('sp_soups', requestId, { scope: 'read', lifetime: '30d', decidedBy: 'owner@example.test' }, NOW)
-    const claims = await Promise.all([repo.claimRequest(requestId, memberRow('sp_soups', NOW, 'd1-grant-d'), NOW), repo.claimRequest(requestId, memberRow('sp_soups', NOW, 'd1-grant-e'), NOW)])
-    expect(claims.filter(Boolean)).toHaveLength(1)
-    expect(await repo.claimRequest(requestId, memberRow('sp_soups', NOW, 'd1-grant-f'), at(NOW, DAY))).toBeNull()
   })
 
   it('add no invite past 100 open at a space when many are made at once', async () => {

@@ -6,7 +6,7 @@ import { inProcess, mcpServerFactory, mountMcp } from '../src/mcp/index.js'
 import { createSharing, newInviteCode, registerSharing, sharerOf, sharingRepo, sharingTools, SHARING_TAG, type SharingOptions } from '../src/sharing/index.js'
 import { cliGaps, lintOpenApi, toolRoutes, toolsRun } from '../src/testing/index.js'
 import { approvedCode, signedIn } from './oauth-store-contract.js'
-import { inviteRow, memberRow, requestRow } from './sharing-rows.js'
+import { inviteRow, memberRow } from './sharing-rows.js'
 
 // The real code maker, unless a test asks for the same code twice (a collision)
 vi.mock('../src/sharing/secrets.js', async (importOriginal) => {
@@ -41,7 +41,7 @@ const sharingApi = async ({ guards = 'memory', options = {}, publicOrigin = ORIG
     // Every token reaches the API here, so the owner routes' own rule is what refuses a space token
     accepts: async () => true,
   })
-  const sharing = await createSharing({ db, secret: SECRET, spaces, owner, fixedKeys: ['owner'], askToJoin: true, ...options })
+  const sharing = await createSharing({ db, secret: SECRET, spaces, owner, fixedKeys: ['owner'], ...options })
   const app = createAgentApi({
     title: 'Sample', version: '1.0.0', description: 'A recipe box.', tags: [SHARING_TAG],
     auth: { realm: 'sample', keys: parseApiKeys(`owner:${hashApiKey(KEY)},spare:${hashApiKey(SPARE_KEY)}`), access: { team: 'sample', audience: 'sample', verify: async (token) => PEOPLE[token] ?? null }, relay: ['/mcp', '/a2a', sharing.relay] },
@@ -243,7 +243,6 @@ describe('invites', () => {
 describe('the same 404', () => {
   const routes = (space: string) => [
     ['GET', `/api/spaces/${space}/sharing`, undefined],
-    ['PATCH', `/api/spaces/${space}/sharing`, { askToJoin: true }],
     ['POST', `/api/spaces/${space}/invites`, { label: 'Sam' }],
     ['GET', `/api/spaces/${space}/invites`, undefined],
     ['GET', `/api/spaces/${space}/invites/inv_x`, undefined],
@@ -375,33 +374,15 @@ describe('an invite made with an Idempotency-Key (probe T5)', () => {
   })
 })
 
-describe("the space's sharing settings", () => {
-  it('show asking off, switch it on, and switching it off refuses who is waiting', async () => {
-    const { byKey, byOwner, db } = await sharingApi()
+describe("the space's sharing", () => {
+  it('shows its name, title and open invites, each space its own', async () => {
+    const { byKey, byOwner } = await sharingApi()
     const settings = await byKey('/api/spaces/soups/sharing')
     expect(settings.status).toBe(200)
-    expect(await settings.json()).toMatchObject({ space: 'soups', title: 'Soups', askToJoin: 'off', askToJoinOffered: true, openInvites: 0 })
+    expect(await settings.json()).toMatchObject({ space: 'soups', title: 'Soups', openInvites: 0 })
     await makeInvite(byKey)
-
-    const on = await byOwner('/api/spaces/soups/sharing', { method: 'PATCH', body: { askToJoin: true } })
-    expect(on.status).toBe(200)
-    expect(await on.json()).toMatchObject({ askToJoin: 'on', openInvites: 1 })
-    // Bakes keeps its own setting
-    expect(await (await byKey('/api/spaces/bakes/sharing')).json()).toMatchObject({ askToJoin: 'off' })
-
-    const repo = sharingRepo(db)
-    const waiting = await repo.addRequest(requestRow('sp_soups', new Date(), 'ada'))
-    const off = await byKey('/api/spaces/soups/sharing', { method: 'PATCH', body: { askToJoin: false } })
-    expect(await off.json()).toMatchObject({ askToJoin: 'off' })
-    expect(await repo.requestAt('sp_soups', waiting!)).toMatchObject({ state: 'refused', decidedBy: 'owner' })
-  })
-
-  it('answer 409 to the switch when the app does not offer asking', async () => {
-    const { byKey } = await sharingApi({ options: { askToJoin: false } })
-    expect(await (await byKey('/api/spaces/soups/sharing')).json()).toMatchObject({ askToJoin: 'off', askToJoinOffered: false })
-    const refused = await byKey('/api/spaces/soups/sharing', { method: 'PATCH', body: { askToJoin: true } })
-    expect(refused.status).toBe(409)
-    expect(((await refused.json()) as { detail: string }).detail).toMatch(/askToJoin/)
+    expect(await (await byOwner('/api/spaces/soups/sharing')).json()).toMatchObject({ openInvites: 1 })
+    expect(await (await byKey('/api/spaces/bakes/sharing')).json()).toMatchObject({ space: 'bakes', openInvites: 0 })
   })
 })
 
@@ -421,7 +402,6 @@ describe('the owner routes and tools', () => {
     const member = (await sharingRepo(db).addOwnerMember(memberRow('sp_soups', new Date(), 'grant-tools')))!
     const args = {
       get_sharing: { space: 'soups' },
-      set_ask_to_join: { space: 'soups', askToJoin: true },
       create_invite: { space: 'soups', label: 'Sam', scope: 'write', lifetime: '7d' },
       list_invites: { space: 'soups', limit: 5 },
       revoke_invite: { space: 'soups', id: open.id },

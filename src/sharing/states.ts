@@ -1,14 +1,14 @@
 /**
- * The named states of an invite, an ask, a member and a space's asking: pure functions of a row and the time, one rule
- * each. The part names a state only through these; the repo's once-only statements check the same rules in SQL (an
- * open invite, an unused ask, a listed member).
+ * The named states of an invite and a member: pure functions of a row and the time, one rule each. The part names a
+ * state only through these; the repo's once-only statements check the same rules in SQL (an open invite, a listed
+ * member).
  *
  * @example
  * inviteStateOf(invite, member, new Date())   // 'open' | 'redeemed' | 'revoked' | 'expired'
  * memberStateOf(member, new Date())            // { state: 'active' } or { state: 'ended', reason: 'lapsed' }
  */
 import type { EndedReason, Lifetime } from './schema.js'
-import type { InviteRow, MemberRow, RequestRow, SpaceRow } from './repo.js'
+import type { InviteRow, MemberRow } from './repo.js'
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
@@ -17,8 +17,6 @@ const DAY = 24 * HOUR
 export const REDEEM_WITHIN = DAY
 /** A member whose sign-in went unused this long is ended as `lapsed`, as the kit's refresh token lapses. */
 export const UNSEEN_FOR = 30 * DAY
-/** Asks in a row that lapse or are refused unanswered before asking pauses. */
-export const UNANSWERED_PAUSE = 10
 /** Open invites a space may hold at once. */
 export const MAX_OPEN_INVITES = 100
 
@@ -34,16 +32,6 @@ export const inviteStateOf = (invite: Pick<InviteRow, 'revokedAt' | 'redeemBy'>,
   if (invite.revokedAt) return 'revoked'
   if (isPast(invite.redeemBy, now)) return 'expired'
   return 'open'
-}
-
-export type RequestState = 'waiting' | 'approved' | 'refused' | 'joined' | 'lapsed'
-
-/** An ask's state: joined once a member holds it, refused once refused, lapsed once its held ticket ends. */
-export const requestStateOf = (request: Pick<RequestRow, 'state' | 'expiresAt'>, member: Pick<MemberRow, 'id'> | null | undefined, now: Date): RequestState => {
-  if (member) return 'joined'
-  if (request.state === 'refused') return 'refused'
-  if (isPast(request.expiresAt, now)) return 'lapsed'
-  return request.state
 }
 
 export type MemberState = { state: 'active' } | { state: 'ended'; reason: EndedReason }
@@ -64,15 +52,6 @@ export const memberListingOf = (member: Pick<MemberRow, 'endedAt' | 'endedReason
   if (current.state === 'active') return 'active'
   if (current.reason === 'removed' || current.reason === 'replaced') return 'hidden'
   return 'signed_out'
-}
-
-export type AskingState = 'off' | 'on' | 'paused'
-
-/** Whether a space takes asks to join: off without its row or its switch, paused after unanswered asks. */
-export const askingStateOf = (space: Pick<SpaceRow, 'askToJoin' | 'askPausedAt'> | null | undefined): AskingState => {
-  if (!space?.askToJoin) return 'off'
-  if (space.askPausedAt) return 'paused'
-  return 'on'
 }
 
 /** When an invite made at `createdAt` stops being redeemable. */

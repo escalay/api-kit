@@ -56,7 +56,7 @@ export const sweepFor = ({ repo, binding }: Aging) => async () => {
 
 /**
  * `forget`: a space the app deleted. Its invites are revoked first, so no claim lands after its members end; then its
- * waiting asks refused, its members ended (`space_gone`) and their grants revoked, its settings dropped.
+ * members are ended (`space_gone`) and their grants revoked.
  *
  * @example
  * const forget = forgetFor({ repo, binding })   // what sharing.forget is
@@ -65,7 +65,5 @@ export const forgetFor = ({ repo, binding }: Aging) => async (spaceId: string) =
   const bound = boundFor(binding, 'forget')
   const now = new Date()
   await repo.revokeInvitesOf(spaceId, now)
-  await repo.refuseWaitingAt(spaceId, 'space deleted', now)
   await revokeAll(bound, await repo.endMembersOf(spaceId, now))
-  await repo.forgetSpace(spaceId)
 }

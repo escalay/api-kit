@@ -1,5 +1,5 @@
 /**
- * Sharing: invites to a space, asks to join and the owner's approval, on the oauth part's hooks (`approve`,
+ * Sharing: invites to a space and the owner's approval, on the oauth part's hooks (`approve`,
  * `complete`, `onGrant`, `onRevoke`, `accepts`). A **space** is the part of an app that is shared (a shelf, a board, a
  * project); a **member** is one grant into one space. The part holds its tables (`SHARING_MIGRATIONS`), the only
  * queries (`sharingRepo`), the named states of its rows (`states.ts`), its secrets (`secrets.ts`), the oauth hooks that
@@ -7,7 +7,6 @@
  * invite's code is typed or the owner approves (`signin.ts`, `owner.ts`, `pages.ts`, `limits.ts`), aging and a deleted
  * space (`sweep`, `forget`: `sweep.ts`), and the owner's routes and tools:
  *   GET    {path}/{space}/sharing                       how the space is shared
- *   PATCH  {path}/{space}/sharing                       switch Ask to join
  *   POST   {path}/{space}/invites                       a new invite → 201, its link and code shown this once
  *   GET    {path}/{space}/invites                       the space's invites, newest first, a page at a time
  *   GET    {path}/{space}/invites/{id}                  one invite and its state, never its link or code
@@ -46,11 +45,11 @@ import { forgetFor, sweepFor } from './sweep.js'
 
 export { appNameOf, boundOf, isRootAudience, ONLY_ITS_SPACE, spaceNameIn, type Binding, type Bound, type BoundOAuth, type MemberView } from './grants.js'
 export { sharerOf, type Sharer, type SharerFacts } from './handlers.js'
-export { sharingRepo, type InviteRow, type InviteWithMember, type MemberRow, type NewInvite, type NewMember, type NewRequest, type PageAt, type RequestRow, type RequestWithMember, type SharingRepo, type SpaceRow } from './repo.js'
+export { sharingRepo, type InviteRow, type InviteWithMember, type MemberRow, type NewInvite, type NewMember, type PageAt, type SharingRepo } from './repo.js'
 export { PLAIN_TEXT, sharingRoutes, type SharingRoutes } from './routes.js'
-export { sharingInvites, sharingMembers, sharingRequests, sharingSpaces, SHARING_MIGRATIONS, type EndedReason, type Lifetime, type Scope } from './schema.js'
-export { addressKeyOf, CODE_ALPHABET, codeHashOf, linkHashOf, newInviteCode, newLinkToken, newShownCode, normalisedCode, sharingKeys, ticketHashOf, type SharingKeys } from './secrets.js'
-export { askingStateOf, inviteStateOf, MAX_OPEN_INVITES, memberExpiresAtOf, memberListingOf, memberStateOf, redeemByOf, requestStateOf, REDEEM_WITHIN, UNANSWERED_PAUSE, UNSEEN_FOR, type AskingState, type InviteState, type MemberListing, type MemberState, type RequestState } from './states.js'
+export { sharingInvites, sharingMembers, SHARING_MIGRATIONS, type EndedReason, type Lifetime, type Scope } from './schema.js'
+export { addressKeyOf, CODE_ALPHABET, codeHashOf, linkHashOf, newInviteCode, newLinkToken, normalisedCode, sharingKeys, ticketHashOf, type SharingKeys } from './secrets.js'
+export { inviteStateOf, MAX_OPEN_INVITES, memberExpiresAtOf, memberListingOf, memberStateOf, redeemByOf, REDEEM_WITHIN, UNSEEN_FOR, type InviteState, type MemberListing, type MemberState } from './states.js'
 export { signInStepOf, type Asked, type SignInFacts, type SignInOAuth, type SignInStep } from './signin.js'
 export { sharingTools } from './tools.js'
 
@@ -82,8 +81,6 @@ export type SharingOptions = {
   spaceName?: RegExp
   /** Where the owner routes live: `{path}/{space}/…`. Default '/api/spaces'. */
   path?: string
-  /** Whether asking to join exists at all; each space still switches it on. Default false. */
-  askToJoin?: boolean
   /**
    * The apps the app expects, by their exact callbacks (https, or a custom scheme it trusts): the pages name them
    * instead of warning. A loopback http redirect is always known (an app on this computer). Default none.
@@ -132,7 +129,7 @@ export type Sharing = {
    * ago: call it from the app's scheduled handler (hourly is enough). Safe from two instances at once.
    */
   sweep: () => Promise<{ ended: number; deleted: number }>
-  /** A space the app deleted: its invites revoked, its members ended and their grants revoked, its settings dropped. */
+  /** A space the app deleted: its invites revoked, its members ended and their grants revoked. */
   forget: (spaceId: string) => Promise<void>
 }
 
@@ -153,7 +150,7 @@ const spaceAddressOf = (resourcePath: string) => {
  * Give its `relay` to `auth.relay`, its `neverKept` to `guards.skip`, and it to `registerSharing`.
  *
  * @example
- * const sharing = await createSharing({ db, secret: env.SHARING_SECRET, spaces: { byName: (name) => shelves.byName(name), byId: (id) => shelves.byId(id) }, owner, askToJoin: true })
+ * const sharing = await createSharing({ db, secret: env.SHARING_SECRET, spaces: { byName: (name) => shelves.byName(name), byId: (id) => shelves.byId(id) }, owner })
  */
 export const createSharing = async (options: SharingOptions): Promise<Sharing> => {
   const { secret, resourcePath = '/s/{space}/mcp', limits, ...rest } = options
@@ -168,7 +165,6 @@ export const createSharing = async (options: SharingOptions): Promise<Sharing> =
     fixedKeys: options.fixedKeys ?? [],
     spaceName: options.spaceName ?? /^[a-z0-9][a-z0-9-]{0,62}$/,
     path: options.path ?? '/api/spaces',
-    askToJoin: options.askToJoin ?? false,
     tag: options.tag ?? SHARING_TAG.name,
     spaceOfPath: options.spaceOfPath ?? (() => null),
   }
@@ -216,7 +212,6 @@ export const registerSharing = async (app: OpenAPIHono, sharing: Sharing, { oaut
   const routes = sharingRoutes({ path: config.path, tag: config.tag })
   const handle = sharingHandlers(config, bound, repo)
   app.openapi(routes.get, handle.get)
-  app.openapi(routes.update, handle.update)
   app.openapi(routes.createInvite, handle.createInvite)
   app.openapi(routes.listInvites, handle.listInvites)
   app.openapi(routes.getInvite, handle.getInvite)

@@ -1,7 +1,7 @@
 /**
- * The part's secrets: an invite's link token and typed code, made here and kept only as HMACs; the asker's shown code;
- * and four keys derived from the app's sharing secret (HKDF-SHA256, one label each), so a key leaked from one use
- * opens no other. Rotating the secret voids open invites and remembered invites; members keep working.
+ * The part's secrets: an invite's link token and typed code, made here and kept only as HMACs; and four keys derived
+ * from the app's sharing secret (HKDF-SHA256, one label each), so a key leaked from one use opens no other. Rotating
+ * the secret voids open invites; members keep working.
  *
  * @example
  * const keys = sharingKeys(env.SHARING_SECRET)
@@ -41,17 +41,14 @@ export const newInviteCode = () => {
 /** A typed code as it is compared: case, dashes and spaces don't matter. */
 export const normalisedCode = (typed: string) => typed.toUpperCase().replace(/[^A-Z]/g, '')
 
-/** The six digits an asker sees and the owner sees beside the ask. */
-export const newShownCode = () => String(randomInt(0, 1_000_000)).padStart(6, '0')
-
 /** What `sharing_invites.link_hash` holds for a token. */
 export const linkHashOf = (keys: SharingKeys, token: string) => mac(keys.link, token)
 
 /** What `sharing_invites.code_hash` holds for a typed code. */
 export const codeHashOf = (keys: SharingKeys, typed: string) => mac(keys.code, normalisedCode(typed))
 
-/** What `sharing_requests.address_key` holds for an address. */
+/** The key a typed code's limits count an address by: an HMAC, so the guard store never holds the address. */
 export const addressKeyOf = (keys: SharingKeys, address: string) => mac(keys.address, address)
 
-/** What `sharing_requests.ticket_hash` holds for the kit's consent ticket. */
+/** The key a typed code's limits count a consent ticket by: its SHA-256. */
 export const ticketHashOf = (ticket: string) => createHash('sha256').update(ticket).digest('hex')

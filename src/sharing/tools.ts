@@ -5,7 +5,7 @@ import { LIFETIMES, SCOPES } from './schema.js'
 
 type InviteCard = { id: string; label: string; scope: string; lifetime: string; state: string; redeemBy: string }
 type MemberCard = { id: string; label: string; appName: string; returnsTo: string; scope: string; lifetime: string; state: string }
-type SharingCard = { space: string; title: string; askToJoin: string; askToJoinOffered: boolean; openInvites: number }
+type SharingCard = { space: string; title: string; openInvites: number }
 type Paged = { _links: { next?: { href: string } | null } }
 type InvitePage = Paged & { _embedded: { invites: InviteCard[] } }
 type MemberPage = Paged & { _embedded: { members: MemberCard[] } }
@@ -29,11 +29,11 @@ const membersText = (page: MemberPage) => {
   return lines.length ? [...lines, ...moreLine(page, 'members', 'list_members')].join('\n') : 'No members yet: no one has joined.'
 }
 const sharingLine = (json: SharingCard) =>
-  `${json.title} (${json.space}): asking to join ${json.askToJoinOffered ? json.askToJoin : 'not offered by this app'}; ${json.openInvites} open invite${json.openInvites === 1 ? '' : 's'}.`
+  `${json.title} (${json.space}): ${json.openInvites} open invite${json.openInvites === 1 ? '' : 's'}.`
 
 /**
- * The MCP tools for the owner's sharing routes: a space's sharing, the Ask to join switch, invites made, listed and
- * revoked, and members listed, removed and invited again. Each acts only on the user's word; `create_invite` and
+ * The MCP tools for the owner's sharing routes: a space's sharing, invites made, listed and revoked, and members
+ * listed, removed and invited again. Each acts only on the user's word; `create_invite` and
  * `invite_again` return the message to send and never send it. Give them to the owner's MCP only, never to
  * `mountA2A`: a delegating agent must not mint invites.
  *
@@ -47,21 +47,11 @@ export const sharingTools = ({ path = '/api/spaces', noun = 'space' }: { path?: 
     mcpTool({
       name: 'get_sharing',
       title: `How a ${noun} is shared`,
-      description: `Whether people may ask to join a ${noun}, and how many invites are open. ${ON_WORD}`,
+      description: `How many invites to a ${noun} are open. ${ON_WORD}`,
       input: z.object({ space }),
       annotations: { readOnlyHint: true, openWorldHint: false },
       cli: { name: 'sharing view', examples: [{ run: 'sharing view soups', about: `How the ${noun} soups is shared` }] },
       call: ({ space }) => ({ path: `${at(space)}/sharing` }),
-      summarize: (json: SharingCard) => sharingLine(json),
-    }),
-    mcpTool({
-      name: 'set_ask_to_join',
-      title: 'Switch asking to join',
-      description: `Lets people ask to join a ${noun} (the owner then approves or refuses each), or stops it, refusing everyone waiting. ${ON_WORD}`,
-      input: z.object({ space, askToJoin: z.boolean().describe('true lets people ask; false refuses everyone waiting.') }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      cli: { name: 'sharing edit', examples: [{ run: 'sharing edit soups --ask-to-join', about: 'Let people ask to join soups' }, { run: 'sharing edit soups --no-ask-to-join', about: 'Stop asking, refusing everyone waiting' }] },
-      call: ({ space, askToJoin }) => ({ method: 'PATCH', path: `${at(space)}/sharing`, body: { askToJoin } }),
       summarize: (json: SharingCard) => sharingLine(json),
     }),
     mcpTool({
