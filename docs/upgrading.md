@@ -333,6 +333,15 @@ Tokens, codes, refresh rows and claims from before grants keep working.
 
 ## mcp
 
+### Unreleased (after 1.32.0)
+
+- New: `guideSkillProblems({ files })`, what the server would warn of reading the guide's skills (`[]` when each
+  loads). A SKILL.md whose frontmatter it can't read, such as a `: ` in an unquoted description, was skipped with a
+  line in the server's log and nothing else. A new app's `test/api.test.ts` checks it; an older app adds
+  `expect(await guideSkillProblems({ files: guideFiles(GUIDE_DIR) })).toEqual([])` there (from
+  `./kit/mcp/index.js`), and quotes its skills' descriptions. `kit doctor` now fails on such a skill, existing apps
+  included, naming the file and the server's reason.
+
 ### 1.31.0
 
 - `mountMcp` takes a path with parameters (`/s/:space/mcp`): each tool's `call` and resource's `read` get them as a

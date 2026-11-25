@@ -715,6 +715,26 @@ const STARTER_TEXT = [
   { files: () => ['src/features/catalog.ts'], text: 'say here what switching it off stops', what: 'a description', instead: 'say what switching the feature off stops' },
 ]
 
+/**
+ * The product's skills (`guide/skills/`, the files the guide module carries) read by the app's own MCP SDK, as its
+ * server reads them: a finding for each skill it would skip, in its words. A note when the SDK isn't installed.
+ */
+const skillFindings = async (root) => {
+  const folder = join(root, 'guide/skills')
+  if (!existsSync(folder)) return { findings: [], notes: [] }
+  let sdk
+  try {
+    sdk = await import(pathToFileURL(createRequire(join(root, 'package.json')).resolve('@modelcontextprotocol/server/ext/skills')).href)
+  } catch {
+    return { findings: [], notes: ["note     could not load the app's @modelcontextprotocol/server (installed?), so guide/skills/ was not read as its MCP server reads it"] }
+  }
+  const files = readdirSync(folder, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile() && /\.(md|txt)$/.test(entry.name))
+  const skills = Object.fromEntries(files.map((entry) => [relative(folder, join(entry.parentPath, entry.name)).split('\\').join('/'), readFileSync(join(entry.parentPath, entry.name), 'utf8')]))
+  const findings = []
+  if (Object.keys(skills).length) await sdk.SkillsExtension.load(sdk.memorySkillFiles(skills), { onWarning: ({ path, message }) => findings.push(`skill    guide/skills/${path === '.' ? '' : path}: ${message}`) })
+  return { findings, notes: [] }
+}
+
 /** One line for each file that still holds the starter's text. */
 const starterFindings = (root) =>
   STARTER_TEXT.flatMap(({ files, text, what, instead }) => files(root).filter((path) => textOf(join(root, path))?.includes(text)).map((path) => `starter  ${path}: ${what} is still the starter’s ("${text}"): ${instead}`))
@@ -1592,18 +1612,19 @@ const commands = {
 
   adopt,
 
-  doctor: () => {
+  doctor: async () => {
     if (flags.has('--adopt') && !existsSync(lockPath)) adopt()
     if (flags.has('--keep')) keepEdits(readLock() ?? fail(`no kit.json in ${dirArg}; add modules first`))
     const lock = readLock()
     const root = lock ? appRootOf() : null
     const brand = root ? brandFindings(root, lock.modules.includes('brand')) : { findings: [], notes: lock?.modules.includes('brand') ? [`note     brand: no package.json above ${dirArg}: \`--app <app>\` names the app whose brand/ to check`] : [] }
-    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...(root ? starterFindings(root) : [])] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
+    const skills = root ? await skillFindings(root) : { findings: [], notes: [] }
+    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...(root ? starterFindings(root) : [])] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
     const texts = lock ? appTexts() : []
     const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
     const kept = lock ? keptEditsOf(lock) : []
     const keptLines = kept.map((file) => `kept     ${file}: an edit kit.json records as kept; \`kit diff --dir ${dirArg} --patch\` shows it`)
-    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...behindNotes, ...keptLines, ...findings]) console.log(line)
+    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...skills.notes, ...behindNotes, ...keptLines, ...findings]) console.log(line)
     const withKept = kept.length ? `, with ${kept.length} kept ${kept.length === 1 ? 'edit' : 'edits'}` : ''
     console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0

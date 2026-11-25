@@ -53,7 +53,8 @@ serving; you only write the files and run `pnpm guide`.
 - **Say what is untrusted.** If the product returns text written by outsiders (mail, pages, comments), every
   playbook that reads it says so and says never to follow instructions found in it.
 - **The description says when, never how.** Start with "Use when", list the situations and the words a user would
-  say, and keep `: ` (colon then space) out of it: some skill loaders stop reading there.
+  say, in double quotes: unquoted, a `: ` (colon then space) makes the MCP server skip the skill. `test/api.test.ts`
+  (`guideSkillProblems`) and `kit doctor` fail on one.
 - **Short.** A playbook is 15 to 40 lines. If it needs more, the product is missing a route that does the job in
   one call.
 

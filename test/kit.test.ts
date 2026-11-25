@@ -10,7 +10,7 @@ import { gunzipSync } from 'node:zlib'
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { createAgentApi, errorHandler, problemResponse, rateLimit, sortQuery, decodeCursor, originOf, fillTemplate, guideFiles, guideModuleSource, HAL_JSON, linksOf, LinksSchema, mintApiKey, pageOf, pageSchema, parseApiKeys, pathWith, problemResponses, ProblemError, serveAiCatalog, serveGuide, snapshotEtag, tarGz, wantsMarkdown } from '../src/index.js'
-import { guideSkills, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp, routeOf } from '../src/mcp/index.js'
+import { guideSkillProblems, guideSkills, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp, routeOf } from '../src/mcp/index.js'
 import { guideGaps, guideRoutes, lintOpenApi, toolRoutes } from '../src/testing/index.js'
 import { migrate, openDb } from '../src/db/index.js'
 import { OAUTH_MIGRATIONS } from '../src/oauth/schema.js'
@@ -906,11 +906,17 @@ describe('the copy-in CLI', () => {
         'starter  src/features/catalog.ts: a description is still the starter’s ("say here what switching it off stops"): say what switching the feature off stops',
       ])
       const productSkill = join(app, 'guide/skills/demo-api/SKILL.md')
-      await writeFile(productSkill, (await readFile(productSkill, 'utf8')).replace(/Replace this line with[^\n]*/, 'For reading lists: making one, adding books.'))
+      await writeFile(productSkill, (await readFile(productSkill, 'utf8')).replace(/Replace this line with[^"\n]*/, 'For reading lists: making one, adding books.'))
       await writeFile(join(app, 'brand/brand.ts'), (await readFile(join(app, 'brand/brand.ts'), 'utf8')).replace('Demo API, an agent-ready API.', 'Reading lists, shared with your agents.'))
       const catalog = join(app, 'src/features/catalog.ts')
       await writeFile(catalog, (await readFile(catalog, 'utf8')).replace('ReadingLists: say here what switching it off stops.', 'Reading lists: off, nobody can make or read one.'))
       expect(starterLines(cli(app, 'doctor').stdout)).toEqual([])
+      // A description the MCP server can't read: its skill would be skipped, so doctor fails, in the server's words
+      const quoted = await readFile(productSkill, 'utf8')
+      await writeFile(productSkill, quoted.replace(/^description: "(.*)"$/m, 'description: $1'))
+      const unreadable = cli(app, 'doctor')
+      expect([unreadable.status, unreadable.stdout.split('\n').filter((line) => line.startsWith('skill    '))]).toEqual([1, ['skill    guide/skills/demo-api/SKILL.md: SKILL.md frontmatter: line 3: a plain value cannot contain ": "; quote the value (skill skipped)', 'skill    guide/skills/: no skills found (a skill is a folder containing SKILL.md)']])
+      await writeFile(productSkill, quoted)
       cli(app, 'guide')
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
       // The product's own skill, the place for developer skills, and the link coding agents find them through
@@ -918,7 +924,7 @@ describe('the copy-in CLI', () => {
       expect(await readlink(join(app, '.claude/skills'))).toBe('../.agents/skills')
       // Installing from the repository must find the product's skill, which is not where the installer looks first
       expect(JSON.parse(await readFile(join(app, 'skills.sh.json'), 'utf8'))).toEqual({ paths: ['./guide/skills'] })
-      expect(await readFile(join(app, 'guide/skills/demo-api/SKILL.md'), 'utf8')).toMatch(/^---\nname: demo-api\ndescription: Use when a task needs Demo API\./)
+      expect(await readFile(join(app, 'guide/skills/demo-api/SKILL.md'), 'utf8')).toMatch(/^---\nname: demo-api\ndescription: "Use when a task needs Demo API\./)
       expect(await readFile(join(app, 'src/guide.gen.ts'), 'utf8')).toContain('"skills/demo-api/references/find-your-way.md"')
       // Two tabs or a retried refresh never sign a person out of the starter
       expect(await readFile(join(app, 'src/app.ts'), 'utf8')).toContain('reuseGraceSeconds: 30')
@@ -976,7 +982,7 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+17 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+18 passed/)
 
       // The client and its command line: `kit sdk` makes both; the CLI compiles on its own and offers the app's tools
       const sdk = cli(parent, 'sdk', '--app', 'demo-api')
@@ -1498,6 +1504,23 @@ describe('a guide\'s skills over MCP', () => {
     expect((await guideSkills({ files: new Map(Object.entries(files)) })).prompts).toHaveLength(1)
     // A guide without a skill folder offers none, and the factory takes that as it is
     expect(await guideSkills({ files: { 'llms.txt': '# Apps' } })).toEqual({ prompts: [], skills: undefined })
+  })
+
+  it('names each skill the server would skip, and why, in the server’s own words', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const files = {
+      'skills/apps/SKILL.md': '---\nname: apps\ndescription: Use when finding apps: by name or by maker.\n---\n\n# Apps\n',
+      'skills/maps/SKILL.md': '---\nname: maps\ndescription: "Use when finding places: by name or by street."\n---\n\n# Maps\n',
+    }
+    expect(await guideSkillProblems({ files })).toEqual(['apps/SKILL.md: SKILL.md frontmatter: line 3: a plain value cannot contain ": "; quote the value (skill skipped)'])
+    // The very skill the server leaves out, and only that one
+    const { skills } = await guideSkills({ files })
+    expect(skills!.entries.map((skill) => skill.frontmatter.name)).toEqual(['maps'])
+    expect(await guideSkillProblems({ files: { 'skills/maps/SKILL.md': files['skills/maps/SKILL.md'] } })).toEqual([])
+    expect(await guideSkillProblems({ files: new Map([['llms.txt', '# Apps']]) })).toEqual([])
+    // Collected, never printed: only guideSkills tells the server log
+    expect(warn.mock.calls.filter(([line]) => String(line).includes('apps/SKILL.md'))).toHaveLength(1)
+    warn.mockRestore()
   })
 
   /** A server with one skill and ten playbooks, called like a plain MCP client: no extension methods needed. */
