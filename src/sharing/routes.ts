@@ -35,12 +35,12 @@ export const sharingRoutes = ({ path, tag }: { path: string; tag: string }) => {
       revokedAt: z.string().nullable(),
       _links: LinksSchema,
     })
-    .openapi('Invite', { description: 'An invite to one space for one person: single use, within a day. Its link and code are never shown again.' })
+    .openapi('Invite', { description: 'An invite to one space for one person: single use, within a day. Its code is never shown again.' })
   const NewInviteSchema = InviteSchema.extend({
-    link: z.string().openapi({ description: 'The invite’s link, shown only in this answer: open it in a browser.', example: 'https://sample.example.test/sharing/join/…' }),
-    code: z.string().openapi({ description: 'The code an app asks for, shown only in this answer.', example: 'BDKM-QXTW' }),
-    message: z.string().openapi({ description: 'The link and code in words, ready for the owner to send. Never sent by the app.' }),
-  }).openapi('NewInvite', { description: 'An invite just made, with its link and code, shown this once.' })
+    address: z.string().openapi({ description: 'The space’s address: the invitee connects their app here, then types the code on the page it opens.', example: 'https://sample.example.test/s/soups/mcp' }),
+    code: z.string().openapi({ description: 'The code the invitee types on the sign-in page, shown only in this answer.', example: 'BDKM-QXTW' }),
+    message: z.string().openapi({ description: 'The address and code in words, ready for the owner to send. Never sent by the app.' }),
+  }).openapi('NewInvite', { description: 'An invite just made, with its code, shown this once.' })
   const InviteInputSchema = z
     .object({
       label: z.string().trim().min(1).max(80).regex(PLAIN_TEXT, 'no control, bidi or zero-width characters').openapi({ description: 'Who it is for, as the owner will recognise them (80 characters at most).', example: 'Sam' }),
@@ -79,25 +79,25 @@ export const sharingRoutes = ({ path, tag }: { path: string; tag: string }) => {
     }),
     createInvite: createRoute({
       method: 'post', path: `${at}/invites`, operationId: 'createInvite', tags: [tag], summary: 'Invite someone to a space',
-      description: 'Makes an invite for one person: a link and a typed code, single use, within a day, shown only in this answer, with a message to send them. An agent may invite for 7 or 30 days only. A retry with the same Idempotency-Key answers 409 `shown_once`, never the link again.',
+      description: 'Makes an invite for one person: a typed code, single use, within a day, shown only in this answer, with the space’s address and a message to send them (connect there, then type the code). An agent may invite for 7 or 30 days only. A retry with the same Idempotency-Key answers 409 `shown_once`, never the code again.',
       request: { params: z.object({ space }), body: { required: true, content: { 'application/json': { schema: InviteInputSchema } } } },
-      responses: { 201: ok('The invite, its link and code shown this once.', NewInviteSchema), ...problemResponses(400, 401, 403, 404, 409) },
+      responses: { 201: ok('The invite, its code shown this once.', NewInviteSchema), ...problemResponses(400, 401, 403, 404, 409) },
     }),
     listInvites: createRoute({
       method: 'get', path: `${at}/invites`, operationId: 'listInvites', tags: [tag], summary: 'A space’s invites',
-      description: 'The space’s invites, newest first, each with its state. Never a link or a code: those were shown once.',
+      description: 'The space’s invites, newest first, each with its state. Never a code: each was shown once.',
       request: { params: z.object({ space }), query: z.object({ limit: limitQuery({ fallback: 50, max: 100 }), cursor: cursorQuery }) },
       responses: { 200: ok('A page of invites.', InvitePageSchema), ...problemResponses(400, 401, 404) },
     }),
     getInvite: createRoute({
       method: 'get', path: `${at}/invites/{id}`, operationId: 'getInvite', tags: [tag], summary: 'One invite',
-      description: 'One of the space’s invites and its state. Never its link or code: those were shown once.',
+      description: 'One of the space’s invites and its state. Never its code: it was shown once.',
       request: { params: z.object({ space, id }) },
       responses: { 200: ok('The invite.', InviteSchema), ...problemResponses(401, 404) },
     }),
     revokeInvite: createRoute({
       method: 'delete', path: `${at}/invites/{id}`, operationId: 'revokeInvite', tags: [tag], summary: 'Revoke an invite',
-      description: 'Revokes an invite no one has used: its link and code stop working at once. Revoking it again is harmless; 409 when it was already used.',
+      description: 'Revokes an invite no one has used: its code stops working at once. Revoking it again is harmless; 409 when it was already used.',
       request: { params: z.object({ space, id }) },
       responses: { 204: { description: 'Revoked.' }, ...problemResponses(401, 403, 404, 409) },
     }),
@@ -123,7 +123,7 @@ export const sharingRoutes = ({ path, tag }: { path: string; tag: string }) => {
       method: 'post', path: `${at}/members/{id}/invite-again`, operationId: 'inviteAgain', tags: [tag], summary: 'Invite a member again',
       description: 'A fresh invite with the member’s label, scope and lifetime, for a lost sign-in: shown once, as createInvite’s. Its earlier invites again are revoked, so only the newest works; once it is used, the old member is ended and its sign-in revoked. An agent may not re-invite a member who had until revoked. A retry with the same Idempotency-Key answers 409 `shown_once`.',
       request: { params: z.object({ space, id: memberId }) },
-      responses: { 201: ok('The invite, its link and code shown this once.', NewInviteSchema), ...problemResponses(400, 401, 403, 404, 409) },
+      responses: { 201: ok('The invite, its code shown this once.', NewInviteSchema), ...problemResponses(400, 401, 403, 404, 409) },
     }),
   }
 }

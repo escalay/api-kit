@@ -71,15 +71,17 @@ const makerOf = (sharer: Sharer) => (sharer.kind === 'agent' ? { madeByClient: s
 /** The time an invite stops working, as people read it. */
 const whenOf = (at: string) => `${at.slice(0, 16).replace('T', ' ')} UTC`
 
-/** The invite in words, ready for the owner to send. */
-const messageOf = (space: Space, link: string, code: string, redeemBy: string) =>
-  `I've invited you to ${space.title}. Open this link in your browser before ${whenOf(redeemBy)} and follow its steps: ${link}\nIf your app asks for a code, type ${code}. The invite works once.`
+/** The invite in words, ready for the owner to send: where to connect, then the code to type. */
+const messageOf = (space: Space, address: string, code: string, redeemBy: string) =>
+  `I've invited you to ${space.title}. Before ${whenOf(redeemBy)}, connect your app to ${address}, then type ${code} on the page it opens. The invite works once.`
 
-/** What an invite is made of besides its link and code. */
+/** What an invite is made of besides its code. */
 type InviteWanted = { label: string; scope: Scope; lifetime: Lifetime; replacesMemberId: string | null }
 
 export const sharingHandlers = (config: SharingConfig, bound: Bound, repo: SharingRepo) => {
   const spacePath = (space: Space) => `${config.path}/${encodeURIComponent(space.name)}`
+  /** The space's address on the pinned origin, where an invitee's app connects. */
+  const addressOf = (space: Space) => bound.root + config.resourcePath.replace('{space}', encodeURIComponent(space.name))
   const invitesPath = (space: Space) => `${spacePath(space)}/invites`
   const invitePath = (space: Space, id: string) => `${invitesPath(space)}/${encodeURIComponent(id)}`
   const noSuchSpace = (name: string) => new ProblemError('not_found', { detail: `No space ${name} here that you may share. Check the name in its address, or ask its owner.` })
@@ -155,28 +157,28 @@ export const sharingHandlers = (config: SharingConfig, bound: Bound, repo: Shari
 
   const spaceIsFull = (space: Space) => new ProblemError('conflict', { detail: `${space.title} has ${MAX_OPEN_INVITES} open invites: revoke some (GET ${invitesPath(space)}) before making more.` })
 
-  /** Adds the invite with a fresh link and code; a 409 when the space is full, and a code already taken gets new ones, up to 3 tries. */
+  /** Adds the invite with a fresh code (and link token, whose page is not built); a 409 when the space is full, and a code already taken gets new ones, up to 3 tries. */
   const addInvite = async (space: Space, invite: Omit<NewInvite, 'linkHash' | 'codeHash'>) => {
     for (let attempt = 0; attempt < CODE_TRIES; attempt++) {
       const token = newLinkToken()
       const code = newInviteCode()
       const id = await repo.addInvite({ ...invite, linkHash: linkHashOf(config.keys, token), codeHash: codeHashOf(config.keys, code) })
-      if (id) return { id, token, code }
+      if (id) return { id, code }
       if ((await repo.countOpenInvites(space.id, new Date(invite.createdAt))) >= MAX_OPEN_INVITES) throw spaceIsFull(space)
     }
     throw new Error(`sharing: ${CODE_TRIES} invite codes in a row were taken; the code maker is broken`)
   }
 
-  /** Makes an invite and answers it once: the link and code are never kept, by the table or by Idempotency-Key. */
+  /** Makes an invite and answers it once: the code is never kept, by the table or by Idempotency-Key. */
   const answerNewInvite = async (c: Context, sharer: Sharer, space: Space, wanted: InviteWanted) => {
     const lifetime = lifetimeFor(sharer, wanted.lifetime)
     const now = new Date()
     const row = { spaceId: space.id, label: wanted.label, invitedBy: sharer.by, ...makerOf(sharer), scope: wanted.scope, lifetime, replacesMemberId: wanted.replacesMemberId, createdAt: now.toISOString(), redeemBy: redeemByOf(now) }
-    const { id, token, code } = await addInvite(space, row)
-    const link = `${bound.root}/sharing/join/${token}`
-    showOnce(c, `This Idempotency-Key already made invite ${id} for ${wanted.label} at ${space.title} (GET ${invitesPath(space)}). Its link and code were shown once, in that answer, and are never shown again. Lost them? Revoke it (DELETE ${invitesPath(space)}/${id}) and make another with a new Idempotency-Key.`)
+    const { id, code } = await addInvite(space, row)
+    const address = addressOf(space)
+    showOnce(c, `This Idempotency-Key already made invite ${id} for ${wanted.label} at ${space.title} (GET ${invitesPath(space)}). Its code was shown once, in that answer, and is never shown again. Lost them? Revoke it (DELETE ${invitesPath(space)}/${id}) and make another with a new Idempotency-Key.`)
     const card = cardOf(originOf(c), space, { ...row, id, revokedAt: null, memberId: null }, now)
-    return c.json({ ...card, link, code, message: messageOf(space, link, code, row.redeemBy) }, 201, { location: invitePath(space, id), ...NO_STORE })
+    return c.json({ ...card, address, code, message: messageOf(space, address, code, row.redeemBy) }, 201, { location: invitePath(space, id), ...NO_STORE })
   }
 
   const get: RouteHandler<SharingRoutes['get']> = async (c) => {

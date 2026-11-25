@@ -96,7 +96,7 @@ With the `sharing` part, also (its tests hold each; the app's tests run them aga
 | Known return | a custom scheme not in `knownReturns` is warned and needs the code; only an http loopback redirect is "on this computer" |
 | Owner’s one click | at an unknown return the owner page starts at read for 30 days; the token's scopes and the member's lifetime are what the page named, never what the client asked |
 | Withdrawn | a code exchanged twice at once makes one member; one the app's own `onGrant` refuses makes none and leaves the invite open |
-| Shown once | `POST …/invites` again with the same Idempotency-Key answers 409 `shown_once`, and nothing the guard store keeps holds the link or code |
+| Shown once | `POST …/invites` again with the same Idempotency-Key answers 409 `shown_once`, and nothing the guard store keeps holds the code |
 | Never through A2A | read the wiring: `sharingTools` are in the owner's MCP only, never passed to `mountA2A` |
 | Agent invites | an agent's invite is for 7 or 30 days (`until_revoked`: 400) and names its maker; once that agent's grant ends its open invites stop working, and people who joined keep access |
 

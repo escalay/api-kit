@@ -5,7 +5,7 @@
  *
  * @example
  * const keys = sharingKeys(env.SHARING_SECRET)
- * const token = newLinkToken()                  // shown once, in `<origin>/sharing/join/<token>`
+ * const token = newLinkToken()                  // kept only as its HMAC: nothing serves an invite's link yet
  * const code = newInviteCode()                  // 'BDKM-QXTW', shown once
  * await repo.addInvite({ …, linkHash: linkHashOf(keys, token), codeHash: codeHashOf(keys, code) })
  */

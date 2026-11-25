@@ -134,7 +134,7 @@ export const sharingPages = (view: PageView) => {
     },
     /** A client that named the owner's whole app: no invite reaches it, and no form. */
     wrongAddress: (c: Context, status: 200 | 400) =>
-      send(c, view, { status, title: 'Use the invite’s address', body: '<h1>Use the address in your invite</h1><p>This app connected to the owner\'s address: connect it to the address in your invite instead. Your invite\'s link shows it.</p>' }),
+      send(c, view, { status, title: 'Use the invite’s address', body: '<h1>Use the address in your invite</h1><p>This app connected to the owner\'s address: connect it to the address in your invite instead.</p>' }),
     /** A ticket this browser can't use: answered already, expired, or opened in another browser. */
     gone: (c: Context, outcome: 'approved' | 'denied' | 'answered' | null) => {
       if (outcome === 'approved' || outcome === 'answered') return send(c, view, { status: 400, title: 'Already joined', body: '<h1>Already joined</h1><p>This sign-in went through already: return to your app. You can close this page.</p>' })

@@ -7,15 +7,15 @@
  * invite's code is typed or the owner approves (`signin.ts`, `owner.ts`, `pages.ts`, `limits.ts`), aging and a deleted
  * space (`sweep`, `forget`: `sweep.ts`), and the owner's routes and tools:
  *   GET    {path}/{space}/sharing                       how the space is shared
- *   POST   {path}/{space}/invites                       a new invite → 201, its link and code shown this once
+ *   POST   {path}/{space}/invites                       a new invite → 201, its code shown this once, with the space's address
  *   GET    {path}/{space}/invites                       the space's invites, newest first, a page at a time
- *   GET    {path}/{space}/invites/{id}                  one invite and its state, never its link or code
+ *   GET    {path}/{space}/invites/{id}                  one invite and its state, never its code
  *   DELETE {path}/{space}/invites/{id}                  revoke an invite no one has used
  *   GET    {path}/{space}/members                       who is signed in, newest first, a page at a time
  *   GET    {path}/{space}/members/{id}                  one member
  *   DELETE {path}/{space}/members/{id}                  remove a member: its sign-in ends at once
  *   POST   {path}/{space}/members/{id}/invite-again     a fresh invite that replaces the member once used
- * The page an invite's link opens and asking to join are not built (its README says what is there).
+ * An invite joins by its code, typed on the sign-in page; a page for an invite's link and asking to join are not built.
  *
  * @example
  * const sharing = await createSharing({ db, secret: env.SHARING_SECRET, spaces, owner, spaceOfPath, fixedKeys: [...parseApiKeys(env.API_KEYS).values()] })

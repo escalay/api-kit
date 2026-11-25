@@ -10,7 +10,7 @@ const KEY = 'owner-key'
 
 type Card = { id: string; label: string; appName: string; state: string; via: string; scope: string; lifetime: string; _links: Record<string, { href: string } | undefined> }
 type Page = { _embedded: { members: Card[] }; _links: { next?: { href: string } | null } }
-type NewInvite = { id: string; label: string; scope: string; lifetime: string; link: string; code: string }
+type NewInvite = { id: string; label: string; scope: string; lifetime: string; address: string; code: string }
 
 const box = async () => {
   const db = await testDb()
@@ -159,7 +159,7 @@ describe('invite again', () => {
     const firstAnswer = await inviteAgain(oldId)
     expect(firstAnswer.status).toBe(201)
     const first = (await firstAnswer.json()) as NewInvite
-    expect(first).toMatchObject({ label: 'Sam', scope: 'write', lifetime: '7d', link: expect.stringContaining('/sharing/join/'), code: expect.any(String) })
+    expect(first).toMatchObject({ label: 'Sam', scope: 'write', lifetime: '7d', address: 'http://localhost/s/soups/mcp', code: expect.any(String) })
     const second = (await (await inviteAgain(oldId)).json()) as NewInvite
     expect([await inviteState(first.id), await inviteState(second.id)]).toEqual(['revoked', 'open'])
     expect((await join(first)).status).toBe(400)
@@ -197,18 +197,18 @@ describe('invite again', () => {
     expect((await join(again)).status).toBe(200)
   })
 
-  it('never answers the link and code twice: a retry with the same Idempotency-Key is a 409 shown_once', async () => {
+  it('never answers the code twice: a retry with the same Idempotency-Key is a 409 shown_once', async () => {
     const { makeInvite, join, app, byKey, memberIdOf } = await box()
     const invitesAt = async () => ((await (await byKey('/api/spaces/soups/invites')).json()) as { _embedded: { invites: unknown[] } })._embedded.invites
     const id = await memberIdOf((await join(await makeInvite())).tokens.access_token)
     const post = () => app.request(`/api/spaces/soups/members/${id}/invite-again`, { method: 'POST', headers: { authorization: `Bearer ${KEY}`, 'idempotency-key': 'again-1' } })
     const first = await post()
     expect([first.status, first.headers.get('shown-once')]).toEqual([201, 'true'])
-    const { code, link } = (await first.json()) as NewInvite
+    const { code, message } = (await first.json()) as NewInvite & { message: string }
     const retried = await post()
     const text = await retried.text()
     expect([retried.status, JSON.parse(text).code]).toEqual([409, 'shown_once'])
-    for (const secret of [code, link]) expect(text).not.toContain(secret)
+    for (const secret of [code, message]) expect(text).not.toContain(secret)
     expect(await invitesAt()).toHaveLength(2)
   })
 

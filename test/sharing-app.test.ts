@@ -57,27 +57,31 @@ const connect = async (box: RecipeBox, { address, redirect, approve }: { address
 
 /** The owner's own agent at `/mcp`, approved on the kit's consent page: a root token. */
 const ownerAgent = async (box: RecipeBox) => (await connect(box, { address: `${ORIGIN}/mcp`, redirect: CLIENT_A, approve: (query) => approveSignIn(box.app, query, { headers: AS_OWNER }) })).tokens!.access_token
-/** An invite made with the owner's agent through `create_invite`: the code its message carries. */
+/** An invite made with the owner's agent through `create_invite`: the message to send, and the address and code it carries. */
 const inviteWithAgent = async (box: RecipeBox, owner: string, shelf: string, label: string) => {
   const message = await toolText(box, '/mcp', owner, 'create_invite', { space: shelf, label })
-  return /[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}/.exec(message)![0]
+  const address = /https?:\/\/\S+\/mcp\b/.exec(message)?.[0] ?? ''
+  return { message, address, code: /[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}/.exec(message)![0] }
 }
-/** An app joining `shelf` with an invite's code typed on the part's page. */
-const joinWithCode = (box: RecipeBox, shelf: string, code: string, redirect = CLIENT_A) =>
-  connect(box, { address: shelfAddress(shelf), redirect, approve: (query) => approveSignIn(box.app, query, { form: { action: '/sharing/join', fields: { code } } }) })
+/** An app joining at `address` with an invite's code typed on the part's page. */
+const joinWithCode = (box: RecipeBox, address: string, code: string, redirect = CLIENT_A) =>
+  connect(box, { address, redirect, approve: (query) => approveSignIn(box.app, query, { form: { action: '/sharing/join', fields: { code } } }) })
 
-/** The box with the owner's agent, and Sam's app joined at Soups with an invite the owner's agent made. */
+/** The box with the owner's agent, and Sam's app joined at Soups with only what the invite's message says. */
 const samAtSoups = async () => {
   const box = await recipeBox()
   const owner = await ownerAgent(box)
-  const code = await inviteWithAgent(box, owner, 'soups', 'Sam')
-  const sam = (await joinWithCode(box, 'soups', code)).tokens!
-  return { box, owner, code, sam: sam.access_token, scope: sam.scope }
+  const { message, address, code } = await inviteWithAgent(box, owner, 'soups', 'Sam')
+  const sam = (await joinWithCode(box, address, code)).tokens!
+  return { box, owner, message, address, code, sam: sam.access_token, scope: sam.scope }
 }
 
 describe('a recipe box shares its shelves', () => {
   it('the owner invites Sam through their own agent, Sam’s app joins with the code, and Sam’s agent reads Soups through its tools', async () => {
-    const { box, owner, sam, scope } = await samAtSoups()
+    const { box, owner, message, address, sam, scope } = await samAtSoups()
+    // The message names the shelf's address and the code, and no page that nothing serves
+    expect(address).toBe(shelfAddress('soups'))
+    expect(message).not.toContain('/sharing/join/')
     // The app asked for read and write; the invite gives read
     expect(scope).toBe('read')
     expect(await toolText(box, '/box/soups/mcp', sam, 'list_recipes')).toBe('soups: Leek soup')
@@ -102,7 +106,7 @@ describe('a recipe box shares its shelves', () => {
 
   it('refuses a spent invite: a second app typing the same code gets the code page again, and nothing', async () => {
     const { box, sam, code } = await samAtSoups()
-    const second = await joinWithCode(box, 'soups', code, SAMPLE_APP)
+    const second = await joinWithCode(box, shelfAddress('soups'), code, SAMPLE_APP)
     expect([second.page.status, second.tokens, second.html]).toEqual([400, null, expect.stringContaining('That code is not one of ours')])
     expect(await toolText(box, '/box/soups/mcp', sam, 'list_recipes')).toBe('soups: Leek soup')
   })
@@ -162,7 +166,7 @@ describe('a recipe box shares its shelves', () => {
     expect(atBakes).toEqual({ status: 401, body: expect.objectContaining({ detail: ONLY_ITS_SPACE }) })
     // A stranger's app with a wrong code: the page names neither
     const stranger = async (shelf: string) => {
-      const { page, html } = await joinWithCode(box, shelf, 'BDKM-QXTW')
+      const { page, html } = await joinWithCode(box, shelfAddress(shelf), 'BDKM-QXTW')
       return [page.status, html.replace(/value="[^"]*"/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')]
     }
     const atSoups = await stranger('soups')

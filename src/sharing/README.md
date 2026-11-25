@@ -1,6 +1,6 @@
 # sharing
 
-Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), and the owner's approval at a space, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite or by the owner's approval. Not built yet: the page an invite's link opens, and asking to join; the typed code is how an invite joins.
+Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), and the owner's approval at a space, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite or by the owner's approval. An invite joins by its code: the person's app connects at the space's address, and they type it on the page that opens. Not built yet: a page for an invite's link, and asking to join.
 
 ## Use it when
 
@@ -100,8 +100,8 @@ The owner routes (`{path}` default `/api/spaces`), paged lists newest first (`?l
 | Route | operationId | Tool, command | Answers |
 |---|---|---|---|
 | `GET {path}/{space}/sharing` | `getSharing` | `get_sharing`, `sharing view` | 200; 404 |
-| `POST {path}/{space}/invites` `{ label, scope = 'read', lifetime = '30d' }` | `createInvite` | `create_invite`, `invite create` | 201 `link`, `code`, `message`, shown once; 400; 409 |
-| `GET {path}/{space}/invites` | `listInvites` | `list_invites`, `invite list` | 200, never a link or code |
+| `POST {path}/{space}/invites` `{ label, scope = 'read', lifetime = '30d' }` | `createInvite` | `create_invite`, `invite create` | 201 `code` shown once, with `address` and `message`; 400; 409 |
+| `GET {path}/{space}/invites` | `listInvites` | `list_invites`, `invite list` | 200, never a code |
 | `GET {path}/{space}/invites/{id}` | `getInvite` | none | 200, the card its `self` names; 404 |
 | `DELETE {path}/{space}/invites/{id}` | `revokeInvite` | `revoke_invite`, `invite revoke` | 204; 409 once used |
 | `GET {path}/{space}/members` | `listMembers` | `list_members`, `member list` | 200, `active` or `signed_out` |
@@ -155,7 +155,7 @@ sequenceDiagram
   participant G as onGrant
   O->>R: Idempotency-Key
   R->>R: its earlier ones revoked, a new one with its label, scope, lifetime
-  R-->>O: 201 link, code, message, shown once
+  R-->>O: 201 code, address, message, shown once
   G->>G: claimInvite, then closeMember replaced (live or signed out), then revokeGrant
 ```
 
@@ -163,7 +163,7 @@ An invite (`inviteStateOf`). Redeemed is not a column: a member row holding its 
 
 ```mermaid
 stateDiagram-v2
-  [*] --> open: made, its link and code shown once
+  [*] --> open: made, its code shown once
   open --> redeemed: claimInvite writes the member row
   open --> revoked: the owner revokes it, or Invite again is used again
   open --> expired: redeem_by passes
@@ -243,7 +243,7 @@ stateDiagram-v2
 - **The claim is the insert**: `claimInvite` is one `insert … select … where` (unique `invite_id`, `grant_id`), as
   `addInvite` holds the cap. No transaction.
 - **A revoke is always recorded**, whatever member holds it: a revoked invite never reopens.
-- **No secret at rest**: links, codes and addresses as HMACs, tickets as SHA-256. The migration's SQL holds no comment
+- **No secret at rest**: codes, link tokens and addresses as HMACs, tickets as SHA-256. The migration's SQL holds no comment
   or quote.
 - Standard: `docs/STANDARD.md` §7, §23
 

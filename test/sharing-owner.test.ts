@@ -55,7 +55,7 @@ const sharingApi = async ({ guards = 'memory', options = {}, publicOrigin = ORIG
 }
 
 type Api = Awaited<ReturnType<typeof sharingApi>>
-type NewInvite = { id: string; label: string; invitedBy: string; scope: string; lifetime: string; state: string; link: string; code: string; message: string; redeemBy: string }
+type NewInvite = { id: string; label: string; invitedBy: string; scope: string; lifetime: string; state: string; address: string; code: string; message: string; redeemBy: string }
 
 const makeInvite = async (call: Api['byKey'], space = 'soups', body: Record<string, unknown> = { label: 'Sam' }, headers: Record<string, string> = {}) => {
   const made = await call(`/api/spaces/${space}/invites`, { method: 'POST', body, headers })
@@ -117,11 +117,13 @@ describe('invites', () => {
     expect([made.status, made.headers.get('cache-control'), made.headers.get('shown-once')]).toEqual([201, 'no-store', 'true'])
     const invite = (await made.json()) as NewInvite
     expect(invite).toMatchObject({ label: 'Sam', invitedBy: 'owner', scope: 'read', lifetime: '30d', state: 'open' })
-    expect(invite.link).toMatch(new RegExp(`^${ORIGIN}/sharing/join/[\\w-]{32}$`))
+    // Where to connect and the code to type: nothing serves an invite's link, so none is given
+    expect(invite.address).toBe(`${ORIGIN}/s/soups/mcp`)
+    expect(invite).not.toHaveProperty('link')
     expect(invite.code).toMatch(/^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/)
-    expect(invite.message).toContain(invite.link)
-    expect(invite.message).toContain(invite.code)
+    expect(invite.message).toContain(`connect your app to ${invite.address}, then type ${invite.code}`)
     expect(invite.message).toContain('Soups')
+    expect(invite.message).not.toContain('/sharing/join/')
 
     // The owner, signed in, makes one too
     const ownerMade = await makeInvite(byOwner, 'soups', { label: 'Ada', scope: 'write', lifetime: 'until_revoked' })
@@ -133,7 +135,7 @@ describe('invites', () => {
     expect(page._embedded.invites.map((one) => [one.id, one.state])).toEqual([[ownerMade.id, 'open'], [invite.id, 'open']])
     // A listed invite never shows its link, its code, or what is kept of them
     const text = JSON.stringify(page)
-    for (const secret of [invite.link, invite.code, ownerMade.code, 'linkHash', 'codeHash', 'madeByGrant']) expect(text).not.toContain(secret)
+    for (const secret of [invite.code, ownerMade.code, 'linkHash', 'codeHash', 'madeByGrant']) expect(text).not.toContain(secret)
 
     expect((await byOwner(`/api/spaces/soups/invites/${invite.id}`, { method: 'DELETE' })).status).toBe(204)
     expect((await byOwner(`/api/spaces/soups/invites/${invite.id}`, { method: 'DELETE' })).status).toBe(204)
@@ -159,7 +161,7 @@ describe('invites', () => {
     const card = (await one.json()) as Record<string, unknown>
     expect(card).toMatchObject({ id: invite.id, label: 'Sam', state: 'open', _links: { self: { href: invite._links.self.href } } })
     const text = JSON.stringify(card)
-    for (const secret of [invite.link, invite.code, 'linkHash', 'codeHash', 'madeByGrant']) expect(text).not.toContain(secret)
+    for (const secret of [invite.code, 'linkHash', 'codeHash', 'madeByGrant']) expect(text).not.toContain(secret)
 
     expect((await byKey(`/api/spaces/soups/invites/${invite.id}`, { method: 'DELETE' })).status).toBe(204)
     expect(((await (await byKey(`/api/spaces/soups/invites/${invite.id}`)).json()) as { state: string }).state).toBe('revoked')
@@ -171,10 +173,11 @@ describe('invites', () => {
     expect(await invitesAt(byKey)).toEqual([])
   })
 
-  it('name publicOrigin in their links, whatever the host header says', async () => {
+  it('name publicOrigin in the address they give, whatever the host header says', async () => {
     const { byKey } = await sharingApi({ publicOrigin: 'https://sample.example.test' })
     const invite = await makeInvite(byKey, 'soups', { label: 'Sam' }, { 'x-forwarded-host': 'evil.example.test', host: 'evil.example.test' })
-    expect(invite.link.startsWith('https://sample.example.test/sharing/join/')).toBe(true)
+    expect(invite.address).toBe('https://sample.example.test/s/soups/mcp')
+    expect(invite.message).not.toContain('evil.example.test')
   })
 
   it('answers 409 once redeemed, and records the revoke all the same: its member keeps access', async () => {
@@ -328,17 +331,16 @@ describe('an invite made with an Idempotency-Key (probe T5)', () => {
     const first = await byKey('/api/spaces/soups/invites', { method: 'POST', body: { label: 'Sam' }, headers: { 'idempotency-key': 'k1' } })
     expect([first.status, first.headers.get('shown-once')]).toEqual([201, 'true'])
     const invite = (await first.json()) as NewInvite
-    const token = invite.link.split('/').at(-1)!
 
     const retried = await byKey('/api/spaces/soups/invites', { method: 'POST', body: { label: 'Sam' }, headers: { 'idempotency-key': 'k1' } })
     expect([retried.status, retried.headers.get('idempotent-replayed')]).toEqual([409, 'true'])
     const text = await retried.text()
-    for (const secret of [token, invite.code]) expect(text).not.toContain(secret)
+    for (const secret of [invite.code, invite.message]) expect(text).not.toContain(secret)
     expect(JSON.parse(text)).toMatchObject({ code: 'shown_once', detail: expect.stringContaining(invite.id) })
     expect(JSON.parse(text).detail).toMatch(/never shown again/)
 
     expect(kept).toEqual([{ version: 2, bodyHash: expect.any(String), shownOnce: expect.stringContaining(invite.id) }])
-    for (const secret of [token, invite.code]) expect(JSON.stringify(kept)).not.toContain(secret)
+    for (const secret of [invite.code, invite.message]) expect(JSON.stringify(kept)).not.toContain(secret)
     if (guards === 'database') {
       const rows = await (db as Db).select().from(kitGuards).where(eq(kitGuards.kind, 'key'))
       expect(rows.map((row) => JSON.parse(row.value))).toEqual(kept)

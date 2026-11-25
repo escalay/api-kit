@@ -745,10 +745,10 @@ an invite's link opens (and the browser remembering it), and asking to join (the
   counts (§9), but a caller can still forward any bare host, which would then name the root: a token for that host
   would read as a root token, everywhere.
 - **Invites are single-use, joined with a typed code.** An invite is for one space and one person, must be used
-  within a day, and gives access for 7 days, 30 days or until revoked. The person's app connects at the space's
-  address (or names none), and the person types the code on the app's own page (`approve`). The invite is spent with the grant's first token (`onGrant`), never at the click,
+  within a day, and gives access for 7 days, 30 days or until revoked. It is answered as the code and the space's
+  address: the person's app connects there (or names none), and the person types the code on the app's own page (`approve`). The invite is spent with the grant's first token (`onGrant`), never at the click,
   so a second use is refused and junk cannot spend it. Typed codes are always limited (per address, per space, and
-  five wrong per sign-in), and links and codes are kept only as HMACs. A revoke is recorded whatever holds the invite
+  five wrong per sign-in), and codes are kept only as HMACs. A revoke is recorded whatever holds the invite
   (a member who joined by it keeps access), so a revoked invite never opens again, even when the grant that held it
   is withdrawn.
 - **Who may invite.** The owner signed in, a key from `API_KEYS` the app names (`fixedKeys`), or an agent with a root token from a known grant,
@@ -785,7 +785,7 @@ an invite's link opens (and the browser remembering it), and asking to join (the
   for a space that exists and one that does not; never a 403 that confirms it. Metadata is 404 only for a path
   `resources` refuses, and a wrong code is "not one of ours" whether or not the space is real. The code page is
   limited like the kit's own open endpoints.
-- **Shown once, and never through A2A.** An invite's link and code are answered once and never kept (`showOnce`: a
+- **Shown once, and never through A2A.** An invite's code is answered once and never kept (`showOnce`: a
   retry with the same Idempotency-Key is a 409 `shown_once`), nor are the sign-in pages' answers. The owner's sharing
   tools go to the owner's MCP only, never to A2A, so a delegating agent cannot mint invites.
 - **Tested as a browser does it.** The owner's approval through `approveSignIn` (`testing`); the app's own page through

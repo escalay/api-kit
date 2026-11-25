@@ -57,7 +57,7 @@ export const sharingTools = ({ path = '/api/spaces', noun = 'space' }: { path?: 
     mcpTool({
       name: 'create_invite',
       title: `Invite someone to a ${noun}`,
-      description: `Makes a single-use invite to one ${noun} for one person, used within a day: a link and a code, shown only now, and a message with both for the user to send. This tool never sends it. ${ON_WORD}`,
+      description: `Makes a single-use invite to one ${noun} for one person, used within a day: a code, shown only now, and a message with the code and the ${noun}’s address for the user to send. This tool never sends it. ${ON_WORD}`,
       input: z.object({
         space,
         label: z.string().describe('Who it is for, as the user will recognise them (`Sam`).'),
@@ -67,12 +67,12 @@ export const sharingTools = ({ path = '/api/spaces', noun = 'space' }: { path?: 
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       cli: { name: 'invite create', examples: [{ run: 'invite create soups --label Sam', about: 'Invite Sam to soups, read only for 30 days' }] },
       call: ({ space, ...body }) => ({ method: 'POST', path: `${at(space)}/invites`, body }),
-      summarize: (json: InviteCard & { message: string }) => `Made invite ${json.id} for ${json.label} (${json.scope}, ${json.lifetime}). Its link and code are shown only now: give the user this message to send.\n\n${json.message}`,
+      summarize: (json: InviteCard & { message: string }) => `Made invite ${json.id} for ${json.label} (${json.scope}, ${json.lifetime}). Its code is shown only now: give the user this message to send.\n\n${json.message}`,
     }),
     mcpTool({
       name: 'list_invites',
       title: `A ${noun}’s invites`,
-      description: `The invites to a ${noun}, newest first, each open, redeemed, revoked or expired, a page at a time: the answer ends with the cursor for the next page while there is more. Never their links or codes. ${ON_WORD}`,
+      description: `The invites to a ${noun}, newest first, each open, redeemed, revoked or expired, a page at a time: the answer ends with the cursor for the next page while there is more. Never their codes. ${ON_WORD}`,
       input: z.object({ space, limit: z.number().int().min(1).max(100).optional().describe('At most this many (default 50).'), cursor: z.string().optional().describe('Where to continue, from the last answer.') }),
       annotations: { readOnlyHint: true, openWorldHint: false },
       cli: { name: 'invite list', examples: [{ run: 'invite list soups', about: 'Every invite to soups' }] },
@@ -82,7 +82,7 @@ export const sharingTools = ({ path = '/api/spaces', noun = 'space' }: { path?: 
     mcpTool({
       name: 'revoke_invite',
       title: 'Revoke an invite',
-      description: `Revokes an invite no one has used: its link and code stop working at once. ${ON_WORD}`,
+      description: `Revokes an invite no one has used: its code stops working at once. ${ON_WORD}`,
       input: z.object({ space, id: z.string().describe('The invite’s id (`inv_…`), from list_invites.') }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       cli: { name: 'invite revoke', examples: [{ run: 'invite revoke soups inv_a1b2 --yes', about: 'Revoke an invite to soups' }] },
@@ -107,7 +107,7 @@ export const sharingTools = ({ path = '/api/spaces', noun = 'space' }: { path?: 
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       cli: { name: 'member reinvite', examples: [{ run: 'member reinvite soups mem_a1b2', about: 'A fresh invite for a member of soups' }] },
       call: ({ space, id }) => ({ method: 'POST', path: `${at(space)}/members/${encodeURIComponent(id)}/invite-again` }),
-      summarize: (json: InviteCard & { message: string }) => `Made invite ${json.id} for ${json.label} (${json.scope}, ${json.lifetime}), replacing their old sign-in once used. Its link and code are shown only now: give the user this message to send.\n\n${json.message}`,
+      summarize: (json: InviteCard & { message: string }) => `Made invite ${json.id} for ${json.label} (${json.scope}, ${json.lifetime}), replacing their old sign-in once used. Its code is shown only now: give the user this message to send.\n\n${json.message}`,
     }),
     mcpTool({
       name: 'remove_member',

@@ -506,10 +506,10 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ### Unreleased (after 1.31.0)
 
-- A new part (the page an invite's link opens and asking to join are not built): its tables (`SHARING_MIGRATIONS` step 1:
+- A new part (an invite joins by its typed code; a page for its link and asking to join are not built): its tables (`SHARING_MIGRATIONS` step 1:
   `sharing_invites`, `sharing_members`), `sharingRepo`, the named states of its rows and its
   secrets; `createSharing` and `registerSharing` with the owner's routes under `/api/spaces/{space}` (the space's
-  sharing and its invites: made with the link and code shown once, listed, read one at a time, revoked) and
+  sharing and its invites: made with the code shown once beside the space's address and a message to send, listed, read one at a time, revoked) and
   `sharingTools`; and the oauth hooks, `sharing.oauth` (`approve`, `onGrant`, `onRevoke`, `accepts`, `resources`,
   `resourceOf`) to spread into `createOAuth`, with `handles`, `memberOf` and `bind` (`registerSharing` calls it).
   `spaces` takes `byId` beside `byName`, and the new option `spaceOfPath` names the space of an in-process `/api` call.
