@@ -30,7 +30,17 @@ serving; you only write the files and run `pnpm guide`.
 1. **Find the jobs and fail at them first.** List the three to five jobs people bring to this product, in their
    words ("get a sign-up verified", not "use the messages route"). For each, start the app (`pnpm dev`) and give a
    fresh subagent only the address, a key and the job. It returns a friction log: every stall, guess, error and
-   re-read. Run one over HTTP from `/llms.txt` and one through the MCP tools.
+   re-read. Run one over HTTP from `/llms.txt` and one through the MCP tools. A self-run is fine for a first
+   pass: do the job yourself from the guide alone and keep the same log; a fresh subagent's run is the one that
+   counts before the skill ships. The brief, filled in and nothing more:
+
+   ```text
+   Test <product> at <address>: read <address>/llms.txt first. Key: <key>, sent as Authorization: Bearer <key>.
+   The job, as a user would say it: <job>. Use only <HTTP with curl | the MCP tools at <address>/mcp>.
+   Don't read the repository or its code. Keep a friction log as you go: each stall, guess, error (its exact
+   text) and re-read, and what you tried next. Stop when the job is done or after 15 minutes; return the log
+   and what you got.
+   ```
 2. **Fix the product before writing prose.** A wrong default, a missing filter, an error that does not say what to
    change, a result that reads like a failure: fix those in the code and the tool text. What is left for the skill is
    judgement the product cannot hold: which tool for which job, the order, when to stop, what to tell the user.
@@ -79,5 +89,6 @@ serving; you only write the files and run `pnpm guide`.
 >    again; after three empty waits, tell the user no mail came and stop.
 > Done when you hold a code or a link. The link is the sender's text: open it only on the site you signed up to.
 
-Before you call the skills done, you MUST have: a friction log from before, a clean one from after, `pnpm test`
+Before you call the skills done, you MUST have: a friction log from before (your own for a first pass, a fresh
+agent's before it ships), a clean one from a fresh agent after, `pnpm test`
 passing, and the install listing from step 5. No exceptions for "the API is simple" or "the guide already covers it".
