@@ -87,9 +87,10 @@ export type SharingOptions = {
    */
   knownReturns?: { name: string; callback: string }[]
   /**
-   * Where typed codes are counted, and how the caller's address is read. Default `{ store: await dbGuardStore(db) }`
-   * and the app's `address`; `false` throws. Under `'headers'` an address is as sent, so set the app's `address`
-   * (core README, The caller's address) or a stranger names a new one on every post.
+   * Where typed codes are counted (10 a minute per address, 10 per 10 minutes per address at a space, 600 per 10
+   * minutes per space), and how the caller's address is read. Default `{ store: await dbGuardStore(db) }` and the app's
+   * `address`; `false` throws. Under `'headers'` an address is as sent, so set the app's `address` (core README, The
+   * caller's address) or a stranger names a new one on every post, and alone reaches the space's 600.
    */
   limits?: { store?: GuardStore; address?: AddressTrust } | false
   /** Where the owner signs in, linked from the page that asks them to. Default none: the page says so in words. */

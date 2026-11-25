@@ -257,7 +257,7 @@ stateDiagram-v2
 | the page "Use the address in your invite" | a client named the owner's whole app: no invite binds it |
 | the code page again, "not one of ours" (400) | no open invite of the asked space (or, for a client that named none, of a space the app has) |
 | `access_denied` at the app | the fifth wrong code on one sign-in, or the owner's Refuse |
-| 429 page "Too many codes" | a typed-code limit (Limits) |
+| 429 page "Too many codes" | this address's codes, in all or at this space, or the space's 600 (Limits) |
 | 403 page "Not allowed" | a post from another site, of a sign-in these pages don't approve, or Approve without the owner |
 | 400 page "expired", "refused", "already joined" | the ticket ran out, is another browser's, or was answered |
 | the code page, "asks only to make changes" | a client asking only `write`, at a read invite |
@@ -280,9 +280,9 @@ stateDiagram-v2
 
 - 100 open invites per space; lists 50 a page by default, 100 at most.
 - An invite's code: 8 letters from 20 (about 34.6 bits), redeemable for a day. Typed codes: 10 a minute per address,
-  then 60 per 10 minutes per space (`any` for a client that named none), 5 wrong per sign-in; never the owner's.
-  Strangers' codes spend the space's 60 too, locking its invitees out for the window; set the app's `address`, or
-  each post names its own.
+  10 per 10 minutes per address at a space (`any` for a client that named none), then 600 per 10 minutes per space,
+  5 wrong per sign-in; never the owner's. One address spends only its own budget; codes from about 60 addresses
+  reach the 600, locking the space's invitees out for the window. Set the app's `address`, or each post names its own.
 - `sweep` deletes members 90 days ended, invites 7 days closed.
 
 ## Tests

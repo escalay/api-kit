@@ -1,7 +1,8 @@
 /**
- * The typed code's limits, always on: per address and per space, counted before the lookup, so a guess costs the same
- * whether or not it is right and whether or not the space exists; and per ticket, counted on each wrong code, so the
- * fifth ends that sign-in. Kept in the guard store (`dbGuardStore(db)` by default), so every instance shares them.
+ * The typed code's limits, always on: per address, per address at a space, and a ceiling per space, counted before the
+ * lookup, so a guess costs the same whether or not it is right and whether or not the space exists; and per ticket,
+ * counted on each wrong code, so the fifth ends that sign-in. Kept in the guard store (`dbGuardStore(db)` by default),
+ * so every instance shares them.
  *
  * @example
  * const limits = codeLimitsOf(config.limits, config.keys)
@@ -15,8 +16,10 @@ import { addressKeyOf, ticketHashOf, type SharingKeys } from './secrets.js'
 const MINUTE = 60 * 1000
 /** Typed codes from one address: 10 a minute. */
 const PER_ADDRESS = { limit: 10, windowMs: MINUTE }
-/** Typed codes at one space (or at no space, for a client that named none): 60 in 10 minutes. */
-const PER_SPACE = { limit: 60, windowMs: 10 * MINUTE }
+/** Typed codes from one address at one space (or at no space, for a client that named none): 10 in 10 minutes. */
+const PER_ADDRESS_AT_SPACE = { limit: 10, windowMs: 10 * MINUTE }
+/** Typed codes at one space from every address: 600 in 10 minutes, the ceiling a spray from many addresses meets. */
+const PER_SPACE = { limit: 600, windowMs: 10 * MINUTE }
 /** Wrong codes one sign-in may type; the last ends it. */
 const WRONG_CODES_PER_TICKET = 5
 /** Longer than any ticket lives (a held one, a week at most), so a ticket's count never starts over. */
@@ -42,13 +45,16 @@ export const codeLimitsOf = ({ store, address }: SharingLimits, keys: SharingKey
 
   return {
     /**
-     * Counts a typed code from this address (kept by its HMAC), then at this space (`any` for none); the seconds to wait
-     * when either is spent, else null. A code refused at its address never spends the space's budget, so one address
-     * needs six minutes to spend it; codes from many addresses, wrong or right, spend it sooner, for everyone.
+     * Counts a typed code from this address (kept by its HMAC), then from it at this space (`any` for none), then at the
+     * space; the seconds to wait at the first one spent, else null. A code refused by one never spends the next, so one
+     * address spends only its own budget at a space; it takes codes from about 60 addresses to reach the ceiling.
      */
     retryAfter: async (c: Context, space: string) => {
-      const fromHere = await overBy(`sharing-code ip:${addressKeyOf(keys, addressOf(c, address))}`, PER_ADDRESS)
+      const from = `ip:${addressKeyOf(keys, addressOf(c, address))}`
+      const fromHere = await overBy(`sharing-code ${from}`, PER_ADDRESS)
       if (fromHere) return fromHere
+      const fromHereAtSpace = await overBy(`sharing-code ${from} space:${space}`, PER_ADDRESS_AT_SPACE)
+      if (fromHereAtSpace) return fromHereAtSpace
       return overBy(`sharing-code space:${space}`, PER_SPACE)
     },
     /** Counts a wrong code on a ticket (kept by its hash); true when that was its last try. */

@@ -518,7 +518,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - Signing in with an invite's code: `approve` shows the code page (`signInStepOf` picks it), and `registerSharing`
   adds `POST /sharing/join`, which needs `SHARING_OPEN_PATHS` in `auth.open`. Typed codes are always limited
   (`limits`, by default counted in the app's database: `createSharing` makes the guard table there, and `limits:
-  false` throws); a space's budget counts everyone's codes, so set the app's `address`, else each post names its own.
+  false` throws): 10 a minute per address, 10 per 10 minutes per address at a space, 600 per 10 minutes per space;
+  set the app's `address`, else each post names its own.
   The new option `knownReturns` names the apps the app expects. Behind Cloudflare Access, let
   `sharingSignInPaths(sharing)` through.
 - The owner's approval at a space: `approve` shows the signed-in owner their own page (Approve or Refuse; Allow

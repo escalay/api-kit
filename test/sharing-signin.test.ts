@@ -466,10 +466,12 @@ describe('POST /sharing/join', () => {
     for (let tried = 0; tried < 10; tried++) expect((await post(tickets[tried % 3]!, { code: 'BDKM-QXTW' }, from('192.0.2.1'))).status).toBe(400)
     const stopped = await post(tickets[0]!, { code: invite.code }, from('192.0.2.1'))
     expect([stopped.status, stopped.headers.get('retry-after'), await stopped.text()]).toEqual([429, expect.stringMatching(/^\d+$/), expect.stringContaining('Too many codes')])
-    // Sixty in ten minutes at one space, from any addresses: ten counted above, fifty more
-    for (let tried = 0; tried < 50; tried++) {
-      const opened = await open({ resource: SOUPS })
-      expect((await post(opened, { code: 'BDKM-QXTW' }, from(`198.51.100.${tried}`))).status).toBe(400)
+    // Six hundred in ten minutes at one space, sprayed from many addresses: ten counted above, ten each from 59 more
+    for (let address = 0; address < 59; address++) {
+      for (let tried = 0; tried < 10; tried++) {
+        const opened = await open({ resource: SOUPS })
+        expect((await post(opened, { code: 'BDKM-QXTW' }, from(`198.51.100.${address}`))).status).toBe(400)
+      }
     }
     const spaceSpent = await post(await open({ resource: SOUPS }), { code: invite.code }, from('203.0.113.9'))
     expect(spaceSpent.status).toBe(429)
@@ -477,6 +479,26 @@ describe('POST /sharing/join', () => {
     expect((await post(await open({ resource: BAKES }), { code: 'BDKM-QXTW' }, from('203.0.113.9'))).status).toBe(400)
     const owner = await open({ resource: SOUPS, headers: { 'x-test-owner': OWNER } })
     expect((await post(owner, { code: invite.code }, { ...from('192.0.2.1'), 'x-test-owner': OWNER })).status).toBe(302)
+  })
+
+  it('keeps a space open to its invitees while one address spends its own budget there', async () => {
+    const inner = memoryGuardStore()
+    let later = 0
+    // The limits' clock, moved on by hand: a minute is all the address limit waits
+    const store: GuardStore = { ...inner, count: (id, windowMs, now) => inner.count(id, windowMs, now + later) }
+    const { makeInvite, open, post } = await box({ options: { limits: { store } } })
+    const invite = await makeInvite()
+    const stranger = { 'x-forwarded-for': '192.0.2.1' }
+    // Ten wrong codes a minute for six minutes, each on a ticket of its own
+    for (let minute = 0; minute < 6; minute++, later += 60 * 1000) {
+      for (let tried = 0; tried < 10; tried++) await post(await open({ resource: SOUPS }), { code: 'BDKM-QXTW' }, stranger)
+    }
+    // Its budget at Soups is spent for the ten minutes; its own minute is new, so Bakes still hears it
+    const spent = await post(await open({ resource: SOUPS }), { code: 'BDKM-QXTW' }, stranger)
+    expect([spent.status, Number(spent.headers.get('retry-after')) > 60]).toEqual([429, true])
+    expect((await post(await open({ resource: BAKES }), { code: 'BDKM-QXTW' }, stranger)).status).toBe(400)
+    // The space's invitee, at another address, still joins
+    expect((await post(await open({ resource: SOUPS }), { code: invite.code }, { 'x-forwarded-for': '198.51.100.7' })).status).toBe(302)
   })
 
   it('counts a typed code by an HMAC of its address, never the address itself', async () => {

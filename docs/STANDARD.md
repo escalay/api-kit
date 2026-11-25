@@ -747,8 +747,8 @@ an invite's link opens (and the browser remembering it), and asking to join (the
 - **Invites are single-use, joined with a typed code.** An invite is for one space and one person, must be used
   within a day, and gives access for 7 days, 30 days or until revoked. It is answered as the code and the space's
   address: the person's app connects there (or names none), and the person types the code on the app's own page (`approve`). The invite is spent with the grant's first token (`onGrant`), never at the click,
-  so a second use is refused and junk cannot spend it. Typed codes are always limited (per address, per space, and
-  five wrong per sign-in), and codes are kept only as HMACs. A revoke is recorded whatever holds the invite
+  so a second use is refused and junk cannot spend it. Typed codes are always limited (per address, per address at a space
+  under a ceiling per space, and five wrong per sign-in), and codes are kept only as HMACs. A revoke is recorded whatever holds the invite
   (a member who joined by it keeps access), so a revoked invite never opens again, even when the grant that held it
   is withdrawn.
 - **Who may invite.** The owner signed in, a key from `API_KEYS` the app names (`fixedKeys`), or an agent with a root token from a known grant,

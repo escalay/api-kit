@@ -203,7 +203,7 @@ export const joinByCodeFor = ({ config, bound, brand, repo, limits, oauth }: Joi
     return inviteStateOf(found.invite, redeemedBy, new Date()) === 'open' ? found : null
   }
 
-  /** Whose budget a typed code spends: the asked space's, by its name, or `any` for a client that named none. */
+  /** The space whose budgets a typed code spends (the address's there, and the space's): the asked one, or `any` for none. */
   const budgetOf = (asked: Asked, ask: SignInAsk) => (asked === 'space' ? spaceOfResource(config, ask.resource, bound.root)! : 'any')
 
   /** A wrong code: the code page again, or the ticket answered `deny` when it was the last try. The owner is never counted. */
