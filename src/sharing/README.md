@@ -124,7 +124,7 @@ export const chained = (sharing: Sharing, mine: Hooks): Hooks => ({
 | `states.ts` | `inviteStateOf`, `memberStateOf`, `memberListingOf`; `redeemByOf`, `memberExpiresAtOf`, `REDEEM_WITHIN` (a day), `UNSEEN_FOR` (30 days), `MAX_OPEN_INVITES` (100) |
 | `secrets.ts` | `sharingKeys`, `newLinkToken` (192 bits), `newInviteCode` (`BDKM-QXTW`, from `CODE_ALPHABET`), `normalisedCode`; what the tables keep instead: `linkHashOf`, `codeHashOf`; what the limits count by: `addressKeyOf` (an HMAC), `ticketHashOf` (SHA-256) |
 
-The owner routes, each with its operationId, tool, command and answers: [REFERENCE.md](REFERENCE.md).
+Owner routes and answers; which refusal is a 401, which a 403: [REFERENCE.md](REFERENCE.md).
 
 ## Flows
 

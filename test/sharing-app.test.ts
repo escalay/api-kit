@@ -4,6 +4,8 @@
  * page (`form`); then a shelf's token is refused at another shelf, a spent invite is refused, a removed member's
  * token is refused, and a shelf that exists and one that does not answer alike.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ONLY_ITS_SPACE } from '../src/sharing/index.js'
 import { approveSignIn, callMcp, connectAgent } from '../src/testing/index.js'
@@ -84,6 +86,23 @@ describe('a recipe box shares its shelves', () => {
     for (const path of ['/api/shelves/bakes/recipes', '/api/spaces/soups/invites', '/api/spaces/soups/members']) expect([path, (await call(path)).status]).toEqual([path, 401])
     expect((await callTool(box, '/mcp', sam, 'list_members', { space: 'soups' })).status).toBe(401)
     expect(box.recipes.get('bakes')).toEqual(['Rye bread'])
+  })
+
+  it('answers each refusal with the status REFERENCE.md’s table gives it', async () => {
+    const { box, sam } = await samAtSoups()
+    const reference = readFileSync(join(import.meta.dirname, '../src/sharing/REFERENCE.md'), 'utf8')
+    const row = (caller: string, asks: string) => reference.split('\n').find((line) => line.startsWith(`| ${caller} | ${asks}`))!.split(' | ').at(-1)!
+    // A read-only member writing over REST, and through the space's tool
+    const rest = await box.app.request('/api/shelves/soups/recipes', { method: 'POST', headers: { authorization: `Bearer ${sam}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Pea soup' }) })
+    expect(row('a token with `read` only', 'a write over REST')).toMatch(/^403 `forbidden`, `error="insufficient_scope"`/)
+    expect([rest.status, (await rest.json()).code, rest.headers.get('www-authenticate')]).toEqual([403, 'forbidden', expect.stringContaining('error="insufficient_scope"')])
+    expect(row('a token with `read` only', 'a write through')).toMatch(/^200, the tool's result `isError`/)
+    const tool = await callTool(box, '/box/soups/mcp', sam, 'add_recipe', { name: 'Pea soup' })
+    expect([tool.status, tool.result?.isError, tool.result?.content[0]?.text]).toEqual([200, true, expect.stringContaining('403')])
+    // At another shelf, existing or not, and at the owner's MCP
+    expect(row('a member’s token (it holds one space)'.replace('’', "'"), 'another space')).toMatch(/^401, `ONLY_ITS_SPACE`/)
+    for (const at of ['/box/bakes/mcp', '/box/pies/mcp', '/mcp']) expect([at, (await callTool(box, at, sam, 'list_recipes')).status]).toEqual([at, 401])
+    expect(box.recipes.get('soups')).toEqual(['Leek soup'])
   })
 
   it('refuses a spent invite: a second app typing the same code gets the code page again, and nothing', async () => {
