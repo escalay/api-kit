@@ -27,7 +27,7 @@ export const __camel__Repo = (db: Db) => {
     },
     /** Sets only the fields `change` has: one left out stays as it is. */
     update: (id: string, change: Partial<__Singular__Input>) => db.update(__camel__).set({ ...change, updatedAt: now() }).where(eq(__camel__.id, id)),
-    remove: (id: string) => db.delete(__camel__).where(eq(__camel__.id, id)),
+    remove: (id: string) => db.delete(__camel__).where(eq(__camel__.id, id)), // feature:remove
   }
 }
 

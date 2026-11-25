@@ -1172,6 +1172,84 @@ describe('the copy-in CLI', () => {
     }
   }, 120_000)
 
+  it('makes a feature with a field of fixed values, its own singular and no delete, that passes its own tests', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-shapes-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'shelf-api', '--bare', '--no-install').status).toBe(0)
+      const app = join(parent, 'shelf-api')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      // Refused with the rule, and nothing written
+      for (const [spec, error] of [
+        ['status:enum()', 'a field is <name>:<type>'],
+        ['status:enum(To-Read|done)', 'a field is <name>:<type>'],
+        ["status:enum(a|b'c)", 'a field is <name>:<type>'],
+        ['status:enum(done|done)', 'status names done twice'],
+      ]) expect(cli(app, 'feature', 'books', '--fields', spec!).stderr, spec).toContain(error)
+      expect(cli(app, 'feature', 'books', '--singular', 'Book').stderr).toContain('"Book" isn\'t a kebab-case name like book or reading-list')
+      expect(existsSync(join(app, 'src/features/books'))).toBe(false)
+      // The naive singular is said, with how to name another
+      const naive = cli(app, 'feature', 'leaves', '--fields', 'name:string')
+      expect(naive.stdout).toContain('each one a leave (--singular names it otherwise)')
+      const made = cli(app, 'feature', 'shelves', '--singular', 'shelf', '--no-remove', '--fields', 'name:string status:enum(to-read|reading|done) mood:enum(calm|busy)?')
+      expect(made.status, made.stderr).toBe(0)
+      expect(made.stdout).toContain('each one a shelf')
+      expect(made.stdout).toContain('no delete')
+      const schema = await read('src/features/shelves/schema.ts')
+      expect(schema).toContain("status: text('status', { enum: ['to-read', 'reading', 'done'] }).notNull(),")
+      expect(schema).toContain("mood: text('mood', { enum: ['calm', 'busy'] }),")
+      expect(schema).toContain(`"status" text not null check ("status" in (\\'to-read\\', \\'reading\\', \\'done\\')), "mood" text check ("mood" in (\\'calm\\', \\'busy\\'))`)
+      expect(schema).toContain('export type ShelfRow')
+      const routes = await read('src/features/shelves/routes.ts')
+      expect(routes).toContain("status: z.enum(['to-read', 'reading', 'done']).openapi(")
+      expect(routes).toContain("operationId: 'getShelf'")
+      expect(routes).not.toMatch(/delete|remove/i)
+      const tools = await read('src/features/shelves/tools.ts')
+      expect(tools).toContain("name: 'get_shelf'")
+      expect(tools).not.toContain('delete_shelf')
+      for (const file of ['repo.ts', 'handlers.ts', 'index.ts', 'shelves.test.ts']) expect(await read(`src/features/shelves/${file}`), file).not.toMatch(/remove|delete|\/\/ feature:/i)
+      // The action route api-kit-feature gives, pasted where its blocks say
+      expect(cli(app, 'feature', 'books', '--fields', 'title:string status:enum(to-read|reading|done)').status).toBe(0)
+      const skill = await readFile(join(import.meta.dirname, '..', 'skills/api-kit-feature/SKILL.md'), 'utf8')
+      const action = skill.slice(skill.indexOf('## An action route')).match(/```ts\n([\s\S]*?)```/)![1]!
+      const blocks = Object.fromEntries(action.split(/^\/\/ /m).filter(Boolean).map((block) => [block.slice(0, block.indexOf(',')), block.slice(block.indexOf('\n') + 1)]))
+      expect(Object.keys(blocks)).toEqual(['routes.ts', 'handlers.ts', 'index.ts', 'tools.ts'])
+      const paste = async (file: string, at: (text: string) => number, block: string) => {
+        const path = join(app, 'src/features/books', file)
+        const text = await readFile(path, 'utf8')
+        expect(at(text), file).toBeGreaterThan(0)
+        await writeFile(path, text.slice(0, at(text)) + block + text.slice(at(text)))
+      }
+      await paste('routes.ts', (text) => text.lastIndexOf('}\n'), blocks['routes.ts']!)
+      await paste('handlers.ts', (text) => text.indexOf('  return { list'), blocks['handlers.ts']!)
+      await paste('index.ts', (text) => text.indexOf('  },\n  tools:'), blocks['index.ts']!)
+      await paste('index.ts', (text) => text.indexOf('    }\n  },\n}'), '      mark_book_done: { id },\n')
+      await paste('tools.ts', (text) => text.indexOf("  mcpTool({\n    name: 'delete_book'"), blocks['tools.ts']!)
+      const handlers = join(app, 'src/features/books/handlers.ts')
+      await writeFile(handlers, (await readFile(handlers, 'utf8')).replace('return { list, get, create, update, remove }', 'return { list, get, create, update, remove, done }'))
+      // The database refuses a value outside the list too, not only the route
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      const { DatabaseSync } = await import('node:sqlite')
+      const sqlite = new DatabaseSync(':memory:')
+      const step = (await readdir(join(app, 'migrations'))).find((file) => file.endsWith('_shelves_1.sql'))!
+      for (const file of ['0000_kit_migrations.sql', step]) sqlite.exec(await readFile(join(app, 'migrations', file), 'utf8'))
+      expect(() => sqlite.exec("insert into shelves values ('1', 'Fiction', 'lost', null, 'now', 'now')")).toThrow(/CHECK/)
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--project', 'node', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+      expect(tests.stdout).toContain('makes, lists and changes a shelf')
+      expect(tests.stdout).toMatch(/books\.test\.ts > books > makes, lists, changes and deletes a book/)
+      expect(tests.stdout).toContain('runs every MCP tool against its route')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('gives a feature the pagination part an app lacks, never moving an older kit copy to this version', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'kit-feature-'))
     expect(cli(parent, 'init', 'old-api', '--no-install', '--no-git').status).toBe(0)

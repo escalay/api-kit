@@ -23,11 +23,12 @@
  *                                             container) and/or Workers (worker.ts, D1); then pnpm install, format and
  *                                             migrations, so its gate passes as made (--no-install leaves them to you).
  *                                             It never asks; --yes is accepted
- *   kit feature <plural-name> [--app .] [--switch] [--fields "name:string minutes:int tags:string[] notes:text?"]
+ *   kit feature <plural-name> [--app .] [--switch] [--singular <name>] [--no-remove] [--fields "name:string minutes:int tags:string[] notes:text?"]
  *                                             a new feature folder (schema, repo, routes, handlers, tools), listed;
  *                                             --switch lists it in src/features/catalog.ts so an owner can switch it off;
- *                                             --fields gives its own fields (string, text, int, number, bool, string[];
- *                                             ? when it may be left out) instead of a title and a body
+ *                                             --fields gives its own fields (string, text, int, number, bool, string[],
+ *                                             enum(a|b|c); ? when it may be left out) instead of a title and a body;
+ *                                             --singular names one (shelves → shelf); --no-remove leaves out delete
  *   kit guide [--from guide] [--out src/guide.gen.ts]  the guide folder as a module (GUIDE_FILES), for Workers
  *   kit sdk [--app .] [--package name] [--bin name]
  *                                             a typed TypeScript client in sdk/: generated types, a fetch-only core,
@@ -107,7 +108,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set(['--fields', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
+const VALUE_FLAGS = new Set(['--fields', '--singular', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 /** The app the kit folder belongs to: `--app`, else the nearest folder at or above `--dir` with a package.json; null when none. */
@@ -422,6 +423,19 @@ const writeGuideModule = (from, out) => {
   return files.length
 }
 
+/**
+ * Lines marked for one runtime, preset or feature shape (`<!-- runtime:node -->`, `// preset:app`, `# runtime:workers`,
+ * `// feature:no-remove`, several at a line's end) stay, unmarked, only where `keeps` names that mark true.
+ */
+const MARK = /^(.*?) (?:<!-- ((?:runtime|preset|feature):[\w-]+) -->|\/\/ ((?:runtime|preset|feature):[\w-]+)|# ((?:runtime|preset|feature):[\w-]+))$/
+const keepMarked = (text, keeps) => {
+  const unmarked = (line) => {
+    const marked = line.match(MARK)
+    return !marked ? [line] : keeps[marked[2] ?? marked[3] ?? marked[4]] ? unmarked(marked[1]) : []
+  }
+  return text.split('\n').flatMap(unmarked).join('\n')
+}
+
 /** Copies a template folder, filling every placeholder in names and contents. */
 const copyTemplate = (from, to, vars, renameOf = (file) => file) => {
   const fill = (text) => Object.entries(vars).reduce((filled, [key, value]) => filled.replaceAll(key, value), text)
@@ -437,11 +451,12 @@ const copyTemplate = (from, to, vars, renameOf = (file) => file) => {
 const capital = (word) => word[0].toUpperCase() + word.slice(1)
 const singularOf = (word) => (word.endsWith('ies') ? `${word.slice(0, -3)}y` : /(ss|x|ch|sh)es$/.test(word) ? word.slice(0, -2) : word.endsWith('s') && !word.endsWith('ss') ? word.slice(0, -1) : word)
 
-/** Every spelling a feature's files need, from its plural kebab-case name (`reading-lists`). */
-export const namesOf = (name) => {
+/** Every spelling a feature's files need, from its plural kebab-case name (`reading-lists`) and its singular, when the naive one is wrong (`shelf`). */
+export const namesOf = (name, singular) => {
   if (!/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(name)) fail(`"${name}" isn't a plural kebab-case name like notes or reading-lists`)
+  if (singular !== undefined && !/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(singular)) fail(`"${singular}" isn't a kebab-case name like book or reading-list`)
   const many = name.split('-')
-  const one = [...many.slice(0, -1), singularOf(many.at(-1))]
+  const one = singular?.split('-') ?? [...many.slice(0, -1), singularOf(many.at(-1))]
   return {
     __name__: name,
     __camel__: many[0] + many.slice(1).map(capital).join(''),
@@ -469,18 +484,31 @@ const FIELD_TYPES = {
   bool: { column: (name) => `integer('${name}', { mode: 'boolean' })`, sql: 'integer', out: 'z.boolean()', input: 'z.boolean()', type: 'boolean', made: true, changed: false },
   'string[]': { column: (name) => `text('${name}', { mode: 'json' }).$type<string[]>()`, sql: 'text', out: 'z.array(z.string())', input: 'z.array(z.string().trim().min(1).max(200)).max(100)', type: 'string[]', made: ['one'], changed: ['two'] },
 }
+/** `enum(to-read|reading|done)`: one of the values, as text, checked by the route, the tool and the table. */
+const enumType = (values) => ({
+  column: (name) => `text('${name}', { enum: ${literal(values).replaceAll(',', ', ')} })`,
+  sql: 'text',
+  check: (column) => ` check ("${column}" in (${values.map((value) => `\\'${value}\\'`).join(', ')}))`,
+  out: `z.enum(${literal(values).replaceAll(',', ', ')})`,
+  input: `z.enum(${literal(values).replaceAll(',', ', ')})`,
+  type: values.map((value) => `'${value}'`).join(' | '),
+  made: values[0],
+  changed: values[1] ?? values[0],
+})
 /** What the sample feature has when no --fields are given. */
 const SAMPLE_FIELDS = 'title:string body:text?'
 /** Names a feature's own fields can't take: the kit's, and the list's and the command line's flags. */
 const OWN_FIELDS = ['id', 'createdAt', 'updatedAt', 'limit', 'cursor', 'json', 'yes', 'dryRun', 'input', 'timeout', 'profile', 'help']
 
-/** `name:string minutes:int tags:string[] notes:text?`, read: each field's name, type, and whether it may be left out. */
+/** `name:string minutes:int tags:string[] status:enum(to-read|done) notes:text?`, read: each field's name, type, and whether it may be left out. */
 const fieldsOf = (spec) =>
   spec.trim().split(/\s+/).map((field) => {
-    const [, name, type, optional] = field.match(/^([a-z][a-zA-Z0-9]*):([a-z]+(?:\[\])?)(\?)?$/) ?? []
-    if (!FIELD_TYPES[type]) fail(`${field}: a field is <name>:<type>, the type one of ${Object.keys(FIELD_TYPES).join(', ')}, and ? after it when it may be left out (notes:text?)`)
+    const [, name, type, values, optional] = field.match(/^([a-z][a-zA-Z0-9]*):([a-z]+(?:\[\])?|enum\(([a-z0-9][a-z0-9_-]*(?:\|[a-z0-9][a-z0-9_-]*)*)\))(\?)?$/) ?? []
+    if (!values && !FIELD_TYPES[type]) fail(`${field}: a field is <name>:<type>, the type one of ${Object.keys(FIELD_TYPES).join(', ')}, enum(a|b|c) (lowercase values, a-z 0-9 - _), and ? after it when it may be left out (notes:text?)`)
     if (OWN_FIELDS.includes(name)) fail(`${name} is the kit’s own field or flag: name it something else`)
-    return { name, type, optional: Boolean(optional), ...FIELD_TYPES[type] }
+    const named = values?.split('|')
+    if (named && new Set(named).size !== named.length) fail(`${name} names ${named.find((value, at) => named.indexOf(value) !== at)} twice: give each value once`)
+    return { name, type: named ? 'enum' : type, optional: Boolean(optional), ...(named ? enumType(named) : FIELD_TYPES[type]) }
   }).map((field, index, fields) => {
     if (fields.findIndex((other) => other.name === field.name) !== index) fail(`${field.name} is named twice: give each field its own name`)
     return field
@@ -500,7 +528,7 @@ const fieldVarsOf = (fields) => {
   return {
     __column_imports__: [...new Set(['sqliteTable', 'text', ...fields.map((field) => field.column('').split('(')[0])])].sort().join(', '),
     __columns__: fields.map((field) => `  ${field.name}: ${field.column(snakeOf(field.name))}${field.optional ? '' : '.notNull()'},`).join('\n'),
-    __sql_columns__: fields.map((field) => `"${snakeOf(field.name)}" ${field.sql}${field.optional ? '' : ' not null'}`).join(', '),
+    __sql_columns__: fields.map((field) => `"${snakeOf(field.name)}" ${field.sql}${field.optional ? '' : ' not null'}${field.check?.(snakeOf(field.name)) ?? ''}`).join(', '),
     __out_fields__: fields.map((field) => `${field.name}: ${field.out}${field.optional ? '.nullable()' : ''},`).join(' '),
     __in_fields__: fields.map((field) => `${field.name}: ${field.input}${field.optional ? '.optional()' : ''}.openapi({ description: 'Its ${snakeOf(field.name).replaceAll('_', ' ')}.', example: ${literal(field.made)} })`).join(', '),
     __tool_create_fields__: fields.map((field) => described(field, `${field.input}${field.optional ? '.optional()' : ''}`)).join(', '),
@@ -515,8 +543,8 @@ const fieldVarsOf = (fields) => {
   }
 }
 
-const addFeature = (root, name, switchable = false, fieldSpec = SAMPLE_FIELDS) => {
-  const vars = { ...namesOf(name), ...fieldVarsOf(fieldsOf(fieldSpec)) }
+const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS, singular, remove = true } = {}) => {
+  const vars = { ...namesOf(name, singular), ...fieldVarsOf(fieldsOf(fieldSpec)) }
   const list = join(root, 'src/features/index.ts')
   if (!existsSync(list)) fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
   const folder = join(root, 'src/features', name)
@@ -535,6 +563,8 @@ const addFeature = (root, name, switchable = false, fieldSpec = SAMPLE_FIELDS) =
     console.log('Copied the pagination part into src/kit: the new list pages by cursor')
   }
   copyTemplate(join(KIT, 'templates/feature'), folder, vars, (file) => (file === 'feature.test.ts' ? `${name}.test.ts` : file))
+  // Delete is a route, a handler, a repo call, a tool and a sample: all or none
+  for (const file of readdirSync(folder)) writeFileSync(join(folder, file), keepMarked(readFileSync(join(folder, file), 'utf8'), { 'feature:remove': remove, 'feature:no-remove': !remove }))
   writeFileSync(list, text.replace('// kit:imports', `import { feature as ${vars.__camel__} } from './${name}/index.js'\n// kit:imports`).replace('  // kit:features', `  ${vars.__camel__},\n  // kit:features`))
   if (switchable) {
     const catalog = join(root, 'src/features/catalog.ts')
@@ -544,7 +574,7 @@ const addFeature = (root, name, switchable = false, fieldSpec = SAMPLE_FIELDS) =
     const index = join(folder, 'index.ts')
     writeFileSync(index, readFileSync(index, 'utf8').replace(`  name: '${name}',`, `  name: '${name}',\n  switch: '${name}',`))
   }
-  console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test) and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
+  console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test${remove ? '' : '; no delete'}), each one a ${vars.__label__}${singular ? '' : ' (--singular names it otherwise)'}, and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
 }
 
 /**
@@ -1562,15 +1592,10 @@ const commands = {
     }
     if (preset === 'app') copyTemplate(join(KIT, 'templates/preset-app'), root, vars)
     if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container']) rmSync(join(root, path), { recursive: true, force: true })
-    // Lines marked for one runtime or preset (`<!-- runtime:node -->`, `// preset:app`, `# runtime:workers`, several at a line's end) stay only in apps that have it
+    // Lines marked for one runtime or preset stay only in apps that have it
     const keeps = { 'runtime:node': runtime !== 'cloudflare', 'runtime:workers': runtime !== 'node', 'preset:api': preset === 'api', 'preset:app': preset === 'app' }
-    const MARK = /^(.*?) (?:<!-- ((?:runtime|preset):\w+) -->|\/\/ ((?:runtime|preset):\w+)|# ((?:runtime|preset):\w+))$/
-    const unmarked = (line) => {
-      const marked = line.match(MARK)
-      return !marked ? [line] : keeps[marked[2] ?? marked[3] ?? marked[4]] ? unmarked(marked[1]) : []
-    }
     for (const file of ['AGENTS.md', 'README.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts', '.github/workflows/ci.yml'].map((path) => join(root, path)).filter(existsSync))
-      writeFileSync(file, readFileSync(file, 'utf8').split('\n').flatMap(unmarked).join('\n').replaceAll('__worker_dev__', runtime === 'both' ? 'dev:worker' : 'dev'))
+      writeFileSync(file, keepMarked(readFileSync(file, 'utf8'), keeps).replaceAll('__worker_dev__', runtime === 'both' ? 'dev:worker' : 'dev'))
     // npm may drop the executable bit when it packs the kit
     chmodSync(join(root, '.githooks/pre-push'), 0o755)
     // A repository from the start, so `pnpm install` can point git at .githooks; never one inside another
@@ -1781,7 +1806,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
   feature: () => {
     const [name] = names
     if (!name) fail('name the feature, plural and kebab-case: feature reading-lists')
-    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, flags.has('--switch'), valueOf('--fields'))
+    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, { switchable: flags.has('--switch'), fieldSpec: valueOf('--fields'), singular: valueOf('--singular'), remove: !flags.has('--no-remove') })
   },
 
   update: () => {

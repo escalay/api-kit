@@ -12,8 +12,10 @@ A feature is one folder, `src/features/<name>/`, with one shape. The kit's `boar
 
 1. `npx @escalay/kit feature <plural-name> --fields "<name>:<type> …"` in the app (`recipes`, kebab-case, plural;
    `--fields "name:string minutes:int tags:string[] notes:text?"`: `string`, `text`, `int`, `number`, `bool`,
-   `string[]`, `?` when it may be left out). It makes the folder with those fields in every file (without
-   `--fields`, a title and a body), a list paged by cursor, and lists the feature in `src/features/index.ts`.
+   `string[]`, `enum(to-read|reading|done)` (one of those values: zod, the column and a SQL check), `?` when it may
+   be left out). It makes the folder with those fields in every file (without `--fields`, a title and a body), a
+   list paged by cursor, and lists the feature in `src/features/index.ts`. It says the singular it took
+   (`shelves` → `shelve`): `--singular shelf` names it. `--no-remove` leaves out delete (route, tool, sample).
    Done when `pnpm test` still passes.
    A feature the app can work without (sending, webhooks, a report) takes `--switch`: it is also listed in
    `src/features/catalog.ts` (write there what switching it off stops) and named in its `index.ts` (`switch`), so
@@ -51,6 +53,46 @@ A feature is one folder, `src/features/<name>/`, with one shape. The kit's `boar
 - Errors: `...problemResponses(400, 404)`. The `detail` says what to do next.
 - Lists page by cursor (`limitQuery`, `cursorQuery`, `pageOf` from the `pagination` part).
 - Work that is slow or costs money answers 202 with a run and sits behind `rateLimit`.
+
+## An action route
+
+A change with a name of its own (`POST /api/books/{id}/done`) is a route beside `update`, for a feature made with
+`--fields "title:string status:enum(to-read|reading|done)"`. Each block names its file and place:
+
+```ts
+// routes.ts, in routes
+  done: createRoute({
+    method: 'post', path: `${PATH}/{id}/done`, operationId: 'markBookDone', tags: [TAG], summary: 'Mark a book done', description: 'Sets its status to done; marking it again changes nothing.',
+    request: { params: z.object({ id }) },
+    responses: { 200: ok('The book.', BookSchema), ...problemResponses(401, 403, 404) },
+  }),
+// handlers.ts, before the return, which adds done
+  const done: RouteHandler<Routes['done']> = async (c) => {
+    const { id } = c.req.valid('param')
+    await rowOf(id)
+    await repo.update(id, { status: 'done' })
+    return c.json(cardOf(originOf(c), await rowOf(id)), 200)
+  }
+// index.ts, in register; and mark_book_done: { id } in samples
+    app.openapi(routes.done, handle.done)
+// tools.ts, before delete_book (toolsRun runs them in order, and its sample deletes the book)
+  mcpTool({
+    name: 'mark_book_done', title: 'Mark a book done', description: 'Sets a book’s status to done, when the user finished it.',
+    input: z.object({ id }),
+    annotations: { idempotentHint: true, openWorldHint: false },
+    cli: { name: 'book done', examples: [{ run: 'book done <id>', about: 'Mark it done' }] },
+    call: ({ id }) => ({ method: 'POST', path: `${PATH}/${encodeURIComponent(id)}/done` }),
+    summarize: (row: Card) => `Done: ${line(row)}`,
+  }),
+```
+
+## A resource inside another
+
+Recipes on a shelf: `kit feature recipes --fields "shelfId:string name:string"`. Before step 1 ever runs, its
+SQL gets `references shelves(id)` after `"shelf_id" text not null`. The list takes `shelf` in its query schema
+(`GET /api/recipes?shelf=…`) and the repo filters by it; `create` and `update` 404 a `shelfId` no shelf has
+(`detail` names `GET /api/shelves`). Its tools take `shelf_id`; `samples` makes a shelf first. Nest the paths
+(`/api/shelves/{shelf}/recipes`) only when the shelf decides who may see them, as a space of the sharing part does.
 
 ## Tools
 
