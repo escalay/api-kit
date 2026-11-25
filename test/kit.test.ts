@@ -2730,8 +2730,11 @@ describe('the skills', () => {
     const internal = Object.entries(skills).filter(([, text]) => /^metadata:\n {2}internal: true$/m.test(text.split('\n---\n')[0]!)).map(([name]) => name)
     const forThisRepository = Object.entries(skills).filter(([, text]) => text.includes('in the escalay/api-kit repository itself')).map(([name]) => name)
     expect(forThisRepository).toEqual(['api-kit-part'])
-    expect(internal).toEqual(forThisRepository)
-    expect(await readFile(join(kitDir, 'README.md'), 'utf8')).toContain('`npx skills add escalay/api-kit --skill api-kit-part -y`')
+    // npm-release is for a repository that publishes to npm, never an app as such: named with --skill, as api-kit-part is
+    expect(internal).toEqual([...forThisRepository, 'npm-release'])
+    const readme = await readFile(join(kitDir, 'README.md'), 'utf8')
+    for (const name of internal) expect(readme, name).toContain(`\`npx skills add escalay/api-kit --skill ${name} -y\``)
+    expect(await readFile(join(kitDir, 'templates/app/AGENTS.md'), 'utf8')).toContain('`npx skills add escalay/api-kit --skill npm-release -y`')
   })
 
   it('are each listed in the README\'s skills table and in AGENTS.md', async () => {
