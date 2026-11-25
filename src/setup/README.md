@@ -33,7 +33,7 @@ await registerSetup(app, { db, code: env.SETUP_CODE, guards: await dbGuardStore(
 
 ### In an app made by `kit init`
 
-`npx @escalay/kit add people setup --wire` writes all of this, `SETUP_CODE` in every file that lists the settings (in
+`npx @escalay/kit add people setup --wire` writes all of this, `SETUP_CODE` in every file that lists the settings (`kit env --write` makes local values; in
 an app made before its markers it prints the edits instead). By hand: a feature of its own, listed in `src/features/index.ts` after `people` (whose README has its feature and the lines in
 `src/app.ts`); `Env` in `src/app.ts` gains `SETUP_CODE?: string`, a secret like the others:
 

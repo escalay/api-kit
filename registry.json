@@ -639,7 +639,7 @@
         ],
         "wiring": {
           "settings": [
-            { "name": "SETUP_CODE", "what": "the code the first person types to claim the deployment, a secret: `openssl rand -base64 18`" }
+            { "name": "SETUP_CODE", "local": "random:18", "what": "the code the first person types to claim the deployment, a secret: `openssl rand -base64 18`" }
           ],
           "wire": {
             "files": ["src/features/setup/index.ts"],
@@ -863,9 +863,9 @@
         "wiring": {
           "code": "Wire it",
           "settings": [
-            { "name": "OAUTH_SIGNING_KEY", "what": "the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one", "test": "await generateOAuthKey()", "testImport": "import { generateOAuthKey } from './src/kit/index.js'" },
-            { "name": "SHARING_SECRET", "what": "32 random bytes or more, a secret of its own: `openssl rand -base64 32`", "test": "'a sharing secret of thirty-two bytes or more, for tests only'" },
-            { "name": "PUBLIC_ORIGIN", "what": "the origin people and agents reach the app at, createOAuth's publicOrigin", "test": "'https://api.test'" }
+            { "name": "OAUTH_SIGNING_KEY", "local": "es256", "what": "the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one", "test": "await generateOAuthKey()", "testImport": "import { generateOAuthKey } from './src/kit/index.js'" },
+            { "name": "SHARING_SECRET", "local": "random:32", "what": "32 random bytes or more, a secret of its own: `openssl rand -base64 32`", "test": "'a sharing secret of thirty-two bytes or more, for tests only'" },
+            { "name": "PUBLIC_ORIGIN", "local": "origin", "what": "the origin people and agents reach the app at, createOAuth's publicOrigin", "test": "'https://api.test'" }
           ],
           "cron": { "schedule": "17 * * * *", "calls": "sweep()" },
           "wire": {

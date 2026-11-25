@@ -59,7 +59,8 @@ One `registry:item` per part in `registry.json`; `kit add`, `kit list` and the s
 - `meta.wiring`, for a part an app made by `init` must wire: `code` (its README's section, for a part not wired as a
   feature of its own; optional), `settings` (each a `name` and `what`, printed by `kit add` with the files that still
   lack it; `test`, an expression for its value in `vitest.config.ts`'s miniflare bindings, and `testImport`, the
-  import line that expression needs), `cron` (`schedule`, and `calls`: what the scheduled handler calls), and `wire`,
+  import line that expression needs; `local`, how `kit env` makes a local value: `random:<bytes>`, `es256` or
+  `origin`), `cron` (`schedule`, and `calls`: what the scheduled handler calls), and `wire`,
   what `kit add <part> --wire` writes, `__over_*__` and `__name__`/`__title__` filled in:
   - `over`: the feature it works over, named by `flag` (`--spaces`), with `what` it is and an `example` that makes one;
   - `files`: its new files, each from `templates/wire/<part>/<the same path>`;

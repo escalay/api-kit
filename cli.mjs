@@ -74,6 +74,9 @@
  *   kit key [name]                            a key to try the app with (`dev` unless named) and its API_KEYS line: the
  *                                             key printed once, the line for .dev.vars or `API_KEYS=… pnpm dev`; kept nowhere,
  *                                             so keep both from one run (each run makes a new pair)
+ *   kit env [--app .] [--write]               a local value for every setting .env.example (Node) and .dev.vars.example
+ *                                             (Workers) list, and a dev key: printed, or --write makes .env and .dev.vars
+ *                                             (never over one); `pnpm dev` and `wrangler dev` read them
  *   kit license keys [--out <folder>]        a product's signing key pair: the private key into <folder>/license-private.jwk
  *                                             (0600, keep it in a secret store), the public JWK printed for the app's code
  *   kit license mint --private <file> --product <name> --licensee <who> --plan <plan> [--grants a,b] [--days 365] [--instance <id>]
@@ -406,8 +409,10 @@ const WEB_DEV = Object.fromEntries(['@cloudflare/vite-plugin', '@tailwindcss/vit
 /** openapi-typescript, pinned: `kit sdk` turns the API's document into the client's types with it. */
 const OPENAPI_TYPESCRIPT = '7.13.0'
 const PRESETS = ['api', 'app', 'selfhosted']
+/** A Node app's dev script: .env holds its local settings (`kit env --write`). */
+const NODE_DEV = 'tsx watch --env-file-if-exists=.env src/server.ts'
 const scriptsFor = (runtime, preset) => {
-  const node = { dev: 'tsx watch src/server.ts', start: 'tsx src/server.ts' }
+  const node = { dev: NODE_DEV, start: 'tsx src/server.ts' }
   const workers = {
     migrations: 'tsx scripts/migrations.ts',
     deploy: 'pnpm guide && pnpm migrations && wrangler d1 migrations apply DB --remote && wrangler deploy',
@@ -1658,6 +1663,7 @@ const wireHint = (name) => {
 /** Where an app made by `init` lists a setting, each file named as the step says it. */
 const SETTING_FILES = [
   ['src/app.ts', 'Env in src/app.ts'],
+  ['.env.example', '.env.example'],
   ['.dev.vars.example', '.dev.vars.example'],
   ['container/entrypoint.sh', 'container/entrypoint.sh'],
   ['vitest.config.ts', "vitest.config.ts's miniflare bindings"],
@@ -1972,8 +1978,14 @@ const planWiring = (root, parts) => {
       } else conflicts.push('src/app.ts: no `export type Env =`')
       const entrypoint = read('container/entrypoint.sh')
       if (entrypoint !== null && !entrypoint.includes(`\${${key}:+`)) write('container/entrypoint.sh', withEntrypointLine(entrypoint, key))
-      const vars = read('.dev.vars.example')
-      if (vars !== null && !dotenvNames(vars).includes(key)) write('.dev.vars.example', `${vars.trimEnd()}\n${key}=""\n`)
+      // Where each runtime reads its local settings, each line with how to make its value; a Node app gets .env.example
+      const onNode = read('src/server.ts') !== null
+      for (const [path, made] of [['.dev.vars.example', null], ['.env.example', onNode ? readFileSync(join(KIT, 'templates/app/env.example'), 'utf8') : null]]) {
+        const text = read(path) ?? made
+        if (text !== null && !dotenvNames(text).includes(key)) write(path, `${text.trimEnd()}\n# ${key}: ${what}\n${key}=""\n`)
+      }
+      const scripts = JSON.parse(read('package.json') ?? '{}').scripts
+      if (onNode && scripts?.dev === 'tsx watch src/server.ts') write('package.json', read('package.json').replace('"dev": "tsx watch src/server.ts"', `"dev": "${NODE_DEV}"`))
       const pkg = JSON.parse(read('package.json') ?? '{}')
       if (pkg.cloudflare?.bindings && !pkg.cloudflare.bindings[key]) write('package.json', `${JSON.stringify({ ...pkg, cloudflare: { ...pkg.cloudflare, bindings: { ...pkg.cloudflare.bindings, [key]: { description: `${capital(what)}.` } } } }, null, 2)}\n`)
       const config = read('vitest.config.ts')
@@ -2016,9 +2028,32 @@ const wireParts = (root, parts, install = null) => {
   const installs = typeof install === 'function'
   if (installs) install()
   const workers = existsSync(join(root, 'scripts/migrations.ts'))
-  if (changed.length) console.log(`Next: ${installs || !install ? '' : `${install} && `}pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test (each part's README says what it does; its settings are in .dev.vars.example${existsSync(join(root, 'container/entrypoint.sh')) ? ' and container/entrypoint.sh' : ''})`)
+  // Where the settings are, and the one command that makes a local value for each
+  const examples = ENV_FILES.filter(({ example }) => existsSync(join(root, example)))
+  const settingsIn = [...examples.map(({ example }) => example), ...(existsSync(join(root, 'container/entrypoint.sh')) ? ['container/entrypoint.sh'] : [])].join(', ').replace(/, ([^,]*)$/, ' and $1')
+  const making = examples.length ? `; \`npx @escalay/kit env --write\` makes ${examples.map(({ file }) => file).join(' and ')} from ${examples.length > 1 ? 'them' : 'it'}, a value for each` : ''
+  if (changed.length) console.log(`Next: ${installs || !install ? '' : `${install} && `}pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test (each part's README says what it does; its settings are in ${settingsIn}${making})`)
   return installs
 }
+
+// ---- Local settings: `kit env` ----
+
+/** The files each runtime reads its local settings from, beside the examples that list them, and the origin it serves at. */
+const ENV_FILES = [
+  { example: '.env.example', file: '.env', origin: () => 'http://localhost:4400' },
+  { example: '.dev.vars.example', file: '.dev.vars', origin: (root) => (existsSync(join(root, 'vite.config.ts')) ? 'http://localhost:5173' : 'http://localhost:8787') },
+]
+/** How `kit env` makes each part's setting (registry.json, `meta.wiring.settings[].local`). */
+const LOCAL_SETTINGS = Object.fromEntries(ITEMS.flatMap((item) => item.meta?.wiring?.settings ?? []).filter((setting) => setting.local).map((setting) => [setting.name, setting.local]))
+/** A local value made as `local` says: `random:<bytes>` (base64), `es256` (a JWK, as generateOAuthKey makes), `origin`. */
+const localValueOf = (local, origin) => {
+  if (local === 'origin') return origin
+  if (local === 'es256') return JSON.stringify({ ...generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ format: 'jwk' }), alg: 'ES256' })
+  const bytes = /^random:(\d+)$/.exec(local)?.[1] ?? fail(`registry.json: a setting's local is random:<bytes>, es256 or origin, not ${local}`)
+  return randomBytes(Number(bytes)).toString('base64')
+}
+/** A dotenv line Node's --env-file and wrangler both read: double quotes, or single ones around a value that has them. */
+const dotenvLine = (name, value) => `${name}=${value.includes('"') ? `'${value}'` : `"${value}"`}`
 
 const commands = {
   help: () => console.log(HELP),
@@ -2139,13 +2174,13 @@ const commands = {
     if (preset === 'app' && runtime !== 'cloudflare') fail('the app preset runs on Cloudflare Workers; leave --runtime out or use --runtime cloudflare')
     // __title_quoted__ sits inside a double-quoted YAML value (a skill's description), so its \ and " are escaped
     const vars = { __name__: name, __title__: title, __title_quoted__: title.replaceAll('\\', '\\\\').replaceAll('"', '\\"'), __kit__: VERSION, __date__: COMPATIBILITY_DATE }
-    copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (['gitignore', 'oxlintrc.json', 'oxfmtrc.json', 'github', 'githooks', 'node-version', 'gitleaks.toml'].includes(file) ? `.${file}` : file === 'agents-skills' ? '.agents/skills' : file))
+    copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (['gitignore', 'oxlintrc.json', 'oxfmtrc.json', 'github', 'githooks', 'node-version', 'gitleaks.toml', 'env.example'].includes(file) ? `.${file}` : file === 'agents-skills' ? '.agents/skills' : file))
     if (runtime !== 'node') {
       copyTemplate(join(KIT, 'templates/runtime-cloudflare'), root, vars, (file) => (file === 'dev.vars.example' ? '.dev.vars.example' : file))
       mkdirSync(join(root, 'migrations'), { recursive: true })
     }
     if (preset === 'app') copyTemplate(join(KIT, 'templates/preset-app'), root, vars)
-    if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container', 'test/env.test.ts']) rmSync(join(root, path), { recursive: true, force: true })
+    if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container', 'test/env.test.ts', '.env.example']) rmSync(join(root, path), { recursive: true, force: true })
     // Lines marked for one runtime or preset stay only in apps that have it
     const keeps = { 'runtime:node': runtime !== 'cloudflare', 'runtime:workers': runtime !== 'node', 'runtime:cloudflare': runtime === 'cloudflare', 'runtime:node-only': runtime === 'node', 'preset:api': preset === 'api', 'preset:app': preset === 'app' }
     for (const file of ['AGENTS.md', 'README.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts', '.github/workflows/ci.yml'].map((path) => join(root, path)).filter(existsSync))
@@ -2361,6 +2396,39 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const key = `${name}_${randomBytes(24).toString('base64url')}`
     const line = `API_KEYS=${name}:${sha(key)}`
     console.log(`Key       ${key}\n${line}\nShown once and kept nowhere: the app holds only the hash. Keep the key and this line from this one run: each run makes a new pair, and a key with another run’s line is a 401. On Node: \`${line} pnpm dev\`; on Workers: the line in .dev.vars. Then send \`authorization: Bearer <the key>\` (the app's AGENTS.md › Try it)`)
+  },
+
+  env: () => {
+    const root = resolve(process.cwd(), valueOf('--app') ?? '.')
+    const files = ENV_FILES.filter(({ example }) => existsSync(join(root, example)))
+    if (!files.length) fail(`no .env.example or .dev.vars.example in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
+    // One key and one value per secret for every file, so Node and Workers take the same; the origin is each one's own
+    const key = `dev_${randomBytes(24).toString('base64url')}`
+    const secrets = new Map()
+    const texts = files.map(({ example, file, origin }) => {
+      const given = Object.fromEntries([...readFileSync(join(root, example), 'utf8').matchAll(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S*))/gm)].map(([, name, ...values]) => [name, values.find((value) => value !== undefined) ?? '']))
+      const valueFor = (name) => {
+        if (name === 'API_KEYS') return `dev:${sha(key)}`
+        const local = LOCAL_SETTINGS[name]
+        if (local === 'origin') return origin(root)
+        if (local && !secrets.has(name)) secrets.set(name, localValueOf(local))
+        return local ? secrets.get(name) : given[name]
+      }
+      return [file, `${Object.keys(given).map((name) => dotenvLine(name, valueFor(name))).join('\n')}\n`]
+    })
+    const keyLines = [`Key       ${key}`, 'Shown once and kept nowhere: the files hold only its hash. Send `authorization: Bearer <the key>` (the app\'s AGENTS.md › Try it)']
+    if (!flags.has('--write')) {
+      for (const [file, text] of texts) console.log(`# ${file}\n${text}`)
+      for (const line of keyLines) console.log(`# ${line}`)
+      return
+    }
+    const there = texts.filter(([file]) => existsSync(join(root, file))).map(([file]) => file)
+    if (there.length) fail(`${there.join(' and ')} exists: nothing written. \`kit env\` prints the lines; add the ones it lacks by hand, or delete it and run this again`)
+    for (const [file, text] of texts) writeFileSync(join(root, file), text, { mode: 0o600 })
+    console.log(`Wrote ${texts.map(([file]) => file).join(' and ')}: a value for each setting, made now`)
+    for (const line of keyLines) console.log(line)
+    const dev = JSON.parse(textOf(join(root, 'package.json')) ?? '{}').scripts?.dev
+    if (files.some(({ file }) => file === '.env') && dev && !dev.includes('--env-file')) console.log(`package.json's dev script reads no .env: make it \`${NODE_DEV}\``)
   },
 
   brand: async () => {

@@ -30,6 +30,14 @@ the hash). Keep both from one run: each run makes a new pair, and a key with ano
 - Workers: the line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm __worker_dev__`, at http://localhost:8787 <!-- preset:api --> <!-- runtime:workers -->
 - The line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm dev`, at http://localhost:5173 <!-- preset:app -->
 
+A wired part (`kit add … --wire`) has settings of its own, each listed with how to make its value in:
+
+- `.env.example`, which `pnpm dev` reads as `.env` <!-- runtime:node -->
+- `.dev.vars.example`, which `wrangler dev` reads as `.dev.vars` <!-- runtime:workers -->
+
+`npx @escalay/kit env --write` makes those files, a value for each and a key it prints once (in place of `kit key`),
+then start the app as above. It never overwrites one: `kit env` prints the lines instead.
+
 ```bash
 KEY=dev_…   # the key it printed
 BASE=http://localhost:4400 # runtime:node
