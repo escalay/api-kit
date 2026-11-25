@@ -30,7 +30,9 @@ so take that one before the rest. An edit the team keeps is recorded with
 file changes again, the kit changes it too, or `update <part> --force` takes the kit's; `update` and `upgrading` end
 with that `doctor --keep` line, naming the files, while an edit is left that doctor would fail. `add` and `update` print `pnpm add`
 only for what `package.json` lacks. Read the sections below for every part the app has, from
-the version in `kit.json` up.
+the version in `kit.json` up. `update` changes only the kit's folder: a change an app must make to its own files (what
+a newer `init` writes in `src/app.ts`, the examples, CI) is a note under the part it belongs to, so no note means
+nothing to change there either.
 
 ## core
 
