@@ -599,6 +599,15 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## sharing
 
+### Unreleased (after 1.36.0)
+
+- **A space's MCP reads its children.** `kit add sharing --wire --spaces <parent>` now adds, for each feature made
+  `--under` it, a `list_<space>_<children>` tool to the space's own MCP, over `/api/<parent>/{id}/<children>`; run it
+  again after adding a child. Before, a friend's agent got `view_<space>` alone. A child by its id
+  (`/api/<children>/{id}`) stays the owner's. An app wired by 1.36.0 runs `--wire` again, or adds the line in
+  REFERENCE.md › What a space's MCP offers. `OAUTH_SIGNING_KEY` is now the oauth part's setting, which sharing
+  uses: `add sharing` names it as before.
+
 ### 1.36.0
 
 - `--wire` says where the owner routes are once it has written (`/api/spaces/{shelf id}/invites` and `…/members`, not

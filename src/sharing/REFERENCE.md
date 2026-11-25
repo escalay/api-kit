@@ -1,7 +1,7 @@
 # sharing: reference
 
-What the README leaves to this file, which ships beside it: the owner routes, a friend's agent as a test, the
-refusals, the sign-in ladder, a member's states and two more flows.
+What the README leaves to this file, which ships beside it: the owner routes, a friend's agent as a test, what a
+space's MCP offers, the refusals, the sign-in ladder, a member's states and two more flows.
 
 ## The owner routes
 
@@ -51,6 +51,18 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
   expect((await app.request(`/api/shelves/${soups}`, { method: 'DELETE', headers })).status).toBe(204)
   expect((await view(`/s/${soups}/mcp`)).status).toBe(401)
 })
+```
+
+## What a space's MCP offers
+
+`--wire` gives a shelf's own MCP (its invites' `address`) `view_shelf`, and for each feature made
+`--under shelves` a list tool over that shelf's children: `kit feature recipes --under shelves` gets
+`list_shelf_recipes`, which calls `/api/shelves/{shelf}/recipes`. A child made after wiring gets its tool when
+`kit add sharing --wire --spaces shelves` runs again. A child by its own id (`/api/recipes/{id}`) is no space's path,
+so it stays the owner's: a member's token there is a 401. By hand, one line per child, after `SPACE_TOOLS`:
+
+```ts
+SPACE_TOOLS.push(mcpTool({ name: 'list_shelf_recipes', title: 'Recipes in this shelf', description: 'The recipes in the shelf this address shares, the newest first, a page at a time.', input: z.object({ limit: z.number().int().min(1).max(100).optional().describe('At most this many (default 50).'), cursor: z.string().optional().describe('Where the next page starts: the cursor the last page ended with.') }), call: (args, at) => ({ path: `/api/shelves/${encodeURIComponent(at?.params.space ?? '')}/recipes`, query: args }), summarize: (page: { _embedded: { recipes: { title: unknown }[] } }) => page._embedded.recipes.map((row) => String(row.title)).join('\n') || 'None yet.' }))
 ```
 
 ## Refusals: 401 or 403

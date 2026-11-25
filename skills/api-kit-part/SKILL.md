@@ -65,6 +65,8 @@ One `registry:item` per part in `registry.json`; `kit add`, `kit list` and the s
   - `over`: the feature it works over, named by `flag` (`--spaces`), with `what` it is and an `example` that makes one;
   - `after`: a line `--wire` prints once it has written (where the part's routes are);
   - `files`: its new files, each from `templates/wire/<part>/<the same path>`;
+  - `children`: edits made once per feature made `--under` the one it works over, its spellings as `__child_*__`
+    (sharing's read tool per child on a space's MCP);
   - `features`: each listed in `src/features/index.ts` (`name`, and `before` another);
   - `edits`, each in a `file` and one of: `import` with `names`; `at` a marker (`kit:setup`, `kit:mounts`, …) with
     `lines`; `line` with `to` (one line as `kit feature` wrote it); `statement` with `was` and `to` (a whole

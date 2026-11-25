@@ -1591,6 +1591,46 @@ describe('the copy-in CLI', () => {
     }
   }, 240_000)
 
+  it('gives a shared space’s MCP a read tool per feature --under it, while a child by its id stays the owner’s', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-space-children-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    try {
+      expect(cli(parent, 'init', 'pantry-api', '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'pantry-api')
+      expect(cli(app, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      expect(cli(app, 'feature', 'recipes', '--under', 'shelves', '--fields', 'title:string').status).toBe(0)
+      const wired = cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install')
+      expect(wired.status, wired.stdout + wired.stderr).toBe(0)
+      const source = await readFile(join(app, 'src/app.ts'), 'utf8')
+      expect(source).toContain("name: 'list_shelf_recipes'")
+      // A child made later is wired by running it again, once
+      expect(cli(app, 'feature', 'labels', '--under', 'shelves', '--fields', 'text:string').status).toBe(0)
+      expect(cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install').status).toBe(0)
+      expect(cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install').stdout).toContain('Wired already')
+      const again = await readFile(join(app, 'src/app.ts'), 'utf8')
+      expect([again.split('const SPACE_TOOLS').length, again.split("name: 'list_shelf_recipes'").length, again.split("name: 'list_shelf_labels'").length]).toEqual([2, 2, 2])
+      const typecheck = spawnSync(join(import.meta.dirname, '..', 'node_modules/.bin/tsc'), ['--noEmit', '-p', 'tsconfig.json'], { cwd: app, encoding: 'utf8' })
+      expect(typecheck.status, typecheck.stdout).toBe(0)
+      // A friend's agent reads the shelf's recipes through its MCP, and never one by its id
+      const { createApp: createPantry } = await import(join(app, 'src/app.ts'))
+      const { approveSignIn: approve, connectAgent } = await import('../src/testing/index.js')
+      const env = { API_KEYS: `owner:${hashOfText('owner-key')}`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
+      const pantry = await createPantry({ db: await openDb(':memory:'), env, address: 'socket' })
+      const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
+      const made = async (path: string, body: object) => ((await (await pantry.request(path, { method: 'POST', headers, body: JSON.stringify(body) })).json()) as { id: string }).id
+      const soups = await made('/api/shelves', { name: 'Soups' })
+      const leek = await made(`/api/shelves/${soups}/recipes`, { title: 'Leek soup' })
+      const { code, address } = (await (await pantry.request(`/api/spaces/${soups}/invites`, { method: 'POST', headers, body: JSON.stringify({ label: 'Sam' }) })).json()) as { code: string; address: string }
+      const { tokens } = await connectAgent(pantry, { address, approve: (query: URLSearchParams) => approve(pantry, query, { form: { action: '/sharing/join', fields: { code } } }) })
+      const listed = await callMcp(pantry, 'tools/call', { path: new URL(address).pathname, bearer: tokens!.access_token, params: { name: 'list_shelf_recipes', arguments: {} } })
+      expect([listed.status, listed.text]).toEqual([200, expect.stringContaining('Leek soup')])
+      expect((await pantry.request(`/api/recipes/${leek}`, { headers: { authorization: `Bearer ${tokens!.access_token}` } })).status).toBe(401)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('runs a wired Node app locally: .env.example lists every setting and how to make it, kit env --write makes .env, and pnpm dev reads it', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-env-file-${process.pid}`)
     await rm(parent, { recursive: true, force: true })

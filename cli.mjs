@@ -1890,6 +1890,22 @@ const wireVarsOf = (root, over) => {
   const first = /\.object\(\{\s*id: z\.string\(\),\s*(\w+):/.exec(routes)?.[1] ?? 'id'
   return { ...Object.fromEntries(Object.entries(names).map(([key, value]) => [`__over_${key.slice(2)}`, value])), __over_first__: first, __name__: name, __title__: title }
 }
+/** The features made `--under` the one a part works over, each with its spellings as `__child_*__`, for `wire.children`. */
+const childrenOf = (root, over) => {
+  const features = join(root, 'src/features')
+  if (!over || !existsSync(features)) return []
+  return readdirSync(features)
+    .filter((name) => name !== over && new RegExp(`path: '/api/${over}/\\{\\w+\\}/${name}'`).test(textOf(join(features, name, 'routes.ts')) ?? ''))
+    .sort()
+    .map((name) => {
+      const routes = textOf(join(features, name, 'routes.ts'))
+      const singular = /export const (\w+)Schema = /.exec(routes)?.[1]
+      const names = namesOf(name, singular?.replace(/[A-Z]/g, (letter, at) => `${at ? '-' : ''}${letter.toLowerCase()}`))
+      // Its first own field, after the id and its parent's
+      const first = /\.object\(\{\s*id: z\.string\(\),\s*(?:\w+Id: z\.string\(\),\s*)?(\w+):/.exec(routes)?.[1] ?? 'id'
+      return { ...Object.fromEntries(Object.entries(names).map(([key, value]) => [`__child_${key.slice(2)}`, value])), __child_first__: first }
+    })
+}
 const fillVars = (text, vars) => Object.entries(vars).reduce((filled, [key, value]) => filled.replaceAll(key, value), text)
 const fillDeep = (value, vars) => (typeof value === 'string' ? fillVars(value, vars) : Array.isArray(value) ? value.map((one) => fillDeep(one, vars)) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, one]) => [key, fillDeep(one, vars)])) : value)
 
@@ -1958,7 +1974,9 @@ const planWiring = (root, parts) => {
       if (ahead >= 0) write(path, [...lines.slice(0, ahead), `  ${camel},`, ...lines.slice(ahead)].join('\n'))
       else insertAt(path, 'kit:features', [`  ${camel},`])
     }
-    for (const edit of fillDeep(wire.edits ?? [], vars)) {
+    // Then what each feature under it adds (a space's read tool per child)
+    const children = childrenOf(root, over).flatMap((child) => fillDeep(wire.children ?? [], { ...vars, ...child }))
+    for (const edit of [...fillDeep(wire.edits ?? [], vars), ...children]) {
       const text = read(edit.file)
       // A runtime the app doesn't have: no worker.ts on Node alone, no server.ts on Workers alone
       if (text === null) continue
