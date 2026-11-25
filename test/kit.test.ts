@@ -1603,9 +1603,8 @@ describe('the copy-in CLI', () => {
   }, 240_000)
 
   it('leaves what --wire writes formatted in an installed app, so an edit by hand meets the shape pnpm format keeps', async () => {
-    const parent = join(import.meta.dirname, '.generated', `run-wire-format-${process.pid}`)
-    await rm(parent, { recursive: true, force: true })
-    await mkdir(parent, { recursive: true })
+    // Outside this repository, whose .gitignore oxfmt would read for test/.generated
+    const parent = await mkdtemp(join(tmpdir(), 'kit-wire-format-'))
     const oxfmt = join(import.meta.dirname, '..', 'node_modules/.bin/oxfmt')
     try {
       expect(cli(parent, 'init', 'tidy-shelves', '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
@@ -1615,14 +1614,21 @@ describe('the copy-in CLI', () => {
       await mkdir(join(app, 'node_modules/.bin'), { recursive: true })
       await symlink(oxfmt, join(app, 'node_modules/.bin/oxfmt'))
       const sources = ['src/app.ts', 'src/server.ts', 'src/features/shelves/index.ts', 'src/features/shelves/spaces.ts']
-      expect(spawnSync(oxfmt, sources.slice(0, 3), { cwd: app }).status).toBe(0)
+      expect(spawnSync(oxfmt, [], { cwd: app }).status).toBe(0)
       const wired = cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install')
       expect(wired.status, wired.stdout + wired.stderr).toBe(0)
       const said = /^Formatted (.*)$/m.exec(wired.stdout)?.[1]?.split(', ')
       expect(said?.sort()).toEqual([...sources].sort())
       expect(wired.stdout).toContain('Next: pnpm test')
-      const check = spawnSync(oxfmt, ['--check', ...sources], { cwd: app, encoding: 'utf8' })
-      expect(check.status, check.stdout + check.stderr).toBe(0)
+      // The whole app as `pnpm check` reads it: package.json, the examples and the rest too
+      const check = spawnSync(oxfmt, ['--check'], { cwd: app, encoding: 'utf8' })
+      expect([check.status, check.stdout + check.stderr]).toEqual([0, expect.stringContaining('All matched files use the correct format')])
+      // A child made later, wired into the formatted app once
+      expect(cli(app, 'feature', 'recipes', '--under', 'shelves', '--fields', 'title:string').status).toBe(0)
+      expect(spawnSync(oxfmt, [], { cwd: app }).status).toBe(0)
+      expect(cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install').stdout).toContain('Formatted src/app.ts')
+      expect(cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install').stdout).toContain('Wired already')
+      expect((await readFile(join(app, 'src/app.ts'), 'utf8')).split("name: 'list_shelf_recipes'")).toHaveLength(2)
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
