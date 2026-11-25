@@ -2,7 +2,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { decodeJwt } from 'jose'
 import { describe, expect, it } from 'vitest'
-import { createBrand, defineBrand, matches, testDb, type AgentBrand } from '../src/index.js'
+import { createBrand, defineBrand, matches, memoryGuardStore, testDb, type AgentBrand, type GuardStore } from '../src/index.js'
 import { createSharing, SHARING_OPEN_PATHS, sharingSignInPaths, signInStepOf, type SharingOptions } from '../src/sharing/index.js'
 import { approveSignIn } from '../src/testing/index.js'
 import { ASSETS } from './brand-fixture.js'
@@ -329,6 +329,16 @@ describe('POST /sharing/join', () => {
     expect((await post(await open({ resource: BAKES }), { code: 'BDKM-QXTW' }, from('203.0.113.9'))).status).toBe(400)
     const owner = await open({ resource: SOUPS, headers: { 'x-test-owner': OWNER } })
     expect((await post(owner, { code: invite.code }, { ...from('192.0.2.1'), 'x-test-owner': OWNER })).status).toBe(302)
+  })
+
+  it('counts a typed code by an HMAC of its address, never the address itself', async () => {
+    const inner = memoryGuardStore()
+    const counted: string[] = []
+    const store: GuardStore = { ...inner, count: (id, windowMs, now) => (counted.push(id), inner.count(id, windowMs, now)) }
+    const { open, post } = await box({ options: { limits: { store } } })
+    await post(await open({ resource: SOUPS }), { code: 'BDKM-QXTW' }, { 'x-forwarded-for': '192.0.2.1' })
+    expect(counted.some((id) => id.startsWith('sharing-code ip:'))).toBe(true)
+    expect(counted.filter((id) => id.includes('192.0.2.1'))).toEqual([])
   })
 
   it('is always limited: limits false throws', async () => {

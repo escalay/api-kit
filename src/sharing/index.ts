@@ -186,7 +186,7 @@ export const registerSharing = async (app: OpenAPIHono, sharing: Sharing, { oaut
   const bound = sharing.bind(oauth, brand)
   await migrate(config.db, 'sharing', SHARING_MIGRATIONS)
   const repo = sharingRepo(config.db)
-  app.post('/sharing/join', joinByCodeFor({ config, bound, brand, repo, limits: codeLimitsOf(config.limits), oauth }))
+  app.post('/sharing/join', joinByCodeFor({ config, bound, brand, repo, limits: codeLimitsOf(config.limits, config.keys), oauth }))
   const routes = sharingRoutes({ path: config.path, tag: config.tag })
   const handle = sharingHandlers(config, bound, repo)
   app.openapi(routes.get, handle.get)

@@ -4,13 +4,13 @@
  * fifth ends that sign-in. Kept in the guard store (`dbGuardStore(db)` by default), so every instance shares them.
  *
  * @example
- * const limits = codeLimitsOf(config.limits)
+ * const limits = codeLimitsOf(config.limits, config.keys)
  * const retry = await limits.retryAfter(c, 'soups')   // seconds to wait, or null
  * if (await limits.lastTry(ticket)) return oauth.complete(c, ticket, 'deny')
  */
 import type { Context } from 'hono'
 import { addressOf, type AddressTrust, type GuardStore } from '../core/guards.js'
-import { ticketHashOf } from './secrets.js'
+import { addressKeyOf, ticketHashOf, type SharingKeys } from './secrets.js'
 
 const MINUTE = 60 * 1000
 /** Typed codes from one address: 10 a minute. */
@@ -29,9 +29,9 @@ export type SharingLimits = { store: GuardStore; address?: AddressTrust }
  * The typed code's counters over a guard store: `retryAfter` before a lookup, `lastTry` on a wrong code.
  *
  * @example
- * const limits = codeLimitsOf({ store: await dbGuardStore(db) })
+ * const limits = codeLimitsOf({ store: await dbGuardStore(db) }, sharingKeys(env.SHARING_SECRET))
  */
-export const codeLimitsOf = ({ store, address }: SharingLimits) => {
+export const codeLimitsOf = ({ store, address }: SharingLimits, keys: SharingKeys) => {
   /** Counts one call against a window; the seconds until it ends when past its limit, else null. */
   const overBy = async (id: string, { limit, windowMs }: { limit: number; windowMs: number }) => {
     const now = Date.now()
@@ -42,11 +42,12 @@ export const codeLimitsOf = ({ store, address }: SharingLimits) => {
 
   return {
     /**
-     * Counts a typed code from this address, then at this space (`any` for none); the seconds to wait when either is
-     * spent, else null. A code refused at its address never spends the space's budget, so one address can't lock others out.
+     * Counts a typed code from this address (kept by its HMAC), then at this space (`any` for none); the seconds to wait
+     * when either is spent, else null. A code refused at its address never spends the space's budget, so one address
+     * can't lock others out.
      */
     retryAfter: async (c: Context, space: string) => {
-      const fromHere = await overBy(`sharing-code ip:${addressOf(c, address)}`, PER_ADDRESS)
+      const fromHere = await overBy(`sharing-code ip:${addressKeyOf(keys, addressOf(c, address))}`, PER_ADDRESS)
       if (fromHere) return fromHere
       return overBy(`sharing-code space:${space}`, PER_SPACE)
     },
