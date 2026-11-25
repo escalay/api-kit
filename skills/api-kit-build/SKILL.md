@@ -93,11 +93,11 @@ Add one with `npx @escalay/kit add <part> --dir src/kit --install` (browser part
    version it records: what each part changed and what the app must do. After `update`, the `--from` it prints
    still finds them.
 2. `npx @escalay/kit doctor`: one line per file that is missing, edited, or behind, each with its fix.
-3. `npx @escalay/kit diff --patch`: your edits beside the kit's changes.
+3. `npx @escalay/kit diff --patch`: each changed file from the app's (-) to the kit's (+), as `update` goes.
 4. `npx @escalay/kit update`: writes what the kit changed and keeps every file you edited. When it exits 1, the
    kit's [Taking a new version](https://github.com/escalay/api-kit/blob/main/docs/upgrading.md#taking-a-new-version)
    says what to do.
-5. Record each edit you mean to keep with `doctor --keep <file>`. Done when `doctor` exits 0 and `pnpm test` passes.
+5. Record each edit you mean to keep with `doctor --keep <file>` (`update` ends with that line, the files named). Done when `doctor` exits 0 and `pnpm test` passes.
 
 ## Shipping
 

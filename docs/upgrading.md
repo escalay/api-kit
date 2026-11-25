@@ -9,7 +9,7 @@ lists every release.
 ```bash
 npx @escalay/kit upgrading --dir src/kit      # this page's notes for your parts since kit.json's version, up to the kit's
 npx @escalay/kit doctor --dir src/kit         # missing, edited, behind: one line each with its fix
-npx @escalay/kit diff --dir src/kit --patch   # your edits next to the kit's changes
+npx @escalay/kit diff --dir src/kit --patch   # each changed file, from the app's (-) to the kit's (+), as update goes
 npx @escalay/kit update --dir src/kit         # never overwrites your edits without --force
 ```
 
@@ -27,7 +27,8 @@ part's, edits too (through kit 1.32.0, a bare `--force` did that without asking)
 file the kit changed too in a part whose notes below name a fix (`**Fixed`, `**Security`): an edit kept over a fix still holds the bug,
 so take that one before the rest. An edit the team keeps is recorded with
 `doctor --keep <file>` (`kept` in `kit.json`, the file's hash): `doctor` then notes it instead of failing, until the
-file changes again, the kit changes it too, or `update <part> --force` takes the kit's. `add` and `update` print `pnpm add`
+file changes again, the kit changes it too, or `update <part> --force` takes the kit's; `update` and `upgrading` end
+with that `doctor --keep` line, naming the files, while an edit is left that doctor would fail. `add` and `update` print `pnpm add`
 only for what `package.json` lacks. Read the sections below for every part the app has, from
 the version in `kit.json` up.
 
@@ -343,10 +344,18 @@ Tokens, codes, refresh rows and claims from before grants keep working.
 
 - New: `guideSkillProblems({ files })`, what the server would warn of reading the guide's skills (`[]` when each
   loads). A SKILL.md whose frontmatter it can't read, such as a `: ` in an unquoted description, was skipped with a
-  line in the server's log and nothing else. A new app's `test/api.test.ts` checks it; an older app adds
-  `expect(await guideSkillProblems({ files: guideFiles(GUIDE_DIR) })).toEqual([])` there (from
-  `./kit/mcp/index.js`), and quotes its skills' descriptions. `kit doctor` now fails on such a skill, existing apps
-  included, naming the file and the server's reason.
+  line in the server's log and nothing else. A new app's `test/api.test.ts` checks it; an older app adds to its
+  `test/api.test.ts` (which has `guideFiles` and `GUIDE_DIR`) the import and the test below, and quotes its skills'
+  descriptions. `kit doctor` now fails on such a skill, existing apps included, naming the file and the server's
+  reason.
+
+  ```ts
+  import { guideSkillProblems } from '../src/kit/mcp/index.js'
+  // inside describe('the API', …)
+  it('loads every skill as its MCP server reads it (quote a description with a colon in it)', async () => {
+    expect(await guideSkillProblems({ files: guideFiles(GUIDE_DIR) })).toEqual([])
+  })
+  ```
 
 ### 1.31.0
 
@@ -528,8 +537,9 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
   and two flows moved to `REFERENCE.md` beside it, which `update` adds. `kit add sharing` prints each setting
   (`OAUTH_SIGNING_KEY`, `SHARING_SECRET`, `PUBLIC_ORIGIN`) and schedule the app still lacks.
 - A new app's `scripts/migrations.ts` writes the part's D1 files, and its features' `register` gets `parts` (a
-  feature calls `parts.sharing.forget(id)`). An older app adds `['sharing', SHARING_MIGRATIONS]` from
-  `./kit/sharing/index.js`, as `kit add` says, and `parts` to its `Feature` type and `createApp` (Wire it).
+  feature calls `parts.sharing.forget(id)`). An older app adds `import { SHARING_MIGRATIONS } from
+  '../src/kit/sharing/index.js'` and `['sharing', SHARING_MIGRATIONS]` to its sets in `scripts/migrations.ts`, as
+  `kit add` says, and `parts` to its `Feature` type and `createApp` (Wire it).
 - The README's hooks chain, for an app with hooks of its own, is a whole file now (`chained(sharing, mine)`), typed
   and tested in the kit; it read `mine` without defining it. Nothing to change in an app that chains them already.
 

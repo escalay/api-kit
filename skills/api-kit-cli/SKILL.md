@@ -118,7 +118,7 @@ default; `--app` is the app's folder, `.` by default.
 | `kit init <dir>` | a new app (`npm create escalay@latest <dir>` runs it): `--preset`, `--runtime both\|cloudflare\|node`, `--title`, `--bare` (no `notes`), `--no-git`; then `pnpm install`, `format` and `migrations` (`--no-install` leaves them out) |
 | `kit add <part…>` | copies parts and the parts they need; `--install`, `--web-dir` for browser parts |
 | `kit list` | every part, what it needs, which are installed |
-| `kit diff [--patch]` | per file: unchanged, you edited, the kit changed, both |
+| `kit diff [--patch]` | per file: unchanged, you edited, the kit changed, both; `--patch` shows only the changed ones, from the app's (`app/`, -) to the kit's (`kit/`, +) |
 | `kit update [part…]` | takes the kit's changes, keeps your edits (`--force` takes the kit's in the parts named, `kit` for the generated `index.ts`, and names each edit it overwrites; naming no part it refuses while an edit would go, and `--force --all` takes every part's) |
 | `kit upgrading` | what changed for the parts in `kit.json` since its version (or `--from`) and what to do: their notes from the kit's `docs/upgrading.md`; `doctor` and `update` print it when the app is behind |
 | `kit doctor` | missing, edited and behind files, `cliGaps`, notes (exits 1 with a fix per line); `--keep <file…>` records edits the team keeps, so they no longer fail it |

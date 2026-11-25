@@ -622,6 +622,32 @@ describe('the copy-in CLI', () => {
     expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).kept).toBeUndefined()
   })
 
+  it('names doctor --keep after update and upgrading leave edits, and diff --patch shows only changed files, app to kit', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'pagination')
+    await writeFile(join(app, 'src/kit/core/hal.ts'), '// ours\n')
+    await writeFile(join(app, 'src/kit/pagination/index.ts'), '// older\n')
+    const lock = JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8'))
+    await writeFile(join(app, 'src/kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1', files: { ...lock.files, 'pagination/index.ts': hashOfText('// older\n') } }))
+    const patch = cli(app, 'diff', '--patch')
+    expect(patch.stdout).not.toMatch(/^ +unchanged /m)
+    expect(patch.stdout).toMatch(/^ +you edited +core\/hal\.ts$/m)
+    expect(patch.stdout).toMatch(/^ +and \d+ unchanged$/m)
+    // Each side named, in the direction update goes: from the app's file to the kit's
+    expect(patch.stdout).toContain(`# core/hal.ts, you edited it: - the app's, + kit ${KIT_VERSION}'s; update keeps the app's (--force takes the kit's)\n`)
+    expect(patch.stdout).toContain('--- app/core/hal.ts\n+++ kit/core/hal.ts\n')
+    expect(patch.stdout).toContain(`# pagination/index.ts, the kit changed it: - the app's, + kit ${KIT_VERSION}'s; update takes this\n`)
+    expect(patch.stdout).toMatch(/^-\/\/ older$/m)
+    expect(patch.stdout).not.toContain(tmpdir())
+    const keep = "Kept edits: `kit doctor --dir src/kit --keep core/hal.ts` records it as the app's, so doctor notes it instead of failing"
+    expect(cli(app, 'upgrading').stdout.trim().split('\n').at(-1)).toBe(keep)
+    const updated = cli(app, 'update')
+    expect(updated.stdout.trim().split('\n').at(-1)).toBe(keep)
+    expect(cli(app, 'doctor', '--keep', 'core/hal.ts').status).toBe(0)
+    // Once kept, neither names it again
+    expect(cli(app, 'update').stdout).not.toContain('Kept edits')
+  })
+
   it('prints no pnpm add for what package.json already has', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     await writeFile(join(app, 'package.json'), JSON.stringify({ name: 'app', dependencies: { hono: '^4.13.18' } }))

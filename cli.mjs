@@ -9,7 +9,8 @@
  *   kit <command> --help                      that command's lines from this list (-h too)
  *   kit list                                  parts, what they need, which are installed; then the root items
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
- *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
+ *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both; --patch: only the changed
+ *                                             files, each from the app's (-, app/) to the kit's (+, kit/), as update goes
  *   kit update [part…] [--dir src/kit] [--force [--all]]
  *                                             --force takes the kit's file over your edit in the parts named (`kit` names
  *                                             the generated index.ts), and names each edit it overwrites or keeps; naming
@@ -265,6 +266,14 @@ const findingsOf = (lock) => {
     ...behind.map((part) => `behind   ${part} was copied from kit ${lock.version} and kit ${VERSION} changed it: \`kit diff --dir ${dirArg} --patch\`, then \`kit update --dir ${dirArg}\``),
     ...(lock.version !== VERSION && !behind.length && !kept.length ? [`behind   kit.json says kit ${lock.version}, this is ${VERSION} with the same files: \`kit update --dir ${dirArg}\` records it`] : []),
   ]
+}
+
+/** The line `update` and `upgrading` end with while edits are left that doctor would fail: the `doctor --keep` for them. */
+const keepLineOf = (lock) => {
+  const kept = keptOf(lock)
+  const files = statusOf(lock, expectedFiles(lock.modules.filter((name) => REGISTRY[name]), lock.webDir)).filter(({ file, state }) => state === 'you edited' && kept[file] === undefined).map(({ file }) => file)
+  const it = files.length === 1 ? 'it' : 'them'
+  return files.length ? [`Kept edits: \`kit doctor --dir ${dirArg} --keep ${files.join(' ')}\` records ${it} as the app's, so doctor notes ${it} instead of failing`] : []
 }
 
 /** `doctor --keep <file…>`: records each edited file's hash as kept, so doctor counts it no more while it stays so. */
@@ -1612,16 +1621,33 @@ const commands = {
 
   diff: () => {
     const lock = readLock() ?? fail(`no kit.json in ${dirArg}; add modules first`)
-    const statuses = statusOf(lock, expectedFiles(lock.modules, lock.webDir))
-    console.log(`Kit ${lock.version} in ${dirArg} → kit ${VERSION}`)
-    for (const { file, state } of statuses) console.log(`  ${state.padEnd(15)} ${file}`)
-    if (flags.has('--patch'))
-      for (const { file, changed } of statuses.filter((status) => status.state !== 'unchanged' && status.state !== 'missing')) {
-        if (!changed && file === 'index.ts') continue
-        const upstream = file === 'index.ts' ? null : join(KIT, 'src', sourceOf(file))
-        if (upstream) spawnSync('git', ['--no-pager', 'diff', '--no-index', '--no-color', upstream, pathOf(file, lock.webDir)], { stdio: 'inherit' })
-      }
+    const expected = expectedFiles(lock.modules, lock.webDir)
+    const statuses = statusOf(lock, expected)
     const changed = statuses.filter((status) => status.state !== 'unchanged')
+    const patch = flags.has('--patch')
+    console.log(`Kit ${lock.version} in ${dirArg} → kit ${VERSION}`)
+    // With the patches, only the files they are about
+    for (const { file, state } of patch ? changed : statuses) console.log(`  ${state.padEnd(15)} ${file}`)
+    if (patch && changed.length < statuses.length) console.log(`  and ${statuses.length - changed.length} unchanged`)
+    if (patch) {
+      // Each side copied under app/ and kit/, so the patch names them and reads as update would change the app's file
+      const sides = join(tmpdir(), `kit-diff-${process.pid}`)
+      const said = { 'you edited': "you edited it: - the app's, + kit VERSION's; update keeps the app's (--force takes the kit's)", 'both changed': "you edited it and the kit changed it: - the app's, + kit VERSION's; update keeps the app's (--force takes the kit's)", 'kit changed': "the kit changed it: - the app's, + kit VERSION's; update takes this", 'dropped by kit': 'no longer in the kit: update stops tracking it', 'new in kit': "new in the kit: update writes it" }
+      try {
+        for (const { file, state } of changed.filter(({ state }) => state !== 'missing')) {
+          const [app, kit] = ['app', 'kit'].map((side) => join(sides, side, sourceOf(file)))
+          for (const [path, text] of [[app, textOf(pathOf(file, lock.webDir))], [kit, expected[file] ?? null]]) {
+            mkdirSync(dirname(path), { recursive: true })
+            writeFileSync(path, text ?? '')
+          }
+          console.log(`\n# ${sourceOf(file)}, ${said[state].replace('VERSION', VERSION)}`)
+          const shown = spawnSync('git', ['--no-pager', 'diff', '--no-index', '--no-color', '--no-prefix', `app/${sourceOf(file)}`, `kit/${sourceOf(file)}`], { cwd: sides, encoding: 'utf8' })
+          process.stdout.write(shown.stdout)
+        }
+      } finally {
+        rmSync(sides, { recursive: true, force: true })
+      }
+    }
     process.exitCode = changed.length ? 1 : 0
   },
 
@@ -1933,10 +1959,12 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     if (kept.length) {
       console.log(`${kept.length} ${kept.length === 1 ? 'file' : 'files'} kept at kit ${lock.version}: ${kept.join(', ')}. ${keptFix([...new Set(kept.map((file) => partOf(file, modules)))])}`)
       console.log(`Dependencies: ${installCommand(modules)}`)
+      for (const line of keepLineOf(readLock())) console.log(line)
       process.exitCode = 1
       return
     }
     console.log(`kit.json → ${VERSION}. Dependencies: ${installCommand(modules)}`)
+    for (const line of keepLineOf(readLock())) console.log(line)
   },
 
   upgrading: () => {
@@ -1946,7 +1974,11 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const markdown = readFileSync(join(KIT, 'docs/upgrading.md'), 'utf8')
     const folders = [...new Set(lock.modules.filter((name) => REGISTRY[name]).map(notesFolderOf))]
     const sections = folders.map((folder) => [folder, notesSince(markdown, folder, since)]).filter(([, notes]) => notes.length)
-    if (!sections.length) return console.log(`No upgrade notes for ${folders.join(', ')} after kit ${since} (this is kit ${VERSION})`)
+    if (!sections.length) {
+      console.log(`No upgrade notes for ${folders.join(', ')} after kit ${since} (this is kit ${VERSION})`)
+      for (const line of keepLineOf(lock)) console.log(line)
+      return
+    }
     console.log(`Upgrade notes for ${folders.join(', ')} after kit ${since}, up to kit ${VERSION} (the kit's docs/upgrading.md):`)
     // An edit kept over a fix holds the bug: the notes mark a fix `**Fixed` or `**Security`, per part, never per file
     const fixed = new Set(sections.filter(([, notes]) => notes.some((note) => /\*\*(Fixed|Security)\b/.test(note))).map(([folder]) => folder))
@@ -1957,6 +1989,8 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     if (overFixes.length) console.log('')
     for (const { file } of overFixes) console.log(`fix      ${file}: your edit, and the kit changed it since; ${notesFolderOf(partOf(file, known))}'s notes below name a fix: ${keptFix([partOf(file, known)])}`)
     for (const [folder, notes] of sections) console.log(`\n## ${folder}\n\n${notes.join('\n\n')}`)
+    const keep = keepLineOf(lock)
+    if (keep.length) console.log(`\n${keep[0]}`)
   },
 }
 
