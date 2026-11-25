@@ -8,6 +8,7 @@
   "main": "src/worker.ts",
   "compatibility_date": "__date__",
   "compatibility_flags": ["nodejs_compat"],
+  // kit:triggers
   "observability": { "enabled": true },
   // The browser app (web/): what is built under /app/ is served as files, any other /app/ path gets index.html, and // preset:app
   // the Worker answers everything else // preset:app

@@ -54,10 +54,19 @@ One `registry:item` per part in `registry.json`; `kit add`, `kit list` and the s
 - Other parts go in `registryDependencies` as `escalay/api-kit/<part>`; a shadcn component by its bare name.
 - `meta.entry: true` when the app imports the part's own folder (`./kit/reminders/index.js`) rather than
   `./kit/index.js`. A part that is repo setup, not code, is a root item (`meta.root`), like `npm-release`.
-- `meta.wiring`, for a part an app made by `init` must wire beyond a feature: `code` (its README's section),
-  `settings` (each a `name` and `what`, printed by `kit add` with the files that still lack it; `test`, an expression
-  for its value in `vitest.config.ts`'s miniflare bindings, and `testImport`, the import line that expression needs)
-  and `cron` (`schedule`, and `calls`: what the scheduled handler calls).
+- `meta.wiring`, for a part an app made by `init` must wire: `code` (its README's section, for a part not wired as a
+  feature of its own; optional), `settings` (each a `name` and `what`, printed by `kit add` with the files that still
+  lack it; `test`, an expression for its value in `vitest.config.ts`'s miniflare bindings, and `testImport`, the
+  import line that expression needs), `cron` (`schedule`, and `calls`: what the scheduled handler calls), and `wire`,
+  what `kit add <part> --wire` writes, `__over_*__` and `__name__`/`__title__` filled in:
+  - `over`: the feature it works over, named by `flag` (`--spaces`), with `what` it is and an `example` that makes one;
+  - `files`: its new files, each from `templates/wire/<part>/<the same path>`;
+  - `features`: each listed in `src/features/index.ts` (`name`, and `before` another);
+  - `edits`, each in a `file` and one of: `import` with `names`; `at` a marker (`kit:setup`, `kit:mounts`, …) with
+    `lines`; `line` with `to` (one line as `kit feature` wrote it); `statement` with `was` and `to` (a whole
+    statement as `init` wrote it, however formatted); `statement` with `object` and `entries` (`{ key, value, was }`,
+    `{ key, append }` or `{ spread }` merged into that object, so two parts compose); `if`, text the file must hold.
+  Settings, the schedule and the markers are generic: a new edit kind goes in `planWiring` in `cli.mjs` with a test.
 - `meta.standard`: the STANDARD sections the part implements (`docs/PARTS.md` and the README's `Standard:` line read
   it); a browser layer adds `meta.layerOf`, the server part it sits on.
 

@@ -15,12 +15,14 @@ import { FEATURES } from './features/index.js'
 import { GUIDE_FILES } from './guide.gen.js'
 import { accessOwner, createAgentApi, createBrand, createOAuth, dbGuardStore, dbOAuthStore, featureTools, parseApiKeys, serveGuide, type AddressTrust, type Db } from './kit/index.js'
 import { guideSkills, inProcess, mcpServerFactory, mountMcp } from './kit/mcp/index.js'
+// kit:imports (a part's imports, `kit add <part> --wire`; each marker below is where it writes)
 
 export type Env = { API_KEYS?: string; OAUTH_SIGNING_KEY?: string; ACCESS_TEAM?: string; ACCESS_AUD?: string; PUBLIC_HOST?: string; FEATURES_OFF?: string }
 
 /** The kit parts a feature calls, made here and handed to each (sharing's `forget` when a space goes): `{ sharing?: Sharing }` once added. */
 export type Parts = Record<string, never>
 
+// kit:module
 export const VERSION = '0.1.0'
 // A switchable feature's tools name their switch, so a 403 from one names a switch an agent can find
 export const TOOLS = FEATURES.flatMap((feature) => (feature.switch ? featureTools(feature.tools, CATALOG, feature.switch) : feature.tools))
@@ -32,6 +34,7 @@ export const createApp = async ({ db, env, address }: { db: Db; env: Env; addres
   // ask its session too, or a deploy signed in by passkey alone can never approve (its README's owner asks Access too):
   // async (c) => { const person = await personOf(c, db); return person?.role === 'owner' ? person.email : null }
   const owner = access ? accessOwner(access) : async () => null
+  // kit:setup
   // A refresh sent twice within 30 seconds (two tabs, a retry) gets the same successor instead of ending the sign-in
   const oauth = env.OAUTH_SIGNING_KEY ? createOAuth({ name: '__title__', signingKey: env.OAUTH_SIGNING_KEY, store: await dbOAuthStore(db), owner, reuseGraceSeconds: 30 }) : undefined
   const app = createAgentApi({
@@ -59,5 +62,6 @@ export const createApp = async ({ db, env, address }: { db: Db; env: Env; addres
   const { prompts, skills } = await guideSkills({ files: GUIDE_FILES })
   const factory = mcpServerFactory({ info: { name: '__name__', version: VERSION }, instructions: '__title__: read the guide at /llms.txt first.', tools: TOOLS, prompts, skills, callApi: inProcess(app) })
   mountMcp(app, { factory, allowedHostnames: [env.PUBLIC_HOST ?? 'localhost', 'localhost', '127.0.0.1'] })
+  // kit:mounts
   return app
 }

@@ -5,6 +5,7 @@
 import { drizzle } from 'drizzle-orm/d1'
 import { createApp, type Env } from './app.js'
 import { openDb, type Db } from './kit/index.js'
+// kit:imports
 
 type Bindings = Env & { DB: D1Database }
 
@@ -20,4 +21,5 @@ const appOf = (env: Bindings) =>
 
 export default {
   fetch: (request, env, ctx) => appOf(env).then((app) => app.fetch(request, env, ctx)),
+  // kit:handlers
 } satisfies ExportedHandler<Bindings>

@@ -9,6 +9,12 @@
  *   kit <command> --help                      that command's lines from this list (-h too)
  *   kit list                                  parts, what they need, which are installed; then the root items
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
+ *   kit add people setup boards sharing --wire [--items <feature>] [--spaces <feature>]
+ *                                             --wire also wires each part into an app made by init: its feature files,
+ *                                             src/app.ts, server.ts, worker.ts, the settings' files, at the markers init
+ *                                             leaves; twice changes nothing. An app without them (or with the kit's
+ *                                             lines changed) is told the edits and nothing is written. boards takes
+ *                                             --items (the feature on its boards), sharing --spaces (its spaces)
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both; --patch: only the changed
  *                                             files, each from the app's (-, app/) to the kit's (+, kit/), as update goes
  *   kit update [part…] [--dir src/kit] [--force [--all]]
@@ -119,7 +125,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set(['--fields', '--singular', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
+const VALUE_FLAGS = new Set([...ITEMS.flatMap((item) => item.meta?.wiring?.wire?.over?.flag ?? []), '--fields', '--singular', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 /** The app the kit folder belongs to: `--app`, else the nearest folder at or above `--dir` with a package.json; null when none. */
@@ -1624,6 +1630,306 @@ const runFirst = (root, steps) => {
   return []
 }
 
+// ---- Wiring a part into an app made by init: `add <part> --wire` ----
+
+/** Where each marker an init template carries sits, as a person reads it: an older app is told the place, not the marker. */
+const MARKER_PLACES = {
+  'kit:imports': 'after the imports',
+  'kit:module': 'before `export const VERSION`',
+  'kit:setup': 'after `const owner`',
+  'kit:mounts': 'after `mountMcp(app, { factory`',
+  'kit:handlers': 'after `fetch:`',
+  'kit:schedule': 'after `serve(`',
+  'kit:triggers': 'after `"compatibility_flags"`',
+  'kit:features': 'in `FEATURES`',
+}
+/** Text with its layout taken out: the same code before and after `pnpm format` (whitespace, semicolons, trailing commas). */
+const squash = (text) => text.replace(/[\s;]+/g, '').replace(/,(?=[)\]}])/g, '')
+/** How far a line opens brackets, outside strings and comments. */
+const depthOf = (line) => {
+  let depth = 0
+  let quote = null
+  for (let at = 0; at < line.length; at++) {
+    const char = line[at]
+    if (quote) {
+      if (char === '\\') at++
+      else if (char === quote) quote = null
+    } else if (char === '/' && line[at + 1] === '/') break
+    else if (`'"\``.includes(char)) quote = char
+    else if ('([{'.includes(char)) depth++
+    else if (')]}'.includes(char)) depth--
+  }
+  return depth
+}
+/** The lines of the one statement (or property) that starts with `start`, however the formatter wrapped it; null when none or several. */
+const statementAt = (lines, start) => {
+  const starts = lines.flatMap((line, index) => (line.trimStart().startsWith(start) ? [index] : []))
+  if (starts.length !== 1) return null
+  let depth = 0
+  for (let end = starts[0]; end < lines.length; end++) {
+    depth += depthOf(lines[end])
+    const next = lines[end + 1]?.trimStart() ?? ''
+    if (depth <= 0 && !/(=|=>|\?|&&|\|\|)$/.test(lines[end].trimEnd()) && !/^(\?|:|\.|&&|\|\|)/.test(next)) return { from: starts[0], to: end + 1 }
+  }
+  return null
+}
+/** Splits a list's text at its top-level commas. */
+const topLevel = (text) => {
+  const parts = []
+  let depth = 0
+  let quote = null
+  let from = 0
+  for (let at = 0; at < text.length; at++) {
+    const char = text[at]
+    if (quote) {
+      if (char === '\\') at++
+      else if (char === quote) quote = null
+    } else if (`'"\``.includes(char)) quote = char
+    else if ('([{'.includes(char)) depth++
+    else if (')]}'.includes(char)) depth--
+    else if (char === ',' && depth === 0) {
+      parts.push(text.slice(from, at))
+      from = at + 1
+    }
+  }
+  return [...parts, text.slice(from)].map((part) => part.trim()).filter(Boolean)
+}
+/** The span of the bracketed text opening at `open` (its index), closing bracket included. */
+const closingOf = (text, open) => {
+  for (let at = open, depth = 0, quote = null; at < text.length; at++) {
+    const char = text[at]
+    if (quote) {
+      if (char === '\\') at++
+      else if (char === quote) quote = null
+    } else if (`'"\``.includes(char)) quote = char
+    else if ('([{'.includes(char)) depth++
+    else if (')]}'.includes(char) && --depth === 0) return at
+  }
+  return -1
+}
+const keyOfEntry = (entry) => (entry.startsWith('...') ? null : /^(\w+)\s*(?::|$)/.exec(entry)?.[1] ?? null)
+const valueOfEntry = (entry) => (entry.includes(':') ? entry.slice(entry.indexOf(':') + 1).trim() : entry)
+/** An object literal's entries with `wanted` applied (see registry.json's meta.wiring.wire); null on an entry the app changed. */
+const mergeEntries = (entries, wanted) => {
+  const out = [...entries]
+  const find = (key) => out.findIndex((entry) => keyOfEntry(entry) === key)
+  for (const want of wanted) {
+    if (want.spread) {
+      if (!out.some((entry) => squash(entry) === squash(want.spread))) out.push(want.spread)
+      continue
+    }
+    const at = find(want.key)
+    const render = (value) => (value === want.key ? want.key : `${want.key}: ${value}`)
+    if (want.append) {
+      if (at < 0) {
+        out.push(`${want.key}: [${want.append.join(', ')}]`)
+        continue
+      }
+      const value = valueOfEntry(out[at])
+      const items = value.startsWith('[') && value.endsWith(']') ? topLevel(value.slice(1, -1)) : [`...${value}`]
+      const added = [...items, ...want.append.filter((item) => !items.some((one) => squash(one) === squash(item)))]
+      out[at] = `${want.key}: [${added.join(', ')}]`
+      continue
+    }
+    if (at < 0) out.push(render(want.value))
+    else if (squash(valueOfEntry(out[at])) === squash(want.value)) continue
+    else if (want.was !== undefined && squash(valueOfEntry(out[at])) === squash(want.was)) out[at] = render(want.value)
+    else return null
+  }
+  return out
+}
+/** A setting's line for container/entrypoint.sh, before the command it starts. */
+const withEntrypointLine = (text, key) => text.replace(/ \\\n(\s*node_modules\/\.bin\/tsx)/, ` ${passLine(key)} \\\n$1`)
+
+/** The app's spellings a part's wiring fills in, and the feature it works over (`--items`, `--spaces`): names from its routes. */
+const wireVarsOf = (root, over) => {
+  const pkg = JSON.parse(textOf(join(root, 'package.json')) ?? '{}')
+  const name = basename(pkg.name ?? basename(root))
+  const title = /^\s*title: '([^']*)'/m.exec(textOf(join(root, 'brand/brand.ts')) ?? '')?.[1] ?? name.split(/[-_.]/).filter(Boolean).map(capital).join(' ')
+  if (!over) return { __name__: name, __title__: title }
+  const routes = textOf(join(root, 'src/features', over, 'routes.ts')) ?? ''
+  const singular = /export const (\w+)Schema = /.exec(routes)?.[1]
+  const names = namesOf(over, singular?.replace(/[A-Z]/g, (letter, at) => `${at ? '-' : ''}${letter.toLowerCase()}`))
+  const first = /\.object\(\{\s*id: z\.string\(\),\s*(\w+):/.exec(routes)?.[1] ?? 'id'
+  return { ...Object.fromEntries(Object.entries(names).map(([key, value]) => [`__over_${key.slice(2)}`, value])), __over_first__: first, __name__: name, __title__: title }
+}
+const fillVars = (text, vars) => Object.entries(vars).reduce((filled, [key, value]) => filled.replaceAll(key, value), text)
+const fillDeep = (value, vars) => (typeof value === 'string' ? fillVars(value, vars) : Array.isArray(value) ? value.map((one) => fillDeep(one, vars)) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, one]) => [key, fillDeep(one, vars)])) : value)
+
+/** What `--wire` refuses before copying anything: an app not made by init, a part with nothing to wire, a missing feature to work over. */
+const wireProblems = (root, parts) => {
+  if (!root || !existsSync(join(root, 'src/app.ts')) || !existsSync(join(root, 'src/features/index.ts'))) return [`--wire wires an app made by \`kit init\` (src/app.ts and src/features/index.ts); without them, follow each part's README › Wire it`]
+  return parts.flatMap((name) => {
+    const wire = REGISTRY[name]?.wiring?.wire
+    if (!wire) return [`${name} has nothing for --wire to write: its README says how to use it`]
+    if (!wire.over) return []
+    const over = valueOf(wire.over.flag)
+    if (!over) return [`--wire ${name} needs ${wire.over.flag} <feature>, ${wire.over.what} (\`${wire.over.example}\` makes one)`]
+    if (!existsSync(join(root, 'src/features', over, 'routes.ts'))) return [`${wire.over.flag} ${over}: no src/features/${over}/ made by \`kit feature\` (\`${wire.over.example}\` makes one)`]
+    return []
+  })
+}
+
+/**
+ * Plans every edit `--wire` makes for the parts, in memory and in order, so two parts editing one statement compose:
+ * the files it would write, each edit described for a person, the markers an older app lacks, and the edits that met
+ * code the app changed. Nothing is written here.
+ */
+const planWiring = (root, parts) => {
+  const texts = new Map()
+  const read = (path) => (texts.has(path) ? texts.get(path) : textOf(join(root, path)))
+  const write = (path, text) => texts.set(path, text)
+  const said = []
+  const missing = new Set()
+  const conflicts = []
+  const markerIn = (path, marker) => {
+    const lines = read(path).split('\n')
+    const at = lines.findIndex((line) => line.trim().startsWith(`// ${marker}`))
+    if (at < 0) missing.add(`${path} (${marker})`)
+    return at
+  }
+  const insertAt = (path, marker, lines) => {
+    const text = read(path)
+    if (squash(text).includes(squash(lines.join('\n')))) return
+    const all = text.split('\n')
+    const at = markerIn(path, marker)
+    if (at >= 0) write(path, [...all.slice(0, at), ...lines, ...all.slice(at)].join('\n'))
+  }
+  for (const part of parts) {
+    const { wire, settings = [], cron } = REGISTRY[part].wiring
+    const over = wire.over ? valueOf(wire.over.flag) : undefined
+    const vars = wireVarsOf(root, over)
+    const steps = []
+    const note = (line, body = []) => steps.push([line, ...body.map((one) => `    ${one}`)].join('\n'))
+    for (const target of wire.files ?? []) {
+      const path = fillVars(target, vars)
+      const text = fillVars(readFileSync(join(KIT, 'templates/wire', part, target), 'utf8'), vars)
+      note(`${path}, new:`, text.trimEnd().split('\n'))
+      const there = read(path)
+      if (there === null) write(path, text)
+      else if (squash(there) !== squash(text)) conflicts.push(`${path} exists and differs from what --wire writes`)
+    }
+    for (const { name, before } of wire.features ?? []) {
+      const camel = namesOf(name).__camel__
+      const path = 'src/features/index.ts'
+      note(`${path}: \`import { feature as ${camel} } from './${name}/index.js'\` with the imports, and \`${camel},\` in FEATURES${before ? `, before ${before}` : ''}`)
+      if (read(path).includes(`from './${name}/index.js'`)) continue
+      insertAt(path, 'kit:imports', [`import { feature as ${camel} } from './${name}/index.js'`])
+      const lines = read(path).split('\n')
+      const ahead = before ? lines.findIndex((line) => line.trim() === `${namesOf(before).__camel__},`) : -1
+      if (ahead >= 0) write(path, [...lines.slice(0, ahead), `  ${camel},`, ...lines.slice(ahead)].join('\n'))
+      else insertAt(path, 'kit:features', [`  ${camel},`])
+    }
+    for (const edit of fillDeep(wire.edits ?? [], vars)) {
+      const text = read(edit.file)
+      // A runtime the app doesn't have: no worker.ts on Node alone, no server.ts on Workers alone
+      if (text === null) continue
+      if (edit.if && !text.includes(edit.if)) continue
+      const lines = text.split('\n')
+      if (edit.import) {
+        note(`${edit.file}: \`import { ${edit.names.join(', ')} } from '${edit.import}'\`${edit.import.startsWith('.') ? ' (into its import from there, when it has one)' : ''}`)
+        const end = lines.findIndex((line) => line.includes(`from '${edit.import}'`))
+        let start = end
+        while (start > 0 && !lines[start].startsWith('import')) start--
+        const statement = end >= 0 ? lines.slice(start, end + 1).join('\n') : ''
+        const [, typeOnly, list] = /^import (type )?\{([\s\S]*)\} from/.exec(statement) ?? []
+        if (list === undefined || (typeOnly && edit.names.some((one) => !one.startsWith('type ')))) {
+          const allTypes = edit.names.every((one) => one.startsWith('type '))
+          insertAt(edit.file, 'kit:imports', [`import ${allTypes ? 'type ' : ''}{ ${edit.names.map((one) => (allTypes ? one.slice(5) : one)).join(', ')} } from '${edit.import}'`])
+          continue
+        }
+        const have = topLevel(list)
+        const bare = (one) => one.replace(/^type /, '')
+        const wanted = edit.names.filter((one) => !have.some((had) => bare(had) === bare(one)))
+        if (!wanted.length) continue
+        const merged = [...have.filter((one) => !one.startsWith('type ')), ...wanted.filter((one) => !one.startsWith('type ')), ...have.filter((one) => one.startsWith('type ')), ...wanted.filter((one) => one.startsWith('type '))]
+        write(edit.file, [...lines.slice(0, start), `import ${typeOnly ?? ''}{ ${merged.join(', ')} } from '${edit.import}'`, ...lines.slice(end + 1)].join('\n'))
+        continue
+      }
+      if (edit.at) {
+        note(`${edit.file}, ${MARKER_PLACES[edit.at]}:`, edit.lines)
+        insertAt(edit.file, edit.at, edit.lines)
+        continue
+      }
+      if (edit.line) {
+        note(`${edit.file}, in place of the line \`${edit.line}\`:`, edit.to)
+        if (squash(text).includes(squash(edit.to.join('\n')))) continue
+        const at = lines.flatMap((line, index) => (squash(line) === squash(edit.line) ? [index] : []))
+        if (at.length !== 1) conflicts.push(`${edit.file}: no line \`${edit.line}\` as the kit wrote it`)
+        else write(edit.file, [...lines.slice(0, at[0]), ...edit.to, ...lines.slice(at[0] + 1)].join('\n'))
+        continue
+      }
+      const span = statementAt(lines, edit.statement)
+      const statement = span && lines.slice(span.from, span.to).join('\n')
+      const swap = (next) => write(edit.file, [...lines.slice(0, span.from), ...next.split('\n'), ...lines.slice(span.to)].join('\n'))
+      if (edit.object) {
+        note(`${edit.file}, in \`${edit.object.replace(/[:(]$/, '')}\`'s { … } (the statement that starts \`${edit.statement}\`): ${edit.entries.map((want) => want.spread ?? (want.append ? `${want.key}: [${want.append.join(', ')}] (added to its list)` : `${want.key}: ${want.value}${want.was ? ` (in place of ${want.was})` : ''}`)).join(', ')}`)
+        const open = statement ? statement.indexOf('{', statement.indexOf(edit.object) + edit.object.length - 1) : -1
+        const close = open >= 0 && statement.indexOf(edit.object) >= 0 ? closingOf(statement, open) : -1
+        const merged = close > 0 ? mergeEntries(topLevel(statement.slice(open + 1, close)), edit.entries) : null
+        if (!merged) conflicts.push(`${edit.file}: the statement that starts \`${edit.statement}\` is not as the kit wrote it`)
+        else if (squash(`{${merged.join(',')}}`) !== squash(statement.slice(open, close + 1))) swap(`${statement.slice(0, open)}{ ${merged.join(', ')} }${statement.slice(close + 1)}`)
+        continue
+      }
+      note(`${edit.file}, in place of the statement that starts \`${edit.statement}\`:`, edit.to)
+      if (statement && squash(statement) === squash(edit.to.join('\n'))) continue
+      if (statement && squash(statement) === squash(edit.was)) swap(edit.to.join('\n'))
+      else conflicts.push(`${edit.file}: the statement that starts \`${edit.statement}\` is not as the kit wrote it`)
+    }
+    // Each setting where an app made by init lists them, only where it lacks it
+    for (const { name: key, what, test, testImport } of settings) {
+      const app = read('src/app.ts')
+      const span = statementAt(app.split('\n'), 'export type Env =')
+      if (span) {
+        const lines = app.split('\n')
+        const env = lines.slice(span.from, span.to).join('\n')
+        const members = topLevel(env.slice(env.indexOf('{') + 1, env.lastIndexOf('}')).replace(/;|\n/g, ','))
+        if (!members.some((member) => member.startsWith(`${key}?`) || member.startsWith(`${key}:`))) write('src/app.ts', [...lines.slice(0, span.from), `export type Env = { ${[...members, `${key}?: string`].join('; ')} }`, ...lines.slice(span.to)].join('\n'))
+      } else conflicts.push('src/app.ts: no `export type Env =`')
+      const entrypoint = read('container/entrypoint.sh')
+      if (entrypoint !== null && !entrypoint.includes(`\${${key}:+`)) write('container/entrypoint.sh', withEntrypointLine(entrypoint, key))
+      const vars = read('.dev.vars.example')
+      if (vars !== null && !dotenvNames(vars).includes(key)) write('.dev.vars.example', `${vars.trimEnd()}\n${key}=""\n`)
+      const pkg = JSON.parse(read('package.json') ?? '{}')
+      if (pkg.cloudflare?.bindings && !pkg.cloudflare.bindings[key]) write('package.json', `${JSON.stringify({ ...pkg, cloudflare: { ...pkg.cloudflare, bindings: { ...pkg.cloudflare.bindings, [key]: { description: `${capital(what)}.` } } } }, null, 2)}\n`)
+      const config = read('vitest.config.ts')
+      const anchor = "TEST_MIGRATIONS: await readD1Migrations('./migrations')"
+      if (test && config?.includes(anchor) && !config.includes(`${key}:`)) {
+        write('vitest.config.ts', config.replace(anchor, `${anchor}, ${key}: ${test}`))
+        if (testImport) insertAt('vitest.config.ts', 'kit:imports', [testImport])
+      }
+      note(`Setting ${key} (${what}): Env in src/app.ts, container/entrypoint.sh, .dev.vars.example and package.json's deploy form, vitest.config.ts's bindings${test ? ` as ${key}: ${test}` : ''}`)
+    }
+    if (cron && read('wrangler.jsonc') !== null) {
+      note(`wrangler.jsonc, ${MARKER_PLACES['kit:triggers']}: "triggers": { "crons": ["${cron.schedule}"] }`)
+      if (!read('wrangler.jsonc').includes('"crons"')) insertAt('wrangler.jsonc', 'kit:triggers', [`  "triggers": { "crons": ["${cron.schedule}"] },`])
+    }
+    said.push([part, steps])
+  }
+  const changed = [...texts].filter(([path, text]) => text !== textOf(join(root, path)))
+  return { changed, said, missing: [...missing], conflicts }
+}
+
+/** `add --wire`: writes the plan, or, in an app without the markers or with code the kit did not write, prints it and writes nothing. */
+const wireParts = (root, parts) => {
+  const { changed, said, missing, conflicts } = planWiring(root, parts)
+  if (missing.length || conflicts.length) {
+    const why = missing.length ? `this app has no wiring markers (made before kit ${VERSION}'s init): ${missing.join(', ')}` : conflicts.join('; ')
+    console.log(`Wired nothing: ${why}. The edits, to make by hand:`)
+    for (const [part, steps] of said) console.log(`\n${part}:\n${steps.map((step) => `  ${step}`).join('\n')}`)
+    process.exitCode = 1
+    return
+  }
+  for (const [path, text] of changed) {
+    mkdirSync(dirname(join(root, path)), { recursive: true })
+    writeFileSync(join(root, path), text)
+  }
+  if (!changed.length) return console.log(`Wired already: ${parts.join(', ')}; nothing changed`)
+  console.log(`Wired ${parts.join(', ')}: ${changed.map(([path]) => path).join(', ')}`)
+  const workers = existsSync(join(root, 'scripts/migrations.ts'))
+  console.log(`Next: pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test (each part's README says what it does; its settings are in .dev.vars.example${existsSync(join(root, 'container/entrypoint.sh')) ? ' and container/entrypoint.sh' : ''})`)
+}
+
 const commands = {
   help: () => console.log(HELP),
 
@@ -1638,6 +1944,12 @@ const commands = {
 
   add: () => {
     if (!names.length) fail('name the modules to add, e.g. `add core guide mcp`')
+    // --wire checks everything it needs before anything is copied
+    const wiring = flags.has('--wire') ? appRootOf() : null
+    if (flags.has('--wire')) {
+      const problems = wireProblems(wiring, names)
+      if (problems.length) fail(problems.join('\n'))
+    }
     const lock = readLock()
     const webDir = webDirArg ?? lock?.webDir
     const modules = withRequired([...(lock?.modules ?? []), ...names])
@@ -1671,7 +1983,8 @@ const commands = {
       for (const line of ignored.todo) console.log(line)
       console.log(`Brand: ${RESVG_INSTALL} && \`kit brand\` renders ${BRAND_MODULE}, then createAgentApi({ …, brand: createBrand(BRAND, BRAND_ASSETS) }) (src/kit/brand/README.md)`)
     }
-    for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
+    if (wiring) wireParts(wiring, names)
+    else for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
     if (flags.has('--install')) install(modules)
     else console.log(`Dependencies: ${installCommand(modules)}`)
     const entries = modules.filter((name) => REGISTRY[name].entry).map((name) => keyOf(name, REGISTRY[name].files.find((file) => file.endsWith('/index.ts')) ?? REGISTRY[name].files[0], webDir))

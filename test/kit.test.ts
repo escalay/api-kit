@@ -396,6 +396,28 @@ describe('the copy-in CLI', () => {
   const KIT_VERSION: string = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')).version
   const cli = (cwd: string, ...args: string[]) => spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), ...args], { cwd, encoding: 'utf8' })
   const hashOfText = (text: string) => createHash('sha256').update(text).digest('hex')
+  /** A friend's agent joins Soups with its code, as the sharing README's test line says, and loses it with the shelf. */
+  const SHARING_FRIEND_TEST = `import { expect, it } from 'vitest'
+import { createApp } from '../src/app.js'
+import { generateOAuthKey, hashApiKey, testDb } from '../src/kit/index.js'
+import { approveSignIn, callMcp, connectAgent } from '../src/kit/testing/index.js'
+
+const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
+const env = { API_KEYS: \`owner:\${hashApiKey('owner-key')}\`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
+it('lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', async () => {
+  const app = await createApp({ db: await testDb(), env, address: 'socket' })
+  const shelf = async (name: string) => ((await (await app.request('/api/shelves', { method: 'POST', headers, body: JSON.stringify({ name }) })).json()) as { id: string }).id
+  const [soups, bakes] = [await shelf('Soups'), await shelf('Bakes')]
+  const invite = await app.request(\`/api/spaces/\${soups}/invites\`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'sam' }, body: JSON.stringify({ label: 'Sam' }) })
+  const { code, address } = (await invite.json()) as { code: string; address: string }
+  const { tokens } = await connectAgent(app, { address, approve: (query) => approveSignIn(app, query, { form: { action: '/sharing/join', fields: { code } } }) })
+  const view = (at: string) => callMcp(app, 'tools/call', { path: at, bearer: tokens!.access_token, params: { name: 'view_shelf', arguments: {} } })
+  expect((await view(new URL(address).pathname)).text).toContain('Soups')
+  expect((await view(\`/s/\${bakes}/mcp\`)).status).toBe(401)
+  expect((await app.request(\`/api/shelves/\${soups}\`, { method: 'DELETE', headers })).status).toBe(204)
+  expect((await view(\`/s/\${soups}/mcp\`)).status).toBe(401)
+})
+`
   const kitText = (file: string) => readFile(join(import.meta.dirname, '..', 'src', file), 'utf8')
 
   it('writes the guide folder as a module that serves the same guide (for Workers)', async () => {
@@ -1402,27 +1424,7 @@ describe('the copy-in CLI', () => {
       // A friend's agent joins Soups with its code, as the README's test line says, and loses it with the shelf
       await writeFile(
         join(app, 'test/sharing.test.ts'),
-        `import { expect, it } from 'vitest'
-import { createApp } from '../src/app.js'
-import { generateOAuthKey, hashApiKey, testDb } from '../src/kit/index.js'
-import { approveSignIn, callMcp, connectAgent } from '../src/kit/testing/index.js'
-
-const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
-const env = { API_KEYS: \`owner:\${hashApiKey('owner-key')}\`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
-it('lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', async () => {
-  const app = await createApp({ db: await testDb(), env, address: 'socket' })
-  const shelf = async (name: string) => ((await (await app.request('/api/shelves', { method: 'POST', headers, body: JSON.stringify({ name }) })).json()) as { id: string }).id
-  const [soups, bakes] = [await shelf('Soups'), await shelf('Bakes')]
-  const invite = await app.request(\`/api/spaces/\${soups}/invites\`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'sam' }, body: JSON.stringify({ label: 'Sam' }) })
-  const { code, address } = (await invite.json()) as { code: string; address: string }
-  const { tokens } = await connectAgent(app, { address, approve: (query) => approveSignIn(app, query, { form: { action: '/sharing/join', fields: { code } } }) })
-  const view = (at: string) => callMcp(app, 'tools/call', { path: at, bearer: tokens!.access_token, params: { name: 'view_shelf', arguments: {} } })
-  expect((await view(new URL(address).pathname)).text).toContain('Soups')
-  expect((await view(\`/s/\${bakes}/mcp\`)).status).toBe(401)
-  expect((await app.request(\`/api/shelves/\${soups}\`, { method: 'DELETE', headers })).status).toBe(204)
-  expect((await view(\`/s/\${soups}/mcp\`)).status).toBe(401)
-})
-`,
+        SHARING_FRIEND_TEST,
       )
       const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
       expect(migrations.status, migrations.stderr).toBe(0)
@@ -1441,6 +1443,106 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       await rm(parent, { recursive: true, force: true })
     }
   }, 120_000)
+
+  it('wires people, setup, boards and sharing with add --wire into a formatted app, once, and both READMEs’ tests pass', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-wire-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    // What `pnpm format` formats in the app, with its own settings, each file named: the kit's .gitignore has test/.generated,
+    // so oxfmt walks past every folder there
+    const format = async (app: string) => {
+      const files = (await readdir(app, { recursive: true })).filter((path) => /^(src|test)[\\/].*\.ts$/.test(path) && !/^src[\\/]kit[\\/]|\.gen\.ts$/.test(path))
+      const formatted = spawnSync(bin('oxfmt'), ['-c', '.oxfmtrc.json', ...files, 'vitest.config.ts'], { cwd: app, encoding: 'utf8' })
+      expect(formatted.status, formatted.stdout + formatted.stderr).toBe(0)
+    }
+    /** Every file outside src/kit and node_modules, hashed: what --wire may change. */
+    const treeOf = async (app: string) => {
+      const files = (await readdir(app, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile() && !/[\\/](src[\\/]kit|node_modules)([\\/]|$)/.test(join(entry.parentPath, entry.name).slice(app.length)))
+      return Object.fromEntries(await Promise.all(files.map(async (entry) => [join(entry.parentPath, entry.name).slice(app.length + 1), hashOfText(await readFile(join(entry.parentPath, entry.name), 'utf8'))])))
+    }
+    const checked = async (app: string) => {
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+      return tests.stdout
+    }
+    try {
+      expect(cli(parent, 'init', 'wired', '--no-install').status).toBe(0)
+      const app = join(parent, 'wired')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      expect(cli(app, 'feature', 'recipes', '--fields', 'name:string').status).toBe(0)
+      expect(cli(app, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      // Refused before anything is copied: a feature to work over is named, and exists
+      const before = await treeOf(app)
+      expect(cli(app, 'add', 'sharing', '--wire').stderr).toContain('--wire sharing needs --spaces <feature>, the feature whose rows are the spaces')
+      expect(cli(app, 'add', 'boards', '--wire', '--items', 'books').stderr).toContain('--items books: no src/features/books/')
+      expect(existsSync(join(app, 'src/kit/sharing'))).toBe(false)
+      expect(await treeOf(app)).toEqual(before)
+      // As an installed app has it: formatted, the long Env type wrapped
+      await format(app)
+      expect(await read('src/app.ts')).toMatch(/^export type Env = \{\n/m)
+      const wired = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves')
+      expect(wired.status, wired.stdout + wired.stderr).toBe(0)
+      expect(wired.stdout).toMatch(/^Wired people, setup, boards, sharing: /m)
+      expect(wired.stdout).toContain('Next: pnpm format && pnpm migrations && pnpm test')
+      expect(wired.stdout).not.toMatch(/^(Wire|Setting|Schedule)[: ]/m)
+      // Twice, formatted or not, changes nothing
+      const once = await treeOf(app)
+      const again = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves')
+      expect(again.stdout).toContain('Wired already: people, setup, boards, sharing; nothing changed')
+      expect(await treeOf(app)).toEqual(once)
+      await format(app)
+      const formatted = await treeOf(app)
+      expect(cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves').stdout).toContain('Wired already')
+      expect(await treeOf(app)).toEqual(formatted)
+      // people's sign-in as its README tests it, the owner switching a feature, and the sharing friend's agent
+      const people = await read('src/kit/people/README.md')
+      const flow = people.slice(people.indexOf('// test/owner.test.ts')).split('```')[0]!
+      expect(cli(app, 'feature', 'things', '--switch').status).toBe(0)
+      await writeFile(join(app, 'test/owner.test.ts'), `${flow}\nit('lets the owner signed in by passkey switch a feature off', async () => {\n  expect(await send('PATCH', '/api/features/things', { on: false })).toMatchObject({ key: 'things', on: false })\n})\n`)
+      await writeFile(join(app, 'test/sharing.test.ts'), SHARING_FRIEND_TEST)
+      const ran = await checked(app)
+      for (const name of ['claims the deployment, makes a passkey, signs in again, and approves an agent', 'lets the owner signed in by passkey switch a feature off', 'lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', 'runs every MCP tool against its route', 'passes every setting Env in src/app.ts reads through container/entrypoint.sh, and nothing else']) expect(ran, name).toContain(name)
+      // What it wired, doctor finds: the sweep, the container's settings; and the deploy form describes each setting
+      const doctor = cli(app, 'doctor')
+      expect(doctor.stdout).not.toMatch(/sharing part, but|^env {6}/m)
+      const ready = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), 'button', '--check'], { cwd: app, encoding: 'utf8', env: { ...process.env, PATH: '/usr/bin:/bin' } })
+      expect(ready.stdout, ready.stderr).toContain('is ready for the Deploy to Cloudflare button')
+
+      // The other order, a part at a time: sharing, then people and setup
+      expect(cli(parent, 'init', 'later', '--no-install').status).toBe(0)
+      const later = join(parent, 'later')
+      expect(cli(later, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      await format(later)
+      expect(cli(later, 'add', 'sharing', '--wire', '--spaces', 'shelves').status).toBe(0)
+      await format(later)
+      expect(cli(later, 'add', 'setup', 'people', '--wire').status).toBe(0)
+      const auth = (await readFile(join(later, 'src/app.ts'), 'utf8')).replace(/\s+/g, ' ')
+      for (const open of ['...PEOPLE_OPEN_PATHS', '...SETUP_OPEN_PATHS', '...(sharing ? SHARING_OPEN_PATHS : [])', 'session: sessionOf(db)']) expect(auth, open).toContain(open)
+      expect(await readFile(join(later, 'src/features/index.ts'), 'utf8')).toMatch(/ {2}people,\n {2}setup,\n/)
+      await writeFile(join(later, 'test/sharing.test.ts'), SHARING_FRIEND_TEST)
+      expect(await checked(later)).toContain('lets a friend’s agent read the shelf it was invited to')
+
+      // An app made before the markers: told every edit, and nothing outside src/kit changes
+      expect(cli(parent, 'init', 'older', '--no-install').status).toBe(0)
+      const older = join(parent, 'older')
+      for (const path of ['src/app.ts', 'src/server.ts', 'src/worker.ts', 'wrangler.jsonc', 'vitest.config.ts']) await writeFile(join(older, path), (await readFile(join(older, path), 'utf8')).replace(/^\s*\/\/ kit:(?!features|imports$).*\n/gm, '').replace(/^\/\/ kit:imports .*\n/m, ''))
+      const untouched = await treeOf(older)
+      const told = cli(older, 'add', 'people', 'setup', '--wire')
+      expect(told.status).toBe(1)
+      expect(told.stdout).toContain('Wired nothing: this app has no wiring markers')
+      expect(told.stdout).toContain("src/app.ts, in place of the statement that starts `const owner =`:\n      const owner = async (c: Context) => {")
+      expect(told.stdout).toContain('src/features/people/index.ts, new:')
+      expect(await treeOf(older)).toEqual(untouched)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 240_000)
 
   it('makes a feature with a field of fixed values, its own singular and no delete, that passes its own tests', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-shapes-${process.pid}`)
@@ -2107,7 +2209,9 @@ describe('the skills', () => {
   it('api-kit-part names every meta.wiring field the registry uses', async () => {
     const skill = (await skillTexts())['api-kit-part']!
     const wired: { meta?: { wiring?: Record<string, unknown> & { settings?: Record<string, string>[]; cron?: Record<string, string> } } }[] = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8')).items
-    const fields = new Set(wired.flatMap(({ meta }) => (meta?.wiring ? [...Object.keys(meta.wiring), ...(meta.wiring.settings ?? []).flatMap(Object.keys), ...Object.keys(meta.wiring.cron ?? {})] : [])))
+    type Wire = { over?: Record<string, string>; features?: Record<string, string>[]; edits?: Record<string, unknown>[] }
+    const wireFields = (wire?: Wire) => (wire ? [...Object.keys(wire), ...Object.keys(wire.over ?? {}), ...(wire.features ?? []).flatMap(Object.keys), ...(wire.edits ?? []).flatMap(Object.keys)] : [])
+    const fields = new Set(wired.flatMap(({ meta }) => (meta?.wiring ? [...Object.keys(meta.wiring), ...(meta.wiring.settings ?? []).flatMap(Object.keys), ...Object.keys(meta.wiring.cron ?? {}), ...wireFields(meta.wiring.wire as Wire | undefined)] : [])))
     expect(fields.size).toBeGreaterThan(0)
     expect([...fields].filter((field) => !skill.includes(`\`${field}\``))).toEqual([])
   })
