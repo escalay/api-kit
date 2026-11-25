@@ -546,6 +546,12 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## testing
 
+### Unreleased (after 1.32.0)
+
+- New: `connectAgent(app, { address, approve })`, a third-party agent's whole sign-in (its registration, PKCE, the
+  person's click through `approve`, the token exchange), for testing an invite or the owner's approval end to end.
+  Nothing to change.
+
 ### 1.31.0
 
 - `approveSignIn(app, query, { form: { action, fields } })` drives an app's own sign-in page (`approve`): it posts
