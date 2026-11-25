@@ -827,6 +827,27 @@ const skillFindings = async (root) => {
   return { findings, notes: [] }
 }
 
+/** The keys of `Env` in src/app.ts, what src/server.ts reads of process.env, and what container/entrypoint.sh passes; null without a container. */
+const envKeysOf = (root) => {
+  const [app, server, entrypoint] = ['src/app.ts', 'src/server.ts', 'container/entrypoint.sh'].map((path) => textOf(join(root, path)))
+  const env = app && /export type Env = \{([^}]*)\}/.exec(app)
+  if (!env || !entrypoint) return null
+  const keys = (text, pattern) => [...(text ?? '').matchAll(pattern)].map(([, key]) => key)
+  return { env: keys(env[1], /(\w+)\??\s*:/g), server: keys(server, /process\.env\.(\w+)/g), passed: keys(entrypoint, /\$\{(\w+):\+/g) }
+}
+/** The shell for passing one setting through the entrypoint, only when it is set. */
+const passLine = (key) => `\${${key}:+${key}="$${key}"}`
+
+/** The container's allowlist against what the app reads, each way: an Env key never passed, a key passed and never read. */
+const envFindings = (root) => {
+  const keys = envKeysOf(root)
+  if (!keys) return []
+  return [
+    ...keys.env.filter((key) => !keys.passed.includes(key)).map((key) => `env      container/entrypoint.sh: passes no ${key}, which Env in src/app.ts reads, so the container never sees it: add ${passLine(key)} before node_modules/.bin/tsx`),
+    ...keys.passed.filter((key) => !keys.env.includes(key) && !keys.server.includes(key)).map((key) => `env      container/entrypoint.sh: passes ${key}, which neither Env in src/app.ts nor src/server.ts reads: take ${passLine(key)} out, or add it to Env`),
+  ]
+}
+
 /** What doctor prints above the starter's lines. */
 const STARTER_HEADING = "Expected on a new app: the starter's text, until it is yours (doctor passes once each is written and `kit brand` has rendered the brand):"
 
@@ -1571,7 +1592,8 @@ const wiringStepsOf = (name, root) => {
   const lacking = (path, text) => existsSync(join(root, path)) && !textOf(join(root, path)).includes(text)
   const settings = (wiring.settings ?? []).flatMap(({ name: setting, what, test, testImport }) => {
     // The workerd tests get a value that works there: their origin, a key made as they start
-    const files = SETTING_FILES.filter(([path]) => lacking(path, setting)).map(([path, where]) => (path === 'vitest.config.ts' && test ? `${where} as ${setting}: ${test}${testImport ? ` (${testImport})` : ''}` : where))
+    // A setting without a test value needs none in the workerd tests' bindings
+    const files = SETTING_FILES.filter(([path]) => lacking(path, setting) && (test || path !== 'vitest.config.ts')).map(([path, where]) => (path === 'vitest.config.ts' ? `${where} as ${setting}: ${test}${testImport ? ` (${testImport})` : ''}` : path === 'container/entrypoint.sh' ? `${where} as ${passLine(setting)}` : where))
     return files.length ? [`Setting ${setting} (${what}): add it to ${files.join(', ')}`] : []
   })
   const cron = wiring.cron
@@ -1581,7 +1603,8 @@ const wiringStepsOf = (name, root) => {
         ...(lacking('src/server.ts', cron.calls) ? [`Schedule: src/server.ts calls ${name}'s ${cron.calls} on a timer (hourly is enough)`] : []),
       ]
     : []
-  return [`Wire ${name}: ${dirArg}/${readme} › ${wiring.code}`, ...settings, ...schedules]
+  // A part wired as a feature of its own has its Wire line from wiringOf
+  return [...(wiring.code ? [`Wire ${name}: ${dirArg}/${readme} › ${wiring.code}`] : []), ...settings, ...schedules]
 }
 
 /** Runs each pnpm step in a new app until one fails; returns the steps left, that one first. Without pnpm, all of them. */
@@ -1716,7 +1739,7 @@ const commands = {
       mkdirSync(join(root, 'migrations'), { recursive: true })
     }
     if (preset === 'app') copyTemplate(join(KIT, 'templates/preset-app'), root, vars)
-    if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container']) rmSync(join(root, path), { recursive: true, force: true })
+    if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container', 'test/env.test.ts']) rmSync(join(root, path), { recursive: true, force: true })
     // Lines marked for one runtime or preset stay only in apps that have it
     const keeps = { 'runtime:node': runtime !== 'cloudflare', 'runtime:workers': runtime !== 'node', 'runtime:cloudflare': runtime === 'cloudflare', 'runtime:node-only': runtime === 'node', 'preset:api': preset === 'api', 'preset:app': preset === 'app' }
     for (const file of ['AGENTS.md', 'README.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts', '.github/workflows/ci.yml'].map((path) => join(root, path)).filter(existsSync))
@@ -1774,7 +1797,7 @@ const commands = {
     const starter = lock && root ? starterFindings(root) : []
     // The starter's lines last, under a heading of their own: a new app has them all
     const starterLines = starter.length ? [STARTER_HEADING, ...starter] : []
-    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...starter] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
+    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...(root ? envFindings(root) : []), ...starter] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
     const texts = lock ? appTexts() : []
     const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
     const kept = lock ? keptEditsOf(lock) : []

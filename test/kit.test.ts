@@ -1106,7 +1106,7 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+18 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+19 passed/)
       // AGENTS.md's Try it, as written: a key from `kit key`, the REST call and the MCP call it gives
       const agents = await readFile(join(app, 'AGENTS.md'), 'utf8')
       const tryIt = agents.slice(agents.indexOf('## Try it'), agents.indexOf('## How changes ship'))
@@ -1294,6 +1294,10 @@ describe('the copy-in CLI', () => {
       const owner = wiring.slice(0, wiring.indexOf('  }') + 1).join('\n')
       const auth = wiring.find((line) => line.startsWith('    auth: '))!.replace("realm: 'postbox'", "realm: 'team-api'")
       await edit('src/app.ts', 'FEATURES_OFF?: string }', 'FEATURES_OFF?: string; SETUP_CODE?: string }')
+      // and in the container's allowlist, as the printed step says (the app's test/env.test.ts holds them in step)
+      const passSetupCode = '${SETUP_CODE:+SETUP_CODE="$SETUP_CODE"}'
+      expect(added.stdout).toContain(`Setting SETUP_CODE (the code the first person types to claim the deployment, a secret: \`openssl rand -base64 18\`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${passSetupCode}\n`)
+      await edit('container/entrypoint.sh', ' \\\n  node_modules/.bin/tsx', ` ${passSetupCode} \\\n  node_modules/.bin/tsx`)
       await edit('src/app.ts', "    auth: { realm: 'team-api', keys: parseApiKeys(env.API_KEYS), access },", auth)
       await edit('src/app.ts', '  const owner = access ? accessOwner(access) : async () => null', owner)
       await edit('src/app.ts', 'featureTools, parseApiKeys,', 'featureTools, parseApiKeys, PEOPLE_OPEN_PATHS, personOf, roleOf, sessionOf, SETUP_OPEN_PATHS,')
@@ -1337,8 +1341,8 @@ describe('the copy-in CLI', () => {
       expect(steps).toEqual([
         'Wire sharing: src/kit/sharing/README.md › Wire it',
         "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one): add it to .dev.vars.example, vitest.config.ts's miniflare bindings as OAUTH_SIGNING_KEY: await generateOAuthKey() (import { generateOAuthKey } from './src/kit/index.js')",
-        "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings as SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only'",
-        "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings as PUBLIC_ORIGIN: 'https://api.test'",
+        "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${SHARING_SECRET:+SHARING_SECRET=\"$SHARING_SECRET\"}, vitest.config.ts's miniflare bindings as SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only'",
+        "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${PUBLIC_ORIGIN:+PUBLIC_ORIGIN=\"$PUBLIC_ORIGIN\"}, vitest.config.ts's miniflare bindings as PUBLIC_ORIGIN: 'https://api.test'",
         'Schedule: "triggers": { "crons": ["17 * * * *"] } in wrangler.jsonc, and a scheduled handler in src/worker.ts that calls sharing\'s sweep()',
         "Schedule: src/server.ts calls sharing's sweep() on a timer (hourly is enough)",
       ])
@@ -1385,6 +1389,12 @@ describe('the copy-in CLI', () => {
         const [, binding, imported] = /miniflare bindings as (\w+: .+?)(?: \((import .+)\))?$/.exec(line)!
         const text = await readFile(config, 'utf8')
         await writeFile(config, (imported ? `${imported}\n` : '') + text.replace("TEST_MIGRATIONS: await readD1Migrations('./migrations')", `$&, ${binding}`))
+      }
+      // and each in the container's allowlist, as printed
+      const entrypoint = join(app, 'container/entrypoint.sh')
+      for (const step of steps) {
+        const line = /container\/entrypoint\.sh as (\$\{\w+:\+\w+="\$\w+"\})/.exec(step)?.[1]
+        if (line) await writeFile(entrypoint, (await readFile(entrypoint, 'utf8')).replace(' \\\n  node_modules/.bin/tsx', ` ${line} \\\n  node_modules/.bin/tsx`))
       }
       const wrangler = join(app, 'wrangler.jsonc')
       await writeFile(wrangler, (await readFile(wrangler, 'utf8')).replace(/^(\s*"compatibility_date": .*)$/m, '$1\n  "triggers": { "crons": ["17 * * * *"] },'))
@@ -1516,6 +1526,44 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       expect(tool('update_shelf').summarize({ ...row, mood: 'calm' }, {})).toBe('Changed: Fiction · status done · mood calm · id s1 · changed 2026-11-25')
       expect(tests.stdout).toMatch(/books\.test\.ts > books > makes, lists, changes and deletes a book/)
       expect(tests.stdout).toContain('runs every MCP tool against its route')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('keeps the container’s env allowlist and Env in step: a test in every new app, and a doctor finding each way', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-env-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'env-api', '--runtime', 'node', '--no-install').status).toBe(0)
+      expect(cli(parent, 'init', 'edge-env', '--runtime', 'cloudflare', '--no-install').status).toBe(0)
+      const app = join(parent, 'env-api')
+      const entrypoint = join(app, 'container/entrypoint.sh')
+      const starter = await readFile(entrypoint, 'utf8')
+      // The starter passes what its Env reads, FEATURES_OFF too
+      expect(starter).toContain('${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"}')
+      const envLines = (text: string) => text.split('\n').filter((line) => line.startsWith('env      '))
+      expect(envLines(cli(app, 'doctor').stdout)).toEqual([])
+      // A Worker has no container, so no such test
+      expect(existsSync(join(parent, 'edge-env/test/env.test.ts'))).toBe(false)
+      const run = () => spawnSync(bin('vitest'), ['run', '--root', '.', 'test/env.test.ts'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(run().status, run().stdout).toBe(0)
+      // A setting Env gains that the container never passes, and one the container passes that nothing reads
+      const appTs = join(app, 'src/app.ts')
+      await writeFile(appTs, (await readFile(appTs, 'utf8')).replace('FEATURES_OFF?: string }', 'FEATURES_OFF?: string; SETUP_CODE?: string }'))
+      await writeFile(entrypoint, starter.replace('${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ', '${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ${OLD_TOKEN:+OLD_TOKEN="$OLD_TOKEN"} '))
+      const doctor = cli(app, 'doctor')
+      expect(doctor.status).toBe(1)
+      expect(envLines(doctor.stdout)).toEqual([
+        'env      container/entrypoint.sh: passes no SETUP_CODE, which Env in src/app.ts reads, so the container never sees it: add ${SETUP_CODE:+SETUP_CODE="$SETUP_CODE"} before node_modules/.bin/tsx',
+        'env      container/entrypoint.sh: passes OLD_TOKEN, which neither Env in src/app.ts nor src/server.ts reads: take ${OLD_TOKEN:+OLD_TOKEN="$OLD_TOKEN"} out, or add it to Env',
+      ])
+      const failed = run()
+      expect(failed.status).toBe(1)
+      expect(failed.stdout + failed.stderr).toContain('SETUP_CODE')
+      expect(failed.stdout + failed.stderr).toContain('OLD_TOKEN')
     } finally {
       await rm(parent, { recursive: true, force: true })
     }

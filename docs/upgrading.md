@@ -514,6 +514,15 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## switches
 
+### Unreleased (after 1.34.0)
+
+- **`kit doctor` fails on an app whose container never sees a setting it reads** (an `env` line), and on one whose
+  `container/entrypoint.sh` passes a key that neither `Env` in `src/app.ts` nor `src/server.ts` reads. Every Node app
+  made before this kit reads `FEATURES_OFF` and never passed it, so switching a feature off by setting did nothing in
+  the container: add `${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"}` to `container/entrypoint.sh`, before
+  `node_modules/.bin/tsx`. A new app checks the same in `test/env.test.ts`; an older one may copy it from a new app
+  (`kit init`). A Workers-only app has no container and no such line.
+
 ### 1.32.0
 
 - A new app's `src/features/switches/index.ts` lets an owner signed in by passkey (the people part) switch, beside

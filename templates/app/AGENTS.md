@@ -89,7 +89,7 @@ your own features' paths and tools once it is gone.
 | `.agents/skills/` | skills for developing this repository (`.claude/skills` links here). Never served, and marked `metadata.internal: true` so installing from the repository does not offer them |
 | `skills.sh.json` | tells `npx skills add <this repository> -y` that the product's skill is in `guide/skills/` |
 | `test/api.test.ts` | every route linted, every MCP tool run (`toolsRun`), every guide placeholder filled |
-| `container/entrypoint.sh` | the env allowlist: the API sees only the variables it reads | <!-- runtime:node -->
+| `container/entrypoint.sh` | the env allowlist: the API sees only the variables it reads (`test/env.test.ts` keeps it equal to `Env`) | <!-- runtime:node -->
 
 ## Rules
 
@@ -100,7 +100,7 @@ your own features' paths and tools once it is gone.
 - On Workers, run `pnpm migrations` after adding a step (it refuses to rewrite a shipped one). On a fresh local D1, `wrangler d1 migrations apply DB --local` before the first `wrangler dev`: files replayed over steps `migrate()` already ran must be idempotent. <!-- runtime:workers -->
 - Nothing runs at global scope that Workers refuse there (random values, I/O, timers): do it in `createApp` or a handler. <!-- runtime:workers -->
 - A new secret: `wrangler secret put <NAME>`, and locally `.dev.vars` (copy `.dev.vars.example`). <!-- runtime:workers -->
-- A new env var the API reads goes into `container/entrypoint.sh` too. <!-- runtime:node -->
+- A new env var the API reads goes into `Env` in `src/app.ts` and `container/entrypoint.sh` (`${NAME:+NAME="$NAME"}`): `test/env.test.ts` and `kit doctor` fail until both have it. <!-- runtime:node -->
 - The browser app owns `/app` and nothing else: `wrangler.jsonc` sends every other path to the Worker. It calls the API with same-origin `fetch` and holds no key. Import images and fonts from code (there is no `public/` folder), so they are built under `/app/assets/`. <!-- preset:app -->
 - `src/kit/` and generated files are left out of `pnpm lint` and `pnpm format`: the kit's copy must stay as the kit wrote it for `doctor` and `update`. What `init` and `feature` write is in the kit's long-line style, so run `pnpm format` after either.
 - The starter's text is the product's to replace: the product skill's description, `brand/brand.ts`'s description, and each feature's in `src/features/catalog.ts`. `npx @escalay/kit doctor` fails while any is left.

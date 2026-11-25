@@ -616,7 +616,12 @@
       "meta": {
         "standard": [
           7
-        ]
+        ],
+        "wiring": {
+          "settings": [
+            { "name": "SETUP_CODE", "what": "the code the first person types to claim the deployment, a secret: `openssl rand -base64 18`" }
+          ]
+        }
       }
     },
     {
