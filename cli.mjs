@@ -54,6 +54,8 @@
  *   kit brand [--app .] [--check]             brand/ (brand.ts, icon.svg, icon-dark.svg) rendered into src/brand.gen.ts: the
  *                                             favicon, PNG icons and OG card, committed (needs @resvg/resvg-js in the app);
  *                                             --check exits 1 when brand/ changed since. `kit add brand` scaffolds brand/
+ *   kit key [name]                            a key to try the app with (`dev` unless named) and its API_KEYS line: the
+ *                                             key printed once, the line for .dev.vars or `API_KEYS=… pnpm dev`; kept nowhere
  *   kit license keys [--out <folder>]        a product's signing key pair: the private key into <folder>/license-private.jwk
  *                                             (0600, keep it in a secret store), the public JWK printed for the app's code
  *   kit license mint --private <file> --product <name> --licensee <who> --plan <plan> [--grants a,b] [--days 365] [--instance <id>]
@@ -66,7 +68,7 @@
  * import { createAgentApi } from './kit/index.js'      // in the app
  */
 import { spawnSync } from 'node:child_process'
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { createRequire } from 'node:module'
@@ -1646,7 +1648,7 @@ const commands = {
     if (preset === 'app') copyTemplate(join(KIT, 'templates/preset-app'), root, vars)
     if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container']) rmSync(join(root, path), { recursive: true, force: true })
     // Lines marked for one runtime or preset stay only in apps that have it
-    const keeps = { 'runtime:node': runtime !== 'cloudflare', 'runtime:workers': runtime !== 'node', 'preset:api': preset === 'api', 'preset:app': preset === 'app' }
+    const keeps = { 'runtime:node': runtime !== 'cloudflare', 'runtime:workers': runtime !== 'node', 'runtime:cloudflare': runtime === 'cloudflare', 'preset:api': preset === 'api', 'preset:app': preset === 'app' }
     for (const file of ['AGENTS.md', 'README.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts', '.github/workflows/ci.yml'].map((path) => join(root, path)).filter(existsSync))
       writeFileSync(file, keepMarked(readFileSync(file, 'utf8'), keeps).replaceAll('__worker_dev__', runtime === 'both' ? 'dev:worker' : 'dev'))
     // npm may drop the executable bit when it packs the kit
@@ -1844,6 +1846,15 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
   },
 
   license: licenseCommand,
+
+  key: () => {
+    const [name = 'dev'] = names
+    if (!/^[a-z][a-z0-9-]*$/.test(name)) fail(`"${name}": a key name is lowercase letters, digits and -, like dev or reader`)
+    // As core's mintApiKey makes one, and parseApiKeys reads the line
+    const key = `${name}_${randomBytes(24).toString('base64url')}`
+    const line = `API_KEYS=${name}:${sha(key)}`
+    console.log(`Key       ${key}\n${line}\nShown once and kept nowhere: the app holds only the hash. On Node: \`${line} pnpm dev\`; on Workers: the line in .dev.vars. Then send \`authorization: Bearer <the key>\` (the app's AGENTS.md › Try it)`)
+  },
 
   brand: async () => {
     const root = resolve(process.cwd(), valueOf('--app') ?? '.')

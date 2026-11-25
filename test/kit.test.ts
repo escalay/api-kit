@@ -415,6 +415,22 @@ describe('the copy-in CLI', () => {
     expect((await app.request('/llms.txt', { headers: auth })).status).toBe(200)
   })
 
+  it('prints a dev key and the API_KEYS line that lets it in, keeping nothing', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-key-'))
+    const made = cli(parent, 'key')
+    expect(made.status, made.stderr).toBe(0)
+    const [, key] = /^Key       (\S+)$/m.exec(made.stdout)!
+    expect(key).toMatch(/^dev_[\w-]{32}$/)
+    expect(made.stdout).toContain(`\nAPI_KEYS=dev:${hashOfText(key!)}\n`)
+    // The app takes the line as it is
+    expect([...parseApiKeys(`dev:${hashOfText(key!)}`).values()]).toEqual(['dev'])
+    const named = cli(parent, 'key', 'reader')
+    expect(named.stdout).toMatch(/^Key       reader_[\w-]{32}$/m)
+    expect(named.stdout).toMatch(/^API_KEYS=reader:[0-9a-f]{64}$/m)
+    expect(cli(parent, 'key', 'Bad Name').stderr).toContain('a key name is lowercase')
+    expect(await readdir(parent)).toEqual([])
+  })
+
   it('copies modules with what they require, a generated index and a lock of hashes', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     const added = cli(app, 'add', 'mcp', 'testing', '--dir', 'src/kit')
@@ -1065,6 +1081,25 @@ describe('the copy-in CLI', () => {
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
       expect(tests.stdout).toMatch(/Tests\s+18 passed/)
+      // AGENTS.md's Try it, as written: a key from `kit key`, the REST call and the MCP call it gives
+      const agents = await readFile(join(app, 'AGENTS.md'), 'utf8')
+      const tryIt = agents.slice(agents.indexOf('## Try it'), agents.indexOf('## How changes ship'))
+      expect(tryIt).toContain('- Node: `API_KEYS=dev:<hash> pnpm dev`, at http://localhost:4400')
+      expect(tryIt).toContain('- Workers: the line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm dev:worker`, at http://localhost:8787')
+      expect(tryIt).toMatch(/^BASE=http:\/\/localhost:4400\n/m)
+      const keyed = cli(parent, 'key')
+      const [, key] = /^Key {7}(\S+)$/m.exec(keyed.stdout)!
+      const [, keys] = /^API_KEYS=(\S+)$/m.exec(keyed.stdout)!
+      const { createApp: createDemo } = await import(join(app, 'src/app.ts'))
+      const { testDb } = await import(join(app, 'src/kit/index.ts'))
+      const demo = await createDemo({ db: await testDb(), env: { API_KEYS: keys } })
+      const [rest, mcp] = [...tryIt.matchAll(/^curl ((?:.*\\\n)*.*)$/gm)].map(([, call]) => call!.replaceAll('\\\n', ' '))
+      const pathOf = (call: string) => /"\$BASE(\/[^"]*)"/.exec(call)![1]!
+      expect((await demo.request(pathOf(rest!), { headers: { authorization: `Bearer ${key}` } })).status).toBe(200)
+      const sent = Object.fromEntries([...mcp!.matchAll(/-H ['"]([^:]+): ([^'"]+)['"]/g)].map(([, name, value]) => [name, value!.replace('$KEY', key!)]))
+      const called = await demo.request(pathOf(mcp!), { method: 'POST', headers: sent, body: /-d '([^']+)'/.exec(mcp!)![1] })
+      expect(called.status).toBe(200)
+      expect(JSON.stringify(await called.json())).toContain('None yet.')
 
       // The client and its command line: `kit sdk` makes both; the CLI compiles on its own and offers the app's tools
       const sdk = cli(parent, 'sdk', '--app', 'demo-api')

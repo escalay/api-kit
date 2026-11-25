@@ -129,6 +129,7 @@ default; `--app` is the app's folder, `.` by default.
 | `kit repo check\|apply` | the GitHub repository's settings and rules for `main` (§20), through `gh` |
 | `kit button` | the Deploy to Cloudflare button: `--check` what would stop a stranger's deploy, `--write` into the README, `--smoke` a real deploy |
 | `kit brand` | `brand/` rendered into `src/brand.gen.ts` (needs `@resvg/resvg-js`); `--check` when it is stale |
+| `kit key [name]` | a key to try the app with and its `API_KEYS=` line (`API_KEYS=… pnpm dev`, or `.dev.vars`); kept nowhere |
 | `kit license keys\|mint\|verify` | a product's signing pair and the license keys `licenseOf` accepts for paid features |
 
 Presets (`kit init --preset`): `--preset api` (the default: an API on Node and Workers, or `--runtime`),

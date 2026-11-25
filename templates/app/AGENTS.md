@@ -21,6 +21,30 @@ A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string min
 `notes` sample): delete `src/features/<name>/` and its lines in `src/features/index.ts` (and `catalog.ts`), then
 `pnpm guide`, and on Workers `pnpm migrations` (it removes the feature's files). A PATCH schema never takes `.default()`: it would overwrite what a PATCH leaves out.
 
+## Try it
+
+Every route but discovery wants a key. `npx @escalay/kit key` prints one and its `API_KEYS=` line (the app keeps only
+the hash):
+
+- Node: `API_KEYS=dev:<hash> pnpm dev`, at http://localhost:4400 <!-- runtime:node -->
+- Workers: the line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm __worker_dev__`, at http://localhost:8787 <!-- preset:api --> <!-- runtime:workers -->
+- The line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm dev`, at http://localhost:5173 <!-- preset:app -->
+
+```bash
+KEY=dev_…   # the key it printed
+BASE=http://localhost:4400 # runtime:node
+BASE=http://localhost:8787 # preset:api # runtime:cloudflare
+BASE=http://localhost:5173 # preset:app
+curl -H "authorization: Bearer $KEY" "$BASE/api/notes?limit=5"
+# MCP is stateless (no initialize, no session): the protocol version and the method go in headers and in the body's _meta
+curl "$BASE/mcp" -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' -H 'mcp-protocol-version: 2026-07-28' -H 'mcp-method: tools/call' -H 'mcp-name: list_notes' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notes","arguments":{"limit":5},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+```
+
+`tools/list` takes the same headers with `mcp-method: tools/list` and no `mcp-name`. `notes` is the sample: use one of
+your own features' paths and tools once it is gone.
+
 ## How changes ship
 
 - `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format, `migrations/` and the build) and `pnpm test`.
