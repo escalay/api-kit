@@ -439,7 +439,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## boards
 
-### Unreleased (after 1.35.0)
+### 1.36.0
 
 - `PUT …/items/{ref}` with no body is `{}` also when it says `content-type: application/json` (it was a 400), as
   the README says. Nothing to change.
@@ -480,7 +480,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## people
 
-### Unreleased (after 1.35.0)
+### 1.36.0
 
 - `kit add people --wire` now installs `@simplewebauthn/server` with the app's package manager (the one
   `package.json` names, else its lockfile's), as `--install` does, so the gate passes without a step by hand; a failed
@@ -521,7 +521,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## setup
 
-### Unreleased (after 1.35.0)
+### 1.36.0
 
 - `--wire` lists `SETUP_CODE` in `.env.example` too on Node, each with how to make its value (and makes the file in a Node
   app without one, and points an unchanged `dev` script at `.env`), and its `Next:` names the settings' files and
@@ -581,7 +581,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## sharing
 
-### Unreleased (after 1.35.0)
+### 1.36.0
 
 - `--wire` says where the owner routes are once it has written (`/api/spaces/{shelf id}/invites` and `…/members`, not
   under the spaces' own path), what an invite answers, and where the worked test of a friend's agent is: REFERENCE.md,
