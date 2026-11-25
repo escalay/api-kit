@@ -9,12 +9,14 @@
  *   kit <command> --help                      that command's lines from this list (-h too)
  *   kit list                                  parts, what they need, which are installed; then the root items
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
- *   kit add people setup boards sharing --wire [--items <feature>] [--spaces <feature>]
+ *   kit add people setup boards sharing --wire [--items <feature>] [--spaces <feature>] [--no-install]
  *                                             --wire also wires each part into an app made by init: its feature files,
  *                                             src/app.ts, server.ts, worker.ts, the settings' files, at the markers init
  *                                             leaves; twice changes nothing. An app without them (or with the kit's
  *                                             lines changed) is told the edits and nothing is written. boards takes
- *                                             --items (the feature on its boards), sharing --spaces (its spaces)
+ *                                             --items (the feature on its boards), sharing --spaces (its spaces). It
+ *                                             installs the parts' dependencies with the app's package manager, as
+ *                                             --install does (--no-install: the command starts Next instead)
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both; --patch: only the changed
  *                                             files, each from the app's (-, app/) to the kit's (+, kit/), as update goes
  *   kit update [part…] [--dir src/kit] [--force [--all]]
@@ -227,15 +229,30 @@ const missingDependencies = (modules) => {
   return Object.entries(dependenciesOf(modules)).filter(([name, range]) => !meetsRange(declared[name], range))
 }
 
-const installCommand = (modules) => {
-  const deps = missingDependencies(modules).map(([name, range]) => `${name}@${range}`)
-  return deps.length ? `pnpm add ${deps.join(' ')}` : Object.keys(dependenciesOf(modules)).length ? 'package.json has them' : 'none'
+/** The app's package manager: the one package.json names, else the one its lockfile is from, else pnpm. */
+const packageManagerOf = (root) => {
+  const named = /^(pnpm|npm|yarn|bun)@/.exec(JSON.parse(textOf(join(root, 'package.json')) ?? '{}').packageManager ?? '')?.[1]
+  if (named) return named
+  const locks = [['pnpm-lock.yaml', 'pnpm'], ['package-lock.json', 'npm'], ['yarn.lock', 'yarn'], ['bun.lock', 'bun'], ['bun.lockb', 'bun']]
+  return locks.find(([file]) => existsSync(join(root, file)))?.[1] ?? 'pnpm'
 }
 
+/** The command that adds the parts' missing dependencies, with the app's package manager; null when none is missing. */
+const addCommandOf = (modules) => {
+  const deps = missingDependencies(modules).map(([name, range]) => `${name}@${range}`)
+  if (!deps.length) return null
+  const manager = packageManagerOf(appRootOf() ?? dir)
+  return [manager, manager === 'npm' ? 'install' : 'add', ...deps]
+}
+
+const installCommand = (modules) => addCommandOf(modules)?.join(' ') ?? (Object.keys(dependenciesOf(modules)).length ? 'package.json has them' : 'none')
+
+/** Adds the parts' missing dependencies in the app's folder, or fails naming the command. */
 const install = (modules) => {
-  if (!installCommand(modules).startsWith('pnpm add')) return
-  const result = spawnSync('pnpm', installCommand(modules).split(' ').slice(1), { stdio: 'inherit', cwd: process.cwd() })
-  if (result.status !== 0) fail('pnpm add failed; run it yourself: ' + installCommand(modules))
+  const command = addCommandOf(modules)
+  if (!command) return
+  const result = spawnSync(command[0], command.slice(1), { stdio: 'inherit', cwd: appRootOf() ?? process.cwd() })
+  if (result.status !== 0) fail(`\`${command.join(' ')}\` failed: run it in the app (${relative(process.cwd(), appRootOf() ?? process.cwd()) || '.'}), then its Next line`)
 }
 
 /** Each file's state against kit.json: did you edit it, did the kit change it. A file equal to the kit's is unchanged, whatever kit.json recorded. */
@@ -1977,7 +1994,11 @@ const planWiring = (root, parts) => {
   return { changed, said, missing: [...missing], conflicts }
 }
 
-/** `add --wire`: writes the plan, or, in an app without the markers or with code the kit did not write, prints it and writes nothing. `install` is the `pnpm add` its Next line starts with, if any. */
+/**
+ * `add --wire`: writes the plan, or, in an app without the markers or with code the kit did not write, prints it and
+ * writes nothing. `install` installs the parts' dependencies once the plan is written (true, returned, when it ran), or
+ * is the command Next starts with.
+ */
 const wireParts = (root, parts, install = null) => {
   const { changed, said, missing, conflicts } = planWiring(root, parts)
   if (missing.length || conflicts.length) {
@@ -1985,16 +2006,18 @@ const wireParts = (root, parts, install = null) => {
     console.log(`Wired nothing: ${why}. The edits, to make by hand:`)
     for (const [part, steps] of said) console.log(`\n${part}:\n${steps.map((step) => `  ${step}`).join('\n')}`)
     process.exitCode = 1
-    return
+    return false
   }
   for (const [path, text] of changed) {
     mkdirSync(dirname(join(root, path)), { recursive: true })
     writeFileSync(join(root, path), text)
   }
-  if (!changed.length) return console.log(`Wired already: ${parts.join(', ')}; nothing changed`)
-  console.log(`Wired ${parts.join(', ')}: ${changed.map(([path]) => path).join(', ')}`)
+  console.log(changed.length ? `Wired ${parts.join(', ')}: ${changed.map(([path]) => path).join(', ')}` : `Wired already: ${parts.join(', ')}; nothing changed`)
+  const installs = typeof install === 'function'
+  if (installs) install()
   const workers = existsSync(join(root, 'scripts/migrations.ts'))
-  console.log(`Next: ${install ? `${install} && ` : ''}pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test (each part's README says what it does; its settings are in .dev.vars.example${existsSync(join(root, 'container/entrypoint.sh')) ? ' and container/entrypoint.sh' : ''})`)
+  if (changed.length) console.log(`Next: ${installs || !install ? '' : `${install} && `}pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test (each part's README says what it does; its settings are in .dev.vars.example${existsSync(join(root, 'container/entrypoint.sh')) ? ' and container/entrypoint.sh' : ''})`)
+  return installs
 }
 
 const commands = {
@@ -2050,10 +2073,13 @@ const commands = {
       for (const line of ignored.todo) console.log(line)
       console.log(`Brand: ${RESVG_INSTALL} && \`kit brand\` renders ${BRAND_MODULE}, then createAgentApi({ …, brand: createBrand(BRAND, BRAND_ASSETS) }) (src/kit/brand/README.md)`)
     }
-    if (wiring) wireParts(wiring, names, !flags.has('--install') && installCommand(modules).startsWith('pnpm add') ? installCommand(modules) : null)
-    else for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
-    if (flags.has('--install')) install(modules)
-    else console.log(`Dependencies: ${installCommand(modules)}`)
+    // --wire installs too (--no-install leaves it to Next): a wired app whose gate fails on a missing module helps no one
+    const installing = flags.has('--install') || (wiring && !flags.has('--no-install'))
+    const wired = wiring ? wireParts(wiring, names, installing ? () => install(modules) : addCommandOf(modules)?.join(' ')) : false
+    if (!wiring) for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
+    if (installing && !wiring) install(modules)
+    // Wiring refused installs nothing: the app is told the edits first
+    else if (!wired) console.log(`Dependencies: ${installCommand(modules)}`)
     const entries = modules.filter((name) => REGISTRY[name].entry).map((name) => keyOf(name, REGISTRY[name].files.find((file) => file.endsWith('/index.ts')) ?? REGISTRY[name].files[0], webDir))
     const importOf = (key) => `'./${relative(process.cwd(), pathOf(key, webDir)).replace(/\.tsx?$/, '.js')}'`
     console.log(`Import from ${[...(expected['index.ts'] ? ['index.ts'] : []), ...entries].map(importOf).join(', ')}`)

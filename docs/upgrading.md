@@ -480,6 +480,12 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## people
 
+### Unreleased (after 1.35.0)
+
+- `kit add people --wire` now installs `@simplewebauthn/server` with the app's package manager (the one
+  `package.json` names, else its lockfile's), as `--install` does, so the gate passes without a step by hand; a failed
+  install exits 1 naming the command. `--no-install` keeps 1.35.0's way: the command starts `Next:`. Nothing to change.
+
 ### 1.35.0
 
 - New: `kit add people --wire` writes the wiring an app made by `kit init` needs (its README's blocks) at the

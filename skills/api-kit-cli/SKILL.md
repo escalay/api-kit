@@ -116,7 +116,7 @@ default; `--app` is the app's folder, `.` by default.
 | Command | What it does |
 |---|---|
 | `kit init <dir>` | a new app (`npm create escalay@latest <dir>` runs it): `--preset`, `--runtime both\|cloudflare\|node`, `--title`, `--bare` (no `notes`), `--no-git`; then `pnpm install`, `format` and `migrations` (`--no-install` leaves them out) |
-| `kit add <part…>` | copies parts and the parts they need; `--install`, `--web-dir` for browser parts; `--wire` also wires `people`, `setup`, `boards` (`--items <feature>`) and `sharing` (`--spaces <feature>`) into an app made by `init` (twice changes nothing; an older app is told the edits) |
+| `kit add <part…>` | copies parts and the parts they need; `--install`, `--web-dir` for browser parts; `--wire` also wires `people`, `setup`, `boards` (`--items <feature>`) and `sharing` (`--spaces <feature>`) into an app made by `init` and installs their dependencies (`--no-install` leaves that to Next; twice changes nothing; an older app is told the edits) |
 | `kit list` | every part, what it needs, which are installed |
 | `kit diff [--patch]` | per file: unchanged, you edited, the kit changed, both; `--patch` shows only the changed ones, from the app's (`app/`, -) to the kit's (`kit/`, +) |
 | `kit update [part…]` | takes the kit's changes, keeps your edits (`--force` takes the kit's in the parts named, `kit` for the generated `index.ts`, and names each edit it overwrites; naming no part it refuses while an edit would go, and `--force --all` takes every part's) |

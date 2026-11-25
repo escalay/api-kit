@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRoute, z } from '@hono/zod-openapi'
@@ -1496,20 +1496,20 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       // As an installed app has it: formatted, the long Env type wrapped
       await format(app)
       expect(await read('src/app.ts')).toMatch(/^export type Env = \{\n/m)
-      const wired = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves')
+      const wired = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--no-install', '--items', 'recipes', '--spaces', 'shelves')
       expect(wired.status, wired.stdout + wired.stderr).toBe(0)
       expect(wired.stdout).toMatch(/^Wired people, setup, boards, sharing: /m)
-      // people's dependency, which --wire leaves to pnpm add, comes first in Next
+      // With --no-install, people's dependency comes first in Next
       expect(wired.stdout).toContain('Next: pnpm add @simplewebauthn/server@^14.1.0 && pnpm format && pnpm migrations && pnpm test')
       expect(wired.stdout).not.toMatch(/^(Wire|Setting|Schedule)[: ]/m)
       // Twice, formatted or not, changes nothing
       const once = await treeOf(app)
-      const again = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves')
+      const again = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--no-install', '--items', 'recipes', '--spaces', 'shelves')
       expect(again.stdout).toContain('Wired already: people, setup, boards, sharing; nothing changed')
       expect(await treeOf(app)).toEqual(once)
       await format(app)
       const formatted = await treeOf(app)
-      expect(cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves').stdout).toContain('Wired already')
+      expect(cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--no-install', '--items', 'recipes', '--spaces', 'shelves').stdout).toContain('Wired already')
       expect(await treeOf(app)).toEqual(formatted)
       // people's sign-in as its README tests it, the owner switching a feature, and the sharing friend's agent
       const people = await read('src/kit/people/README.md')
@@ -1530,12 +1530,12 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       const later = join(parent, 'later')
       expect(cli(later, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
       await format(later)
-      const sharingOnly = cli(later, 'add', 'sharing', '--wire', '--spaces', 'shelves')
+      const sharingOnly = cli(later, 'add', 'sharing', '--wire', '--no-install', '--spaces', 'shelves')
       expect(sharingOnly.status).toBe(0)
       // A part whose dependencies package.json has leaves Next as it was
       expect(sharingOnly.stdout).toContain('Next: pnpm format && pnpm migrations && pnpm test')
       await format(later)
-      expect(cli(later, 'add', 'setup', 'people', '--wire').status).toBe(0)
+      expect(cli(later, 'add', 'setup', 'people', '--wire', '--no-install').status).toBe(0)
       const auth = (await readFile(join(later, 'src/app.ts'), 'utf8')).replace(/\s+/g, ' ')
       for (const open of ['...PEOPLE_OPEN_PATHS', '...SETUP_OPEN_PATHS', '...(sharing ? SHARING_OPEN_PATHS : [])', 'session: sessionOf(db)']) expect(auth, open).toContain(open)
       expect(await readFile(join(later, 'src/features/index.ts'), 'utf8')).toMatch(/ {2}people,\n {2}setup,\n/)
@@ -1568,7 +1568,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
         const one = join(parent, `only-${runtime}`)
         expect(cli(one, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
         await format(one)
-        const done = cli(one, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'notes', '--spaces', 'shelves')
+        const done = cli(one, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--no-install', '--items', 'notes', '--spaces', 'shelves')
         expect([runtime, done.status, done.stderr]).toEqual([runtime, 0, ''])
         if (runtime === 'node') expect(await readFile(join(one, 'src/server.ts'), 'utf8')).toContain('sharingOf(app)?.sweep()')
         else expect(await readFile(join(one, 'src/worker.ts'), 'utf8')).toContain('scheduled: ')
@@ -1585,6 +1585,47 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       await rm(parent, { recursive: true, force: true })
     }
   }, 240_000)
+
+  it('installs what the wired parts need with add --wire, with the app’s package manager, or names the command when it cannot', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-wire-install-'))
+    // Stand-ins for the package managers: each logs where it ran and what it was asked, and fails when told to
+    const bins = join(parent, 'bin')
+    await mkdir(bins)
+    const log = join(parent, 'calls.log')
+    for (const name of ['pnpm', 'npm']) await writeFile(join(bins, name), `#!/bin/sh\necho "$(pwd -P) ${name} $*" >> "${log}"\nexit \${FAKE_PM_EXIT:-0}\n`, { mode: 0o755 })
+    const wire = (cwd: string, more: string[] = [], exit = '0') =>
+      spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), 'add', 'people', 'setup', '--wire', ...more], { cwd, encoding: 'utf8', env: { ...process.env, PATH: `${bins}:${process.env.PATH}`, FAKE_PM_EXIT: exit } })
+    const calls = async () => (existsSync(log) ? (await readFile(log, 'utf8')).trim().split('\n') : [])
+    try {
+      for (const name of ['by-pnpm', 'by-npm', 'told', 'failed']) expect(cli(parent, 'init', name, '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'by-pnpm')
+      // In the app's folder, with the package manager package.json names, before Next
+      const wired = wire(join(app, 'src'), ['--dir', 'kit'])
+      expect(wired.status, wired.stdout + wired.stderr).toBe(0)
+      expect(await calls()).toEqual([`${await realpath(app)} pnpm add @simplewebauthn/server@^14.1.0`])
+      expect(wired.stdout).toContain('Next: pnpm format && pnpm test')
+      expect(wired.stdout).not.toContain('Dependencies: pnpm add')
+      // An app on npm: npm install
+      const npmApp = join(parent, 'by-npm')
+      const manifest = JSON.parse(await readFile(join(npmApp, 'package.json'), 'utf8'))
+      delete manifest.packageManager
+      await writeFile(join(npmApp, 'package.json'), JSON.stringify(manifest))
+      await writeFile(join(npmApp, 'package-lock.json'), '{}')
+      await rm(log)
+      expect(wire(npmApp).status).toBe(0)
+      expect(await calls()).toEqual([`${await realpath(npmApp)} npm install @simplewebauthn/server@^14.1.0`])
+      // --no-install installs nothing and puts the command first in Next, as before
+      await rm(log)
+      const told = wire(join(parent, 'told'), ['--no-install'])
+      expect(told.stdout).toContain('Next: pnpm add @simplewebauthn/server@^14.1.0 && pnpm format && pnpm test')
+      expect(await calls()).toEqual([])
+      // A failed install fails the command, naming what to run
+      const failed = wire(join(parent, 'failed'), [], '1')
+      expect([failed.status, failed.stderr]).toEqual([1, expect.stringContaining('`pnpm add @simplewebauthn/server@^14.1.0` failed: run it in the app')])
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
 
   it('makes a feature with a field of fixed values, its own singular and no delete, that passes its own tests', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-shapes-${process.pid}`)
