@@ -1520,6 +1520,8 @@ describe('the copy-in CLI', () => {
       expect(sharingOnly.status).toBe(0)
       // A part whose dependencies package.json has leaves Next as it was
       expect(sharingOnly.stdout).toContain('Next: pnpm format && pnpm migrations && pnpm test')
+      // On both runtimes: both files, and the one command that makes them
+      expect(sharingOnly.stdout).toContain('its settings are in .env.example, .dev.vars.example and container/entrypoint.sh; `npx @escalay/kit env --write` makes .env and .dev.vars from them, a value for each')
       // Where the owner's routes are, what an invite answers, and the worked test: not under /api/shelves
       expect(sharingOnly.stdout).toContain("Owner routes: /api/spaces/{shelf id}/invites (POST answers 201 with code, shown once, address and message) and /api/spaces/{shelf id}/members ({ count, _embedded: { members } }); a friend's agent, as a test: src/kit/sharing/REFERENCE.md")
       const wireIt = (await readFile(join(later, 'src/kit/sharing/README.md'), 'utf8')).split('## Wire it')[1]!.split('```')[0]!
@@ -1529,6 +1531,13 @@ describe('the copy-in CLI', () => {
       const auth = (await readFile(join(later, 'src/app.ts'), 'utf8')).replace(/\s+/g, ' ')
       for (const open of ['...PEOPLE_OPEN_PATHS', '...SETUP_OPEN_PATHS', '...(sharing ? SHARING_OPEN_PATHS : [])', 'session: sessionOf(db)']) expect(auth, open).toContain(open)
       expect(await readFile(join(later, 'src/features/index.ts'), 'utf8')).toMatch(/ {2}people,\n {2}setup,\n/)
+      // kit env --write: the same key and secrets for both runtimes, each its own origin
+      expect(cli(later, 'env', '--write').stdout).toContain('Wrote .env and .dev.vars')
+      const nodeEnv = parseEnv(await readFile(join(later, '.env'), 'utf8'))
+      const workersEnv = parseEnv(await readFile(join(later, '.dev.vars'), 'utf8'))
+      expect(Object.keys(nodeEnv).sort()).toEqual(['API_KEYS', 'OAUTH_SIGNING_KEY', 'PUBLIC_ORIGIN', 'SETUP_CODE', 'SHARING_SECRET'])
+      expect([nodeEnv.PUBLIC_ORIGIN, workersEnv.PUBLIC_ORIGIN]).toEqual(['http://localhost:4400', 'http://localhost:8787'])
+      for (const name of ['API_KEYS', 'OAUTH_SIGNING_KEY', 'SETUP_CODE', 'SHARING_SECRET']) expect(workersEnv[name], name).toBe(nodeEnv[name])
       await writeFile(join(later, 'test/sharing.test.ts'), SHARING_FRIEND_TEST)
       expect(await checked(later)).toContain('lets a friend’s agent read the shelf it was invited to')
 
@@ -1562,6 +1571,11 @@ describe('the copy-in CLI', () => {
         expect([runtime, done.status, done.stderr]).toEqual([runtime, 0, ''])
         if (runtime === 'node') expect(await readFile(join(one, 'src/server.ts'), 'utf8')).toContain('sharingOf(app)?.sweep()')
         else expect(await readFile(join(one, 'src/worker.ts'), 'utf8')).toContain('scheduled: ')
+        // Each runtime's own settings file, named in Next, and no other
+        const [own, other] = runtime === 'node' ? ['.env', '.dev.vars'] : ['.dev.vars', '.env']
+        expect(done.stdout, runtime).toContain(`its settings are in ${own}.example${runtime === 'node' ? ' and container/entrypoint.sh' : ''}; \`npx @escalay/kit env --write\` makes ${own} from it`)
+        expect([runtime, existsSync(join(one, `${other}.example`))]).toEqual([runtime, false])
+        expect(await readFile(join(one, `${own}.example`), 'utf8')).toMatch(/^# SHARING_SECRET: .*\nSHARING_SECRET=""$/m)
         await writeFile(join(one, 'test/sharing.test.ts'), SHARING_FRIEND_TEST)
         if (runtime === 'cloudflare') expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: one, encoding: 'utf8' }).status).toBe(0)
         for (const project of ['tsconfig.json', ...(runtime === 'node' ? [] : ['test/workers/tsconfig.json'])]) {
