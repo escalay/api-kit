@@ -11,9 +11,12 @@
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
  *   kit update [part…] [--dir src/kit] [--force]
+ *                                             --force takes the kit's file over your edit in the parts named (every part when
+ *                                             none is), and names each edit it overwrites or keeps
  *   kit upgrading [--dir src/kit] [--from <version>]
  *                                             what changed for the parts in kit.json since its version (or --from), up to
- *                                             this kit, and what to do: their notes from the kit's docs/upgrading.md, part by part
+ *                                             this kit, and what to do: their notes from the kit's docs/upgrading.md, part by part;
+ *                                             first, each edit the kit changed too in a part whose notes name a fix
  *   kit doctor [--dir src/kit] [--adopt] [--keep <file…>]
  *                                             missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it);
  *                                             --keep records those edited files as kept in kit.json: a note while they stay so
@@ -230,8 +233,10 @@ const statusOf = (lock, expected) =>
     return { file, state, edited, changed }
   })
 
-/** What to do with a file you edited that the kit changed too. */
-const keptFix = () => `\`kit diff --dir ${dirArg} --patch\` shows both; \`kit update --dir ${dirArg} --force\` takes the kit's, then make your edits again`
+/** What to do with files you edited that the kit changed too; `--force` names their parts, so it overwrites no other edit. */
+const keptFix = (parts) => `\`kit diff --dir ${dirArg} --patch\` shows both; \`${forceCommand(parts)}\` takes the kit's, then make your edits again`
+/** `kit update <parts> --force`; the generated index.ts belongs to no part, so naming it names every one. */
+const forceCommand = (parts) => ['kit update', ...(parts.includes('kit') ? [] : parts), '--dir', dirArg, '--force'].join(' ')
 
 /** The part a recorded file came with (`index.ts` is the kit's own). */
 const partOf = (key, modules) => modules.find((name) => REGISTRY[name].files.includes(sourceOf(key))) ?? 'kit'
@@ -252,7 +257,7 @@ const findingsOf = (lock) => {
     ...statuses.filter(({ state }) => state === 'missing').map(({ file }) => `missing  ${file}: \`kit update --dir ${dirArg}\` writes it again`),
     ...statuses
       .filter(({ edited }) => edited)
-      .map(({ file, state }) => (state === 'both changed' ? `edited   ${file}: you edited it, and kit ${VERSION} changed it: ${keptFix()}` : `edited   ${file}: yours to keep; \`kit diff --dir ${dirArg} --patch\` shows the change, \`kit update --dir ${dirArg} --force\` takes the kit's`)),
+      .map(({ file, state }) => (state === 'both changed' ? `edited   ${file}: you edited it, and kit ${VERSION} changed it: ${keptFix([partOf(file, lock.modules)])}` : `edited   ${file}: yours to keep; \`kit diff --dir ${dirArg} --patch\` shows the change, \`${forceCommand([partOf(file, lock.modules)])}\` takes the kit's`)),
     ...behind.map((part) => `behind   ${part} was copied from kit ${lock.version} and kit ${VERSION} changed it: \`kit diff --dir ${dirArg} --patch\`, then \`kit update --dir ${dirArg}\``),
     ...(lock.version !== VERSION && !behind.length && !kept.length ? [`behind   kit.json says kit ${lock.version}, this is ${VERSION} with the same files: \`kit update --dir ${dirArg}\` records it`] : []),
   ]
@@ -1815,6 +1820,9 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const expected = expectedFiles(modules, lock.webDir)
     const hashes = { ...lock.files }
     const kept = []
+    // --force takes the kit's file over an edit only in the parts it names (all of them when it names none)
+    const forced = (file) => flags.has('--force') && (!names.length || names.includes(partOf(file, modules)))
+    const scope = names.length ? `--force names ${names.join(', ')}` : '--force names every part'
     for (const { file, state } of statusOf(lock, expected)) {
       if (state === 'dropped by kit') {
         delete hashes[file]
@@ -1825,23 +1833,28 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
         hashes[file] = sha(expected[file])
         continue
       }
-      if ((state === 'both changed' || state === 'you edited') && !flags.has('--force')) {
+      const edited = state === 'both changed' || state === 'you edited'
+      if (edited && !forced(file)) {
         if (state === 'both changed') kept.push(file)
         // The kit's hash, as adopt records it: a wrong record would read as a kit change once the kit moves on
         if (state === 'you edited' && lock.version === VERSION) hashes[file] = sha(expected[file])
+        if (flags.has('--force')) {
+          const part = partOf(file, modules)
+          console.log(state === 'both changed' ? `  kept          ${file}: your edit, and the kit changed it; ${scope}, not ${part}: \`${forceCommand([part])}\` takes the kit's` : `  kept          ${file}: your edit; ${scope}, not ${part}`)
+        }
         continue
       }
       mkdirSync(dirname(pathOf(file, lock.webDir)), { recursive: true })
       writeFileSync(pathOf(file, lock.webDir), expected[file])
       hashes[file] = sha(expected[file])
-      console.log(`  updated       ${file}`)
+      console.log(edited ? `  overwrote     ${file} (your edit: ${scope})` : `  updated       ${file}`)
     }
     // A kept file still holds the older kit's code, so kit.json keeps the older version until none is left
     writeLock(modules, hashes, lock.webDir, kept.length ? lock.version : VERSION, keptOf(lock))
     // kit.json may now record this kit, so the command names the version the app came from
     if (isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0) console.log(`What changed for these parts since kit ${lock.version}: ${upgradingCommand(lock.version, true)}`)
     if (kept.length) {
-      console.log(`${kept.length} ${kept.length === 1 ? 'file' : 'files'} kept at kit ${lock.version}: ${kept.join(', ')}. ${keptFix()}`)
+      console.log(`${kept.length} ${kept.length === 1 ? 'file' : 'files'} kept at kit ${lock.version}: ${kept.join(', ')}. ${keptFix([...new Set(kept.map((file) => partOf(file, modules)))])}`)
       console.log(`Dependencies: ${installCommand(modules)}`)
       process.exitCode = 1
       return
@@ -1858,6 +1871,11 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const sections = folders.map((folder) => [folder, notesSince(markdown, folder, since)]).filter(([, notes]) => notes.length)
     if (!sections.length) return console.log(`No upgrade notes for ${folders.join(', ')} after kit ${since} (this is kit ${VERSION})`)
     console.log(`Upgrade notes for ${folders.join(', ')} after kit ${since}, up to kit ${VERSION} (the kit's docs/upgrading.md):`)
+    // An edit kept over a fix holds the bug: the notes mark a fix `**Fixed` or `**Security`, per part, never per file
+    const fixed = new Set(sections.filter(([, notes]) => notes.some((note) => /\*\*(Fixed|Security)\b/.test(note))).map(([folder]) => folder))
+    const overFixes = statusOf(lock, expectedFiles(lock.modules, lock.webDir)).filter(({ file, state }) => state === 'both changed' && fixed.has(notesFolderOf(partOf(file, lock.modules))))
+    if (overFixes.length) console.log('')
+    for (const { file } of overFixes) console.log(`fix      ${file}: your edit, and the kit changed it since; ${notesFolderOf(partOf(file, lock.modules))}'s notes below name a fix: ${keptFix([partOf(file, lock.modules)])}`)
     for (const [folder, notes] of sections) console.log(`\n## ${folder}\n\n${notes.join('\n\n')}`)
   },
 }

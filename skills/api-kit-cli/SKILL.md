@@ -119,7 +119,7 @@ default; `--app` is the app's folder, `.` by default.
 | `kit add <part…>` | copies parts and the parts they need; `--install`, `--web-dir` for browser parts |
 | `kit list` | every part, what it needs, which are installed |
 | `kit diff [--patch]` | per file: unchanged, you edited, the kit changed, both |
-| `kit update [part…]` | takes the kit's changes, keeps your edits (`--force` takes the kit's) |
+| `kit update [part…]` | takes the kit's changes, keeps your edits (`--force` takes the kit's in the parts named, or every part when none is, and names each edit it overwrites) |
 | `kit upgrading` | what changed for the parts in `kit.json` since its version (or `--from`) and what to do: their notes from the kit's `docs/upgrading.md`; `doctor` and `update` print it when the app is behind |
 | `kit doctor` | missing, edited and behind files, `cliGaps`, notes (exits 1 with a fix per line); `--keep <file…>` records edits the team keeps, so they no longer fail it |
 | `kit adopt` | writes `kit.json` for parts the shadcn CLI copied |
