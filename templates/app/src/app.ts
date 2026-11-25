@@ -13,7 +13,7 @@ import { CATALOG } from './features/catalog.js'
 import { flagsOf } from './features/flags.js'
 import { FEATURES } from './features/index.js'
 import { GUIDE_FILES } from './guide.gen.js'
-import { accessOwner, createAgentApi, createBrand, createOAuth, dbGuardStore, dbOAuthStore, featureTools, parseApiKeys, serveGuide, type AddressTrust, type Db } from './kit/index.js'
+import { accessOwner, createAgentApi, createBrand, createOAuth, dbGuardStore, dbOAuthStore, featureTools, parseApiKeys, problemResponse, serveGuide, type AddressTrust, type Db } from './kit/index.js'
 import { guideSkills, inProcess, mcpServerFactory, mountMcp } from './kit/mcp/index.js'
 // kit:imports (a part's imports, `kit add <part> --wire`; each marker below is where it writes)
 
@@ -52,6 +52,8 @@ export const createApp = async ({ db, env, address }: { db: Db; env: Env; addres
     // In the database, so every instance (each Worker isolate) shares Idempotency-Key answers
     guards: { store: await dbGuardStore(db) },
   })
+  // OAuth is off without its key: its metadata names the setting rather than answering a bare 404
+  if (!oauth) app.get('/.well-known/oauth-*', (c) => problemResponse(c, 'not_found', { detail: 'OAuth is off here: set OAUTH_SIGNING_KEY (`npx @escalay/kit env --write` makes one locally) to let agents sign in.' }))
   // A switchable feature sees the app through its gate, so every route it adds answers 403 feature_disabled while off
   const flags = flagsOf(db, env)
   const parts: Parts = {}

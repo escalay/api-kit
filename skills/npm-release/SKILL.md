@@ -1,6 +1,8 @@
 ---
 name: npm-release
 description: Use when setting up or running releases of an npm package from GitHub Actions with release-please and npm trusted publishing (no npm token, provenance, a release pull request), or when diagnosing a release that failed or a version that did not appear on npm.
+metadata:
+  internal: true
 ---
 
 # Release an npm package from GitHub Actions

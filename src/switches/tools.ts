@@ -22,12 +22,13 @@ const line = (feature: Feature) => {
 }
 
 /**
- * The MCP tools for feature switches: list them, and switch one (owner only, on the route).
+ * The MCP tools for feature switches: list them, and switch one (owner only, on the route). `example` is a key from the
+ * catalog for the command line's example; without one it says `<key>`, never a feature the app lacks.
  *
  * @example
  * mcpServerFactory({ tools: [...featureTools, ...switchTools()], … })
  */
-export const switchTools = ({ path = '/api/features', example = 'webhooks' }: { path?: string; example?: string } = {}): McpTool[] => [
+export const switchTools = ({ path = '/api/features', example = '<key>' }: { path?: string; example?: string } = {}): McpTool[] => [
   mcpTool({
     name: 'list_features',
     title: 'Features',

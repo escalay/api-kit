@@ -60,11 +60,13 @@ One `registry:item` per part in `registry.json`; `kit add`, `kit list` and the s
   feature of its own; optional), `settings` (each a `name` and `what`, printed by `kit add` with the files that still
   lack it; `test`, an expression for its value in `vitest.config.ts`'s miniflare bindings, and `testImport`, the
   import line that expression needs; `local`, how `kit env` makes a local value: `random:<bytes>`, `es256` or
-  `origin`), `cron` (`schedule`, and `calls`: what the scheduled handler calls), and `wire`,
+  `origin`), `uses` (the parts whose settings it needs too, as people, setup and sharing name `oauth` for its key), `cron` (`schedule`, and `calls`: what the scheduled handler calls), and `wire`,
   what `kit add <part> --wire` writes, `__over_*__` and `__name__`/`__title__` filled in:
   - `over`: the feature it works over, named by `flag` (`--spaces`), with `what` it is and an `example` that makes one;
   - `after`: a line `--wire` prints once it has written (where the part's routes are);
   - `files`: its new files, each from `templates/wire/<part>/<the same path>`;
+  - `children`: edits made once per feature made `--under` the one it works over, its spellings as `__child_*__`
+    (sharing's read tool per child on a space's MCP);
   - `features`: each listed in `src/features/index.ts` (`name`, and `before` another);
   - `edits`, each in a `file` and one of: `import` with `names`; `at` a marker (`kit:setup`, `kit:mounts`, …) with
     `lines`; `line` with `to` (one line as `kit feature` wrote it); `statement` with `was` and `to` (a whole

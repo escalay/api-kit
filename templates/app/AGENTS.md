@@ -14,7 +14,7 @@ an MCP tool.
 - `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:api --> <!-- runtime:workers -->
 - `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `vite build`, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:app -->
 - `pnpm run deploy:env`: the same for a real deployment whose settings live outside the repository: `CLOUDFLARE_ACCOUNT_ID`, `D1_<BINDING>_ID`, every `vars` entry left `""` in `wrangler.jsonc`, optional `PUBLIC_HOST`, from the environment (a secret store's `run`). It writes the git-ignored `wrangler.deploy.jsonc`, makes missing queues and deploys. A repository that may go public keeps no account id or real domain: deploy it this way <!-- runtime:workers -->
-- `npx skills add escalay/api-kit -y` (`-y`, or the installer stops to ask): the kit's skills for your coding agent: `api-kit-build` (parts, who may see what, a newer kit), `api-kit-feature` (a feature, its switch), `api-kit-review` (is it ready for agents), `api-kit-cli` (the command line, every `kit` command), `api-kit-skills` (this product's own skills). It skips `api-kit-part` (for the kit's own repository); `npm-release` is for a repository that publishes to npm: leave it be otherwise
+- `npx skills add escalay/api-kit -y` (`-y`, or the installer stops to ask): the kit's skills for your coding agent: `api-kit-build` (parts, who may see what, a newer kit), `api-kit-feature` (a feature, its switch), `api-kit-review` (is it ready for agents), `api-kit-cli` (the command line, every `kit` command), `api-kit-skills` (this product's own skills). It skips `api-kit-part` (for the kit's own repository) and `npm-release` (for a repository that publishes to npm: `npx skills add escalay/api-kit --skill npm-release -y` adds it)
 
 A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string minutes:int tags:string[] notes:text?"`
 (its own fields in every file, `status:enum(to-read|done)` for fixed values; `kit feature --help` lists the types, `--singular`, `--no-remove` and `--under <parent>` for one inside another), then fill in what is its own. Removing one (the
@@ -30,7 +30,9 @@ the hash). Keep both from one run: each run makes a new pair, and a key with ano
 - Workers: the line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm __worker_dev__`, at http://localhost:8787 <!-- preset:api --> <!-- runtime:workers -->
 - The line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm dev`, at http://localhost:5173 <!-- preset:app -->
 
-A wired part (`kit add … --wire`) has settings of its own, each listed with how to make its value in:
+Start it with `pnpm dev`, never `tsx src/server.ts` alone, which reads no `.env`. Stop it with Ctrl-C, or `kill -- -<its process group>`: `tsx watch` runs the server as a child, which killing the watcher's pid alone leaves listening. <!-- runtime:node -->
+
+Each setting, `OAUTH_SIGNING_KEY` (without it OAuth is off, and the app says so) and a wired part's own (`kit add … --wire`), is listed with how to make its value in:
 
 - `.env.example`, which `pnpm dev` reads as `.env` <!-- runtime:node -->
 - `.dev.vars.example`, which `wrangler dev` reads as `.dev.vars` <!-- runtime:workers -->
@@ -50,8 +52,8 @@ curl "$BASE/mcp" -H "authorization: Bearer $KEY" -H 'content-type: application/j
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notes","arguments":{"limit":5},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
 
-`tools/list` takes the same headers with `mcp-method: tools/list` and no `mcp-name`. `notes` is the sample: use one of
-your own features' paths and tools once it is gone.
+`tools/list` takes the same headers with `mcp-method: tools/list` and no `mcp-name`. `kit feature` and `feature --remove` keep these calls on the
+first feature in `src/features/index.ts`.
 
 ## How changes ship
 
@@ -96,7 +98,7 @@ your own features' paths and tools once it is gone.
 | `guide/skills/__name__/` | the skill this product ships to the agents that use it: `SKILL.md` routes, `references/<job>.md` is one playbook per job. Served at `/skills/*`, offered over MCP as skills and prompts, and installed with `npx skills add <this deployment's address> -y` or from the repository |
 | `.agents/skills/` | skills for developing this repository (`.claude/skills` links here). Never served, and marked `metadata.internal: true` so installing from the repository does not offer them |
 | `skills.sh.json` | tells `npx skills add <this repository> -y` that the product's skill is in `guide/skills/` |
-| `test/api.test.ts` | every route linted, every MCP tool run (`toolsRun`), every guide placeholder filled |
+| `test/api.test.ts` | every route linted, every MCP tool run (`toolsRun`), every guide placeholder filled and every route the guide names real (`guideRoutes`) |
 | `container/entrypoint.sh` | the env allowlist: the API sees only the variables it reads (`test/env.test.ts` keeps it equal to `Env`) | <!-- runtime:node -->
 
 ## Rules

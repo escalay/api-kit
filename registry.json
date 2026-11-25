@@ -177,7 +177,12 @@
         "standard": [
           7,
           11
-        ]
+        ],
+        "wiring": {
+          "settings": [
+            { "name": "OAUTH_SIGNING_KEY", "local": "es256", "what": "the OAuth server's ES256 key, a secret: `npx @escalay/kit env --write` makes one (or `generateOAuthKey()` from ./kit/index.js); without it OAuth is off", "test": "await generateOAuthKey()", "testImport": "import { generateOAuthKey } from './src/kit/index.js'" }
+          ]
+        }
       }
     },
     {
@@ -590,6 +595,7 @@
           7
         ],
         "wiring": {
+          "uses": ["oauth"],
           "wire": {
             "files": ["src/features/people/index.ts"],
             "features": [{"name": "people", "before": "setup"}],
@@ -638,6 +644,7 @@
           7
         ],
         "wiring": {
+          "uses": ["oauth"],
           "settings": [
             { "name": "SETUP_CODE", "local": "random:18", "what": "the code the first person types to claim the deployment, a secret: `openssl rand -base64 18`" }
           ],
@@ -862,8 +869,8 @@
         ],
         "wiring": {
           "code": "Wire it",
+          "uses": ["oauth"],
           "settings": [
-            { "name": "OAUTH_SIGNING_KEY", "local": "es256", "what": "the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one", "test": "await generateOAuthKey()", "testImport": "import { generateOAuthKey } from './src/kit/index.js'" },
             { "name": "SHARING_SECRET", "local": "random:32", "what": "32 random bytes or more, a secret of its own: `openssl rand -base64 32`", "test": "'a sharing secret of thirty-two bytes or more, for tests only'" },
             { "name": "PUBLIC_ORIGIN", "local": "origin", "what": "the origin people and agents reach the app at, createOAuth's publicOrigin", "test": "'https://api.test'" }
           ],
@@ -872,6 +879,9 @@
             "over": {"flag": "--spaces", "what": "the feature whose rows are the spaces", "example": "kit feature shelves --singular shelf --fields \"name:string\""},
             "after": "Owner routes: /api/spaces/{__over_label__ id}/invites (POST answers 201 with code, shown once, address and message) and /api/spaces/{__over_label__ id}/members ({ count, _embedded: { members } }); a friend's agent, as a test: src/kit/sharing/REFERENCE.md",
             "files": ["src/features/__over_name__/spaces.ts"],
+            "children": [
+              {"file": "src/app.ts", "at": "kit:module", "lines": ["// The __child_labels__ in it, read at the same address (`kit feature __child_name__ --under __over_name__`); one by its id stays the owner's", "SPACE_TOOLS.push(mcpTool({ name: 'list___over_snake_singular_____child_snake__', title: '__child_Labels__ in this __over_label__', description: 'The __child_labels__ in the __over_label__ this address shares, the newest first, a page at a time.', input: z.object({ limit: z.number().int().min(1).max(100).optional().describe('At most this many (default 50).'), cursor: z.string().optional().describe('Where the next page starts: the cursor the last page ended with.') }), call: (args, at) => ({ path: `/api/__over_name__/${encodeURIComponent(at?.params.space ?? '')}/__child_name__`, query: args }), summarize: (page: { _embedded: { __child_camel__: { __child_first__: unknown }[] } }) => page._embedded.__child_camel__.map((row) => String(row.__child_first__)).join('\\n') || 'None yet.' }))"]}
+            ],
             "edits": [
               {"file": "src/features/__over_name__/index.ts", "line": "register: async (app, { db }) => {", "to": ["  register: async (app, { db, parts }) => {"], "if": "routes.remove"},
               {"file": "src/features/__over_name__/index.ts", "line": "const handle = __over_camel__Handlers(__over_camel__Repo(db))", "to": ["    const repo = __over_camel__Repo(db)", "    // A deleted __over_label__ ends its members", "    const handle = __over_camel__Handlers({ ...repo, remove: async (id) => { await repo.remove(id); if (parts.sharing) await parts.sharing.forget(id) } })"], "if": "routes.remove"},

@@ -14,5 +14,7 @@ const db = await openDb(process.env.DATABASE_FILE ?? `file:${join(stateDir, 'sta
 // and with the app reachable only through it, `{ header: 'x-forwarded-for' }` instead (src/kit/core/README.md)
 const app = await createApp({ db, env: process.env, address: 'socket' })
 const port = Number(process.env.PORT ?? 4400)
+// OAuth is off without its key, so a start says so rather than leave agents a bare 404
+if (!process.env.OAUTH_SIGNING_KEY) console.log('OAuth is off: set OAUTH_SIGNING_KEY (`npx @escalay/kit env --write` makes .env with one, which `pnpm dev` reads) to let agents sign in')
 serve({ fetch: app.fetch, hostname: '0.0.0.0', port }, (info) => console.log(`__name__ → http://localhost:${info.port} (/docs, /llms.txt, /mcp)`))
 // kit:schedule

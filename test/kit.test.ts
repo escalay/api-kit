@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { spawn, spawnSync } from 'node:child_process'
+import { mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRoute, z } from '@hono/zod-openapi'
@@ -421,6 +421,15 @@ describe('the copy-in CLI', () => {
     serveGuide(fromFolder, { dir, vars: () => ({ counts: { apps: 2 } }), full: ['llms.txt'] })
     expect(await (await fromModule.request('/llms.txt')).text()).toBe(await (await fromFolder.request('/llms.txt')).text())
     expect((await app.request('/llms.txt', { headers: auth })).status).toBe(200)
+  })
+
+  it('gives every new app’s test/api.test.ts each check the testing README’s Wire it runs', async () => {
+    const readme = await kitText('testing/README.md')
+    const wireIt = readme.slice(readme.indexOf('## Wire it')).match(/```ts\n([\s\S]*?)```/)![1]!
+    const checks = [...wireIt.matchAll(/expect\((?:await )?(\w+)\(/g)].map(([, name]) => name!)
+    expect(checks).toContain('guideRoutes')
+    const test = await readFile(join(import.meta.dirname, '..', 'templates/app/test/api.test.ts'), 'utf8')
+    expect(checks.filter((name) => !test.includes(`${name}(`))).toEqual([])
   })
 
   it('prints a dev key and the API_KEYS line that lets it in, keeping nothing', async () => {
@@ -1124,7 +1133,7 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+19 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+20 passed/)
       // AGENTS.md's Try it, as written: a key from `kit key`, the REST call and the MCP call it gives
       const agents = await readFile(join(app, 'AGENTS.md'), 'utf8')
       const tryIt = agents.slice(agents.indexOf('## Try it'), agents.indexOf('## How changes ship'))
@@ -1358,7 +1367,8 @@ describe('the copy-in CLI', () => {
       const steps = added.stdout.split('\n').filter((line) => /^(Wire|Setting|Schedule)[: ]/.test(line))
       expect(steps).toEqual([
         'Wire sharing: src/kit/sharing/README.md › Wire it; or `kit add sharing --wire --spaces <feature>` writes it all, settings too',
-        "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one): add it to .env.example, .dev.vars.example, vitest.config.ts's miniflare bindings as OAUTH_SIGNING_KEY: await generateOAuthKey() (import { generateOAuthKey } from './src/kit/index.js')",
+        // A new app's examples list the OAuth key (the oauth part's setting, which sharing uses): only the workerd tests lack it
+        "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `npx @escalay/kit env --write` makes one (or `generateOAuthKey()` from ./kit/index.js); without it OAuth is off): add it to vitest.config.ts's miniflare bindings as OAUTH_SIGNING_KEY: await generateOAuthKey() (import { generateOAuthKey } from './src/kit/index.js')",
         "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .env.example, .dev.vars.example, container/entrypoint.sh as ${SHARING_SECRET:+SHARING_SECRET=\"$SHARING_SECRET\"}, vitest.config.ts's miniflare bindings as SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only'",
         "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .env.example, .dev.vars.example, container/entrypoint.sh as ${PUBLIC_ORIGIN:+PUBLIC_ORIGIN=\"$PUBLIC_ORIGIN\"}, vitest.config.ts's miniflare bindings as PUBLIC_ORIGIN: 'https://api.test'",
         'Schedule: "triggers": { "crons": ["17 * * * *"] } in wrangler.jsonc, and a scheduled handler in src/worker.ts that calls sharing\'s sweep()',
@@ -1366,9 +1376,11 @@ describe('the copy-in CLI', () => {
       ])
       // The starter's script finds the part's tables itself
       expect(added.stdout).not.toContain('lacks')
-      // The README's Wire it, block by block, each where its first line says
+      // Wire it by hand (REFERENCE.md, which the README's Wire it links), block by block, each where its first line says
       const readme = await read('src/kit/sharing/README.md')
-      const block = readme.slice(readme.indexOf('## Wire it')).match(/```ts\n([\s\S]*?)```/)![1]!
+      expect(readme.slice(readme.indexOf('## Wire it'))).toContain('](REFERENCE.md#wire-it-by-hand)')
+      const reference = await read('src/kit/sharing/REFERENCE.md')
+      const block = reference.slice(reference.indexOf('## Wire it by hand')).match(/```ts\n([\s\S]*?)```/)![1]!
       const groups = block.split(/^\/\/ (src\/[^\n]*)\n/m).slice(1)
       // A line's key: what it declares or sets, at its indent
       const keyOf = (line: string) => /^\s*(export type \w+|const \w+|\w+:|\w+\()/.exec(line)?.[0]
@@ -1399,7 +1411,7 @@ describe('the copy-in CLI', () => {
       }
       expect(await read('src/app.ts')).toContain('PUBLIC_ORIGIN?: string }')
       // Its hooks chain, for an app with hooks of its own, typechecks as written, with every name it uses
-      const chain = [...readme.slice(readme.indexOf('## Wire it'), readme.indexOf('## Options')).matchAll(/```ts\n([\s\S]*?)```/g)][1]![1]!
+      const chain = [...readme.slice(readme.indexOf('## Wire it'), readme.indexOf('## Options')).matchAll(/```ts\n([\s\S]*?)```/g)][0]![1]!
       await writeFile(join(app, 'src/hooks.ts'), chain)
       // The printed steps as printed: each setting in the workerd tests' bindings (so sharing is on there too), the schedule
       const config = join(app, 'vitest.config.ts')
@@ -1590,6 +1602,94 @@ describe('the copy-in CLI', () => {
     }
   }, 240_000)
 
+  it('leaves what --wire writes formatted in an installed app, so an edit by hand meets the shape pnpm format keeps', async () => {
+    // Outside this repository, whose .gitignore oxfmt would read for test/.generated
+    const parent = await mkdtemp(join(tmpdir(), 'kit-wire-format-'))
+    const oxfmt = join(import.meta.dirname, '..', 'node_modules/.bin/oxfmt')
+    try {
+      expect(cli(parent, 'init', 'tidy-shelves', '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'tidy-shelves')
+      expect(cli(app, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      // As installed: the app's own formatter, which `pnpm format` runs
+      await mkdir(join(app, 'node_modules/.bin'), { recursive: true })
+      await symlink(oxfmt, join(app, 'node_modules/.bin/oxfmt'))
+      const sources = ['src/app.ts', 'src/server.ts', 'src/features/shelves/index.ts', 'src/features/shelves/spaces.ts']
+      expect(spawnSync(oxfmt, [], { cwd: app }).status).toBe(0)
+      const wired = cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install')
+      expect(wired.status, wired.stdout + wired.stderr).toBe(0)
+      const said = /^Formatted (.*)$/m.exec(wired.stdout)?.[1]?.split(', ')
+      expect(said?.sort()).toEqual([...sources].sort())
+      expect(wired.stdout).toContain('Next: pnpm test')
+      // The whole app as `pnpm check` reads it: package.json, the examples and the rest too
+      const check = spawnSync(oxfmt, ['--check'], { cwd: app, encoding: 'utf8' })
+      expect([check.status, check.stdout + check.stderr]).toEqual([0, expect.stringContaining('All matched files use the correct format')])
+      // A child made later, wired into the formatted app once
+      expect(cli(app, 'feature', 'recipes', '--under', 'shelves', '--fields', 'title:string').status).toBe(0)
+      expect(spawnSync(oxfmt, [], { cwd: app }).status).toBe(0)
+      expect(cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install').stdout).toContain('Formatted src/app.ts')
+      expect(cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install').stdout).toContain('Wired already')
+      expect((await readFile(join(app, 'src/app.ts'), 'utf8')).split("name: 'list_shelf_recipes'")).toHaveLength(2)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('titles a shared space’s read tool for a hyphenated child in words, as its README does', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-space-child-title-'))
+    try {
+      expect(cli(parent, 'init', 'pantry-api', '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'pantry-api')
+      expect(cli(app, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      expect(cli(app, 'feature', 'recipe-cards', '--under', 'shelves', '--fields', 'title:string').status).toBe(0)
+      const wired = cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install')
+      expect(wired.status, wired.stdout + wired.stderr).toBe(0)
+      const source = await readFile(join(app, 'src/app.ts'), 'utf8')
+      expect(source).toContain("name: 'list_shelf_recipe_cards', title: 'Recipe cards in this shelf'")
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  it('gives a shared space’s MCP a read tool per feature --under it, while a child by its id stays the owner’s', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-space-children-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    try {
+      expect(cli(parent, 'init', 'pantry-api', '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'pantry-api')
+      expect(cli(app, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      expect(cli(app, 'feature', 'recipes', '--under', 'shelves', '--fields', 'title:string').status).toBe(0)
+      const wired = cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install')
+      expect(wired.status, wired.stdout + wired.stderr).toBe(0)
+      const source = await readFile(join(app, 'src/app.ts'), 'utf8')
+      expect(source).toContain("name: 'list_shelf_recipes'")
+      // A child made later is wired by running it again, once
+      expect(cli(app, 'feature', 'labels', '--under', 'shelves', '--fields', 'text:string').status).toBe(0)
+      expect(cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install').status).toBe(0)
+      expect(cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install').stdout).toContain('Wired already')
+      const again = await readFile(join(app, 'src/app.ts'), 'utf8')
+      expect([again.split('const SPACE_TOOLS').length, again.split("name: 'list_shelf_recipes'").length, again.split("name: 'list_shelf_labels'").length]).toEqual([2, 2, 2])
+      const typecheck = spawnSync(join(import.meta.dirname, '..', 'node_modules/.bin/tsc'), ['--noEmit', '-p', 'tsconfig.json'], { cwd: app, encoding: 'utf8' })
+      expect(typecheck.status, typecheck.stdout).toBe(0)
+      // A friend's agent reads the shelf's recipes through its MCP, and never one by its id
+      const { createApp: createPantry } = await import(join(app, 'src/app.ts'))
+      const { approveSignIn: approve, connectAgent } = await import('../src/testing/index.js')
+      const env = { API_KEYS: `owner:${hashOfText('owner-key')}`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
+      const pantry = await createPantry({ db: await openDb(':memory:'), env, address: 'socket' })
+      const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
+      const made = async (path: string, body: object) => ((await (await pantry.request(path, { method: 'POST', headers, body: JSON.stringify(body) })).json()) as { id: string }).id
+      const soups = await made('/api/shelves', { name: 'Soups' })
+      const leek = await made(`/api/shelves/${soups}/recipes`, { title: 'Leek soup' })
+      const { code, address } = (await (await pantry.request(`/api/spaces/${soups}/invites`, { method: 'POST', headers, body: JSON.stringify({ label: 'Sam' }) })).json()) as { code: string; address: string }
+      const { tokens } = await connectAgent(pantry, { address, approve: (query: URLSearchParams) => approve(pantry, query, { form: { action: '/sharing/join', fields: { code } } }) })
+      const listed = await callMcp(pantry, 'tools/call', { path: new URL(address).pathname, bearer: tokens!.access_token, params: { name: 'list_shelf_recipes', arguments: {} } })
+      expect([listed.status, listed.text]).toEqual([200, expect.stringContaining('Leek soup')])
+      expect((await pantry.request(`/api/recipes/${leek}`, { headers: { authorization: `Bearer ${tokens!.access_token}` } })).status).toBe(401)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('runs a wired Node app locally: .env.example lists every setting and how to make it, kit env --write makes .env, and pnpm dev reads it', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-env-file-${process.pid}`)
     await rm(parent, { recursive: true, force: true })
@@ -1637,6 +1737,57 @@ describe('the copy-in CLI', () => {
       const printed = cli(app, 'env')
       expect(printed.stdout).toMatch(/^SHARING_SECRET="[A-Za-z0-9+/=]{44}"$/m)
       expect(existsSync(join(app, '.env'))).toBe(false)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('never leaves OAuth silently off: every new app lists OAUTH_SIGNING_KEY, kit env --write makes it, and an app without it names it', async () => {
+    const parent = join(import.meta.dirname, '.generated', `oauth-key-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    /** Starts the app as `pnpm dev` does, without the watcher: its first lines, and what it answers at the OAuth metadata. */
+    const started = async (app: string, port: number) => {
+      // The shell's own settings left out: a variable already set wins over .env
+      const { OAUTH_SIGNING_KEY: _, API_KEYS: __, ...shell } = process.env
+      const server = spawn(bin('tsx'), ['--env-file-if-exists=.env', 'src/server.ts'], { cwd: app, env: { ...shell, PORT: String(port), STATE_DIR: join(app, '.state') } })
+      let out = ''
+      server.stdout.on('data', (chunk) => (out += chunk))
+      server.stderr.on('data', (chunk) => (out += chunk))
+      try {
+        for (let tries = 0; !out.includes('→ http://localhost') && tries < 300; tries++) await new Promise((resolve) => setTimeout(resolve, 100))
+        const metadata = await fetch(`http://localhost:${port}/.well-known/oauth-authorization-server`)
+        return { out, status: metadata.status, body: await metadata.text() }
+      } finally {
+        server.kill()
+      }
+    }
+    try {
+      for (const runtime of ['both', 'node', 'cloudflare']) {
+        expect(cli(parent, 'init', `${runtime}-api`, '--runtime', runtime, '--no-install', '--no-git').status).toBe(0)
+        const app = join(parent, `${runtime}-api`)
+        for (const example of ['.env.example', '.dev.vars.example'].filter((file) => existsSync(join(app, file)))) {
+          expect(await readFile(join(app, example), 'utf8'), `${runtime} ${example}`).toMatch(/^# OAUTH_SIGNING_KEY: .*`npx @escalay\/kit env --write`.*\nOAUTH_SIGNING_KEY=""$/m)
+        }
+      }
+      const app = join(parent, 'node-api')
+      // Without the key: the start-up line and the metadata both name the setting
+      const off = await started(app, 4400 + 100 + (process.pid % 400))
+      expect(off.out).toContain('OAuth is off: set OAUTH_SIGNING_KEY')
+      expect([off.status, JSON.parse(off.body).detail]).toEqual([404, expect.stringContaining('OAUTH_SIGNING_KEY')])
+      // kit env --write makes the key, and the app started as pnpm dev starts it serves OAuth
+      expect(cli(app, 'env', '--write').status).toBe(0)
+      const key = JSON.parse(parseEnv(await readFile(join(app, '.env'), 'utf8')).OAUTH_SIGNING_KEY!)
+      expect(key).toMatchObject({ kty: 'EC', crv: 'P-256', alg: 'ES256' })
+      const on = await started(app, 4400 + 500 + (process.pid % 400))
+      expect(on.out).not.toContain('OAuth is off')
+      expect([on.status, JSON.parse(on.body).issuer]).toEqual([200, expect.stringMatching(/^http:\/\/localhost:\d+$/)])
+      // --wire of a part that approves through OAuth adds the key to an app that lacks it
+      const older = join(parent, 'both-api')
+      for (const example of ['.env.example', '.dev.vars.example']) await writeFile(join(older, example), (await readFile(join(older, example), 'utf8')).replace(/^# OAUTH_SIGNING_KEY: .*\nOAUTH_SIGNING_KEY=""\n/m, ''))
+      expect(cli(older, 'add', 'setup', '--wire', '--no-install').status).toBe(0)
+      for (const example of ['.env.example', '.dev.vars.example']) expect(await readFile(join(older, example), 'utf8'), example).toMatch(/^OAUTH_SIGNING_KEY=""$/m)
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
@@ -1940,6 +2091,59 @@ describe('the copy-in CLI', () => {
       expect(envLines(older)).toEqual([])
       expect(older).toContain('note     env container/entrypoint.sh: passes no FEATURES_OFF, which Env in src/app.ts reads, so the container never sees it: add ${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} before node_modules/.bin/tsx (a failure once the app has test/env.test.ts, which a new app from `kit init` has)')
       expect(toFix(older)).toBe(toFix(withTest) - 1)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('keeps AGENTS.md’s Try it on a feature the app has: the first one listed, after feature and feature --remove', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-try-it-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const tryIt = async (app: string) => {
+      const agents = await readFile(join(app, 'AGENTS.md'), 'utf8')
+      return agents.slice(agents.indexOf('## Try it'), agents.indexOf('## How changes ship'))
+    }
+    /** The REST path and the MCP tool Try it calls, each as many times as it names one. */
+    const called = (text: string) => ({ paths: [...text.matchAll(/"\$BASE(\/api\/[^"?]*)/g)].map(([, path]) => path), tools: [...text.matchAll(/mcp-name: (\w+)'|"name":"(\w+)"/g)].map(([, header, body]) => header ?? body) })
+    try {
+      expect(cli(parent, 'init', 'shelf-api', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'shelf-api')
+      expect(called(await tryIt(app))).toEqual({ paths: ['/api/notes'], tools: ['list_notes', 'list_notes'] })
+      // Started by pnpm dev, which reads .env (tsx alone reads none), and stopped whole: the watcher's child too
+      expect(await tryIt(app)).toContain('Start it with `pnpm dev`, never `tsx src/server.ts` alone, which reads no `.env`')
+      expect(await tryIt(app)).toContain('Stop it with Ctrl-C, or `kill -- -<its process group>`')
+      expect(cli(app, 'feature', 'books').status).toBe(0)
+      expect(cli(app, 'feature', 'chapters', '--under', 'books').status).toBe(0)
+      expect(called(await tryIt(app)).paths).toEqual(['/api/notes'])
+      const removed = cli(app, 'feature', '--remove', 'notes')
+      expect(removed.status, removed.stderr).toBe(0)
+      expect(removed.stdout).toContain("AGENTS.md › Try it: now calls /api/books and list_books")
+      const now = await tryIt(app)
+      expect(called(now)).toEqual({ paths: ['/api/books'], tools: ['list_books', 'list_books'] })
+      expect(now).not.toMatch(/\bnotes?\b/)
+      // A child needs its parent's id, so it is never the example; with no feature of its own, the switches' list
+      expect(cli(app, 'feature', '--remove', 'books').status).toBe(0)
+      expect(called(await tryIt(app))).toEqual({ paths: ['/api/features'], tools: ['list_features', 'list_features'] })
+      // init --bare makes no notes, so its Try it never names them
+      expect(cli(parent, 'init', 'bare-api', '--bare', '--no-install', '--no-git').status).toBe(0)
+      const bare = join(parent, 'bare-api')
+      expect(called(await tryIt(bare))).toEqual({ paths: ['/api/features'], tools: ['list_features', 'list_features'] })
+      // The calls work as written there
+      const { createApp: createBare } = await import(join(bare, 'src/app.ts'))
+      const { testDb, hashApiKey: hashOf } = await import(join(bare, 'src/kit/index.ts'))
+      const served = await createBare({ db: await testDb(), env: { API_KEYS: `dev:${hashOf('dev-key')}` } })
+      const [rest, mcp] = [...(await tryIt(bare)).matchAll(/^curl ((?:.*\\\n)*.*)$/gm)].map(([, call]) => call!.replaceAll('\\\n', ' '))
+      const pathOf = (call: string) => /"\$BASE(\/[^"]*)"/.exec(call)![1]!
+      expect((await served.request(pathOf(rest!), { headers: { authorization: 'Bearer dev-key' } })).status).toBe(200)
+      const sent = Object.fromEntries([...mcp!.matchAll(/-H ['"]([^:]+): ([^'"]+)['"]/g)].map(([, name, value]) => [name, value!.replace('$KEY', 'dev-key')]))
+      const answer = await served.request(pathOf(mcp!), { method: 'POST', headers: sent, body: /-d '([^']+)'/.exec(mcp!)![1] })
+      expect([answer.status, JSON.stringify(await answer.json())]).toEqual([200, expect.stringContaining('everything is core')])
+      // A Try it the owner rewrote is left alone, and said so
+      await writeFile(join(bare, 'AGENTS.md'), '# Bare\n\n## Try it\n\nOur own words.\n\n## How changes ship\n')
+      const own = cli(bare, 'feature', 'books')
+      expect(own.stdout).toContain('AGENTS.md › Try it: no example call as init wrote it, so it was left as it is')
+      expect(await readFile(join(bare, 'AGENTS.md'), 'utf8')).toContain('Our own words.')
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
@@ -2557,8 +2761,19 @@ describe('the skills', () => {
     const internal = Object.entries(skills).filter(([, text]) => /^metadata:\n {2}internal: true$/m.test(text.split('\n---\n')[0]!)).map(([name]) => name)
     const forThisRepository = Object.entries(skills).filter(([, text]) => text.includes('in the escalay/api-kit repository itself')).map(([name]) => name)
     expect(forThisRepository).toEqual(['api-kit-part'])
-    expect(internal).toEqual(forThisRepository)
-    expect(await readFile(join(kitDir, 'README.md'), 'utf8')).toContain('`npx skills add escalay/api-kit --skill api-kit-part -y`')
+    // npm-release is for a repository that publishes to npm, never an app as such: named with --skill, as api-kit-part is
+    expect(internal).toEqual([...forThisRepository, 'npm-release'])
+    const readme = await readFile(join(kitDir, 'README.md'), 'utf8')
+    for (const name of internal) expect(readme, name).toContain(`\`npx skills add escalay/api-kit --skill ${name} -y\``)
+    expect(await readFile(join(kitDir, 'templates/app/AGENTS.md'), 'utf8')).toContain('`npx skills add escalay/api-kit --skill npm-release -y`')
+  })
+
+  it('are in the quick start of both npm READMEs, with what they hold', async () => {
+    for (const file of ['README.md', 'packages/create-escalay/README.md']) {
+      const readme = await readFile(join(kitDir, file), 'utf8')
+      const start = readme.match(/```bash\n([\s\S]*?)```/)![1]!
+      expect(start, file).toMatch(/^npx skills add escalay\/api-kit -y +# .*api-kit-build.*api-kit-feature/m)
+    }
   })
 
   it('are each listed in the README\'s skills table and in AGENTS.md', async () => {
@@ -2601,7 +2816,8 @@ describe('the skills', () => {
 
   it('api-kit-build wires the sharing part as its README does, and api-kit-review checks the threats its tests hold', async () => {
     const skills = await skillTexts()
-    const wiring = await readFile(join(kitDir, 'src/sharing/README.md'), 'utf8')
+    // The README and the REFERENCE.md beside it, which holds the wiring by hand
+    const wiring = (await Promise.all(['README.md', 'REFERENCE.md'].map((file) => readFile(join(kitDir, 'src/sharing', file), 'utf8')))).join('\n')
     for (const fact of ['SHARING_SECRET', 'SHARING_OPEN_PATHS', 'sharing.relay', 'sharing.neverKept', 'sharing.sweep()', 'sharing.forget(', 'sharingSignInPaths(sharing)', 'publicOrigin', "address: { header: 'cf-connecting-ip' }", 'mountA2A']) {
       expect(skills['api-kit-build'], fact).toContain(fact)
       if (fact !== 'mountA2A' && !fact.startsWith('address')) expect(wiring, fact).toContain(fact)

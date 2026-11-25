@@ -1,7 +1,59 @@
 # sharing: reference
 
-What the README leaves to this file, which ships beside it: the owner routes, a friend's agent as a test, the
-refusals, the sign-in ladder, a member's states and two more flows.
+What the README leaves to this file, which ships beside it: wiring it by hand, the owner routes, a friend's agent as a test, what a
+space's MCP offers, the refusals, the sign-in ladder, a member's states and two more flows.
+
+## Wire it by hand
+
+`kit add sharing --wire --spaces shelves` writes all of this; an app made before the wiring markers takes it by hand,
+each block naming its place:
+
+```ts
+// src/features/shelves/spaces.ts, new: the shelves as spaces, each shelf's id its space's name
+import type { Db } from '../../kit/index.js'
+import { shelvesRepo } from './repo.js'
+
+export const shelfSpaces = (db: Db) => {
+  const byId = async (id: string) => {
+    const row = await shelvesRepo(db).get(id)
+    return row ? { id: row.id, name: row.id, title: row.name } : null
+  }
+  return { byName: byId, byId }
+}
+// src/features/shelves/index.ts, in place of the statements that start the same way: a deleted shelf ends its members
+  register: async (app, { db, parts }) => {
+    const handle = shelvesHandlers({ ...repo, remove: async (id) => { await repo.remove(id); if (parts.sharing) await parts.sharing.forget(id) } })
+// src/features/shelves/index.ts, before `const handle`
+    const repo = shelvesRepo(db)
+// src/app.ts, after `import BRAND`
+import { z } from '@hono/zod-openapi'
+import { shelfSpaces } from './features/shelves/spaces.js'
+import { mcpTool } from './kit/mcp/index.js'
+import { createSharing, registerSharing, sharingTools, SHARING_OPEN_PATHS, SHARING_TAG, type Sharing } from './kit/sharing/index.js'
+// src/app.ts, in place of the statements that start the same way (the realm and name stay the app's)
+export type Parts = { sharing?: Sharing }
+  const oauth = env.OAUTH_SIGNING_KEY ? createOAuth({ name: 'Shelves', signingKey: env.OAUTH_SIGNING_KEY, store: await dbOAuthStore(db), owner, reuseGraceSeconds: 30, ...(sharing && { publicOrigin: env.PUBLIC_ORIGIN, limits: { store: await dbGuardStore(db) }, ...sharing.oauth }) }) : undefined
+    tags: [...FEATURES.map((feature) => feature.tag), ...(sharing ? [SHARING_TAG] : [])],
+    auth: { realm: 'shelves', keys: parseApiKeys(env.API_KEYS), access, ...(sharing && { open: [...SHARING_OPEN_PATHS], relay: ['/mcp', '/a2a', sharing.relay] }) },
+    guards: { store: await dbGuardStore(db), ...(sharing && { skip: sharing.neverKept }) },
+  const parts: Parts = { sharing }
+  const factory = mcpServerFactory({ info: { name: 'shelves', version: VERSION }, instructions: 'Shelves: read the guide at /llms.txt first.', tools: [...TOOLS, ...(sharing ? sharingTools({ noun: 'shelf' }) : [])], prompts, skills, callApi: inProcess(app) })
+// src/app.ts, inside `export type Env`'s braces, at the end
+SHARING_SECRET?: string; PUBLIC_ORIGIN?: string
+// src/app.ts, before `const oauth`: on once its settings are, so createApp({ db, env: {} }) stays plain
+  const sharing = env.OAUTH_SIGNING_KEY && env.SHARING_SECRET && env.PUBLIC_ORIGIN ? await createSharing({ db, secret: env.SHARING_SECRET, spaces: shelfSpaces(db), spaceOfPath: (path) => /^\/api\/shelves\/([^/]+)/.exec(path)?.[1] ?? null, owner, fixedKeys: [...parseApiKeys(env.API_KEYS).values()] }) : undefined
+// src/app.ts, after `mountMcp(app, { factory`: the part's routes, and a shelf's own MCP
+  if (sharing && oauth) await registerSharing(app, sharing, { oauth })
+  if (sharing) mountMcp(app, { path: sharing.mcpPath, factory: mcpServerFactory({ info: { name: 'shelves', version: VERSION }, instructions: 'One shelf, shared with you.', tools: SPACE_TOOLS, callApi: inProcess(app) }), allowedHostnames: [env.PUBLIC_HOST ?? 'localhost', 'localhost', '127.0.0.1'] })
+// src/app.ts, before `export const VERSION`
+const SPACE_TOOLS = [mcpTool({ name: 'view_shelf', title: 'This shelf', description: 'The shelf this address shares.', input: z.object({}), call: (_, at) => ({ path: `/api/shelves/${encodeURIComponent(at?.params.space ?? '')}` }), summarize: (shelf: { name: string }) => shelf.name })]
+// src/worker.ts and src/server.ts, after `import { openDb`
+import { sharingOf } from './kit/sharing/index.js'
+// src/worker.ts, after `fetch:`: wrangler.jsonc's "triggers": { "crons": ["17 * * * *"] } runs it hourly
+  scheduled: (_event, env, ctx) => ctx.waitUntil(appOf(env).then(async (app) => { const sharing = sharingOf(app); if (sharing) await sharing.sweep() })),
+// src/server.ts, after `serve(`: hourly
+setInterval(() => void sharingOf(app)?.sweep().catch((error) => console.error('sharing sweep failed', error)), 3_600_000)
+```
 
 ## The owner routes
 
@@ -51,6 +103,18 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
   expect((await app.request(`/api/shelves/${soups}`, { method: 'DELETE', headers })).status).toBe(204)
   expect((await view(`/s/${soups}/mcp`)).status).toBe(401)
 })
+```
+
+## What a space's MCP offers
+
+`--wire` gives a shelf's own MCP (its invites' `address`) `view_shelf`, and for each feature made
+`--under shelves` a list tool over that shelf's children: `kit feature recipes --under shelves` gets
+`list_shelf_recipes`, which calls `/api/shelves/{shelf}/recipes`. A child made after wiring gets its tool when
+`kit add sharing --wire --spaces shelves` runs again. A child by its own id (`/api/recipes/{id}`) is no space's path,
+so it stays the owner's: a member's token there is a 401. By hand, one line per child, after `SPACE_TOOLS`:
+
+```ts
+SPACE_TOOLS.push(mcpTool({ name: 'list_shelf_recipes', title: 'Recipes in this shelf', description: 'The recipes in the shelf this address shares, the newest first, a page at a time.', input: z.object({ limit: z.number().int().min(1).max(100).optional().describe('At most this many (default 50).'), cursor: z.string().optional().describe('Where the next page starts: the cursor the last page ended with.') }), call: (args, at) => ({ path: `/api/shelves/${encodeURIComponent(at?.params.space ?? '')}/recipes`, query: args }), summarize: (page: { _embedded: { recipes: { title: unknown }[] } }) => page._embedded.recipes.map((row) => String(row.title)).join('\n') || 'None yet.' }))
 ```
 
 ## Refusals: 401 or 403

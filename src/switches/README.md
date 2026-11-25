@@ -131,7 +131,7 @@ switches({ catalog, providers, license: licenseOf({ key: env.LICENSE_KEY, public
 | `schema.ts` | the `feature_switches` table (`featureSwitches`: key, scope, on, changed_by, changed_at) and `SWITCH_MIGRATIONS` |
 | `repo.ts` | `switchesRepo`, `databaseProvider` (the table as a provider, read whole and kept 5 s) |
 | `routes.ts` | `switchRoutes`: `GET {path}`, `GET` and `PATCH {path}/{key}` |
-| `tools.ts` | `switchTools`: `list_features`, `switch_feature` |
+| `tools.ts` | `switchTools`: `list_features`, `switch_feature`; `example`, a catalog key for the command line's example (`<key>` without one, so an empty catalog names no feature the app lacks) |
 | `license.ts` | `verifyLicense` (one key, offline, never throws), `licenseOf` (a deployment's license, checked hourly) |
 | `index.ts` | `switches` (`isOn`, `assertOn`, `gate`, `gated`, `set`, `stateOf`, `register`), `SWITCHES_TAG` |
 

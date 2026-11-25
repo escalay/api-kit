@@ -4,7 +4,8 @@ import { HAL_JSON, LinksSchema } from '../core/hal.js'
 import { problemResponses } from '../core/problem.js'
 
 export const switchRoutes = ({ path, tag, keys }: { path: string; tag: string; keys: readonly string[] }) => {
-  const example = keys[0] ?? 'webhooks'
+  // A key from the catalog, or none: an empty catalog's document names no feature the app lacks
+  const example = keys[0]
   const OverrideSchema = z.object({
     scope: z.string().openapi({ description: 'Who it applies to: `everyone`, `person:<email>` or `key:<name>`.', example: 'everyone' }),
     on: z.boolean(),
@@ -13,7 +14,7 @@ export const switchRoutes = ({ path, tag, keys }: { path: string; tag: string; k
   })
   const FeatureSchema = z
     .object({
-      key: z.string().openapi({ description: 'The feature’s stable key: the same in the database, `FEATURES_OFF` and a flag service.', example }),
+      key: z.string().openapi({ description: 'The feature’s stable key: the same in the database, `FEATURES_OFF` and a flag service.', ...(example && { example }) }),
       title: z.string(),
       description: z.string().openapi({ description: 'What switching it off stops.' }),
       on: z.boolean().openapi({ description: 'Whether it works for you: its own switch and every feature it needs.' }),
@@ -49,7 +50,7 @@ export const switchRoutes = ({ path, tag, keys }: { path: string; tag: string; k
       feature: FeatureSchema,
     })
     .openapi('FeatureSwitched', { description: 'A switch made, or with `dryRun`, what it would change.' })
-  const keyParam = z.object({ key: z.string().openapi({ param: { name: 'key', in: 'path' }, description: 'The feature’s key, from the list.', example }) })
+  const keyParam = z.object({ key: z.string().openapi({ param: { name: 'key', in: 'path' }, description: 'The feature’s key, from the list.', ...(example && { example }) }) })
 
   return {
     list: createRoute({

@@ -670,12 +670,46 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
     const index = join(folder, 'index.ts')
     writeFileSync(index, readFileSync(index, 'utf8').replace(`  name: '${name}',`, `  name: '${name}',\n  switch: '${name}',`))
   }
+  syncTryIt(root)
   console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test${remove ? '' : '; no delete'}), each one a ${vars.__label__}${singular ? '' : ' (--singular names it otherwise)'}, and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
   if (under) console.log(`under ${under}: GET and POST /api/${under}/{${vars.__parent_param__}}/${name}, each ${vars.__label__} with its ${vars.__parent_id__}; one by its id at /api/${name}/{id}; a ${vars.__parent_label__} that isn't there is a 404, deleting one deletes its ${vars.__labels__} (on delete cascade), and the tools take ${vars.__parent_snake_singular__}`)
   // init says its own Next line
   if (!next) return
   console.log("Next: pnpm format (what feature writes is in the kit's long-line style), then pnpm test")
   console.log('An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; one inside another (recipes on a shelf): `kit feature <name> --under <parent>`')
+}
+
+/** What AGENTS.md › Try it calls: the first feature listed with a list of its own (a child needs its parent's id), else the switches'. */
+const tryItTargetOf = (root) => {
+  const list = textOf(join(root, 'src/features/index.ts')) ?? ''
+  for (const [, name] of list.matchAll(/^import \{ feature as \w+ \} from '\.\/([\w-]+)\/index\.js'/gm)) {
+    const routes = textOf(join(root, 'src/features', name, 'routes.ts')) ?? ''
+    const tool = /name: '(list_\w+)'/.exec(textOf(join(root, 'src/features', name, 'tools.ts')) ?? '')?.[1]
+    if (tool && /path: PATH, operationId: 'list/.test(routes)) return { path: `/api/${name}`, tool, paged: true }
+  }
+  // The switches' list takes no page size
+  return { path: '/api/features', tool: 'list_features', paged: false }
+}
+/** The sentence 1.36.0's AGENTS.md closed Try it with, naming the sample. */
+const OLD_TRY_IT_NOTE = "`notes` is the sample: use one of\nyour own features' paths and tools once it is gone."
+const TRY_IT_NOTE = '`kit feature` and `feature --remove` keep these calls on the\nfirst feature in `src/features/index.ts`.'
+/** Points AGENTS.md › Try it at a feature the app has, as `feature` and `feature --remove` leave it; says what it did. */
+const syncTryIt = (root) => {
+  const path = join(root, 'AGENTS.md')
+  const text = textOf(path)
+  if (text === null) return
+  const { path: route, tool, paged } = tryItTargetOf(root)
+  const rest = /"\$BASE\/api\/[\w-]+(?:\?limit=5)?"/
+  const calls = [/mcp-name: list_\w+'/, /"name":"list_\w+","arguments":\{(?:"limit":5)?\}/]
+  if (!rest.test(text) || calls.some((call) => !call.test(text))) return console.log('AGENTS.md › Try it: no example call as init wrote it, so it was left as it is')
+  const next = text
+    .replace(rest, `"$BASE${route}${paged ? '?limit=5' : ''}"`)
+    .replace(calls[0], `mcp-name: ${tool}'`)
+    .replace(calls[1], `"name":"${tool}","arguments":{${paged ? '"limit":5' : ''}}`)
+    .replace(OLD_TRY_IT_NOTE, TRY_IT_NOTE)
+  if (next === text) return
+  writeFileSync(path, next)
+  console.log(`AGENTS.md › Try it: now calls ${route} and ${tool}`)
 }
 
 /**
@@ -701,6 +735,7 @@ const removeFeature = (root, name) => {
   if (switched) writeFileSync(catalog, textOf(catalog).replace(entry, ''))
   console.log(`Removed src/features/${name}/ and its lines in src/features/index.ts${switched ? ', and its switch in src/features/catalog.ts' : ''}`)
   if (stillListed) console.log(`src/features/index.ts still names ${local}: take it out of FEATURES by hand`)
+  syncTryIt(root)
   // What else still reaches into it: another feature over its rows, a test of its own outside the folder
   const mentions = ['src', 'test', 'web'].filter((top) => existsSync(join(root, top))).flatMap((top) =>
     readdirSync(join(root, top), { recursive: true, withFileTypes: true })
@@ -1339,7 +1374,7 @@ const applyFinding = (repo, plan, finding) => {
 const DEPLOY_FORM = {
   PUBLIC_HOST: { description: 'The host this Worker answers on: `<name>.<your-subdomain>.workers.dev`, or a custom domain such as `api.example.com`. MCP accepts requests for this host only.' },
   API_KEYS: { description: 'Optional. Keys as `name:sha256` pairs, comma-separated: the hash of each key, never the key (`printf \'my-key\' | shasum -a 256`).' },
-  OAUTH_SIGNING_KEY: { description: 'Optional. Turns on OAuth sign-in for agents: an ES256 private key as JWK JSON. Make one in a clone: `pnpm exec tsx -e "import(\'./src/kit/oauth/index.ts\').then(async (m) => console.log(await m.generateOAuthKey()))"`.' },
+  OAUTH_SIGNING_KEY: { description: 'Optional. Turns on OAuth sign-in for agents: an ES256 private key as JWK JSON. Make one in a clone: `npx @escalay/kit env` prints one.' },
   ACCESS_TEAM: { description: 'Optional, with ACCESS_AUD. Your Cloudflare Access team name, to let people in through Access.' },
   ACCESS_AUD: { description: 'Optional, with ACCESS_TEAM. The Application Audience (AUD) tag of the Access application in front of this Worker.' },
 }
@@ -1674,6 +1709,13 @@ const SETTING_FILES = [
   ['vitest.config.ts', "vitest.config.ts's miniflare bindings"],
 ]
 
+/** A part's settings: those of the parts it works through (`meta.wiring.uses`, e.g. the OAuth key), then its own. */
+const settingsOf = (name) => {
+  const wiring = REGISTRY[name]?.wiring ?? {}
+  const all = [...(wiring.uses ?? []).flatMap(settingsOf), ...(wiring.settings ?? [])]
+  return all.filter((setting, at) => all.findIndex((one) => one.name === setting.name) === at)
+}
+
 /**
  * The steps a part's `meta.wiring` (registry.json) asks of an app made by `init`, each only where the app lacks it: its
  * settings in every file that lists the app's settings, a schedule for its scheduled work, and its README's code.
@@ -1683,7 +1725,7 @@ const wiringStepsOf = (name, root) => {
   if (!wiring || !root || !existsSync(join(root, 'src/app.ts'))) return []
   const readme = REGISTRY[name].files.find((file) => file.endsWith('README.md'))
   const lacking = (path, text) => existsSync(join(root, path)) && !textOf(join(root, path)).includes(text)
-  const settings = (wiring.settings ?? []).flatMap(({ name: setting, what, test, testImport }) => {
+  const settings = settingsOf(name).flatMap(({ name: setting, what, test, testImport }) => {
     // The workerd tests get a value that works there: their origin, a key made as they start
     // A setting without a test value needs none in the workerd tests' bindings
     const files = SETTING_FILES.filter(([path]) => lacking(path, setting) && (test || path !== 'vitest.config.ts')).map(([path, where]) => (path === 'vitest.config.ts' ? `${where} as ${setting}: ${test}${testImport ? ` (${testImport})` : ''}` : path === 'container/entrypoint.sh' ? `${where} as ${passLine(setting)}` : where))
@@ -1848,6 +1890,22 @@ const wireVarsOf = (root, over) => {
   const first = /\.object\(\{\s*id: z\.string\(\),\s*(\w+):/.exec(routes)?.[1] ?? 'id'
   return { ...Object.fromEntries(Object.entries(names).map(([key, value]) => [`__over_${key.slice(2)}`, value])), __over_first__: first, __name__: name, __title__: title }
 }
+/** The features made `--under` the one a part works over, each with its spellings as `__child_*__`, for `wire.children`. */
+const childrenOf = (root, over) => {
+  const features = join(root, 'src/features')
+  if (!over || !existsSync(features)) return []
+  return readdirSync(features)
+    .filter((name) => name !== over && new RegExp(`path: '/api/${over}/\\{\\w+\\}/${name}'`).test(textOf(join(features, name, 'routes.ts')) ?? ''))
+    .sort()
+    .map((name) => {
+      const routes = textOf(join(features, name, 'routes.ts'))
+      const singular = /export const (\w+)Schema = /.exec(routes)?.[1]
+      const names = namesOf(name, singular?.replace(/[A-Z]/g, (letter, at) => `${at ? '-' : ''}${letter.toLowerCase()}`))
+      // Its first own field, after the id and its parent's
+      const first = /\.object\(\{\s*id: z\.string\(\),\s*(?:\w+Id: z\.string\(\),\s*)?(\w+):/.exec(routes)?.[1] ?? 'id'
+      return { ...Object.fromEntries(Object.entries(names).map(([key, value]) => [`__child_${key.slice(2)}`, value])), __child_Labels__: capital(names.__labels__), __child_first__: first }
+    })
+}
 const fillVars = (text, vars) => Object.entries(vars).reduce((filled, [key, value]) => filled.replaceAll(key, value), text)
 const fillDeep = (value, vars) => (typeof value === 'string' ? fillVars(value, vars) : Array.isArray(value) ? value.map((one) => fillDeep(one, vars)) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, one]) => [key, fillDeep(one, vars)])) : value)
 
@@ -1891,7 +1949,8 @@ const planWiring = (root, parts) => {
     if (at >= 0) write(path, [...all.slice(0, at), ...lines, ...all.slice(at)].join('\n'))
   }
   for (const part of parts) {
-    const { wire, settings = [], cron } = REGISTRY[part].wiring
+    const { wire, cron } = REGISTRY[part].wiring
+    const settings = settingsOf(part)
     const over = wire.over ? valueOf(wire.over.flag) : undefined
     const vars = wireVarsOf(root, over)
     const steps = []
@@ -1915,7 +1974,9 @@ const planWiring = (root, parts) => {
       if (ahead >= 0) write(path, [...lines.slice(0, ahead), `  ${camel},`, ...lines.slice(ahead)].join('\n'))
       else insertAt(path, 'kit:features', [`  ${camel},`])
     }
-    for (const edit of fillDeep(wire.edits ?? [], vars)) {
+    // Then what each feature under it adds (a space's read tool per child)
+    const children = childrenOf(root, over).flatMap((child) => fillDeep(wire.children ?? [], { ...vars, ...child }))
+    for (const edit of [...fillDeep(wire.edits ?? [], vars), ...children]) {
       const text = read(edit.file)
       // A runtime the app doesn't have: no worker.ts on Node alone, no server.ts on Workers alone
       if (text === null) continue
@@ -2045,8 +2106,13 @@ const wireParts = (root, parts, install = null) => {
   }
   const installs = typeof install === 'function'
   const workers = existsSync(join(root, 'scripts/migrations.ts'))
-  const rest = `pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test`
-  const installed = installs && install(rest)
+  const installed = installs && install(`pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test`)
+  // In the shape `pnpm format` keeps, so an edit by hand after --wire meets it; only with the app's own formatter
+  const sources = changed.map(([path]) => path).filter((path) => /\.tsx?$/.test(path))
+  const formatter = join(root, 'node_modules/.bin/oxfmt')
+  const formatted = sources.length > 0 && existsSync(formatter) && spawnSync(formatter, sources, { cwd: root }).status === 0
+  if (formatted) console.log(`Formatted ${sources.join(', ')}`)
+  const rest = `${formatted ? '' : 'pnpm format && '}${workers ? 'pnpm migrations && ' : ''}pnpm test`
   // Where the settings are, and the one command that makes a local value for each
   const examples = ENV_FILES.filter(({ example }) => existsSync(join(root, example)))
   const settingsIn = [...examples.map(({ example }) => example), ...(existsSync(join(root, 'container/entrypoint.sh')) ? ['container/entrypoint.sh'] : [])].join(', ').replace(/, ([^,]*)$/, ' and $1')
@@ -2247,6 +2313,7 @@ const commands = {
     const cloudflare = runtime === 'node' ? {} : { cloudflare: { bindings: DEPLOY_FORM } }
     writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', packageManager: KIT_PACKAGE_MANAGER, engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps), ...cloudflare }, null, 2) + '\n')
     if (!flags.has('--bare')) addFeature(root, 'notes', { singular: 'note', next: false })
+    else syncTryIt(root)
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
     // What makes the app pass its own gate as made: what init writes is in the kit's long-line style, and D1 needs migrations/
     const firstRun = [['install'], ['format'], ...(runtime === 'node' ? [] : [['migrations']])]
@@ -2565,7 +2632,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const folders = [...new Set(lock.modules.filter((name) => REGISTRY[name]).map(notesFolderOf))]
     const sections = folders.map((folder) => [folder, notesSince(markdown, folder, since)]).filter(([, notes]) => notes.length)
     if (!sections.length) {
-      console.log(`No upgrade notes for ${folders.join(', ')} after kit ${since} (this is kit ${VERSION})`)
+      console.log(`No upgrade notes for ${folders.join(', ')} after kit ${since} (this is kit ${VERSION}): nothing to do by hand beyond \`kit update\`, which changes only ${dirArg}. A change an app must make to its own files (src/app.ts, the examples, CI) would be a note here under its part, and there is none`)
       for (const line of keepLineOf(lock)) console.log(line)
       return
     }

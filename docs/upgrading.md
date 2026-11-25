@@ -30,7 +30,9 @@ so take that one before the rest. An edit the team keeps is recorded with
 file changes again, the kit changes it too, or `update <part> --force` takes the kit's; `update` and `upgrading` end
 with that `doctor --keep` line, naming the files, while an edit is left that doctor would fail. `add` and `update` print `pnpm add`
 only for what `package.json` lacks. Read the sections below for every part the app has, from
-the version in `kit.json` up.
+the version in `kit.json` up. `update` changes only the kit's folder: a change an app must make to its own files (what
+a newer `init` writes in `src/app.ts`, the examples, CI) is a note under the part it belongs to, so no note means
+nothing to change there either.
 
 ## core
 
@@ -121,6 +123,17 @@ the version in `kit.json` up.
   file in `migrations/` (`pnpm check` and CI fail until it is there), and the deploy applies it.
 
 ## oauth
+
+### Unreleased (after 1.36.0)
+
+- **OAuth is never silently off in a new app.** `OAUTH_SIGNING_KEY` is now the oauth part's own setting (its
+  `meta.wiring`), which people, setup and sharing use: `kit add <part> --wire` of any of them adds it to
+  `.env.example` and `.dev.vars.example` when missing, and `kit env --write` makes its value. A new app lists it from
+  `init`, answers `/.well-known/oauth-*` with a 404 problem naming the setting while it is unset, and `src/server.ts`
+  prints `OAuth is off: set OAUTH_SIGNING_KEY` at start. An older app that wants the same: the key's line in its
+  example (`kit env` prints a value), and after `createAgentApi` in `src/app.ts`
+  `if (!oauth) app.get('/.well-known/oauth-*', (c) => problemResponse(c, 'not_found', { detail: 'OAuth is off here: set OAUTH_SIGNING_KEY.' }))`.
+  Nothing else changes.
 
 ### 1.32.0
 
@@ -557,6 +570,13 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## switches
 
+### Unreleased (after 1.36.0)
+
+- **No feature the app lacks in its guide.** With an empty catalog, the switch routes' key had the example `webhooks`,
+  which the guide printed as `GET /api/features/webhooks`; the example is now the catalog's first key, or none (the
+  guide shows `{key}`). `switchTools()` without `example` gives the command line `feature switch <key>` in place of
+  `webhooks`. Nothing to change in the app.
+
 ### 1.35.0
 
 - **`kit doctor` notes a setting the container never sees** (a `note     env` line): one `Env` in `src/app.ts` reads
@@ -580,6 +600,16 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - `onSwitch` is guarded: a hook that throws is logged and never answered, so the switch stays made.
 
 ## sharing
+
+### Unreleased (after 1.36.0)
+
+- **A space's MCP reads its children.** `kit add sharing --wire --spaces <parent>` now adds, for each feature made
+  `--under` it, a `list_<space>_<children>` tool to the space's own MCP, over `/api/<parent>/{id}/<children>`; run it
+  again after adding a child. Before, a friend's agent got `view_<space>` alone. A child by its id
+  (`/api/<children>/{id}`) stays the owner's. An app wired by 1.36.0 runs `--wire` again, or adds the line in
+  REFERENCE.md › What a space's MCP offers. An app wired by hand from the 1.36.0 README renames its `SHELF_TOOLS`
+  to `SPACE_TOOLS` first, the name `--wire` writes to. `OAUTH_SIGNING_KEY` is now the oauth part's setting, which sharing
+  uses: `add sharing` names it as before.
 
 ### 1.36.0
 
@@ -645,6 +675,13 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
   `address: { header: 'cf-connecting-ip' }`.
 
 ## testing
+
+### Unreleased (after 1.36.0)
+
+- A new app's `test/api.test.ts` runs every check this part's README wires, `guideRoutes` too: a route the guide
+  names that the spec lacks fails the gate. An older app adds `guideRoutes` to its import in `test/api.test.ts`
+  (`import { guideRoutes } from '../src/kit/testing/index.js'`) and a test that
+  `expect(guideRoutes(guideFiles(GUIDE_DIR), await doc())).toEqual([])`.
 
 ### 1.35.0
 
