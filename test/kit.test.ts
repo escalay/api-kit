@@ -1020,7 +1020,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       // -y: without it the installer stops to ask, which an agent's shell never answers
       expect(made.stdout).toMatch(/^Skills first: npx skills add escalay\/api-kit -y .*\nNext: /m)
       // and that doctor fails on a new app until the starter's text is the product's, with the commands that render the brand
-      expect(made.stdout).toContain("Doctor: `npx @escalay/kit doctor` fails on a new app until the starter's text is yours: the product skill's description (guide/skills/demo-api/SKILL.md), brand/brand.ts's, and each switch's in src/features/catalog.ts; then `pnpm add -D @resvg/resvg-js` and `npx @escalay/kit brand` render the brand")
+      expect(made.stdout).toContain("Doctor: `npx @escalay/kit doctor` fails on a new app until the starter's text is yours, in the files it names: guide/skills/demo-api/SKILL.md (its description), brand/brand.ts (its description), src/features/catalog.ts (each switch's description, once `feature --switch` writes one); then `pnpm add -D @resvg/resvg-js` and `npx @escalay/kit brand` render the brand")
       const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
@@ -1056,6 +1056,9 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
         'starter  brand/brand.ts: its description is still the starter’s (", an agent-ready API."): say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`',
         'starter  src/features/catalog.ts: a description is still the starter’s ("say here what switching it off stops"): say what switching the feature off stops',
       ])
+      // init named each file doctor names
+      const doctorLine = made.stdout.split('\n').find((line) => line.startsWith('Doctor: '))!
+      for (const line of starterLines(doctor.stdout)) expect(doctorLine).toContain(` ${/^starter +([^:]+):/.exec(line)![1]} (`)
       // The count names where they are: none is in src/kit
       expect(doctor.stdout.trim().split('\n').at(-1)).toBe('3 to fix in guide/skills/demo-api/SKILL.md, brand/brand.ts and src/features/catalog.ts')
       const productSkill = join(app, 'guide/skills/demo-api/SKILL.md')

@@ -849,9 +849,9 @@ const sharingNotes = (texts, modules) => {
  */
 const productSkills = (root) => (existsSync(join(root, 'guide/skills')) ? readdirSync(join(root, 'guide/skills'), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => `guide/skills/${entry.name}/SKILL.md`) : [])
 const STARTER_TEXT = [
-  { files: productSkills, text: 'Replace this line with', what: 'its description', instead: 'say when an agent should use the product, in its users’ words' },
-  { files: () => ['brand/brand.ts'], text: ', an agent-ready API.', what: 'its description', instead: 'say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`' },
-  { files: () => ['src/features/catalog.ts'], text: 'say here what switching it off stops', what: 'a description', instead: 'say what switching the feature off stops' },
+  { files: productSkills, text: 'Replace this line with', what: 'its description', instead: 'say when an agent should use the product, in its users’ words', said: 'its description' },
+  { files: () => ['brand/brand.ts'], text: ', an agent-ready API.', what: 'its description', instead: 'say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`', said: 'its description' },
+  { files: () => ['src/features/catalog.ts'], text: 'say here what switching it off stops', what: 'a description', instead: 'say what switching the feature off stops', said: "each switch's description, once `feature --switch` writes one" },
 ]
 
 /**
@@ -2162,7 +2162,7 @@ const commands = {
     console.log(`Next: cd ${relative(process.cwd(), root)} && ${[...left.map((args) => `pnpm ${args.join(' ')}`), 'pnpm test', 'pnpm dev'].join(' && ')}`)
     console.log(`Brand: make brand/ yours, then ${RESVG_INSTALL} && \`npx @escalay/kit brand\` renders the favicon, PNG icons and OG card into ${BRAND_MODULE}`)
     // A new app's first doctor fails on the starter's text: said before it runs
-    console.log(`Doctor: \`npx @escalay/kit doctor\` fails on a new app until the starter's text is yours: the product skill's description (guide/skills/${name}/SKILL.md), brand/brand.ts's, and each switch's in src/features/catalog.ts; then ${RESVG_INSTALL} and \`npx @escalay/kit brand\` render the brand`)
+    console.log(`Doctor: \`npx @escalay/kit doctor\` fails on a new app until the starter's text is yours, in the files it names: ${STARTER_TEXT.flatMap(({ files, said }) => files(root).map((path) => `${path} (${said})`)).join(', ')}; then ${RESVG_INSTALL} and \`npx @escalay/kit brand\` render the brand`)
   },
 
   adopt,
