@@ -527,6 +527,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - A new app's `scripts/migrations.ts` writes the part's D1 files, and its features' `register` gets `parts` (a
   feature calls `parts.sharing.forget(id)`). An older app adds `['sharing', SHARING_MIGRATIONS]` from
   `./kit/sharing/index.js`, as `kit add` says, and `parts` to its `Feature` type and `createApp` (Wire it).
+- The README's hooks chain, for an app with hooks of its own, is a whole file now (`chained(sharing, mine)`), typed
+  and tested in the kit; it read `mine` without defining it. Nothing to change in an app that chains them already.
 
 ### 1.32.0
 

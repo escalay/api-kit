@@ -1290,6 +1290,9 @@ describe('the copy-in CLI', () => {
         }
       }
       expect(await read('src/app.ts')).toContain('PUBLIC_ORIGIN?: string }')
+      // Its hooks chain, for an app with hooks of its own, typechecks as written, with every name it uses
+      const chain = [...readme.slice(readme.indexOf('## Wire it'), readme.indexOf('## Options')).matchAll(/```ts\n([\s\S]*?)```/g)][1]![1]!
+      await writeFile(join(app, 'src/hooks.ts'), chain)
       // The printed steps as printed: each setting in the workerd tests' bindings (so sharing is on there too), the schedule
       const config = join(app, 'vitest.config.ts')
       for (const line of steps.filter((step) => step.startsWith('Setting '))) {

@@ -24,7 +24,7 @@ Node and Workers.
 ## Wire it
 
 An app made by `kit init` whose spaces are shelves (`kit feature shelves --singular shelf --fields "name:string"`);
-`kit add sharing` prints the settings and the schedule it lacks. Each block names its file and where it goes:
+`kit add sharing` prints the settings and the schedule it lacks. Each block names its file and place:
 
 ```ts
 // src/features/shelves/spaces.ts, new: the shelves as spaces, each shelf's id its space's name
@@ -73,17 +73,21 @@ import { sharingOf } from './kit/sharing/index.js'
 setInterval(() => void sharingOf(app)?.sweep().catch((error) => console.error('sharing sweep failed', error)), 3_600_000)
 ```
 
-A test signs a friend's agent in with `connectAgent` (testing), the code typed through `approveSignIn`'s `form:
-{ action: '/sharing/join', fields: { code } }`, then calls `view_shelf` at the invite's `address`.
-
-An app with hooks of its own (`mine`: its `approve`, `onGrant`, `onRevoke` and `accepts`) chains them, its veto
-first so a refusal never spends an invite. Behind Cloudflare Access it lets exactly `sharingSignInPaths(sharing)` through.
+An app with its own four hooks (`mine`) chains them, its veto first so a refusal never spends an invite:
+`createOAuth` takes `...chained(sharing, mine)` after `...sharing.oauth`. Behind Cloudflare Access it lets exactly
+`sharingSignInPaths(sharing)` through.
 
 ```ts
-approve: async (c, ask) => (sharing.handles(ask) ? sharing.oauth.approve(c, ask) : mine.approve(c, ask)),
-onGrant: async (grant, c) => (await mine.onGrant(grant, c)) && (await sharing.oauth.onGrant(grant, c)),
-onRevoke: async (revoked) => { await sharing.oauth.onRevoke(revoked); await mine.onRevoke(revoked) },
-accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(caller, c); return judged === true ? mine.accepts(caller, c) : judged },
+// src/hooks.ts
+import type { Sharing } from './kit/sharing/index.js'
+
+type Hooks = Omit<Sharing['oauth'], 'resources' | 'resourceOf'>
+export const chained = (sharing: Sharing, mine: Hooks): Hooks => ({
+  approve: (c, ask) => (sharing.handles(ask) ? sharing.oauth.approve(c, ask) : mine.approve(c, ask)),
+  onGrant: async (grant, c) => (await mine.onGrant(grant, c)) && (await sharing.oauth.onGrant(grant, c)),
+  onRevoke: async (revoked) => { await sharing.oauth.onRevoke(revoked); await mine.onRevoke(revoked) },
+  accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(caller, c); return judged === true ? mine.accepts(caller, c) : judged },
+})
 ```
 
 ## Options
@@ -110,7 +114,7 @@ accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(calle
 
 | File | What |
 |---|---|
-| `index.ts` | `createSharing` (`relay`, `mcpPath`, `neverKept`, `config`; the hooks `oauth`; `bind`, `handles`, `memberOf`, `sweep`, `forget`), `registerSharing`, `sharingOf` (the part an app was registered with, for its scheduled handler), `SHARING_TAG`, `SHARING_OPEN_PATHS`, `sharingSignInPaths`, and re-exports the files below |
+| `index.ts` | `createSharing` (`relay`, `mcpPath`, `neverKept`, `config`; the hooks `oauth`; `bind`, `handles`, `memberOf`, `sweep`, `forget`), `registerSharing`, `sharingOf` (the part an app registered, for its scheduled handler), `SHARING_TAG`, `SHARING_OPEN_PATHS`, `sharingSignInPaths`, and re-exports the files below |
 | `grants.ts` | the hooks but `approve` (Rules); `boundOf`, `appNameOf`, `isRootAudience`, `spaceNameIn`, `ONLY_ITS_SPACE`, `MemberView` |
 | `signin.ts`, `owner.ts` | `approve`, `signInStepOf` (the ladder), `POST /sharing/join`; the owner's `POST /sharing/as-owner` and `/sharing/owner` |
 | `pages.ts`, `limits.ts`, `sweep.ts` | the pages; the code's limits; `sweep`, `forget` |
@@ -120,7 +124,7 @@ accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(calle
 | `states.ts` | `inviteStateOf`, `memberStateOf`, `memberListingOf`; `redeemByOf`, `memberExpiresAtOf`, `REDEEM_WITHIN` (a day), `UNSEEN_FOR` (30 days), `MAX_OPEN_INVITES` (100) |
 | `secrets.ts` | `sharingKeys`, `newLinkToken` (192 bits), `newInviteCode` (`BDKM-QXTW`, from `CODE_ALPHABET`), `normalisedCode`; what the tables keep instead: `linkHashOf`, `codeHashOf`; what the limits count by: `addressKeyOf` (an HMAC), `ticketHashOf` (SHA-256) |
 
-The owner routes under `{path}` (default `/api/spaces`), each with its operationId, tool, command and answers: [REFERENCE.md](REFERENCE.md), beside this file.
+The owner routes, each with its operationId, tool, command and answers: [REFERENCE.md](REFERENCE.md).
 
 ## Flows
 
@@ -262,7 +266,8 @@ stateDiagram-v2
 
 ## Tests
 
-- In the app: `connectAgent` and `approveSignIn` (testing) sign an invitee's agent in, as Wire it says.
+- In the app: `connectAgent` (testing) signs an invitee's agent in, the code typed through `approveSignIn`'s `form:
+  { action: '/sharing/join', fields: { code } }`, then calls `view_shelf` at the invite's `address`.
 - The kit's own: `test/sharing*.test.ts` (tables, owner, grants, sign-in, members, the app end to end over
   `test/sharing-fixture.ts`), and the grants contract on D1 in `test/workers/sharing.test.ts`.
 
