@@ -582,7 +582,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## browser
 
-### Unreleased (after 1.33.0)
+### 1.34.0
 
 - New parts for the owner's sharing in the browser, over the `sharing` part's routes: `sharing-client`
   (`createSharingClient`, `SharingError`, `ShownOnceError`) and `sharing-react` (`useSharing`). Nothing to change; an app
