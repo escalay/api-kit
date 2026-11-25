@@ -247,6 +247,9 @@ describe('the owner at a space', () => {
     expect((await exchange(reader, await postTo('/sharing/owner', reader, { decision: 'approve' }, asOwner))).tokens.scope).toBe('read')
 
     const writer = await open({ resource: SOUPS, scope: 'write', redirect: 'https://evil.example.test/cb', headers: asOwner })
+    // A write-only app's page never promises reading: unticked, it gets nothing
+    expect([wordsOf(reader.html), wordsOf(writer.html)]).toEqual([expect.stringContaining('Unticked, it can read Soups for 30 days.'), expect.not.stringContaining('can read')])
+    expect(wordsOf(writer.html)).toContain('This app asks only to make changes: tick Allow changes to approve it.')
     const unticked = await postTo('/sharing/owner', writer, { decision: 'approve' }, asOwner)
     expect([unticked.status, unticked.headers.get('location'), await unticked.text()]).toEqual([400, null, expect.stringContaining('asks only to make changes')])
     expect((await exchange(writer, await postTo('/sharing/owner', writer, { decision: 'approve', write: 'on' }, asOwner))).tokens.scope).toBe('write')

@@ -83,6 +83,9 @@ const ticketField = (ask: Pick<SignInAsk, 'ticket'>) => `<input type="hidden" na
 const clientLine = (ask: Asking) => `<p>The app calls itself <strong>${escape(appNameOf(ask.client.name))}</strong>.</p>`
 const noteLine = (note: string | undefined) => (note ? `<p role="alert"><strong>${escape(note)}</strong></p>` : '')
 const box = (name: string, label: string, ticked: boolean) => `<label><input type="checkbox" name="${name}" value="on"${ticked ? ' checked' : ''}> ${label}</label>`
+/** What the owner's page gives with no box ticked: read for 30 days, or nothing to an app asking only to make changes. */
+const untickedLine = (ask: Pick<SignInAsk, 'scopes'>, title: string) =>
+  ask.scopes.includes('read') ? `<p>Unticked, it can read ${escape(title)} for 30 days.</p>` : '<p>This app asks only to make changes: tick Allow changes to approve it.</p>'
 /** The owner's way in from a space's code page, when their cookie did not come: a same-origin POST, which carries it. */
 const ownerHop = (ask: Asking) => `<p>Are you the owner?</p><form method="post" action="/sharing/as-owner">${ticketField(ask)}<button class="quiet">Continue as the owner</button></form>`
 
@@ -105,14 +108,14 @@ export const sharingPages = (view: PageView) => {
 
   /**
    * The owner's approval at a space: where the app returns, and two boxes, Allow changes (only when the app asked to
-   * make changes) and Until revoked. Unticked, it can read for 30 days.
+   * make changes) and Until revoked. Unticked, it can read for 30 days; an app asking only to make changes needs the box.
    */
   const owner = (c: Context, ask: OwnerAsking, offer: OwnerView, note?: string) =>
     send(c, view, {
       status: note ? 400 : 200,
       title: `Approve at ${offer.title}`,
       returnsTo: ask.redirectUri,
-      body: `<h1>Approve this app at ${escape(offer.title)}</h1>${returnLine(offer.back)}${clientLine(ask)}${noteLine(note)}<p>Unticked, it can read ${escape(offer.title)} for 30 days.</p>
+      body: `<h1>Approve this app at ${escape(offer.title)}</h1>${returnLine(offer.back)}${clientLine(ask)}${noteLine(note)}${untickedLine(ask, offer.title)}
 <form method="post" action="/sharing/owner">${ticketField(ask)}${ask.scopes.includes('write') ? box('write', 'Allow changes', offer.write) : ''}${box('untilRevoked', 'Until revoked, not 30 days', offer.untilRevoked)}<button name="decision" value="approve">Approve</button><button name="decision" value="deny" class="quiet">Refuse</button></form><p>${ACCOUNT_LINE}</p>`,
     })
 
