@@ -37,7 +37,7 @@ const sharing = await createSharing({
   knownReturns: [{ name: 'Client A', callback: 'https://client-a.example.test/callback' }],
   signInPath: '/sign-in',
 })
-const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, publicOrigin, limits, ...sharing.oauth })   // publicOrigin: required
+const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, publicOrigin, limits, ...sharing.oauth })   // publicOrigin: required, the root (never a request's host)
 const app = createAgentApi({
   …,
   tags: [...FEATURE_TAGS, SHARING_TAG],
@@ -47,6 +47,7 @@ const app = createAgentApi({
 })
 await registerSharing(app, sharing, { oauth })   // migrates, binds the hooks to oauth, then /sharing/* and the owner routes
 mcpServerFactory({ tools: [...FEATURE_TOOLS, ...sharingTools({ noun: 'shelf' })], … })   // the owner's MCP only
+mountMcp(app, { path: sharing.mcpPath, factory: shelfMcp, allowedHostnames })   // its tools read at.params.space
 // the scheduled handler: await sharing.sweep(); deleting a shelf: await sharing.forget(shelf.id)
 ```
 
@@ -81,13 +82,11 @@ accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(calle
 | `signInPath` | string | none | where the owner signs in, linked from "Sign in first" |
 | `tag` | string | `'Sharing'` | the routes' OpenAPI tag (`SHARING_TAG` declares it) |
 
-`registerSharing(app, sharing, { oauth })` binds the hooks to the app's `createOAuth` and brand (`bind`, `boundOf`).
-
 ## Exports
 
 | File | What |
 |---|---|
-| `index.ts` | `createSharing` (`relay`, `mcpPath`, `neverKept`, `config`; the hooks `oauth`; `bind`, `handles`, `memberOf`, `sweep`, `forget`), `registerSharing`, `SHARING_TAG`, `SHARING_OPEN_PATHS` (`/sharing/*`, for `auth.open`), `sharingSignInPaths`, and re-exports the files below |
+| `index.ts` | `createSharing` (`relay`, `mcpPath`, `neverKept`, `config`; the hooks `oauth`; `bind`, `handles`, `memberOf`, `sweep`, `forget`), `registerSharing`, `SHARING_TAG`, `SHARING_OPEN_PATHS`, `sharingSignInPaths`, and re-exports the files below |
 | `grants.ts` | the hooks but `approve` (Rules); `boundOf`, `appNameOf`, `isRootAudience`, `spaceNameIn`, `ONLY_ITS_SPACE`, `MemberView` |
 | `signin.ts`, `owner.ts` | `approve`, `signInStepOf` (the ladder), `POST /sharing/join`; the owner's `POST /sharing/as-owner` and `/sharing/owner` |
 | `pages.ts`, `limits.ts`, `sweep.ts` | the pages; the code's limits; `sweep`, `forget` |
@@ -114,7 +113,7 @@ The owner routes (`{path}` default `/api/spaces`), paged lists newest first (`?l
 
 ## Flows
 
-Joining with a code. The invite is spent at the token exchange, never at the click.
+Joining with a code: the invite is spent at the token exchange, never at the click.
 
 ```mermaid
 sequenceDiagram
@@ -241,7 +240,6 @@ stateDiagram-v2
   (every by-id statement takes the space). The code page never names the space.
 - **Shown once means never kept.** `createInvite` and `inviteAgain` answer through `showOnce`, `no-store` (a retry
   with the same Idempotency-Key: 409 `shown_once`); `neverKept` (`/sharing/*`) keeps the pages' answers out too.
-- **The root is the pinned origin** (`publicOrigin`), never a request's host.
 - **Never through A2A.** `sharingTools` go to the owner's MCP only. Each acts only on the user's word, and
   `create_invite` and `invite_again` return the message to send, never send it.
 - **The claim is the insert**: `claimInvite` and `claimRequest` are one `insert … select … where` each (unique
@@ -299,6 +297,7 @@ stateDiagram-v2
   `test/workers/sharing.test.ts`, on D1.
 - `test/sharing-signin.test.ts`: the ladder; the pages (probes T1, T2, T4); codes, limits; the owner's page and hop.
 - `test/sharing-members.test.ts`: members listed, removed, invited again; `sweep`; `forget`.
+- `test/sharing-app.test.ts`: §23 end to end over `test/sharing-fixture.ts`.
 
 ## Upgrading
 
