@@ -124,7 +124,7 @@ nothing to change there either.
 
 ## oauth
 
-### Unreleased (after 1.36.0)
+### 1.36.1
 
 - **OAuth is never silently off in a new app.** `OAUTH_SIGNING_KEY` is now the oauth part's own setting (its
   `meta.wiring`), which people, setup and sharing use: `kit add <part> --wire` of any of them adds it to
@@ -570,7 +570,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## switches
 
-### Unreleased (after 1.36.0)
+### 1.36.1
 
 - **No feature the app lacks in its guide.** With an empty catalog, the switch routes' key had the example `webhooks`,
   which the guide printed as `GET /api/features/webhooks`; the example is now the catalog's first key, or none (the
@@ -601,7 +601,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## sharing
 
-### Unreleased (after 1.36.0)
+### 1.36.1
 
 - **A space's MCP reads its children.** `kit add sharing --wire --spaces <parent>` now adds, for each feature made
   `--under` it, a `list_<space>_<children>` tool to the space's own MCP, over `/api/<parent>/{id}/<children>`; run it
@@ -676,7 +676,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## testing
 
-### Unreleased (after 1.36.0)
+### 1.36.1
 
 - A new app's `test/api.test.ts` runs every check this part's README wires, `guideRoutes` too: a route the guide
   names that the spec lacks fails the gate. An older app adds `guideRoutes` to its import in `test/api.test.ts`
