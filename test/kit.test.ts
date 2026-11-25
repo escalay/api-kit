@@ -909,9 +909,9 @@ describe('the copy-in CLI', () => {
       const next = made.stdout.match(/^Next: cd demo-api && (.+) && pnpm dev$/m)?.[1]
       expect(next).toBe('pnpm install && pnpm format && pnpm migrations && pnpm test')
       expect(await readFile(join(import.meta.dirname, '..', 'skills/api-kit-build/SKILL.md'), 'utf8')).toContain(`\`cd my-api && ${next}\``)
-      // and the line after it gives the coding agent the kit's skills
+      // and the line before it gives the coding agent the kit's skills, first, so it reads them before it builds
       // -y: without it the installer stops to ask, which an agent's shell never answers
-      expect(made.stdout).toMatch(/^Next: .*\nSkills: npx skills add escalay\/api-kit -y /m)
+      expect(made.stdout).toMatch(/^Skills first: npx skills add escalay\/api-kit -y .*\nNext: /m)
       const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
@@ -1717,10 +1717,13 @@ describe('the skills', () => {
   const PRESETS = kitSays('init', 'no-such-app', '--preset', 'no-such-preset').match(/--preset is one of (.+)/)![1]!.split(', ')
 
   it('gives every `npx skills add` it names `-y`: without it the installer stops to ask, which an agent never answers', async () => {
-    const markdownUnder = async (dir: string) => (await readdir(join(kitDir, dir), { recursive: true })).filter((path) => path.endsWith('.md')).map((path) => join(dir, path))
-    const files = ['README.md', 'AGENTS.md', 'docs/STANDARD.md', ...(await markdownUnder('skills')), ...(await markdownUnder('templates'))]
-    const commands = (await Promise.all(files.map(async (file) => [...(await readFile(join(kitDir, file), 'utf8')).matchAll(/`(npx skills add [^`]*)`/g)].map(([, command]) => `${file}: ${command}`)))).flat()
-    expect(commands.length).toBeGreaterThan(5)
+    // Every file the kit ships or writes into an app, the CLI's own output included; the tests and the changelog aside
+    const tracked = spawnSync('git', ['ls-files'], { cwd: kitDir, encoding: 'utf8' }).stdout.split('\n')
+    const files = tracked.filter((path) => /\.(md|mjs|ts|tsx|json|jsonc|sh|ya?ml|txt)$/.test(path) && path !== 'CHANGELOG.md' && !path.startsWith('test/'))
+    expect(files).toEqual(expect.arrayContaining(['cli.mjs', 'templates/app/AGENTS.md', 'src/mcp/README.md']))
+    // A command names what it installs; a bare mention (`npx skills add.`) runs nothing
+    const commands = (await Promise.all(files.map(async (file) => [...(await readFile(join(kitDir, file), 'utf8')).matchAll(/npx skills add [^\s`'".,)][^`"\n]*/g)].map(([command]) => `${file}: ${command}`)))).flat()
+    expect(commands.length).toBeGreaterThan(10)
     // `--list` only lists, so it never asks
     expect(commands.filter((line) => !/ (-y|--list)\b/.test(line))).toEqual([])
   })

@@ -1638,14 +1638,14 @@ const commands = {
     // What the Deploy to Cloudflare form says about each setting (kit button --check wants one for each it asks)
     const cloudflare = runtime === 'node' ? {} : { cloudflare: { bindings: DEPLOY_FORM } }
     writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', packageManager: KIT_PACKAGE_MANAGER, engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps), ...cloudflare }, null, 2) + '\n')
-    if (!flags.has('--bare')) addFeature(root, 'notes')
+    if (!flags.has('--bare')) addFeature(root, 'notes', { singular: 'note' })
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
     // What makes the app pass its own gate as made: what init writes is in the kit's long-line style, and D1 needs migrations/
     const firstRun = [['install'], ['format'], ...(runtime === 'node' ? [] : [['migrations']])]
     const left = flags.has('--no-install') ? firstRun : runFirst(root, firstRun)
+    // First, so a coding agent has the kit's skills before it builds; -y: the installer otherwise stops to ask, and an agent's shell never answers
+    console.log(`Skills first: npx skills add ${REPO} -y gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
     console.log(`Next: cd ${relative(process.cwd(), root)} && ${[...left.map((args) => `pnpm ${args.join(' ')}`), 'pnpm test', 'pnpm dev'].join(' && ')}`)
-    // -y: the installer otherwise stops to ask which skills and agents, and an agent's shell never answers
-    console.log(`Skills: npx skills add ${REPO} -y gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
     console.log(`Brand: make brand/ yours, then ${RESVG_INSTALL} && \`npx @escalay/kit brand\` renders the favicon, PNG icons and OG card into ${BRAND_MODULE}`)
   },
 
