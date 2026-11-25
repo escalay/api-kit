@@ -505,6 +505,19 @@ describe('POST /sharing/join', () => {
     expect((await post(await open({ resource: SOUPS }), { code: invite.code }, { 'x-forwarded-for': '198.51.100.7' })).status).toBe(302)
   })
 
+  it('never counts a code refused at its address’s budget toward the space’s ceiling', async () => {
+    const inner = memoryGuardStore()
+    let later = 0
+    const spaceCounted: string[] = []
+    const store: GuardStore = { ...inner, count: (id, windowMs, now) => (/^sharing-code space:/.test(id) && spaceCounted.push(id), inner.count(id, windowMs, now + later)) }
+    const { open, post } = await box({ options: { limits: { store } } })
+    // Thirty wrong codes from one address, ten a minute: only its first ten fit its budget at Soups
+    for (let minute = 0; minute < 3; minute++, later += 60 * 1000) {
+      for (let tried = 0; tried < 10; tried++) await post(await open({ resource: SOUPS }), { code: 'BDKM-QXTW' }, { 'x-forwarded-for': '192.0.2.1' })
+    }
+    expect(spaceCounted).toHaveLength(10)
+  })
+
   it('counts a typed code by an HMAC of its address, never the address itself', async () => {
     const inner = memoryGuardStore()
     const counted: string[] = []
