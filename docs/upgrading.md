@@ -122,6 +122,17 @@ the version in `kit.json` up.
 
 ## oauth
 
+### Unreleased (after 1.36.0)
+
+- **OAuth is never silently off in a new app.** `OAUTH_SIGNING_KEY` is now the oauth part's own setting (its
+  `meta.wiring`), which people, setup and sharing use: `kit add <part> --wire` of any of them adds it to
+  `.env.example` and `.dev.vars.example` when missing, and `kit env --write` makes its value. A new app lists it from
+  `init`, answers `/.well-known/oauth-*` with a 404 problem naming the setting while it is unset, and `src/server.ts`
+  prints `OAuth is off: set OAUTH_SIGNING_KEY` at start. An older app that wants the same: the key's line in its
+  example (`kit env` prints a value), and after `createAgentApi` in `src/app.ts`
+  `if (!oauth) app.get('/.well-known/oauth-*', (c) => problemResponse(c, 'not_found', { detail: 'OAuth is off here: set OAUTH_SIGNING_KEY.' }))`.
+  Nothing else changes.
+
 ### 1.32.0
 
 - **Fixed: a forwarded host with a path in it no longer widens a token.** Without `publicOrigin`, the root (`rootOf`)

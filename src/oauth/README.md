@@ -21,7 +21,7 @@ The app as its own OAuth server, so MCP clients (Claude, ChatGPT) and agents con
 npx @escalay/kit add oauth
 ```
 
-Needs `core` and `db`. A signing key in the app's secrets: `generateOAuthKey()` makes one.
+Needs `core` and `db`. Its key, `OAUTH_SIGNING_KEY`: `kit env --write` or `generateOAuthKey()` makes one.
 
 ## Wire it
 

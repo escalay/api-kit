@@ -1339,7 +1339,7 @@ const applyFinding = (repo, plan, finding) => {
 const DEPLOY_FORM = {
   PUBLIC_HOST: { description: 'The host this Worker answers on: `<name>.<your-subdomain>.workers.dev`, or a custom domain such as `api.example.com`. MCP accepts requests for this host only.' },
   API_KEYS: { description: 'Optional. Keys as `name:sha256` pairs, comma-separated: the hash of each key, never the key (`printf \'my-key\' | shasum -a 256`).' },
-  OAUTH_SIGNING_KEY: { description: 'Optional. Turns on OAuth sign-in for agents: an ES256 private key as JWK JSON. Make one in a clone: `pnpm exec tsx -e "import(\'./src/kit/oauth/index.ts\').then(async (m) => console.log(await m.generateOAuthKey()))"`.' },
+  OAUTH_SIGNING_KEY: { description: 'Optional. Turns on OAuth sign-in for agents: an ES256 private key as JWK JSON. Make one in a clone: `npx @escalay/kit env` prints one.' },
   ACCESS_TEAM: { description: 'Optional, with ACCESS_AUD. Your Cloudflare Access team name, to let people in through Access.' },
   ACCESS_AUD: { description: 'Optional, with ACCESS_TEAM. The Application Audience (AUD) tag of the Access application in front of this Worker.' },
 }
@@ -1674,6 +1674,13 @@ const SETTING_FILES = [
   ['vitest.config.ts', "vitest.config.ts's miniflare bindings"],
 ]
 
+/** A part's settings: those of the parts it works through (`meta.wiring.uses`, e.g. the OAuth key), then its own. */
+const settingsOf = (name) => {
+  const wiring = REGISTRY[name]?.wiring ?? {}
+  const all = [...(wiring.uses ?? []).flatMap(settingsOf), ...(wiring.settings ?? [])]
+  return all.filter((setting, at) => all.findIndex((one) => one.name === setting.name) === at)
+}
+
 /**
  * The steps a part's `meta.wiring` (registry.json) asks of an app made by `init`, each only where the app lacks it: its
  * settings in every file that lists the app's settings, a schedule for its scheduled work, and its README's code.
@@ -1683,7 +1690,7 @@ const wiringStepsOf = (name, root) => {
   if (!wiring || !root || !existsSync(join(root, 'src/app.ts'))) return []
   const readme = REGISTRY[name].files.find((file) => file.endsWith('README.md'))
   const lacking = (path, text) => existsSync(join(root, path)) && !textOf(join(root, path)).includes(text)
-  const settings = (wiring.settings ?? []).flatMap(({ name: setting, what, test, testImport }) => {
+  const settings = settingsOf(name).flatMap(({ name: setting, what, test, testImport }) => {
     // The workerd tests get a value that works there: their origin, a key made as they start
     // A setting without a test value needs none in the workerd tests' bindings
     const files = SETTING_FILES.filter(([path]) => lacking(path, setting) && (test || path !== 'vitest.config.ts')).map(([path, where]) => (path === 'vitest.config.ts' ? `${where} as ${setting}: ${test}${testImport ? ` (${testImport})` : ''}` : path === 'container/entrypoint.sh' ? `${where} as ${passLine(setting)}` : where))
@@ -1891,7 +1898,8 @@ const planWiring = (root, parts) => {
     if (at >= 0) write(path, [...all.slice(0, at), ...lines, ...all.slice(at)].join('\n'))
   }
   for (const part of parts) {
-    const { wire, settings = [], cron } = REGISTRY[part].wiring
+    const { wire, cron } = REGISTRY[part].wiring
+    const settings = settingsOf(part)
     const over = wire.over ? valueOf(wire.over.flag) : undefined
     const vars = wireVarsOf(root, over)
     const steps = []

@@ -30,7 +30,7 @@ the hash). Keep both from one run: each run makes a new pair, and a key with ano
 - Workers: the line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm __worker_dev__`, at http://localhost:8787 <!-- preset:api --> <!-- runtime:workers -->
 - The line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm dev`, at http://localhost:5173 <!-- preset:app -->
 
-A wired part (`kit add … --wire`) has settings of its own, each listed with how to make its value in:
+Each setting, `OAUTH_SIGNING_KEY` (without it OAuth is off, and the app says so) and a wired part's own (`kit add … --wire`), is listed with how to make its value in:
 
 - `.env.example`, which `pnpm dev` reads as `.env` <!-- runtime:node -->
 - `.dev.vars.example`, which `wrangler dev` reads as `.dev.vars` <!-- runtime:workers -->

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1358,7 +1358,8 @@ describe('the copy-in CLI', () => {
       const steps = added.stdout.split('\n').filter((line) => /^(Wire|Setting|Schedule)[: ]/.test(line))
       expect(steps).toEqual([
         'Wire sharing: src/kit/sharing/README.md › Wire it; or `kit add sharing --wire --spaces <feature>` writes it all, settings too',
-        "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one): add it to .env.example, .dev.vars.example, vitest.config.ts's miniflare bindings as OAUTH_SIGNING_KEY: await generateOAuthKey() (import { generateOAuthKey } from './src/kit/index.js')",
+        // A new app's examples list the OAuth key (the oauth part's setting, which sharing uses): only the workerd tests lack it
+        "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `npx @escalay/kit env --write` makes one (or `generateOAuthKey()` from ./kit/index.js); without it OAuth is off): add it to vitest.config.ts's miniflare bindings as OAUTH_SIGNING_KEY: await generateOAuthKey() (import { generateOAuthKey } from './src/kit/index.js')",
         "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .env.example, .dev.vars.example, container/entrypoint.sh as ${SHARING_SECRET:+SHARING_SECRET=\"$SHARING_SECRET\"}, vitest.config.ts's miniflare bindings as SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only'",
         "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .env.example, .dev.vars.example, container/entrypoint.sh as ${PUBLIC_ORIGIN:+PUBLIC_ORIGIN=\"$PUBLIC_ORIGIN\"}, vitest.config.ts's miniflare bindings as PUBLIC_ORIGIN: 'https://api.test'",
         'Schedule: "triggers": { "crons": ["17 * * * *"] } in wrangler.jsonc, and a scheduled handler in src/worker.ts that calls sharing\'s sweep()',
@@ -1637,6 +1638,57 @@ describe('the copy-in CLI', () => {
       const printed = cli(app, 'env')
       expect(printed.stdout).toMatch(/^SHARING_SECRET="[A-Za-z0-9+/=]{44}"$/m)
       expect(existsSync(join(app, '.env'))).toBe(false)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('never leaves OAuth silently off: every new app lists OAUTH_SIGNING_KEY, kit env --write makes it, and an app without it names it', async () => {
+    const parent = join(import.meta.dirname, '.generated', `oauth-key-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    /** Starts the app as `pnpm dev` does, without the watcher: its first lines, and what it answers at the OAuth metadata. */
+    const started = async (app: string, port: number) => {
+      // The shell's own settings left out: a variable already set wins over .env
+      const { OAUTH_SIGNING_KEY: _, API_KEYS: __, ...shell } = process.env
+      const server = spawn(bin('tsx'), ['--env-file-if-exists=.env', 'src/server.ts'], { cwd: app, env: { ...shell, PORT: String(port), STATE_DIR: join(app, '.state') } })
+      let out = ''
+      server.stdout.on('data', (chunk) => (out += chunk))
+      server.stderr.on('data', (chunk) => (out += chunk))
+      try {
+        for (let tries = 0; !out.includes('→ http://localhost') && tries < 300; tries++) await new Promise((resolve) => setTimeout(resolve, 100))
+        const metadata = await fetch(`http://localhost:${port}/.well-known/oauth-authorization-server`)
+        return { out, status: metadata.status, body: await metadata.text() }
+      } finally {
+        server.kill()
+      }
+    }
+    try {
+      for (const runtime of ['both', 'node', 'cloudflare']) {
+        expect(cli(parent, 'init', `${runtime}-api`, '--runtime', runtime, '--no-install', '--no-git').status).toBe(0)
+        const app = join(parent, `${runtime}-api`)
+        for (const example of ['.env.example', '.dev.vars.example'].filter((file) => existsSync(join(app, file)))) {
+          expect(await readFile(join(app, example), 'utf8'), `${runtime} ${example}`).toMatch(/^# OAUTH_SIGNING_KEY: .*`npx @escalay\/kit env --write`.*\nOAUTH_SIGNING_KEY=""$/m)
+        }
+      }
+      const app = join(parent, 'node-api')
+      // Without the key: the start-up line and the metadata both name the setting
+      const off = await started(app, 4400 + 100 + (process.pid % 400))
+      expect(off.out).toContain('OAuth is off: set OAUTH_SIGNING_KEY')
+      expect([off.status, JSON.parse(off.body).detail]).toEqual([404, expect.stringContaining('OAUTH_SIGNING_KEY')])
+      // kit env --write makes the key, and the app started as pnpm dev starts it serves OAuth
+      expect(cli(app, 'env', '--write').status).toBe(0)
+      const key = JSON.parse(parseEnv(await readFile(join(app, '.env'), 'utf8')).OAUTH_SIGNING_KEY!)
+      expect(key).toMatchObject({ kty: 'EC', crv: 'P-256', alg: 'ES256' })
+      const on = await started(app, 4400 + 500 + (process.pid % 400))
+      expect(on.out).not.toContain('OAuth is off')
+      expect([on.status, JSON.parse(on.body).issuer]).toEqual([200, expect.stringMatching(/^http:\/\/localhost:\d+$/)])
+      // --wire of a part that approves through OAuth adds the key to an app that lacks it
+      const older = join(parent, 'both-api')
+      for (const example of ['.env.example', '.dev.vars.example']) await writeFile(join(older, example), (await readFile(join(older, example), 'utf8')).replace(/^# OAUTH_SIGNING_KEY: .*\nOAUTH_SIGNING_KEY=""\n/m, ''))
+      expect(cli(older, 'add', 'setup', '--wire', '--no-install').status).toBe(0)
+      for (const example of ['.env.example', '.dev.vars.example']) expect(await readFile(join(older, example), 'utf8'), example).toMatch(/^OAUTH_SIGNING_KEY=""$/m)
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
