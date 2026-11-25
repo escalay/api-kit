@@ -452,6 +452,20 @@ describe('the copy-in CLI', () => {
     const added = cli(app, 'add', 'people', 'pagination')
     expect(added.stdout).toContain("scripts/migrations.ts lacks people's tables: `import { PEOPLE_MIGRATIONS } from '../src/kit/index.js'` and `['people', PEOPLE_MIGRATIONS]` in its sets, then `pnpm migrations` writes their D1 files")
     expect(added.stdout).not.toMatch(/'(pagination|db)'/)
+    // An entry part's tables come from its own folder
+    expect(cli(app, 'add', 'sharing').stdout).toContain("scripts/migrations.ts lacks sharing's tables: `import { SHARING_MIGRATIONS } from '../src/kit/sharing/index.js'` and `['sharing', SHARING_MIGRATIONS]` in its sets")
+  })
+
+  it('never names the migrations line for a part an app made by init wires as a feature: the feature brings its tables', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    await writeFile(join(app, 'package.json'), '{ "name": "older" }')
+    await mkdir(join(app, 'scripts'))
+    await mkdir(join(app, 'src/features'), { recursive: true })
+    await writeFile(join(app, 'src/features/index.ts'), '// kit:imports\n')
+    await writeFile(join(app, 'scripts/migrations.ts'), "const sets = [['oauth', OAUTH_MIGRATIONS], ['guards', GUARD_MIGRATIONS]]\n")
+    const added = cli(app, 'add', 'people', 'boards')
+    expect(added.stdout).not.toContain('lacks')
+    expect(added.stdout).toContain("Wire people: a feature in src/features/people/ listed in src/features/index.ts (its migrations reach migrations/ through it: add no line to scripts/migrations.ts), and the lines in src/app.ts: src/kit/people/README.md › In an app made by `kit init`")
   })
 
   it('tells your edits from the kit’s and never overwrites an edit without --force', async () => {
@@ -1153,7 +1167,7 @@ describe('the copy-in CLI', () => {
       expect(cli(app, 'feature', 'things', '--switch').status).toBe(0)
       expect(cli(app, 'feature', 'recipes', '--fields', 'name:string').status).toBe(0)
       const added = cli(app, 'add', 'people', 'setup', 'boards')
-      expect(added.stdout).toContain('Wire people: a feature in src/features/people/ listed in src/features/index.ts, and the lines in src/app.ts: src/kit/people/README.md › In an app made by `kit init`')
+      expect(added.stdout).toContain('Wire people: a feature in src/features/people/ listed in src/features/index.ts (its migrations reach migrations/ through it: add no line to scripts/migrations.ts), and the lines in src/app.ts: src/kit/people/README.md › In an app made by `kit init`')
       // The starter's script finds the parts' tables itself
       expect(added.stdout).not.toContain('scripts/migrations.ts lacks')
       // Each part's feature as its README writes it, listed in the order it says

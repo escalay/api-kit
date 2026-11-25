@@ -1475,9 +1475,12 @@ const wiringOf = (parts) => {
     const constant = `${name.toUpperCase()}_MIGRATIONS`
     const keepsTables = REGISTRY[name].files.some((file) => upstreamOf(file).includes(`export const ${constant} =`))
     const wrapped = inFeatures && upstreamOf(readme).includes(WRAPPER_HEADING)
+    // An entry part's tables are exported from its own folder, never the kit's index
+    const from = `../${relative(root ?? dir, dir).split('\\').join('/')}/${REGISTRY[name].entry ? `${name}/` : ''}index.js`
     return [
-      ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}`] : []),
-      ...(keepsTables && migrations !== null && !migrations.includes(constant) ? [`scripts/migrations.ts lacks ${name}'s tables: \`import { ${constant} } from '../${relative(root, dir).split('\\').join('/')}/index.js'\` and \`['${name}', ${constant}]\` in its sets, then \`pnpm migrations\` writes their D1 files`] : []),
+      ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts${keepsTables ? ' (its migrations reach migrations/ through it: add no line to scripts/migrations.ts)' : ''}, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}`] : []),
+      // A wrapped part's feature lists its steps: a line here too wrote every step twice
+      ...(keepsTables && !wrapped && migrations !== null && !migrations.includes(constant) ? [`scripts/migrations.ts lacks ${name}'s tables: \`import { ${constant} } from '${from}'\` and \`['${name}', ${constant}]\` in its sets, then \`pnpm migrations\` writes their D1 files`] : []),
     ]
   })
 }
