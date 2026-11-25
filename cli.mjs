@@ -10,10 +10,14 @@
  *   kit list                                  parts, what they need, which are installed; then the root items
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
- *   kit update [part…] [--dir src/kit] [--force]
+ *   kit update [part…] [--dir src/kit] [--force [--all]]
+ *                                             --force takes the kit's file over your edit in the parts named (`kit` names
+ *                                             the generated index.ts), and names each edit it overwrites or keeps; naming
+ *                                             no part, it refuses while it would overwrite an edit: --force --all takes them all
  *   kit upgrading [--dir src/kit] [--from <version>]
  *                                             what changed for the parts in kit.json since its version (or --from), up to
- *                                             this kit, and what to do: their notes from the kit's docs/upgrading.md, part by part
+ *                                             this kit, and what to do: their notes from the kit's docs/upgrading.md, part by part;
+ *                                             first, each edit the kit changed too in a part whose notes name a fix
  *   kit doctor [--dir src/kit] [--adopt] [--keep <file…>]
  *                                             missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it);
  *                                             --keep records those edited files as kept in kit.json: a note while they stay so
@@ -23,11 +27,12 @@
  *                                             container) and/or Workers (worker.ts, D1); then pnpm install, format and
  *                                             migrations, so its gate passes as made (--no-install leaves them to you).
  *                                             It never asks; --yes is accepted
- *   kit feature <plural-name> [--app .] [--switch] [--fields "name:string minutes:int tags:string[] notes:text?"]
+ *   kit feature <plural-name> [--app .] [--switch] [--singular <name>] [--no-remove] [--fields "name:string minutes:int tags:string[] notes:text?"]
  *                                             a new feature folder (schema, repo, routes, handlers, tools), listed;
  *                                             --switch lists it in src/features/catalog.ts so an owner can switch it off;
- *                                             --fields gives its own fields (string, text, int, number, bool, string[];
- *                                             ? when it may be left out) instead of a title and a body
+ *                                             --fields gives its own fields (string, text, int, number, bool, string[],
+ *                                             enum(a|b|c); ? when it may be left out) instead of a title and a body;
+ *                                             --singular names one (shelves → shelf); --no-remove leaves out delete
  *   kit guide [--from guide] [--out src/guide.gen.ts]  the guide folder as a module (GUIDE_FILES), for Workers
  *   kit sdk [--app .] [--package name] [--bin name]
  *                                             a typed TypeScript client in sdk/: generated types, a fetch-only core,
@@ -87,6 +92,7 @@ const REGISTRY = Object.fromEntries(
       dependencies: Object.fromEntries((item.dependencies ?? []).filter((dependency) => dependency.lastIndexOf('@') > 0).map(rangeOf)),
       entry: item.meta?.entry,
       web: item.meta?.web,
+      wiring: item.meta?.wiring,
     },
   ]),
 )
@@ -107,7 +113,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set(['--fields', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
+const VALUE_FLAGS = new Set(['--fields', '--singular', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 /** The app the kit folder belongs to: `--app`, else the nearest folder at or above `--dir` with a package.json; null when none. */
@@ -229,8 +235,10 @@ const statusOf = (lock, expected) =>
     return { file, state, edited, changed }
   })
 
-/** What to do with a file you edited that the kit changed too. */
-const keptFix = () => `\`kit diff --dir ${dirArg} --patch\` shows both; \`kit update --dir ${dirArg} --force\` takes the kit's, then make your edits again`
+/** What to do with files you edited that the kit changed too; `--force` names their parts, so it overwrites no other edit. */
+const keptFix = (parts) => `\`kit diff --dir ${dirArg} --patch\` shows both; \`${forceCommand(parts)}\` takes the kit's, then make your edits again`
+/** `kit update <parts> --force`; `kit` names the generated index.ts, which belongs to no part. */
+const forceCommand = (parts) => ['kit update', ...parts, '--dir', dirArg, '--force'].join(' ')
 
 /** The part a recorded file came with (`index.ts` is the kit's own). */
 const partOf = (key, modules) => modules.find((name) => REGISTRY[name].files.includes(sourceOf(key))) ?? 'kit'
@@ -251,7 +259,7 @@ const findingsOf = (lock) => {
     ...statuses.filter(({ state }) => state === 'missing').map(({ file }) => `missing  ${file}: \`kit update --dir ${dirArg}\` writes it again`),
     ...statuses
       .filter(({ edited }) => edited)
-      .map(({ file, state }) => (state === 'both changed' ? `edited   ${file}: you edited it, and kit ${VERSION} changed it: ${keptFix()}` : `edited   ${file}: yours to keep; \`kit diff --dir ${dirArg} --patch\` shows the change, \`kit update --dir ${dirArg} --force\` takes the kit's`)),
+      .map(({ file, state }) => (state === 'both changed' ? `edited   ${file}: you edited it, and kit ${VERSION} changed it: ${keptFix([partOf(file, lock.modules)])}` : `edited   ${file}: yours to keep; \`kit diff --dir ${dirArg} --patch\` shows the change, \`${forceCommand([partOf(file, lock.modules)])}\` takes the kit's`)),
     ...behind.map((part) => `behind   ${part} was copied from kit ${lock.version} and kit ${VERSION} changed it: \`kit diff --dir ${dirArg} --patch\`, then \`kit update --dir ${dirArg}\``),
     ...(lock.version !== VERSION && !behind.length && !kept.length ? [`behind   kit.json says kit ${lock.version}, this is ${VERSION} with the same files: \`kit update --dir ${dirArg}\` records it`] : []),
   ]
@@ -422,6 +430,19 @@ const writeGuideModule = (from, out) => {
   return files.length
 }
 
+/**
+ * Lines marked for one runtime, preset or feature shape (`<!-- runtime:node -->`, `// preset:app`, `# runtime:workers`,
+ * `// feature:no-remove`, several at a line's end) stay, unmarked, only where `keeps` names that mark true.
+ */
+const MARK = /^(.*?) (?:<!-- ((?:runtime|preset|feature):[\w-]+) -->|\/\/ ((?:runtime|preset|feature):[\w-]+)|# ((?:runtime|preset|feature):[\w-]+))$/
+const keepMarked = (text, keeps) => {
+  const unmarked = (line) => {
+    const marked = line.match(MARK)
+    return !marked ? [line] : keeps[marked[2] ?? marked[3] ?? marked[4]] ? unmarked(marked[1]) : []
+  }
+  return text.split('\n').flatMap(unmarked).join('\n')
+}
+
 /** Copies a template folder, filling every placeholder in names and contents. */
 const copyTemplate = (from, to, vars, renameOf = (file) => file) => {
   const fill = (text) => Object.entries(vars).reduce((filled, [key, value]) => filled.replaceAll(key, value), text)
@@ -437,11 +458,12 @@ const copyTemplate = (from, to, vars, renameOf = (file) => file) => {
 const capital = (word) => word[0].toUpperCase() + word.slice(1)
 const singularOf = (word) => (word.endsWith('ies') ? `${word.slice(0, -3)}y` : /(ss|x|ch|sh)es$/.test(word) ? word.slice(0, -2) : word.endsWith('s') && !word.endsWith('ss') ? word.slice(0, -1) : word)
 
-/** Every spelling a feature's files need, from its plural kebab-case name (`reading-lists`). */
-export const namesOf = (name) => {
+/** Every spelling a feature's files need, from its plural kebab-case name (`reading-lists`) and its singular, when the naive one is wrong (`shelf`). */
+export const namesOf = (name, singular) => {
   if (!/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(name)) fail(`"${name}" isn't a plural kebab-case name like notes or reading-lists`)
+  if (singular !== undefined && !/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(singular)) fail(`"${singular}" isn't a kebab-case name like book or reading-list`)
   const many = name.split('-')
-  const one = [...many.slice(0, -1), singularOf(many.at(-1))]
+  const one = singular?.split('-') ?? [...many.slice(0, -1), singularOf(many.at(-1))]
   return {
     __name__: name,
     __camel__: many[0] + many.slice(1).map(capital).join(''),
@@ -469,18 +491,31 @@ const FIELD_TYPES = {
   bool: { column: (name) => `integer('${name}', { mode: 'boolean' })`, sql: 'integer', out: 'z.boolean()', input: 'z.boolean()', type: 'boolean', made: true, changed: false },
   'string[]': { column: (name) => `text('${name}', { mode: 'json' }).$type<string[]>()`, sql: 'text', out: 'z.array(z.string())', input: 'z.array(z.string().trim().min(1).max(200)).max(100)', type: 'string[]', made: ['one'], changed: ['two'] },
 }
+/** `enum(to-read|reading|done)`: one of the values, as text, checked by the route, the tool and the table. */
+const enumType = (values) => ({
+  column: (name) => `text('${name}', { enum: ${literal(values).replaceAll(',', ', ')} })`,
+  sql: 'text',
+  check: (column) => ` check ("${column}" in (${values.map((value) => `\\'${value}\\'`).join(', ')}))`,
+  out: `z.enum(${literal(values).replaceAll(',', ', ')})`,
+  input: `z.enum(${literal(values).replaceAll(',', ', ')})`,
+  type: values.map((value) => `'${value}'`).join(' | '),
+  made: values[0],
+  changed: values[1] ?? values[0],
+})
 /** What the sample feature has when no --fields are given. */
 const SAMPLE_FIELDS = 'title:string body:text?'
 /** Names a feature's own fields can't take: the kit's, and the list's and the command line's flags. */
 const OWN_FIELDS = ['id', 'createdAt', 'updatedAt', 'limit', 'cursor', 'json', 'yes', 'dryRun', 'input', 'timeout', 'profile', 'help']
 
-/** `name:string minutes:int tags:string[] notes:text?`, read: each field's name, type, and whether it may be left out. */
+/** `name:string minutes:int tags:string[] status:enum(to-read|done) notes:text?`, read: each field's name, type, and whether it may be left out. */
 const fieldsOf = (spec) =>
   spec.trim().split(/\s+/).map((field) => {
-    const [, name, type, optional] = field.match(/^([a-z][a-zA-Z0-9]*):([a-z]+(?:\[\])?)(\?)?$/) ?? []
-    if (!FIELD_TYPES[type]) fail(`${field}: a field is <name>:<type>, the type one of ${Object.keys(FIELD_TYPES).join(', ')}, and ? after it when it may be left out (notes:text?)`)
+    const [, name, type, values, optional] = field.match(/^([a-z][a-zA-Z0-9]*):([a-z]+(?:\[\])?|enum\(([a-z0-9][a-z0-9_-]*(?:\|[a-z0-9][a-z0-9_-]*)*)\))(\?)?$/) ?? []
+    if (!values && !FIELD_TYPES[type]) fail(`${field}: a field is <name>:<type>, the type one of ${Object.keys(FIELD_TYPES).join(', ')}, enum(a|b|c) (lowercase values, a-z 0-9 - _), and ? after it when it may be left out (notes:text?)`)
     if (OWN_FIELDS.includes(name)) fail(`${name} is the kit’s own field or flag: name it something else`)
-    return { name, type, optional: Boolean(optional), ...FIELD_TYPES[type] }
+    const named = values?.split('|')
+    if (named && new Set(named).size !== named.length) fail(`${name} names ${named.find((value, at) => named.indexOf(value) !== at)} twice: give each value once`)
+    return { name, type: named ? 'enum' : type, optional: Boolean(optional), ...(named ? enumType(named) : FIELD_TYPES[type]) }
   }).map((field, index, fields) => {
     if (fields.findIndex((other) => other.name === field.name) !== index) fail(`${field.name} is named twice: give each field its own name`)
     return field
@@ -500,7 +535,7 @@ const fieldVarsOf = (fields) => {
   return {
     __column_imports__: [...new Set(['sqliteTable', 'text', ...fields.map((field) => field.column('').split('(')[0])])].sort().join(', '),
     __columns__: fields.map((field) => `  ${field.name}: ${field.column(snakeOf(field.name))}${field.optional ? '' : '.notNull()'},`).join('\n'),
-    __sql_columns__: fields.map((field) => `"${snakeOf(field.name)}" ${field.sql}${field.optional ? '' : ' not null'}`).join(', '),
+    __sql_columns__: fields.map((field) => `"${snakeOf(field.name)}" ${field.sql}${field.optional ? '' : ' not null'}${field.check?.(snakeOf(field.name)) ?? ''}`).join(', '),
     __out_fields__: fields.map((field) => `${field.name}: ${field.out}${field.optional ? '.nullable()' : ''},`).join(' '),
     __in_fields__: fields.map((field) => `${field.name}: ${field.input}${field.optional ? '.optional()' : ''}.openapi({ description: 'Its ${snakeOf(field.name).replaceAll('_', ' ')}.', example: ${literal(field.made)} })`).join(', '),
     __tool_create_fields__: fields.map((field) => described(field, `${field.input}${field.optional ? '.optional()' : ''}`)).join(', '),
@@ -515,8 +550,8 @@ const fieldVarsOf = (fields) => {
   }
 }
 
-const addFeature = (root, name, switchable = false, fieldSpec = SAMPLE_FIELDS) => {
-  const vars = { ...namesOf(name), ...fieldVarsOf(fieldsOf(fieldSpec)) }
+const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS, singular, remove = true } = {}) => {
+  const vars = { ...namesOf(name, singular), ...fieldVarsOf(fieldsOf(fieldSpec)) }
   const list = join(root, 'src/features/index.ts')
   if (!existsSync(list)) fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
   const folder = join(root, 'src/features', name)
@@ -535,6 +570,8 @@ const addFeature = (root, name, switchable = false, fieldSpec = SAMPLE_FIELDS) =
     console.log('Copied the pagination part into src/kit: the new list pages by cursor')
   }
   copyTemplate(join(KIT, 'templates/feature'), folder, vars, (file) => (file === 'feature.test.ts' ? `${name}.test.ts` : file))
+  // Delete is a route, a handler, a repo call, a tool and a sample: all or none
+  for (const file of readdirSync(folder)) writeFileSync(join(folder, file), keepMarked(readFileSync(join(folder, file), 'utf8'), { 'feature:remove': remove, 'feature:no-remove': !remove }))
   writeFileSync(list, text.replace('// kit:imports', `import { feature as ${vars.__camel__} } from './${name}/index.js'\n// kit:imports`).replace('  // kit:features', `  ${vars.__camel__},\n  // kit:features`))
   if (switchable) {
     const catalog = join(root, 'src/features/catalog.ts')
@@ -544,7 +581,7 @@ const addFeature = (root, name, switchable = false, fieldSpec = SAMPLE_FIELDS) =
     const index = join(folder, 'index.ts')
     writeFileSync(index, readFileSync(index, 'utf8').replace(`  name: '${name}',`, `  name: '${name}',\n  switch: '${name}',`))
   }
-  console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test) and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
+  console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test${remove ? '' : '; no delete'}), each one a ${vars.__label__}${singular ? '' : ' (--singular names it otherwise)'}, and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
 }
 
 /**
@@ -715,6 +752,26 @@ const STARTER_TEXT = [
   { files: () => ['src/features/catalog.ts'], text: 'say here what switching it off stops', what: 'a description', instead: 'say what switching the feature off stops' },
 ]
 
+/**
+ * The product's skills (`guide/skills/`, the files the guide module carries) read by the app's own MCP SDK, as its
+ * server reads them: a finding for each skill it would skip, in its words. A note when the SDK isn't installed.
+ */
+const skillFindings = async (root) => {
+  const folder = join(root, 'guide/skills')
+  if (!existsSync(folder)) return { findings: [], notes: [] }
+  let sdk
+  try {
+    sdk = await import(pathToFileURL(createRequire(join(root, 'package.json')).resolve('@modelcontextprotocol/server/ext/skills')).href)
+  } catch {
+    return { findings: [], notes: ["note     could not load the app's @modelcontextprotocol/server (installed?), so guide/skills/ was not read as its MCP server reads it"] }
+  }
+  const files = readdirSync(folder, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile() && /\.(md|txt)$/.test(entry.name))
+  const skills = Object.fromEntries(files.map((entry) => [relative(folder, join(entry.parentPath, entry.name)).split('\\').join('/'), readFileSync(join(entry.parentPath, entry.name), 'utf8')]))
+  const findings = []
+  if (Object.keys(skills).length) await sdk.SkillsExtension.load(sdk.memorySkillFiles(skills), { onWarning: ({ path, message }) => findings.push(`skill    guide/skills/${path === '.' ? '' : path}: ${message}`) })
+  return { findings, notes: [] }
+}
+
 /** One line for each file that still holds the starter's text. */
 const starterFindings = (root) =>
   STARTER_TEXT.flatMap(({ files, text, what, instead }) => files(root).filter((path) => textOf(join(root, path))?.includes(text)).map((path) => `starter  ${path}: ${what} is still the starter’s ("${text}"): ${instead}`))
@@ -868,7 +925,13 @@ const loadBrand = (root) => {
   const loaded = spawnSync('pnpm', ['exec', 'tsx', script], { cwd: root, encoding: 'utf8' })
   rmSync(script, { force: true })
   const lines = (loaded.stderr || '').trim().split('\n')
-  if (loaded.status !== 0) fail(`could not load brand/brand.ts (tsx installed? \`pnpm add -D tsx\`): ${lines.find((line) => /Error|brand:/.test(line)) ?? lines[0] ?? ''}`)
+  if (loaded.status !== 0) {
+    // esbuild (tsx's) names a syntax error `<file>:<line>:<column>: ERROR: …`; pnpm says when there is no tsx to run
+    const syntax = lines.find((line) => /:\d+:\d+: ERROR: /.test(line))
+    if (syntax) fail(`brand/brand.ts has a syntax error: ${syntax.slice(syntax.lastIndexOf('brand.ts:') - 'brand/'.length)}`)
+    if (lines.some((line) => /Command "tsx" not found/.test(line))) fail('running brand/brand.ts needs tsx in the app: `pnpm add -D tsx`, then `kit brand` again')
+    fail(`could not load brand/brand.ts: ${lines.find((line) => /Error|brand:/.test(line)) ?? lines[0] ?? ''}`)
+  }
   return JSON.parse(loaded.stdout.trim().split('\n').at(-1))
 }
 
@@ -1420,11 +1483,47 @@ const wiringOf = (parts) => {
     const constant = `${name.toUpperCase()}_MIGRATIONS`
     const keepsTables = REGISTRY[name].files.some((file) => upstreamOf(file).includes(`export const ${constant} =`))
     const wrapped = inFeatures && upstreamOf(readme).includes(WRAPPER_HEADING)
+    // An entry part's tables are exported from its own folder, never the kit's index
+    const from = `../${relative(root ?? dir, dir).split('\\').join('/')}/${REGISTRY[name].entry ? `${name}/` : ''}index.js`
     return [
-      ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}`] : []),
-      ...(keepsTables && migrations !== null && !migrations.includes(constant) ? [`scripts/migrations.ts lacks ${name}'s tables: \`import { ${constant} } from '../${relative(root, dir).split('\\').join('/')}/index.js'\` and \`['${name}', ${constant}]\` in its sets, then \`pnpm migrations\` writes their D1 files`] : []),
+      ...wiringStepsOf(name, root),
+      ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts${keepsTables ? ' (its migrations reach migrations/ through it: add no line to scripts/migrations.ts)' : ''}, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}`] : []),
+      // A wrapped part's feature lists its steps: a line here too wrote every step twice
+      ...(keepsTables && !wrapped && migrations !== null && !migrations.includes(constant) ? [`scripts/migrations.ts lacks ${name}'s tables: \`import { ${constant} } from '${from}'\` and \`['${name}', ${constant}]\` in its sets, then \`pnpm migrations\` writes their D1 files`] : []),
     ]
   })
+}
+
+/** Where an app made by `init` lists a setting, each file named as the step says it. */
+const SETTING_FILES = [
+  ['src/app.ts', 'Env in src/app.ts'],
+  ['.dev.vars.example', '.dev.vars.example'],
+  ['container/entrypoint.sh', 'container/entrypoint.sh'],
+  ['vitest.config.ts', "vitest.config.ts's miniflare bindings"],
+]
+
+/**
+ * The steps a part's `meta.wiring` (registry.json) asks of an app made by `init`, each only where the app lacks it: its
+ * settings in every file that lists the app's settings, a schedule for its scheduled work, and its README's code.
+ */
+const wiringStepsOf = (name, root) => {
+  const wiring = REGISTRY[name].wiring
+  if (!wiring || !root || !existsSync(join(root, 'src/app.ts'))) return []
+  const readme = REGISTRY[name].files.find((file) => file.endsWith('README.md'))
+  const lacking = (path, text) => existsSync(join(root, path)) && !textOf(join(root, path)).includes(text)
+  const settings = (wiring.settings ?? []).flatMap(({ name: setting, what, test, testImport }) => {
+    // The workerd tests get a value that works there: their origin, a key made as they start
+    const files = SETTING_FILES.filter(([path]) => lacking(path, setting)).map(([path, where]) => (path === 'vitest.config.ts' && test ? `${where} as ${setting}: ${test}${testImport ? ` (${testImport})` : ''}` : where))
+    return files.length ? [`Setting ${setting} (${what}): add it to ${files.join(', ')}`] : []
+  })
+  const cron = wiring.cron
+  const schedules = cron
+    ? [
+        ...(lacking('wrangler.jsonc', '"crons"') ? [`Schedule: "triggers": { "crons": ["${cron.schedule}"] } in wrangler.jsonc, and a scheduled handler in src/worker.ts that calls ${name}'s ${cron.calls}`] : []),
+        ...(lacking('src/server.ts', cron.calls) ? [`Schedule: src/server.ts calls ${name}'s ${cron.calls} on a timer (hourly is enough)`] : []),
+      ]
+    : []
+  return [`Wire ${name}: ${dirArg}/${readme} › ${wiring.code}`, ...settings, ...schedules]
 }
 
 /** Runs each pnpm step in a new app until one fails; returns the steps left, that one first. Without pnpm, all of them. */
@@ -1534,7 +1633,8 @@ const commands = {
     const runtime = valueOf('--runtime') ?? (preset === 'app' ? 'cloudflare' : 'both')
     if (!RUNTIMES.includes(runtime)) fail(`--runtime is one of ${RUNTIMES.join(', ')}`)
     if (preset === 'app' && runtime !== 'cloudflare') fail('the app preset runs on Cloudflare Workers; leave --runtime out or use --runtime cloudflare')
-    const vars = { __name__: name, __title__: title, __kit__: VERSION, __date__: COMPATIBILITY_DATE }
+    // __title_quoted__ sits inside a double-quoted YAML value (a skill's description), so its \ and " are escaped
+    const vars = { __name__: name, __title__: title, __title_quoted__: title.replaceAll('\\', '\\\\').replaceAll('"', '\\"'), __kit__: VERSION, __date__: COMPATIBILITY_DATE }
     copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (['gitignore', 'oxlintrc.json', 'oxfmtrc.json', 'github', 'githooks', 'node-version', 'gitleaks.toml'].includes(file) ? `.${file}` : file === 'agents-skills' ? '.agents/skills' : file))
     if (runtime !== 'node') {
       copyTemplate(join(KIT, 'templates/runtime-cloudflare'), root, vars, (file) => (file === 'dev.vars.example' ? '.dev.vars.example' : file))
@@ -1542,15 +1642,10 @@ const commands = {
     }
     if (preset === 'app') copyTemplate(join(KIT, 'templates/preset-app'), root, vars)
     if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container']) rmSync(join(root, path), { recursive: true, force: true })
-    // Lines marked for one runtime or preset (`<!-- runtime:node -->`, `// preset:app`, `# runtime:workers`, several at a line's end) stay only in apps that have it
+    // Lines marked for one runtime or preset stay only in apps that have it
     const keeps = { 'runtime:node': runtime !== 'cloudflare', 'runtime:workers': runtime !== 'node', 'preset:api': preset === 'api', 'preset:app': preset === 'app' }
-    const MARK = /^(.*?) (?:<!-- ((?:runtime|preset):\w+) -->|\/\/ ((?:runtime|preset):\w+)|# ((?:runtime|preset):\w+))$/
-    const unmarked = (line) => {
-      const marked = line.match(MARK)
-      return !marked ? [line] : keeps[marked[2] ?? marked[3] ?? marked[4]] ? unmarked(marked[1]) : []
-    }
     for (const file of ['AGENTS.md', 'README.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts', '.github/workflows/ci.yml'].map((path) => join(root, path)).filter(existsSync))
-      writeFileSync(file, readFileSync(file, 'utf8').split('\n').flatMap(unmarked).join('\n').replaceAll('__worker_dev__', runtime === 'both' ? 'dev:worker' : 'dev'))
+      writeFileSync(file, keepMarked(readFileSync(file, 'utf8'), keeps).replaceAll('__worker_dev__', runtime === 'both' ? 'dev:worker' : 'dev'))
     // npm may drop the executable bit when it packs the kit
     chmodSync(join(root, '.githooks/pre-push'), 0o755)
     // A repository from the start, so `pnpm install` can point git at .githooks; never one inside another
@@ -1579,31 +1674,32 @@ const commands = {
     // What the Deploy to Cloudflare form says about each setting (kit button --check wants one for each it asks)
     const cloudflare = runtime === 'node' ? {} : { cloudflare: { bindings: DEPLOY_FORM } }
     writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', packageManager: KIT_PACKAGE_MANAGER, engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps), ...cloudflare }, null, 2) + '\n')
-    if (!flags.has('--bare')) addFeature(root, 'notes')
+    if (!flags.has('--bare')) addFeature(root, 'notes', { singular: 'note' })
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
     // What makes the app pass its own gate as made: what init writes is in the kit's long-line style, and D1 needs migrations/
     const firstRun = [['install'], ['format'], ...(runtime === 'node' ? [] : [['migrations']])]
     const left = flags.has('--no-install') ? firstRun : runFirst(root, firstRun)
+    // First, so a coding agent has the kit's skills before it builds; -y: the installer otherwise stops to ask, and an agent's shell never answers
+    console.log(`Skills first: npx skills add ${REPO} -y gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
     console.log(`Next: cd ${relative(process.cwd(), root)} && ${[...left.map((args) => `pnpm ${args.join(' ')}`), 'pnpm test', 'pnpm dev'].join(' && ')}`)
-    // -y: the installer otherwise stops to ask which skills and agents, and an agent's shell never answers
-    console.log(`Skills: npx skills add ${REPO} -y gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
     console.log(`Brand: make brand/ yours, then ${RESVG_INSTALL} && \`npx @escalay/kit brand\` renders the favicon, PNG icons and OG card into ${BRAND_MODULE}`)
   },
 
   adopt,
 
-  doctor: () => {
+  doctor: async () => {
     if (flags.has('--adopt') && !existsSync(lockPath)) adopt()
     if (flags.has('--keep')) keepEdits(readLock() ?? fail(`no kit.json in ${dirArg}; add modules first`))
     const lock = readLock()
     const root = lock ? appRootOf() : null
     const brand = root ? brandFindings(root, lock.modules.includes('brand')) : { findings: [], notes: lock?.modules.includes('brand') ? [`note     brand: no package.json above ${dirArg}: \`--app <app>\` names the app whose brand/ to check`] : [] }
-    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...(root ? starterFindings(root) : [])] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
+    const skills = root ? await skillFindings(root) : { findings: [], notes: [] }
+    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...(root ? starterFindings(root) : [])] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
     const texts = lock ? appTexts() : []
     const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
     const kept = lock ? keptEditsOf(lock) : []
     const keptLines = kept.map((file) => `kept     ${file}: an edit kit.json records as kept; \`kit diff --dir ${dirArg} --patch\` shows it`)
-    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...behindNotes, ...keptLines, ...findings]) console.log(line)
+    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...skills.notes, ...behindNotes, ...keptLines, ...findings]) console.log(line)
     const withKept = kept.length ? `, with ${kept.length} kept ${kept.length === 1 ? 'edit' : 'edits'}` : ''
     console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
@@ -1760,16 +1856,32 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
   feature: () => {
     const [name] = names
     if (!name) fail('name the feature, plural and kebab-case: feature reading-lists')
-    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, flags.has('--switch'), valueOf('--fields'))
+    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, { switchable: flags.has('--switch'), fieldSpec: valueOf('--fields'), singular: valueOf('--singular'), remove: !flags.has('--no-remove') })
   },
 
   update: () => {
     const lock = readLock() ?? fail(`no kit.json in ${dirArg}; add modules first`)
-    const modules = withRequired([...lock.modules, ...names])
+    // `kit` names the generated index.ts (for --force), never a module
+    const modules = withRequired([...lock.modules, ...names.filter((name) => name !== 'kit')])
     const expected = expectedFiles(modules, lock.webDir)
     const hashes = { ...lock.files }
     const kept = []
-    for (const { file, state } of statusOf(lock, expected)) {
+    // --force takes the kit's file over an edit only in the parts it names; naming none, only with --all or when no edit would go
+    const forced = (file) => flags.has('--force') && (!names.length || names.includes(partOf(file, modules)))
+    const scope = names.length ? `--force names ${names.join(', ')}` : '--force --all'
+    const statuses = statusOf(lock, expected)
+    const edits = statuses.filter(({ state }) => state === 'both changed' || state === 'you edited').map(({ file }) => file)
+    if (flags.has('--force') && !names.length && !flags.has('--all') && edits.length) {
+      const parts = [...new Set(edits.map((file) => partOf(file, modules)))]
+      fail(
+        [
+          `update --force names no part, and would overwrite ${edits.length} ${edits.length === 1 ? 'edit' : 'edits'}:`,
+          ...edits.map((file) => `  ${file} (${partOf(file, modules)})`),
+          `Take the kit's part by part: ${parts.map((part) => `\`${forceCommand([part])}\``).join(', ')}; or every part's, these edits too: \`kit update --dir ${dirArg} --force --all\``,
+        ].join('\n'),
+      )
+    }
+    for (const { file, state } of statuses) {
       if (state === 'dropped by kit') {
         delete hashes[file]
         console.log(`  dropped       ${file} (no longer in the kit; delete it when nothing imports it)`)
@@ -1779,23 +1891,28 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
         hashes[file] = sha(expected[file])
         continue
       }
-      if ((state === 'both changed' || state === 'you edited') && !flags.has('--force')) {
+      const edited = state === 'both changed' || state === 'you edited'
+      if (edited && !forced(file)) {
         if (state === 'both changed') kept.push(file)
         // The kit's hash, as adopt records it: a wrong record would read as a kit change once the kit moves on
         if (state === 'you edited' && lock.version === VERSION) hashes[file] = sha(expected[file])
+        if (flags.has('--force')) {
+          const part = partOf(file, modules)
+          console.log(state === 'both changed' ? `  kept          ${file}: your edit, and the kit changed it; ${scope}, not ${part}: \`${forceCommand([part])}\` takes the kit's` : `  kept          ${file}: your edit; ${scope}, not ${part}`)
+        }
         continue
       }
       mkdirSync(dirname(pathOf(file, lock.webDir)), { recursive: true })
       writeFileSync(pathOf(file, lock.webDir), expected[file])
       hashes[file] = sha(expected[file])
-      console.log(`  updated       ${file}`)
+      console.log(edited ? `  overwrote     ${file} (your edit: ${scope})` : `  updated       ${file}`)
     }
     // A kept file still holds the older kit's code, so kit.json keeps the older version until none is left
     writeLock(modules, hashes, lock.webDir, kept.length ? lock.version : VERSION, keptOf(lock))
     // kit.json may now record this kit, so the command names the version the app came from
     if (isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0) console.log(`What changed for these parts since kit ${lock.version}: ${upgradingCommand(lock.version, true)}`)
     if (kept.length) {
-      console.log(`${kept.length} ${kept.length === 1 ? 'file' : 'files'} kept at kit ${lock.version}: ${kept.join(', ')}. ${keptFix()}`)
+      console.log(`${kept.length} ${kept.length === 1 ? 'file' : 'files'} kept at kit ${lock.version}: ${kept.join(', ')}. ${keptFix([...new Set(kept.map((file) => partOf(file, modules)))])}`)
       console.log(`Dependencies: ${installCommand(modules)}`)
       process.exitCode = 1
       return
@@ -1812,6 +1929,14 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const sections = folders.map((folder) => [folder, notesSince(markdown, folder, since)]).filter(([, notes]) => notes.length)
     if (!sections.length) return console.log(`No upgrade notes for ${folders.join(', ')} after kit ${since} (this is kit ${VERSION})`)
     console.log(`Upgrade notes for ${folders.join(', ')} after kit ${since}, up to kit ${VERSION} (the kit's docs/upgrading.md):`)
+    // An edit kept over a fix holds the bug: the notes mark a fix `**Fixed` or `**Security`, per part, never per file
+    const fixed = new Set(sections.filter(([, notes]) => notes.some((note) => /\*\*(Fixed|Security)\b/.test(note))).map(([folder]) => folder))
+    // Only the parts this kit knows: a kit.json may name one a later kit added
+    const known = lock.modules.filter((name) => REGISTRY[name])
+    // The generated index.ts is no part's, so no part's notes name a fix in it
+    const overFixes = fixed.size ? statusOf(lock, expectedFiles(known, lock.webDir)).filter(({ file, state }) => state === 'both changed' && partOf(file, known) !== 'kit' && fixed.has(notesFolderOf(partOf(file, known)))) : []
+    if (overFixes.length) console.log('')
+    for (const { file } of overFixes) console.log(`fix      ${file}: your edit, and the kit changed it since; ${notesFolderOf(partOf(file, known))}'s notes below name a fix: ${keptFix([partOf(file, known)])}`)
     for (const [folder, notes] of sections) console.log(`\n## ${folder}\n\n${notes.join('\n\n')}`)
   },
 }

@@ -6,11 +6,14 @@ import { createApp, TOOLS } from '../src/app.js'
 import { BRAND_ASSETS } from '../src/brand.gen.js'
 import { FEATURES } from '../src/features/index.js'
 import { guideFiles, guideModuleSource, hashApiKey, testDb } from '../src/kit/index.js'
+import { guideSkillProblems } from '../src/kit/mcp/index.js'
 import { cliGaps, guideGaps, lintOpenApi, toolRoutes, toolsRun } from '../src/kit/testing/index.js'
 
 const GUIDE_DIR = fileURLToPath(new URL('../guide', import.meta.url))
 const KEY = 'test-key'
 const headers = { authorization: `Bearer ${KEY}` }
+// One app for these checks: each reads the whole app (its document, tools, guide) and none counts rows. A test that
+// counts what it made gets an app of its own, as a feature's test does
 const app = await createApp({ db: await testDb(), env: { API_KEYS: `tester:${hashApiKey(KEY)}` } })
 const request = async (path: string, init: RequestInit = {}) => app.request(path, { ...init, headers: { ...headers, 'content-type': 'application/json', ...(init.headers as Record<string, string>) } })
 const doc = async () => (await app.request('/openapi.json', { headers })).json()
@@ -54,6 +57,10 @@ describe('the API', () => {
       for (const path of [`skills/${skill}/SKILL.md`, ...playbooks]) expect(files.get(path), path).not.toMatch(/\{\{[^}]+\}\}/)
       for (const path of playbooks) expect(files.get(`skills/${skill}/SKILL.md`), path).toContain(path.slice(`skills/${skill}/`.length))
     }
+  })
+
+  it('loads every skill as its MCP server reads it (quote a description with a colon in it)', async () => {
+    expect(await guideSkillProblems({ files: guideFiles(GUIDE_DIR) })).toEqual([])
   })
 
   it('serves the guide folder as it is now (run `pnpm guide` after editing guide/)', () => {

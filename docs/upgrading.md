@@ -19,9 +19,15 @@ When `kit.json` records an older kit, `doctor` prints a `note` line naming `kit 
 The app owns the copy, and nothing follows `main`: a version is taken on purpose. A file equal to the kit's counts as
 unchanged, whatever `kit.json` recorded. `update` keeps a file you edited; when the kit also changed that file since
 the version `kit.json` records, it exits 1 and leaves `kit.json` at that version, so `doctor` still names the file:
-`update --force` takes the kit's, then make your edits again. An edit the team keeps is recorded with
+`update <part> --force` takes the kit's for that part's files and no other part's (`kit` names the generated
+`index.ts`, which is no part's), printing each edit it overwrites and each it keeps; then make your edits again. Naming
+no part, `update --force` goes ahead only when no edit would be overwritten: otherwise it exits 1, writes nothing, and
+lists each edit with its part, the `update <part> --force` for each, and `update --force --all`, which takes every
+part's, edits too (through kit 1.32.0, a bare `--force` did that without asking). `kit upgrading` names first an edited
+file the kit changed too in a part whose notes below name a fix (`**Fixed`, `**Security`): an edit kept over a fix still holds the bug,
+so take that one before the rest. An edit the team keeps is recorded with
 `doctor --keep <file>` (`kept` in `kit.json`, the file's hash): `doctor` then notes it instead of failing, until the
-file changes again, the kit changes it too, or `update --force` takes the kit's. `add` and `update` print `pnpm add`
+file changes again, the kit changes it too, or `update <part> --force` takes the kit's. `add` and `update` print `pnpm add`
 only for what `package.json` lacks. Read the sections below for every part the app has, from
 the version in `kit.json` up.
 
@@ -333,6 +339,15 @@ Tokens, codes, refresh rows and claims from before grants keep working.
 
 ## mcp
 
+### Unreleased (after 1.32.0)
+
+- New: `guideSkillProblems({ files })`, what the server would warn of reading the guide's skills (`[]` when each
+  loads). A SKILL.md whose frontmatter it can't read, such as a `: ` in an unquoted description, was skipped with a
+  line in the server's log and nothing else. A new app's `test/api.test.ts` checks it; an older app adds
+  `expect(await guideSkillProblems({ files: guideFiles(GUIDE_DIR) })).toEqual([])` there (from
+  `./kit/mcp/index.js`), and quotes its skills' descriptions. `kit doctor` now fails on such a skill, existing apps
+  included, naming the file and the server's reason.
+
 ### 1.31.0
 
 - `mountMcp` takes a path with parameters (`/s/:space/mcp`): each tool's `call` and resource's `read` get them as a
@@ -504,6 +519,20 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## sharing
 
+### Unreleased (after 1.32.0)
+
+- New: `sharingOf(app)`, the part `registerSharing` bound to that app, for a scheduled handler that holds only the
+  app. Nothing to change.
+- The README's Wire it is the whole wiring for an app made by `kit init` (a spaces source, the feature's delete
+  calling `forget`, `src/app.ts`, the scheduled handlers), tested in the kit; the owner routes, the sign-in ladder
+  and two flows moved to `REFERENCE.md` beside it, which `update` adds. `kit add sharing` prints each setting
+  (`OAUTH_SIGNING_KEY`, `SHARING_SECRET`, `PUBLIC_ORIGIN`) and schedule the app still lacks.
+- A new app's `scripts/migrations.ts` writes the part's D1 files, and its features' `register` gets `parts` (a
+  feature calls `parts.sharing.forget(id)`). An older app adds `['sharing', SHARING_MIGRATIONS]` from
+  `./kit/sharing/index.js`, as `kit add` says, and `parts` to its `Feature` type and `createApp` (Wire it).
+- The README's hooks chain, for an app with hooks of its own, is a whole file now (`chained(sharing, mine)`), typed
+  and tested in the kit; it read `mine` without defining it. Nothing to change in an app that chains them already.
+
 ### 1.32.0
 
 - A new part (an invite joins by its typed code; a page for its link and asking to join are not built): its tables (`SHARING_MIGRATIONS` step 1:
@@ -533,6 +562,12 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
   `address: { header: 'cf-connecting-ip' }`.
 
 ## testing
+
+### Unreleased (after 1.32.0)
+
+- New: `connectAgent(app, { address, approve })`, a third-party agent's whole sign-in (its registration, PKCE, the
+  person's click through `approve`, the token exchange), for testing an invite or the owner's approval end to end.
+  Nothing to change.
 
 ### 1.31.0
 

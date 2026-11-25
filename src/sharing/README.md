@@ -23,42 +23,71 @@ Node and Workers.
 
 ## Wire it
 
-```ts
-import { createSharing, registerSharing, sharingTools, SHARING_OPEN_PATHS, SHARING_TAG } from './kit/sharing/index.js'
+An app made by `kit init` whose spaces are shelves (`kit feature shelves --singular shelf --fields "name:string"`);
+`kit add sharing` prints the settings and the schedule it lacks. Each block names its file and place:
 
-const sharing = await createSharing({
-  db,
-  // 32+ random bytes, its own entry in the app's secret store: never the OAuth signing key
-  secret: env.SHARING_SECRET,
-  spaces: { byName: (name) => shelves.byName(name), byId: (id) => shelves.byId(id) },
-  spaceOfPath: (path) => /^\/api\/shelves\/([^/]+)(\/|$)/.exec(path)?.[1] ?? null,
-  owner,
-  fixedKeys: [...parseApiKeys(env.API_KEYS).values()],
-  knownReturns: [{ name: 'Client A', callback: 'https://client-a.example.test/callback' }],
-  signInPath: '/sign-in',
-})
-const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, publicOrigin, limits, ...sharing.oauth })   // publicOrigin: required, the root (never a request's host)
-const app = createAgentApi({
-  …,
-  tags: [...FEATURE_TAGS, SHARING_TAG],
-  auth: { realm, keys, open: [...SHARING_OPEN_PATHS], relay: ['/mcp', '/a2a', sharing.relay] },
-  guards: { …, skip: sharing.neverKept },
-  oauth,
-})
-await registerSharing(app, sharing, { oauth })   // migrates, binds the hooks to oauth and brand, then /sharing/* and the owner routes
-mcpServerFactory({ tools: [...FEATURE_TOOLS, ...sharingTools({ noun: 'shelf' })], … })   // the owner's MCP only
-mountMcp(app, { path: sharing.mcpPath, factory: shelfMcp, allowedHostnames })   // its tools read at.params.space
-// the scheduled handler: await sharing.sweep(); deleting a shelf: await sharing.forget(shelf.id)
+```ts
+// src/features/shelves/spaces.ts, new: the shelves as spaces, each shelf's id its space's name
+import type { Db } from '../../kit/index.js'
+import { shelvesRepo } from './repo.js'
+
+export const shelfSpaces = (db: Db) => {
+  const byId = async (id: string) => {
+    const row = await shelvesRepo(db).get(id)
+    return row ? { id: row.id, name: row.id, title: row.name } : null
+  }
+  return { byName: byId, byId }
+}
+// src/features/shelves/index.ts, in place of the statements that start the same way: a deleted shelf ends its members
+  register: async (app, { db, parts }) => {
+    const handle = shelvesHandlers({ ...repo, remove: async (id) => { await repo.remove(id); if (parts.sharing) await parts.sharing.forget(id) } })
+// src/features/shelves/index.ts, before `const handle`
+    const repo = shelvesRepo(db)
+// src/app.ts, after `import BRAND`
+import { z } from '@hono/zod-openapi'
+import { shelfSpaces } from './features/shelves/spaces.js'
+import { mcpTool } from './kit/mcp/index.js'
+import { createSharing, registerSharing, sharingTools, SHARING_OPEN_PATHS, SHARING_TAG, type Sharing } from './kit/sharing/index.js'
+// src/app.ts, in place of the statements that start the same way (the realm and name stay the app's)
+export type Parts = { sharing?: Sharing }
+  const oauth = env.OAUTH_SIGNING_KEY ? createOAuth({ name: 'Shelves', signingKey: env.OAUTH_SIGNING_KEY, store: await dbOAuthStore(db), owner, reuseGraceSeconds: 30, ...(sharing && { publicOrigin: env.PUBLIC_ORIGIN, limits: { store: await dbGuardStore(db) }, ...sharing.oauth }) }) : undefined
+    tags: [...FEATURES.map((feature) => feature.tag), ...(sharing ? [SHARING_TAG] : [])],
+    auth: { realm: 'shelves', keys: parseApiKeys(env.API_KEYS), access, ...(sharing && { open: [...SHARING_OPEN_PATHS], relay: ['/mcp', '/a2a', sharing.relay] }) },
+    guards: { store: await dbGuardStore(db), ...(sharing && { skip: sharing.neverKept }) },
+  const parts: Parts = { sharing }
+  const factory = mcpServerFactory({ info: { name: 'shelves', version: VERSION }, instructions: 'Shelves: read the guide at /llms.txt first.', tools: [...TOOLS, ...(sharing ? sharingTools({ noun: 'shelf' }) : [])], prompts, skills, callApi: inProcess(app) })
+// src/app.ts, inside `export type Env`'s braces, at the end
+SHARING_SECRET?: string; PUBLIC_ORIGIN?: string
+// src/app.ts, before `const oauth`: on once its settings are, so createApp({ db, env: {} }) stays plain
+  const sharing = env.OAUTH_SIGNING_KEY && env.SHARING_SECRET && env.PUBLIC_ORIGIN ? await createSharing({ db, secret: env.SHARING_SECRET, spaces: shelfSpaces(db), spaceOfPath: (path) => /^\/api\/shelves\/([^/]+)/.exec(path)?.[1] ?? null, owner, fixedKeys: [...parseApiKeys(env.API_KEYS).values()] }) : undefined
+// src/app.ts, after `mountMcp(app, { factory`: the part's routes, and a shelf's own MCP
+  if (sharing && oauth) await registerSharing(app, sharing, { oauth })
+  if (sharing) mountMcp(app, { path: sharing.mcpPath, factory: mcpServerFactory({ info: { name: 'shelves', version: VERSION }, instructions: 'One shelf, shared with you.', tools: SHELF_TOOLS, callApi: inProcess(app) }), allowedHostnames: [env.PUBLIC_HOST ?? 'localhost', 'localhost', '127.0.0.1'] })
+// src/app.ts, before `export const VERSION`
+const SHELF_TOOLS = [mcpTool({ name: 'view_shelf', title: 'This shelf', description: 'The shelf this address shares.', input: z.object({}), call: (_, at) => ({ path: `/api/shelves/${encodeURIComponent(at?.params.space ?? '')}` }), summarize: (shelf: { name: string }) => shelf.name })]
+// src/worker.ts and src/server.ts, after `import { openDb`
+import { sharingOf } from './kit/sharing/index.js'
+// src/worker.ts, after `fetch:`: wrangler.jsonc's "triggers": { "crons": ["17 * * * *"] } runs it hourly
+  scheduled: (_event, env, ctx) => ctx.waitUntil(appOf(env).then(async (app) => { const sharing = sharingOf(app); if (sharing) await sharing.sweep() })),
+// src/server.ts, after `serve(`: hourly
+setInterval(() => void sharingOf(app)?.sweep().catch((error) => console.error('sharing sweep failed', error)), 3_600_000)
 ```
 
-An app with hooks of its own chains them, its veto first so a refusal never spends an invite. Behind Cloudflare Access
-it lets exactly `sharingSignInPaths(sharing)` through.
+An app with its own four hooks (`mine`) chains them, its veto first so a refusal never spends an invite:
+`createOAuth` takes `...chained(sharing, mine)` after `...sharing.oauth`. Behind Cloudflare Access it lets exactly
+`sharingSignInPaths(sharing)` through.
 
 ```ts
-approve: async (c, ask) => (sharing.handles(ask) ? sharing.oauth.approve(c, ask) : mine.approve(c, ask)),
-onGrant: async (grant, c) => (await mine.onGrant(grant, c)) && (await sharing.oauth.onGrant(grant, c)),
-onRevoke: async (revoked) => { await sharing.oauth.onRevoke(revoked); await mine.onRevoke(revoked) },
-accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(caller, c); return judged === true ? mine.accepts(caller, c) : judged },
+// src/hooks.ts
+import type { Sharing } from './kit/sharing/index.js'
+
+type Hooks = Omit<Sharing['oauth'], 'resources' | 'resourceOf'>
+export const chained = (sharing: Sharing, mine: Hooks): Hooks => ({
+  approve: (c, ask) => (sharing.handles(ask) ? sharing.oauth.approve(c, ask) : mine.approve(c, ask)),
+  onGrant: async (grant, c) => (await mine.onGrant(grant, c)) && (await sharing.oauth.onGrant(grant, c)),
+  onRevoke: async (revoked) => { await sharing.oauth.onRevoke(revoked); await mine.onRevoke(revoked) },
+  accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(caller, c); return judged === true ? mine.accepts(caller, c) : judged },
+})
 ```
 
 ## Options
@@ -85,7 +114,7 @@ accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(calle
 
 | File | What |
 |---|---|
-| `index.ts` | `createSharing` (`relay`, `mcpPath`, `neverKept`, `config`; the hooks `oauth`; `bind`, `handles`, `memberOf`, `sweep`, `forget`), `registerSharing`, `SHARING_TAG`, `SHARING_OPEN_PATHS`, `sharingSignInPaths`, and re-exports the files below |
+| `index.ts` | `createSharing` (`relay`, `mcpPath`, `neverKept`, `config`; the hooks `oauth`; `bind`, `handles`, `memberOf`, `sweep`, `forget`), `registerSharing`, `sharingOf` (the part an app registered, for its scheduled handler), `SHARING_TAG`, `SHARING_OPEN_PATHS`, `sharingSignInPaths`, and re-exports the files below |
 | `grants.ts` | the hooks but `approve` (Rules); `boundOf`, `appNameOf`, `isRootAudience`, `spaceNameIn`, `ONLY_ITS_SPACE`, `MemberView` |
 | `signin.ts`, `owner.ts` | `approve`, `signInStepOf` (the ladder), `POST /sharing/join`; the owner's `POST /sharing/as-owner` and `/sharing/owner` |
 | `pages.ts`, `limits.ts`, `sweep.ts` | the pages; the code's limits; `sweep`, `forget` |
@@ -95,19 +124,7 @@ accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(calle
 | `states.ts` | `inviteStateOf`, `memberStateOf`, `memberListingOf`; `redeemByOf`, `memberExpiresAtOf`, `REDEEM_WITHIN` (a day), `UNSEEN_FOR` (30 days), `MAX_OPEN_INVITES` (100) |
 | `secrets.ts` | `sharingKeys`, `newLinkToken` (192 bits), `newInviteCode` (`BDKM-QXTW`, from `CODE_ALPHABET`), `normalisedCode`; what the tables keep instead: `linkHashOf`, `codeHashOf`; what the limits count by: `addressKeyOf` (an HMAC), `ticketHashOf` (SHA-256) |
 
-The owner routes (`{path}` default `/api/spaces`), paged lists newest first (`?limit&cursor`), and their tools:
-
-| Route | operationId | Tool, command | Answers |
-|---|---|---|---|
-| `GET {path}/{space}/sharing` | `getSharing` | `get_sharing`, `sharing view` | 200; 404 |
-| `POST {path}/{space}/invites` `{ label, scope = 'read', lifetime = '30d' }` | `createInvite` | `create_invite`, `invite create` | 201 `code` shown once, with `address` and `message`; 400; 409 |
-| `GET {path}/{space}/invites` | `listInvites` | `list_invites`, `invite list` | 200, never a code |
-| `GET {path}/{space}/invites/{id}` | `getInvite` | none | 200, the card its `self` names; 404 |
-| `DELETE {path}/{space}/invites/{id}` | `revokeInvite` | `revoke_invite`, `invite revoke` | 204; 409 once used |
-| `GET {path}/{space}/members` | `listMembers` | `list_members`, `member list` | 200, `active` or `signed_out` |
-| `GET {path}/{space}/members/{id}` | `getMember` | none | 200; 404 |
-| `DELETE {path}/{space}/members/{id}` | `removeMember` | `remove_member`, `member remove` | 204, again 204; 404 |
-| `POST {path}/{space}/members/{id}/invite-again` | `inviteAgain` | `invite_again`, `member reinvite` | 201 as `createInvite`; 400; 409 |
+The owner routes, each with its operationId, tool, command and answers: [REFERENCE.md](REFERENCE.md).
 
 ## Flows
 
@@ -129,35 +146,7 @@ sequenceDiagram
   G-->>A: tokens, unless ended meanwhile (a replayed code): nothing, onRevoke told again
 ```
 
-The owner approves an app at a space.
-
-```mermaid
-sequenceDiagram
-  participant A as App
-  participant P as /oauth/authorize, approve
-  participant H as POST /sharing/as-owner
-  participant O as POST /sharing/owner
-  A->>P: resource, the space's address
-  P->>P: owner(c), then byName: the owner page, or no such space (404)
-  P-->>H: no owner cookie (cross-site): Continue as the owner, on the code page
-  H->>H: owner(c) again (else Sign in first), then the owner page
-  P->>O: Approve or Refuse, the boxes ticked
-  O->>O: same-origin, the ticket, owner(c), byName, again
-  O->>A: complete as owner:email, asked scopes the ticks give, 30 days or until revoked
-```
-
-Invite again: the old sign-in ends once the fresh invite is used. A withdrawn join reopens it; the old stays replaced.
-
-```mermaid
-sequenceDiagram
-  participant O as Owner
-  participant R as POST {path}/soups/members/{id}/invite-again
-  participant G as onGrant
-  O->>R: Idempotency-Key
-  R->>R: its earlier ones revoked, a new one with its label, scope, lifetime
-  R-->>O: 201 code, address, message, shown once
-  G->>G: claimInvite, then closeMember replaced (live or signed out), then revokeGrant
-```
+The owner approving an app at a space, and Invite again: [REFERENCE.md](REFERENCE.md).
 
 An invite (`inviteStateOf`). Redeemed is not a column: a member row holding its `invite_id` is.
 
@@ -194,18 +183,8 @@ stateDiagram-v2
   | a space, from the part's pages (`data.sharing`) | the claim writes the member, or no | its member's space only, while it lives |
   | any other (a space by a device grant or the kit's page, the app's own resource) | no: withdrawn | refused |
 
-- **The ladder** (`signInStepOf`), for a sign-in the part `handles`:
-
-  | It asks for | The owner signed in | Step |
-  |---|---|---|
-  | the root or its MCP, named by the client | yes | `kit`: the kit's consent page |
-  | the root or its MCP, named by the client | no | `wrong-address`: no form |
-  | nothing (the root, chosen by the server) | yes | `kit` |
-  | nothing | no | `code`: the code's invite binds its space |
-  | a space `byName` finds | yes | `owner` |
-  | a space `byName` misses | yes | `no-such-space` (404, to the owner only) |
-  | a space | no | `code`, with Continue as the owner |
-
+- **The ladder** (`signInStepOf`), for a sign-in the part `handles`: what it asks for and whether the owner is signed in
+  pick the kit's consent page, the code page, the owner's page, or none ([REFERENCE.md](REFERENCE.md)).
 - **The pages name the return**: an app on this computer (loopback http), a `knownReturns` name (exact), or else
   "This app returns to <host>" (a custom scheme by its scheme). Each that approves says "This connects the app signed
   in in this browser."; all are escaped, `no-store`, `noindex`, unframed, script-free, `form-action` here and the return.
@@ -287,14 +266,10 @@ stateDiagram-v2
 
 ## Tests
 
-- `test/sharing.test.ts`: the tables, states, secrets, races, every by-id statement at another space.
-- `test/sharing-owner.test.ts`: who may share; invites; the same 404; probe T5; the lint and every tool run.
-- `test/sharing-grants.test.ts`: probes T6, T7, `race.mts`; `onGrant`, `accepts`, `onRevoke`. Its contract
-  (`test/sharing-grants-contract.ts`, `sweep` twice at once too) runs on node:sqlite and, in
-  `test/workers/sharing.test.ts`, on D1.
-- `test/sharing-signin.test.ts`: the ladder; the pages (probes T1, T2, T4); codes, limits; the owner's page and hop.
-- `test/sharing-members.test.ts`: members listed, removed, invited again; `sweep`; `forget`.
-- `test/sharing-app.test.ts`: §23 end to end over `test/sharing-fixture.ts`.
+- In the app: `connectAgent` (testing) signs an invitee's agent in, the code typed through `approveSignIn`'s `form:
+  { action: '/sharing/join', fields: { code } }`, then calls `view_shelf` at the invite's `address`.
+- The kit's own: `test/sharing*.test.ts` (tables, owner, grants, sign-in, members, the app end to end over
+  `test/sharing-fixture.ts`), and the grants contract on D1 in `test/workers/sharing.test.ts`.
 
 ## Upgrading
 

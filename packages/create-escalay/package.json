@@ -2,7 +2,7 @@
   "name": "create-escalay",
   "version": "1.32.0",
   "type": "module",
-  "description": "Start an agent-ready API from the Escalay kit: `npm create escalay my-api`.",
+  "description": "Start an agent-ready API from the Escalay kit: `npm create escalay@latest my-api`.",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -21,7 +21,7 @@ const KIT = 'escalay/api-kit/'
  * `note` is what the parts alone don't say.
  */
 export const GOALS = [
-  { goal: 'Start a new API', command: 'npm create escalay <name>', note: 'the starter, with an example feature and its tests' },
+  { goal: 'Start a new API', command: 'npm create escalay@latest <name>', note: 'the starter, with an example feature and its tests' },
   { goal: 'Put an existing API on the standard', parts: ['core', 'db', 'pagination', 'guide', 'mcp', 'testing'] },
   { goal: 'Lists that page', parts: ['pagination'] },
   { goal: 'Agents and MCP clients sign in without a pasted key', parts: ['oauth'], note: 'the owner approves each one on the kit’s page' },
@@ -196,6 +196,8 @@ export const partsMarkdown = (registry, cliSource) => {
     'a README.',
     '',
     ...README_SHAPE.map(([heading, what], index) => `${index + 1}. **${heading}**: ${what}`),
+    '',
+    'A part may ship one `REFERENCE.md` beside its README for tables and diagrams, linked from the README and under the same 20 KB ceiling (`test/one-source.test.mjs`).',
     '',
   ].join('\n')
 }

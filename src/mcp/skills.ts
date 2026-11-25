@@ -28,6 +28,30 @@ const aboutOf = (text: string, fallback: string) => {
 /** What guideSkills read about each reference file, by URI: the catalog itself only knows sizes and digests. */
 const ABOUT = new WeakMap<SkillCatalog, Map<string, { title: string; description: string }>>()
 
+/** The guide's `skills/` files by path under it, each rendered by `fill`. */
+const skillFilesOf = (files: Map<string, string> | Record<string, string>, fill: (text: string) => string) =>
+  (files instanceof Map ? [...files] : Object.entries(files)).flatMap(([path, text]): [string, string][] => (path.startsWith(SKILLS) ? [[path.slice(SKILLS.length), fill(text)]] : []))
+
+/** The one way the guide's skills are read: the SDK's loader, whose warnings name each skill it skips. */
+const loadSkills = (skills: [string, string][], onWarning?: (warning: { path: string; message: string }) => void) =>
+  SkillsExtension.load(memorySkillFiles(Object.fromEntries(skills)), { cacheHint: { ttlMs: HOUR, cacheScope: 'private' }, ...(onWarning ? { onWarning } : {}) })
+
+/**
+ * guideSkillProblems reads the guide's skills exactly as `guideSkills` does and returns what the server would warn
+ * of, one line each (`<skill>/SKILL.md: …`): a frontmatter it can't read, a skill it skips. `[]` when every skill
+ * loads, so a test is one line.
+ *
+ * @example
+ * expect(await guideSkillProblems({ files: GUIDE_FILES })).toEqual([])
+ */
+export const guideSkillProblems = async ({ files, fill = (text) => text }: { files: Map<string, string> | Record<string, string>; fill?: (text: string) => string }) => {
+  const skills = skillFilesOf(files, fill)
+  if (!skills.length) return []
+  const problems: string[] = []
+  await loadSkills(skills, ({ path, message }) => problems.push(`${path}: ${message}`))
+  return problems
+}
+
 /**
  * guideSkills reads `skills/<name>/SKILL.md` and `skills/<name>/references/*.md` out of the guide's files. Each
  * playbook becomes a prompt named after its file, titled by its heading and described by its first paragraph line.
@@ -40,14 +64,13 @@ export const guideSkills = async ({
   files: Map<string, string> | Record<string, string>
   fill?: (text: string) => string
 }) => {
-  const entries = files instanceof Map ? [...files] : Object.entries(files)
-  const skills = entries.flatMap(([path, text]): [string, string][] => (path.startsWith(SKILLS) ? [[path.slice(SKILLS.length), fill(text)]] : []))
+  const skills = skillFilesOf(files, fill)
   const prompts = skills.flatMap(([path, text]): McpPrompt[] => {
     const name = path.match(PLAYBOOK)?.[1]
     return name ? [{ name, ...aboutOf(text, name), text: () => text }] : []
   })
   if (!skills.length) return { prompts, skills: undefined }
-  const catalog = await SkillsExtension.load(memorySkillFiles(Object.fromEntries(skills)), { cacheHint: { ttlMs: HOUR, cacheScope: 'private' } })
+  const catalog = await loadSkills(skills)
   ABOUT.set(catalog, new Map(skills.map(([path, text]) => [BASE + path, aboutOf(text, path.split('/').pop()!)])))
   return {
     prompts,

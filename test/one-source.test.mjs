@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { README_SHAPE } from '../scripts/parts.mjs'
@@ -70,6 +70,23 @@ describe('the size of a part’s README', () => {
       expect(sizes[folder], `${folder}: under the ceiling now, so drop it from OVER`).toBeGreaterThan(CEILING)
       expect(cap - sizes[folder], `${folder}: shrank, so lower its cap`).toBeLessThanOrEqual(2 * 1024)
     }
+  })
+
+  // A part's tables and diagrams may go to one REFERENCE.md beside it, under the same ceiling and with no cap of its own
+  const references = folders.filter((folder) => existsSync(join(root, `src/${folder}/REFERENCE.md`)))
+
+  it.each(references)('src/%s/REFERENCE.md stays under the ceiling, and its README links it', (folder) => {
+    expect(Buffer.byteLength(read(`src/${folder}/REFERENCE.md`)), `${folder}: cut its REFERENCE.md, never give it a cap`).toBeLessThanOrEqual(CEILING)
+    expect(read(`src/${folder}/README.md`)).toContain('](REFERENCE.md)')
+  })
+
+  it.each(['docs/PARTS.md', 'skills/api-kit-part/SKILL.md'])('%s says a part may ship one REFERENCE.md', (path) => {
+    expect(read(path)).toMatch(/one `REFERENCE\.md`/)
+  })
+
+  it('takes no other Markdown beside a README', () => {
+    const others = folders.flatMap((folder) => readdirSync(join(root, 'src', folder)).filter((file) => file.endsWith('.md') && !['README.md', 'REFERENCE.md'].includes(file)).map((file) => `src/${folder}/${file}`))
+    expect(others).toEqual([])
   })
 })
 

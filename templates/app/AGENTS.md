@@ -17,7 +17,7 @@ an MCP tool.
 - `npx skills add escalay/api-kit -y` (`-y`, or the installer stops to ask): the kit's skills for your coding agent: `api-kit-build` (parts, who may see what, a newer kit), `api-kit-feature` (a feature, its switch), `api-kit-review` (is it ready for agents), `api-kit-cli` (the command line, every `kit` command), `api-kit-skills` (this product's own skills). It installs `api-kit-part` and `npm-release` too, which are for the kit's own repository: leave them be
 
 A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string minutes:int tags:string[] notes:text?"`
-(its own fields in every file; `kit feature --help` lists the types), then fill in what is its own. Removing one (the
+(its own fields in every file, `status:enum(to-read|done)` for fixed values; `kit feature --help` lists the types, `--singular` and `--no-remove`), then fill in what is its own. Removing one (the
 `notes` sample): delete `src/features/<name>/` and its lines in `src/features/index.ts` (and `catalog.ts`), then
 `pnpm guide`, and on Workers `pnpm migrations` (it removes the feature's files). A PATCH schema never takes `.default()`: it would overwrite what a PATCH leaves out.
 

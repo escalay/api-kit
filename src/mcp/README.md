@@ -120,6 +120,7 @@ schema, when fixed), `annotations`, `call` (args, and `at` with the mount path's
 | `PROBLEM_META`, `PENDING_META` | a failed call carries its problem (with `status`) in `_meta["api-kit/problem"]`; one still working names its run and the path to poll (`{ run, location }`) in `_meta["api-kit/pending"]`, and its text says to `GET` that path until the run is done, then call the tool again |
 | `mountedMcp(app)` | the tools and resources `mountMcp` serves at the path without parameters, for `cliGaps` and `cliSnapshot` |
 | `guideSkills({ files, fill })` | the guide's skill folders as the factory's `skills` and `prompts` (one prompt per playbook); `fill` renders a file first when a skill uses placeholders |
+| `guideSkillProblems({ files, fill })` | what the server would warn of reading the same skills, one line each, `[]` when every skill loads: a frontmatter it can't read (a `: ` in an unquoted description) means the skill is skipped, so the app's test checks it |
 | `mcpServerFactory` | the server: info, instructions, tools, resources, prompts, skills (options above) |
 | `mountMcp` | `/mcp` (Streamable HTTP, MCP 2026-07-28 with a fallback for older clients) and the Server Card |
 | `serverInfoOf(info, brand, origin, { inline })` | that identity: the inline PNG icon first (2025's `initialize`, `server/discover`, the card), left out of the serverInfo 2026-07-28 stamps on every other answer; a stdio factory takes `brand` itself |
@@ -129,7 +130,7 @@ schema, when fixed), `annotations`, `call` (args, and `at` with the mount path's
 | File | What |
 |---|---|
 | `index.ts` | the server, tools, resources, mounting, the waits; `problemOf` and `problemText` (a failed answer as a problem, and as one line an agent can act on), `toolsHashOf` (a short hash of the tool and template lists, on every tool as `_meta["api-kit/tools-hash"]`, `TOOLS_HASH_META`, so a client that caches the list learns it changed), `FORWARDED` (the request headers `mountMcp` passes on to the routes a tool calls) |
-| `skills.ts` | `guideSkills`, and `attachSkills` (the factory calls it): the extension plus what a plain client needs |
+| `skills.ts` | `guideSkills`, `guideSkillProblems`, and `attachSkills` (the factory calls it): the extension plus what a plain client needs |
 
 ## Flows
 

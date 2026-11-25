@@ -36,9 +36,9 @@ export const routes = {
     request: { params: z.object({ id }), body: { required: true, content: { 'application/json': { schema: __Singular__PatchSchema } } } },
     responses: { 200: ok('The __label__.', __Singular__Schema), ...problemResponses(400, 401, 403, 404) },
   }),
-  remove: createRoute({
-    method: 'delete', path: `${PATH}/{id}`, operationId: 'delete__Singular__', tags: [TAG], summary: 'Delete a __label__', description: 'Deletes the __label__ for good.',
-    request: { params: z.object({ id }) },
-    responses: { 204: { description: 'Deleted.' }, ...problemResponses(401, 403, 404) },
-  }),
+  remove: createRoute({ // feature:remove
+    method: 'delete', path: `${PATH}/{id}`, operationId: 'delete__Singular__', tags: [TAG], summary: 'Delete a __label__', description: 'Deletes the __label__ for good.', // feature:remove
+    request: { params: z.object({ id }) }, // feature:remove
+    responses: { 204: { description: 'Deleted.' }, ...problemResponses(401, 403, 404) }, // feature:remove
+  }), // feature:remove
 }

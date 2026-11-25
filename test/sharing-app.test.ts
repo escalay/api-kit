@@ -4,15 +4,13 @@
  * page (`form`); then a shelf's token is refused at another shelf, a spent invite is refused, a removed member's
  * token is refused, and a shelf that exists and one that does not answer alike.
  */
-import { createHash, randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { ONLY_ITS_SPACE } from '../src/sharing/index.js'
-import { approveSignIn } from '../src/testing/index.js'
+import { approveSignIn, connectAgent } from '../src/testing/index.js'
 import { CLIENT_A, ORIGIN, OWNER, OWNER_KEY, READER_KEY, recipeBox, SAMPLE_APP, shelfAddress, type RecipeBox } from './sharing-fixture.js'
 
 const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} }
 const AS_OWNER = { 'x-test-owner': OWNER }
-const form = (fields: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(fields).toString() })
 const json = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
 type ToolResult = { isError?: boolean; content: { text: string }[] }
@@ -33,27 +31,8 @@ const toolText = async (...args: Parameters<typeof callTool>) => {
   return result!.content[0]!.text
 }
 
-/**
- * An app connecting to `address` as an MCP client does: a call with no token, the 401's `resource_metadata`, that
- * document's `resource`, registration, then `/oauth/authorize` for it. `approve` approves the page; the token answer.
- */
-const connect = async (box: RecipeBox, { address, redirect, approve }: { address: string; redirect: string; approve: (query: URLSearchParams) => Promise<Response> }) => {
-  const { app } = box
-  const refused = await app.request(new URL(address).pathname, json({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))
-  const metadataUrl = /resource_metadata="([^"]+)"/.exec(refused.headers.get('www-authenticate') ?? '')?.[1]
-  expect([refused.status, metadataUrl]).toEqual([401, expect.any(String)])
-  const { resource } = (await (await app.request(new URL(metadataUrl!).pathname)).json()) as { resource: string }
-  const client_id = ((await (await app.request('/oauth/register', json({ client_name: 'Sample', redirect_uris: [redirect] }))).json()) as { client_id: string }).client_id
-  const verifier = randomBytes(32).toString('base64url')
-  const query = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: redirect, scope: 'read write', resource, code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' })
-  const page = await approve(query)
-  const location = page.headers.get('location')
-  if (page.status !== 302 || !location) return { page, html: await page.text(), tokens: null }
-  const code = new URL(location).searchParams.get('code')!
-  const answer = await app.request('/oauth/token', form({ grant_type: 'authorization_code', code, client_id, code_verifier: verifier }))
-  expect(answer.status).toBe(200)
-  return { page, html: '', tokens: (await answer.json()) as { access_token: string; scope: string } }
-}
+/** An app connecting to `address` as an MCP client does, through the testing part's `connectAgent`. */
+const connect = async (box: RecipeBox, options: { address: string; redirect: string; approve: (query: URLSearchParams) => Promise<Response> }) => connectAgent(box.app, { ...options, name: 'Sample' })
 
 /** The owner's own agent at `/mcp`, approved on the kit's consent page: a root token. */
 const ownerAgent = async (box: RecipeBox) => (await connect(box, { address: `${ORIGIN}/mcp`, redirect: CLIENT_A, approve: (query) => approveSignIn(box.app, query, { headers: AS_OWNER }) })).tokens!.access_token
@@ -77,6 +56,15 @@ const samAtSoups = async () => {
 }
 
 describe('a recipe box shares its shelves', () => {
+  it('connects as a third-party agent does, and names the step that failed', async () => {
+    const box = await recipeBox()
+    await expect(connectAgent(box.app, { address: `${ORIGIN}/api/health`, approve: async () => new Response(null) })).rejects.toThrow(/^connectAgent: http:\/\/localhost\/api\/health answered \d+ without a resource_metadata challenge$/)
+    // A refusal is an answer, not a failure: no tokens, and the page that said so
+    const refused = await connectAgent(box.app, { address: `${ORIGIN}/mcp`, approve: (query) => approveSignIn(box.app, query, { headers: AS_OWNER, decision: 'deny' }) })
+    expect([refused.page.status, refused.tokens]).toEqual([302, null])
+    expect(new URL(refused.page.headers.get('location')!).searchParams.get('error')).toBe('access_denied')
+  })
+
   it('the owner invites Sam through their own agent, Sam’s app joins with the code, and Sam’s agent reads Soups through its tools', async () => {
     const { box, owner, message, address, sam, scope } = await samAtSoups()
     // The message names the shelf's address and the code, and no page that nothing serves

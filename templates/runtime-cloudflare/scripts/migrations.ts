@@ -8,7 +8,7 @@
  * from a feature taken out (what `pnpm check` and CI run).
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { FEATURES } from '../src/features/index.js'
@@ -18,8 +18,17 @@ const checking = process.argv.includes('--check')
 const dir = fileURLToPath(new URL('../migrations', import.meta.url))
 // The kit's parts that keep tables, by the name each migrates under: those copied into src/kit (`kit add people`) count
 const PARTS = { oauth: 'OAUTH_MIGRATIONS', guards: 'GUARD_MIGRATIONS', keys: 'KEYS_MIGRATIONS', people: 'PEOPLE_MIGRATIONS', setup: 'SETUP_MIGRATIONS', boards: 'BOARDS_MIGRATIONS', telemetry: 'TELEMETRY_MIGRATIONS' }
-const partSets = Object.entries(PARTS).flatMap(([name, key]): [string, readonly string[]][] => {
-  const steps = (kit as Record<string, unknown>)[key]
+// And those an app imports from their own folder (`kit add sharing`), when copied in
+const ENTRY_PARTS = { sharing: 'SHARING_MIGRATIONS' }
+const entries = await Promise.all(
+  Object.entries(ENTRY_PARTS).map(async ([name, key]): Promise<[string, unknown]> => {
+    const path = `../src/kit/${name}/index.js`
+    return [key, existsSync(fileURLToPath(new URL(`../src/kit/${name}/index.ts`, import.meta.url))) ? ((await import(path)) as Record<string, unknown>)[key] : undefined]
+  }),
+)
+const exported: Record<string, unknown> = { ...kit, ...Object.fromEntries(entries) }
+const partSets = Object.entries({ ...PARTS, ...ENTRY_PARTS }).flatMap(([name, key]): [string, readonly string[]][] => {
+  const steps = exported[key]
   return Array.isArray(steps) ? [[name, steps]] : []
 })
 // Each name once: a feature that wraps a part (src/features/people/) brings the part's steps under the part's name

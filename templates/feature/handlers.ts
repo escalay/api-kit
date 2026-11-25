@@ -36,11 +36,12 @@ export const __camel__Handlers = (repo: __Pascal__Repo) => {
     await repo.update(id, c.req.valid('json'))
     return c.json(cardOf(originOf(c), await rowOf(id)), 200)
   }
-  const remove: RouteHandler<Routes['remove']> = async (c) => {
-    const { id } = c.req.valid('param')
-    await rowOf(id)
-    await repo.remove(id)
-    return c.body(null, 204)
-  }
-  return { list, get, create, update, remove }
+  const remove: RouteHandler<Routes['remove']> = async (c) => { // feature:remove
+    const { id } = c.req.valid('param') // feature:remove
+    await rowOf(id) // feature:remove
+    await repo.remove(id) // feature:remove
+    return c.body(null, 204) // feature:remove
+  } // feature:remove
+  return { list, get, create, update, remove } // feature:remove
+  return { list, get, create, update } // feature:no-remove
 }

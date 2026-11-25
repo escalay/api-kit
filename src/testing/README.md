@@ -44,6 +44,7 @@ expect(cliGaps({ tools, resources, jobs })).toEqual([])
 | `toolsRun(tools, app, samples, { headers })` | | no headers | sample arguments per tool, and the credentials every call sends |
 | `cliGaps({ tools, resources, jobs }, { singular })` | string[] | none | nouns that end in s but are singular |
 | `cliSnapshot({ app, version, tools, resources, jobs })` | | `''` for `app` and `version` | the snapshot's app name and version |
+| `connectAgent(app, { redirect, scope, name })` | strings | a loopback callback, `'read write'`, `'Sample Agent'` | where the code returns, what it asks, and the client's name |
 | `approveSignIn(app, query, { headers, decision, form })` | `'allow'` \| `'deny'`; `{ action, fields? }` | `'allow'`, no headers, the kit's page | the owner's credentials (the app's `owner` reads them), and the answer on the kit's page; `form`: the app's own page instead (`approve`), the one form that posts to `action` (a path), sent with its hidden inputs and `fields` |
 
 ## Exports
@@ -63,10 +64,11 @@ expect(cliGaps({ tools, resources, jobs })).toEqual([])
 | `flagsOf(schema)` | an input schema's properties as the CLI's flags (`{ name, key, type, description, required, multiple, enum?, default? }`), positional ones included |
 | `softAuthenticator()` | a software passkey: `register(options, origin)` and `login(options, origin)` answer the WebAuthn ceremonies the way a phone would, so claim → register → verify → login → verify runs in CI (the people and setup parts). `options` is the one inside the options route's `{ challengeId, options }`; `challengeId` goes back with the answer (the people README's test) |
 | `approveSignIn(app, query, { headers, decision, form })` | approves an OAuth sign-in the way a browser does: it opens `/oauth/authorize`, keeps the ticket cookie the page sets, and posts a form on it same-origin with that cookie: the kit's consent form with `decision`, or with `form` the app's own (`{ action: '/sharing/join', fields: { code: 'BDKM-QXTW' } }`). It returns the answer: the 302 to the client, or the app's page |
+| `connectAgent(app, { address, approve, redirect, scope, name })` | a third-party agent signing in at `address` (`/mcp`, or a space's) as an MCP client does: the 401's `resource_metadata`, `/oauth/register`, `/oauth/authorize` with PKCE, `approve(query)` for the person's click (`approveSignIn`), then the code at `/oauth/token`. Returns `{ page, html, tokens }`, `tokens` null when the click gave no code (a friend's agent joining with an invite's code: the sharing README, Wire it); `AgentConnection` is its type |
 
 | File | What |
 |---|---|
-| `index.ts` | the checks, `approveSignIn`, and the exports of the other two |
+| `index.ts` | the checks, `approveSignIn`, `connectAgent`, and the exports of the other two |
 | `cli.ts` | `cliGaps`, `cliSnapshot`, `flagsOf` |
 | `authenticator.ts` | `softAuthenticator` |
 

@@ -423,5 +423,5 @@ export const mountMcp = (app: Hono<any, any, any>, { path = '/mcp', factory, all
   return handler
 }
 
-export { guideSkills } from './skills.js'
+export { guideSkillProblems, guideSkills } from './skills.js'
 export { CLI_META, cliOf, PENDING_META, PROBLEM_META, routeOf, TOOLS_HASH_META, type CallAt, type CliExample, type CliSpec } from '../core/cli.js'

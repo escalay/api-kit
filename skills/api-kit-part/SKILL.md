@@ -28,6 +28,7 @@ apps copy in and own. Read the repository's `AGENTS.md` and `docs/STANDARD.md` f
 `test/readmes.test.mjs`. The `Standard:` line under its rules equals the registry's `meta.standard`, history stays in
 `docs/upgrading.md`, every option and hook is in it, and so is every value the part exports (the test fails on one it never names). Each `###` heading is given once, and a README stays under
 20 KB (`test/one-source.test.mjs`; oauth has its own cap, which only goes down: cut or move text, never raise it).
+Tables and diagrams that don't fit may go to one `REFERENCE.md` beside it, linked from the README, under the same 20 KB.
 
 ## 3. The registry item
 
@@ -53,6 +54,10 @@ One `registry:item` per part in `registry.json`; `kit add`, `kit list` and the s
 - Other parts go in `registryDependencies` as `escalay/api-kit/<part>`; a shadcn component by its bare name.
 - `meta.entry: true` when the app imports the part's own folder (`./kit/reminders/index.js`) rather than
   `./kit/index.js`. A part that is repo setup, not code, is a root item (`meta.root`), like `npm-release`.
+- `meta.wiring`, for a part an app made by `init` must wire beyond a feature: `code` (its README's section),
+  `settings` (each a `name` and `what`, printed by `kit add` with the files that still lack it; `test`, an expression
+  for its value in `vitest.config.ts`'s miniflare bindings, and `testImport`, the import line that expression needs)
+  and `cron` (`schedule`, and `calls`: what the scheduled handler calls).
 - `meta.standard`: the STANDARD sections the part implements (`docs/PARTS.md` and the README's `Standard:` line read
   it); a browser layer adds `meta.layerOf`, the server part it sits on.
 

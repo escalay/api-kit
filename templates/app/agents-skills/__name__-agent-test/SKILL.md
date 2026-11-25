@@ -1,6 +1,6 @@
 ---
 name: __name__-agent-test
-description: Use when a __title__ route, MCP tool, guide page or skill was added or changed and needs proof that an agent can use it unaided, or when asked to run the agent test, a cold test, or to find what agents stall on. Covers pnpm dev, friction logs, planted instructions.
+description: "Use when a __title_quoted__ route, MCP tool, guide page or skill was added or changed and needs proof that an agent can use it unaided, or when asked to run the agent test, a cold test, or to find what agents stall on. Covers pnpm dev, friction logs, planted instructions."
 metadata:
   internal: true
 ---

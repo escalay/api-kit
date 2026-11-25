@@ -9,7 +9,8 @@ import { __camel__Tools } from './tools.js'
 
 export const feature: Feature = {
   name: '__name__',
-  tag: { name: TAG, description: '__Pascal__: make, list, change and delete them.' },
+  tag: { name: TAG, description: '__Pascal__: make, list, change and delete them.' }, // feature:remove
+  tag: { name: TAG, description: '__Pascal__: make, list and change them.' }, // feature:no-remove
   migrations: __CONST___MIGRATIONS,
   register: async (app, { db }) => {
     await migrate(db, '__name__', __CONST___MIGRATIONS)
@@ -18,7 +19,7 @@ export const feature: Feature = {
     app.openapi(routes.get, handle.get)
     app.openapi(routes.create, handle.create)
     app.openapi(routes.update, handle.update)
-    app.openapi(routes.remove, handle.remove)
+    app.openapi(routes.remove, handle.remove) // feature:remove
   },
   tools: __camel__Tools,
   samples: async (request) => {
@@ -28,7 +29,7 @@ export const feature: Feature = {
       get___snake_singular__: { id },
       create___snake_singular__: __sample__,
       update___snake_singular__: { id, __patch_entries__ },
-      delete___snake_singular__: { id },
+      delete___snake_singular__: { id }, // feature:remove
     }
   },
 }

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -27,10 +27,11 @@ const appAt = async (version: string, ...parts: string[]) => {
   return app
 }
 
-/** A copy of the kit whose docs/upgrading.md is `markdown`: the CLI reads the docs beside itself. */
+/** A copy of the kit whose docs/upgrading.md is `markdown`: the CLI reads the docs beside itself (and the parts, linked). */
 const kitWithNotes = async (markdown: string) => {
   const kit = await mkdtemp(join(tmpdir(), 'kit-copy-'))
   for (const file of ['cli.mjs', 'registry.json', 'package.json']) await copyFile(join(KIT, file), join(kit, file))
+  await symlink(join(KIT, 'src'), join(kit, 'src'), 'dir')
   await mkdir(join(kit, 'docs'))
   await writeFile(join(kit, 'docs/upgrading.md'), markdown)
   return kit
@@ -109,6 +110,35 @@ describe('kit upgrading', () => {
         '### 1.30.0', '', '- a browser note', '',
       ].join('\n'),
     )
+  })
+
+  it('names each edit the kit changed too in a part whose notes name a fix, with the command that takes it', async () => {
+    const kit = await kitWithNotes(
+      ['# Upgrading', '', '## core', '', '### Unreleased (after 0.0.1)', '', '- **Fixed: a retry was answered twice.** Take core.', '', '## pagination', '', '### Unreleased (after 0.0.1)', '', '- A new option.', ''].join('\n'),
+    )
+    const app = await appAt('0.0.1', 'pagination')
+    // Each edited here, and the kit changed each since 0.0.1; only core's notes name a fix
+    await writeFile(join(app, 'src/kit/core/hal.ts'), '// mine\n')
+    await writeFile(join(app, 'src/kit/pagination/index.ts'), '// mine\n')
+    // The generated index.ts too, which no part's notes cover
+    await writeFile(join(app, 'src/kit/index.ts'), '// mine\n')
+    const lockPath = join(app, 'src/kit/kit.json')
+    const lock = JSON.parse(await readFile(lockPath, 'utf8'))
+    await writeFile(lockPath, JSON.stringify({ ...lock, files: { ...lock.files, 'core/hal.ts': 'older', 'pagination/index.ts': 'older', 'index.ts': 'older' } }))
+    const printed = run(join(kit, 'cli.mjs'), app, 'upgrading')
+    expect(printed.status, printed.stderr).toBe(0)
+    expect(printed.stdout.split('\n').filter((line) => line.startsWith('fix '))).toEqual([
+      "fix      core/hal.ts: your edit, and the kit changed it since; core's notes below name a fix: `kit diff --dir src/kit --patch` shows both; `kit update core --dir src/kit --force` takes the kit's, then make your edits again",
+    ])
+    // Before the notes, so it is read first
+    expect(printed.stdout.indexOf('fix      ')).toBeLessThan(printed.stdout.indexOf('## core'))
+    // A part a later kit added, which this one doesn't know, changes nothing
+    await writeFile(lockPath, JSON.stringify({ ...JSON.parse(await readFile(lockPath, 'utf8')), modules: [...lock.modules, 'from-a-later-kit'] }))
+    expect(run(join(kit, 'cli.mjs'), app, 'upgrading').stdout).toContain('fix      core/hal.ts')
+    await writeFile(lockPath, JSON.stringify({ ...JSON.parse(await readFile(lockPath, 'utf8')), modules: lock.modules }))
+    // Taken from the kit: nothing to say
+    expect(run(join(kit, 'cli.mjs'), app, 'update', 'core', '--force').status).toBe(1)
+    expect(run(join(kit, 'cli.mjs'), app, 'upgrading', '--from', '0.0.1').stdout).not.toContain('fix      ')
   })
 
   it('prints nothing newer than the kit it runs as', async () => {

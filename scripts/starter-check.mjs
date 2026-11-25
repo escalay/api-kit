@@ -29,7 +29,7 @@ const check = (name, preset, more = [], { brand = false } = {}) => {
   // the renderer, then the PNGs into src/brand.gen.ts
   if (brand) {
     const write = (path, from, to) => writeFileSync(join(app, path), readFileSync(join(app, path), 'utf8').replace(from, to))
-    write(`guide/skills/${name}/SKILL.md`, /Replace this line with[^\n]*/, 'For its notes: making, reading and changing them.')
+    write(`guide/skills/${name}/SKILL.md`, /Replace this line with[^"\n]*/, 'For its notes: making, reading and changing them.')
     write('brand/brand.ts', /, an agent-ready API\./, ': notes, kept for your agents.')
     run('pnpm', ['guide'], app)
     run('pnpm', ['add', '-D', `@resvg/resvg-js@${RESVG}`], app)

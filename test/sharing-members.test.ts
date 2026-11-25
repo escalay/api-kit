@@ -1,8 +1,8 @@
 /** The sharing part's members: listed, removed and invited again by the owner, aged by sweep, forgotten with their space. */
 import { eq } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
-import { testDb } from '../src/index.js'
-import { createSharing, sharingInvites, sharingMembers } from '../src/sharing/index.js'
+import { createAgentApi, testDb } from '../src/index.js'
+import { createSharing, sharingInvites, sharingMembers, sharingOf } from '../src/sharing/index.js'
 import { BAKES, grantOf, grantsApp, SOUPS } from './sharing-grants-contract.js'
 import { DAY, HOUR } from './sharing-rows.js'
 
@@ -259,6 +259,13 @@ describe('sweep', () => {
     await db.update(sharingInvites).set({ redeemBy: new Date(Date.now() - 8 * DAY).toISOString() }).where(eq(sharingInvites.id, stale.id))
     expect(await sharing.sweep()).toEqual({ ended: 0, deleted: 3 })
     expect([await memberOfToken(week), await repo.inviteAt('sp_soups', weekMember.inviteId!), await repo.inviteAt('sp_soups', stale.id)]).toEqual([undefined, undefined, undefined])
+  })
+
+  it('is reached from the app registerSharing bound it to, as a scheduled handler holds only the app', async () => {
+    const { app, sharing } = await box()
+    expect(sharingOf(app)).toBe(sharing)
+    expect(await sharingOf(app)!.sweep()).toEqual({ ended: 0, deleted: 0 })
+    expect(sharingOf(createAgentApi({ title: 'Other', version: '1.0.0', description: 'An app without the part.', tags: [], auth: { realm: 'other', keys: new Map() } }))).toBeUndefined()
   })
 
   it('and forget refuse to run before registerSharing binds the part', async () => {

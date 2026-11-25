@@ -8,7 +8,7 @@
  *   index.ts     the feature: register, tools, sample tool arguments for the tests
  */
 import type { OpenAPIHono } from '@hono/zod-openapi'
-import type { Env } from '../app.js'
+import type { Env, Parts } from '../app.js'
 import type { Db } from '../kit/index.js'
 import type { McpTool } from '../kit/mcp/index.js'
 import type { FeatureKey } from './catalog.js'
@@ -24,8 +24,11 @@ export type Feature = {
   tag: { name: string; description: string }
   /** Its tables as SQL steps, in order (also written to `migrations/` for D1 by `pnpm migrations`). */
   migrations: readonly string[]
-  /** Migrates its tables, then registers its routes; `env` is the deployment's settings (a kit part's wrapper reads its keys). */
-  register: (app: OpenAPIHono, context: { db: Db; flags: Flags; env: Env }) => Promise<void>
+  /**
+   * Migrates its tables, then registers its routes; `env` is the deployment's settings (a kit part's wrapper reads its
+   * keys), `parts` the kit parts it may call (`parts.sharing?.forget(id)` when it deletes a space).
+   */
+  register: (app: OpenAPIHono, context: { db: Db; flags: Flags; env: Env; parts: Parts }) => Promise<void>
   tools: McpTool[]
   /** Sample arguments for each of its tools (making what they need through the API), for `toolsRun`. */
   samples: (request: (path: string, init?: RequestInit) => Promise<Response>) => Promise<Record<string, Record<string, unknown>>>

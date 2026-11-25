@@ -48,12 +48,12 @@ export const __camel__Tools: McpTool[] = [
     call: ({ id, ...change }) => ({ method: 'PATCH', path: `${PATH}/${encodeURIComponent(id)}`, body: change }),
     summarize: (row: Card) => `Changed: ${line(row)}`,
   }),
-  mcpTool({
-    name: 'delete___snake_singular__', title: 'Delete a __label__', description: 'Deletes a __label__ for good. Ask the owner first.',
-    input: z.object({ id }),
-    annotations: { destructiveHint: true, openWorldHint: false },
-    cli: { name: '__kebab_singular__ delete', examples: [{ run: '__kebab_singular__ delete <id> --yes', about: 'Delete it for good' }] },
-    call: ({ id }) => ({ method: 'DELETE', path: `${PATH}/${encodeURIComponent(id)}` }),
-    summarize: () => 'Deleted.',
-  }),
+  mcpTool({ // feature:remove
+    name: 'delete___snake_singular__', title: 'Delete a __label__', description: 'Deletes a __label__ for good. Ask the owner first.', // feature:remove
+    input: z.object({ id }), // feature:remove
+    annotations: { destructiveHint: true, openWorldHint: false }, // feature:remove
+    cli: { name: '__kebab_singular__ delete', examples: [{ run: '__kebab_singular__ delete <id> --yes', about: 'Delete it for good' }] }, // feature:remove
+    call: ({ id }) => ({ method: 'DELETE', path: `${PATH}/${encodeURIComponent(id)}` }), // feature:remove
+    summarize: () => 'Deleted.', // feature:remove
+  }), // feature:remove
 ]

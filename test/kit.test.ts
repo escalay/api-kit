@@ -10,7 +10,7 @@ import { gunzipSync } from 'node:zlib'
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { createAgentApi, errorHandler, problemResponse, rateLimit, sortQuery, decodeCursor, originOf, fillTemplate, guideFiles, guideModuleSource, HAL_JSON, linksOf, LinksSchema, mintApiKey, pageOf, pageSchema, parseApiKeys, pathWith, problemResponses, ProblemError, serveAiCatalog, serveGuide, snapshotEtag, tarGz, wantsMarkdown } from '../src/index.js'
-import { guideSkills, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp, routeOf } from '../src/mcp/index.js'
+import { guideSkillProblems, guideSkills, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp, routeOf } from '../src/mcp/index.js'
 import { guideGaps, guideRoutes, lintOpenApi, toolRoutes } from '../src/testing/index.js'
 import { migrate, openDb } from '../src/db/index.js'
 import { OAUTH_MIGRATIONS } from '../src/oauth/schema.js'
@@ -452,6 +452,20 @@ describe('the copy-in CLI', () => {
     const added = cli(app, 'add', 'people', 'pagination')
     expect(added.stdout).toContain("scripts/migrations.ts lacks people's tables: `import { PEOPLE_MIGRATIONS } from '../src/kit/index.js'` and `['people', PEOPLE_MIGRATIONS]` in its sets, then `pnpm migrations` writes their D1 files")
     expect(added.stdout).not.toMatch(/'(pagination|db)'/)
+    // An entry part's tables come from its own folder
+    expect(cli(app, 'add', 'sharing').stdout).toContain("scripts/migrations.ts lacks sharing's tables: `import { SHARING_MIGRATIONS } from '../src/kit/sharing/index.js'` and `['sharing', SHARING_MIGRATIONS]` in its sets")
+  })
+
+  it('never names the migrations line for a part an app made by init wires as a feature: the feature brings its tables', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    await writeFile(join(app, 'package.json'), '{ "name": "older" }')
+    await mkdir(join(app, 'scripts'))
+    await mkdir(join(app, 'src/features'), { recursive: true })
+    await writeFile(join(app, 'src/features/index.ts'), '// kit:imports\n')
+    await writeFile(join(app, 'scripts/migrations.ts'), "const sets = [['oauth', OAUTH_MIGRATIONS], ['guards', GUARD_MIGRATIONS]]\n")
+    const added = cli(app, 'add', 'people', 'boards')
+    expect(added.stdout).not.toContain('lacks')
+    expect(added.stdout).toContain("Wire people: a feature in src/features/people/ listed in src/features/index.ts (its migrations reach migrations/ through it: add no line to scripts/migrations.ts), and the lines in src/app.ts: src/kit/people/README.md › In an app made by `kit init`")
   })
 
   it('tells your edits from the kit’s and never overwrites an edit without --force', async () => {
@@ -470,10 +484,74 @@ describe('the copy-in CLI', () => {
     cli(app, 'update', '--dir', 'kit')
     expect(await readFile(join(app, 'kit/core/hal.ts'), 'utf8')).toBe('// mine\n')
     expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).toBe('// mine too\n')
-    cli(app, 'update', '--dir', 'kit', '--force')
+    cli(app, 'update', '--dir', 'kit', '--force', '--all')
     expect(await readFile(join(app, 'kit/core/hal.ts'), 'utf8')).not.toBe('// mine\n')
     expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).not.toBe('// mine too\n')
     expect(cli(app, 'add', 'nope', '--dir', 'kit').stderr).toContain('no module "nope"')
+  })
+
+  it('update <part> --force takes the kit’s files only in the parts it names, and names each edit it overwrites or keeps', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'pagination', '--dir', 'kit')
+    const lock = JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8'))
+    // Edited here, and the kit changed both since: one in core, one in pagination; one more edit in core the kit left alone
+    await writeFile(join(app, 'kit/core/hal.ts'), '// mine\n')
+    await writeFile(join(app, 'kit/pagination/index.ts'), '// mine too\n')
+    await writeFile(join(app, 'kit/core/cache.ts'), (await kitText('core/cache.ts')) + '// ours\n')
+    await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1', files: { ...lock.files, 'core/hal.ts': 'older', 'pagination/index.ts': 'older' } }))
+    const named = cli(app, 'update', 'pagination', '--dir', 'kit', '--force')
+    expect(named.stdout).toContain("  overwrote     pagination/index.ts (your edit: --force names pagination)")
+    expect(named.stdout).toContain("  kept          core/hal.ts: your edit, and the kit changed it; --force names pagination, not core: `kit update core --dir kit --force` takes the kit's")
+    expect(named.stdout).toContain("  kept          core/cache.ts: your edit; --force names pagination, not core")
+    expect(await readFile(join(app, 'kit/pagination/index.ts'), 'utf8')).toBe(await kitText('pagination/index.ts'))
+    expect(await readFile(join(app, 'kit/core/hal.ts'), 'utf8')).toBe('// mine\n')
+    expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).toBe((await kitText('core/cache.ts')) + '// ours\n')
+    // core/hal.ts still holds the older kit's code
+    expect([named.status, JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8')).version]).toEqual([1, '0.0.1'])
+    // Naming no part, --force refuses while an edit would go, and writes nothing
+    const bare = cli(app, 'update', '--dir', 'kit', '--force')
+    expect([bare.status, bare.stdout]).toEqual([1, ''])
+    expect(bare.stderr.trim().split('\n')).toEqual([
+      'kit: update --force names no part, and would overwrite 2 edits:',
+      '  core/cache.ts (core)',
+      '  core/hal.ts (core)',
+      "Take the kit's part by part: `kit update core --dir kit --force`; or every part's, these edits too: `kit update --dir kit --force --all`",
+    ])
+    expect(await readFile(join(app, 'kit/core/hal.ts'), 'utf8')).toBe('// mine\n')
+    // --force --all takes every edit, and says so for each
+    const all = cli(app, 'update', '--dir', 'kit', '--force', '--all')
+    expect(all.status).toBe(0)
+    expect(all.stdout).toContain('  overwrote     core/hal.ts (your edit: --force --all)')
+    expect(all.stdout).toContain('  overwrote     core/cache.ts (your edit: --force --all)')
+    // With no edit to overwrite (hal.ts is what an older kit wrote), a bare --force goes ahead
+    const taken = JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8'))
+    await writeFile(join(app, 'kit/core/hal.ts'), '// older\n')
+    await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...taken, version: '0.0.1', files: { ...taken.files, 'core/hal.ts': hashOfText('// older\n') } }))
+    const clean = cli(app, 'update', '--dir', 'kit', '--force')
+    expect([clean.status, clean.stdout]).toEqual([0, expect.stringContaining('  updated       core/hal.ts')])
+    expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).toBe(await kitText('core/cache.ts'))
+  })
+
+  it('names `kit` for the generated index.ts, so the command doctor prints for it overwrites no other part’s edit', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'pagination', 'mcp', '--dir', 'kit')
+    const kitIndex = await readFile(join(app, 'kit/index.ts'), 'utf8')
+    const mcpIndex = await readFile(join(app, 'kit/mcp/index.ts'), 'utf8')
+    await writeFile(join(app, 'kit/index.ts'), `${kitIndex}// mine\n`)
+    await writeFile(join(app, 'kit/mcp/index.ts'), `${mcpIndex}// mine too\n`)
+    const doctor = cli(app, 'doctor', '--dir', 'kit')
+    expect(doctor.stdout).toContain("edited   index.ts: yours to keep; `kit diff --dir kit --patch` shows the change, `kit update kit --dir kit --force` takes the kit's")
+    const forced = cli(app, 'update', 'kit', '--dir', 'kit', '--force')
+    expect(forced.status, forced.stderr).toBe(0)
+    expect(forced.stdout).toContain('  overwrote     index.ts (your edit: --force names kit)')
+    expect(forced.stdout).toContain('  kept          mcp/index.ts: your edit; --force names kit, not mcp')
+    expect(await readFile(join(app, 'kit/index.ts'), 'utf8')).toBe(kitIndex)
+    expect(await readFile(join(app, 'kit/mcp/index.ts'), 'utf8')).toBe(`${mcpIndex}// mine too\n`)
+    expect(JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8')).modules).not.toContain('kit')
+    // With a part beside it, both
+    await writeFile(join(app, 'kit/index.ts'), `${kitIndex}// mine\n`)
+    expect(cli(app, 'update', 'kit', 'mcp', '--dir', 'kit', '--force').status).toBe(0)
+    expect([await readFile(join(app, 'kit/index.ts'), 'utf8'), await readFile(join(app, 'kit/mcp/index.ts'), 'utf8')]).toEqual([kitIndex, mcpIndex])
   })
 
   it('checks a copy against its record: missing, edited and behind, each with its fix, and exits 1', async () => {
@@ -494,11 +572,11 @@ describe('the copy-in CLI', () => {
     expect(sick.stdout.trim().split('\n')).toEqual([
       'note     kit.json says kit 0.0.1: `kit upgrading --dir src/kit` prints what changed for its parts since, and what to do',
       'missing  core/kv.ts: `kit update --dir src/kit` writes it again',
-      "edited   core/hal.ts: yours to keep; `kit diff --dir src/kit --patch` shows the change, `kit update --dir src/kit --force` takes the kit's",
+      "edited   core/hal.ts: yours to keep; `kit diff --dir src/kit --patch` shows the change, `kit update core --dir src/kit --force` takes the kit's",
       `behind   pagination was copied from kit 0.0.1 and kit ${KIT_VERSION} changed it: \`kit diff --dir src/kit --patch\`, then \`kit update --dir src/kit\``,
       '3 to fix in src/kit',
     ])
-    cli(app, 'update', '--force')
+    cli(app, 'update', '--force', '--all')
     expect(cli(app, 'doctor').status).toBe(0)
     // Only the version is behind: update records it
     await writeFile(join(app, 'src/kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1' }))
@@ -524,7 +602,7 @@ describe('the copy-in CLI', () => {
     expect(cli(app, 'doctor').stdout).toContain('edited   core/hal.ts')
     expect(cli(app, 'doctor').status).toBe(1)
     // Taking the kit's file drops the record
-    cli(app, 'update', '--force')
+    cli(app, 'update', '--force', '--all')
     expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).kept).toBeUndefined()
   })
 
@@ -573,13 +651,13 @@ describe('the copy-in CLI', () => {
     const kept = cli(app, 'update', '--dir', 'kit')
     expect(kept.status).toBe(1)
     expect(kept.stdout).toContain('  updated       core/hal.ts')
-    expect(kept.stdout).toContain("1 file kept at kit 0.0.1: core/cache.ts. `kit diff --dir kit --patch` shows both; `kit update --dir kit --force` takes the kit's, then make your edits again")
+    expect(kept.stdout).toContain("1 file kept at kit 0.0.1: core/cache.ts. `kit diff --dir kit --patch` shows both; `kit update core --dir kit --force` takes the kit's, then make your edits again")
     expect(kept.stdout).not.toContain(`kit.json → ${KIT_VERSION}`)
     expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).toBe('// mine\n')
     expect(await readFile(join(app, 'kit/core/hal.ts'), 'utf8')).toBe(await kitText('core/hal.ts'))
     expect(JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8'))).toMatchObject({ version: '0.0.1', files: { 'core/hal.ts': hashOfText(await kitText('core/hal.ts')), 'core/cache.ts': 'older' } })
     // Taking the kit's and making the edit again ends at the new version with the edit kept
-    expect(cli(app, 'update', '--dir', 'kit', '--force').status).toBe(0)
+    expect(cli(app, 'update', 'core', '--dir', 'kit', '--force').status).toBe(0)
     await writeFile(join(app, 'kit/core/cache.ts'), (await kitText('core/cache.ts')) + '// mine\n')
     const again = cli(app, 'update', '--dir', 'kit')
     expect(again.status).toBe(0)
@@ -719,7 +797,7 @@ describe('the copy-in CLI', () => {
     cli(app, 'add', 'core', '--dir', 'kit')
     const lock = JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8'))
     await writeFile(join(app, 'kit/core/cache.ts'), '// mine\n')
-    const keptLine = `edited   core/cache.ts: you edited it, and kit ${KIT_VERSION} changed it: \`kit diff --dir kit --patch\` shows both; \`kit update --dir kit --force\` takes the kit's, then make your edits again`
+    const keptLine = `edited   core/cache.ts: you edited it, and kit ${KIT_VERSION} changed it: \`kit diff --dir kit --patch\` shows both; \`kit update core --dir kit --force\` takes the kit's, then make your edits again`
     // Kept by an update that left kit.json at the older version
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1', files: { ...lock.files, 'core/cache.ts': 'older' } }))
     const kept = cli(app, 'doctor', '--dir', 'kit')
@@ -729,7 +807,7 @@ describe('the copy-in CLI', () => {
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, files: { ...lock.files, 'core/cache.ts': 'older' } }))
     const stamped = cli(app, 'doctor', '--dir', 'kit')
     expect(stamped.stdout.trim().split('\n')).toEqual([
-      "edited   core/cache.ts: yours to keep; `kit diff --dir kit --patch` shows the change, `kit update --dir kit --force` takes the kit's",
+      "edited   core/cache.ts: yours to keep; `kit diff --dir kit --patch` shows the change, `kit update core --dir kit --force` takes the kit's",
       '1 to fix in kit',
     ])
     expect(stamped.stdout).not.toContain('copied from')
@@ -743,7 +821,7 @@ describe('the copy-in CLI', () => {
     await writeFile(join(app, 'kit/core/cache.ts'), edited)
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, files: { ...lock.files, 'core/cache.ts': 'bad' } }))
     expect(cli(app, 'doctor', '--dir', 'kit').stdout.trim().split('\n')).toEqual([
-      "edited   core/cache.ts: yours to keep; `kit diff --dir kit --patch` shows the change, `kit update --dir kit --force` takes the kit's",
+      "edited   core/cache.ts: yours to keep; `kit diff --dir kit --patch` shows the change, `kit update core --dir kit --force` takes the kit's",
       '1 to fix in kit',
     ])
     for (const run of [1, 2]) {
@@ -793,7 +871,7 @@ describe('the copy-in CLI', () => {
     expect(lock).toMatchObject({ source: '@escalay/kit', version: KIT_VERSION, modules: ['core', 'pagination', 'mcp'] })
     expect(await readFile(join(app, 'src/kit/index.ts'), 'utf8')).toContain("export * from './pagination/index.js'")
     expect(cli(app, 'adopt').stderr).toContain('already has a kit.json')
-    cli(app, 'update', '--force')
+    cli(app, 'update', 'core', '--force')
     expect(cli(app, 'doctor').status).toBe(0)
     // A part whose required part is not on disk is recorded with it; doctor names the missing files
     const lone = await mkdtemp(join(tmpdir(), 'kit-app-'))
@@ -860,7 +938,7 @@ describe('the copy-in CLI', () => {
     await rm(parent, { recursive: true, force: true })
     await mkdir(parent, { recursive: true })
     try {
-      // The way `npm create escalay demo-api` starts: create-escalay hands its arguments to `init`; flags may come first
+      // The way `npm create escalay@latest demo-api` starts: create-escalay hands its arguments to `init`; flags may come first
       // --no-install: the kit's own packages resolve the app here, without a download
       const made = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'packages/create-escalay/index.mjs'), '--preset', 'api', '--yes', '--no-install', '--title', 'Demo API', 'demo-api'], { cwd: parent, encoding: 'utf8' })
       expect(made.status, made.stderr).toBe(0)
@@ -869,9 +947,9 @@ describe('the copy-in CLI', () => {
       const next = made.stdout.match(/^Next: cd demo-api && (.+) && pnpm dev$/m)?.[1]
       expect(next).toBe('pnpm install && pnpm format && pnpm migrations && pnpm test')
       expect(await readFile(join(import.meta.dirname, '..', 'skills/api-kit-build/SKILL.md'), 'utf8')).toContain(`\`cd my-api && ${next}\``)
-      // and the line after it gives the coding agent the kit's skills
+      // and the line before it gives the coding agent the kit's skills, first, so it reads them before it builds
       // -y: without it the installer stops to ask, which an agent's shell never answers
-      expect(made.stdout).toMatch(/^Next: .*\nSkills: npx skills add escalay\/api-kit -y /m)
+      expect(made.stdout).toMatch(/^Skills first: npx skills add escalay\/api-kit -y .*\nNext: /m)
       const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
@@ -906,11 +984,17 @@ describe('the copy-in CLI', () => {
         'starter  src/features/catalog.ts: a description is still the starter’s ("say here what switching it off stops"): say what switching the feature off stops',
       ])
       const productSkill = join(app, 'guide/skills/demo-api/SKILL.md')
-      await writeFile(productSkill, (await readFile(productSkill, 'utf8')).replace(/Replace this line with[^\n]*/, 'For reading lists: making one, adding books.'))
+      await writeFile(productSkill, (await readFile(productSkill, 'utf8')).replace(/Replace this line with[^"\n]*/, 'For reading lists: making one, adding books.'))
       await writeFile(join(app, 'brand/brand.ts'), (await readFile(join(app, 'brand/brand.ts'), 'utf8')).replace('Demo API, an agent-ready API.', 'Reading lists, shared with your agents.'))
       const catalog = join(app, 'src/features/catalog.ts')
       await writeFile(catalog, (await readFile(catalog, 'utf8')).replace('ReadingLists: say here what switching it off stops.', 'Reading lists: off, nobody can make or read one.'))
       expect(starterLines(cli(app, 'doctor').stdout)).toEqual([])
+      // A description the MCP server can't read: its skill would be skipped, so doctor fails, in the server's words
+      const quoted = await readFile(productSkill, 'utf8')
+      await writeFile(productSkill, quoted.replace(/^description: "(.*)"$/m, 'description: $1'))
+      const unreadable = cli(app, 'doctor')
+      expect([unreadable.status, unreadable.stdout.split('\n').filter((line) => line.startsWith('skill    '))]).toEqual([1, ['skill    guide/skills/demo-api/SKILL.md: SKILL.md frontmatter: line 3: a plain value cannot contain ": "; quote the value (skill skipped)', 'skill    guide/skills/: no skills found (a skill is a folder containing SKILL.md)']])
+      await writeFile(productSkill, quoted)
       cli(app, 'guide')
       const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
       // The product's own skill, the place for developer skills, and the link coding agents find them through
@@ -918,7 +1002,7 @@ describe('the copy-in CLI', () => {
       expect(await readlink(join(app, '.claude/skills'))).toBe('../.agents/skills')
       // Installing from the repository must find the product's skill, which is not where the installer looks first
       expect(JSON.parse(await readFile(join(app, 'skills.sh.json'), 'utf8'))).toEqual({ paths: ['./guide/skills'] })
-      expect(await readFile(join(app, 'guide/skills/demo-api/SKILL.md'), 'utf8')).toMatch(/^---\nname: demo-api\ndescription: Use when a task needs Demo API\./)
+      expect(await readFile(join(app, 'guide/skills/demo-api/SKILL.md'), 'utf8')).toMatch(/^---\nname: demo-api\ndescription: "Use when a task needs Demo API\./)
       expect(await readFile(join(app, 'src/guide.gen.ts'), 'utf8')).toContain('"skills/demo-api/references/find-your-way.md"')
       // Two tabs or a retried refresh never sign a person out of the starter
       expect(await readFile(join(app, 'src/app.ts'), 'utf8')).toContain('reuseGraceSeconds: 30')
@@ -976,7 +1060,7 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+17 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+18 passed/)
 
       // The client and its command line: `kit sdk` makes both; the CLI compiles on its own and offers the app's tools
       const sdk = cli(parent, 'sdk', '--app', 'demo-api')
@@ -1121,7 +1205,7 @@ describe('the copy-in CLI', () => {
       expect(cli(app, 'feature', 'things', '--switch').status).toBe(0)
       expect(cli(app, 'feature', 'recipes', '--fields', 'name:string').status).toBe(0)
       const added = cli(app, 'add', 'people', 'setup', 'boards')
-      expect(added.stdout).toContain('Wire people: a feature in src/features/people/ listed in src/features/index.ts, and the lines in src/app.ts: src/kit/people/README.md › In an app made by `kit init`')
+      expect(added.stdout).toContain('Wire people: a feature in src/features/people/ listed in src/features/index.ts (its migrations reach migrations/ through it: add no line to scripts/migrations.ts), and the lines in src/app.ts: src/kit/people/README.md › In an app made by `kit init`')
       // The starter's script finds the parts' tables itself
       expect(added.stdout).not.toContain('scripts/migrations.ts lacks')
       // Each part's feature as its README writes it, listed in the order it says
@@ -1161,6 +1245,217 @@ describe('the copy-in CLI', () => {
       for (const name of ['claims the deployment, makes a passkey, signs in again, and approves an agent', 'lets the owner signed in by passkey switch a feature off', 'answers every feature list route with a key, and refuses without one', 'runs every MCP tool against its route']) expect(tests.stdout).toContain(name)
       // The boards' tools are on MCP, so toolsRun ran them with the README's samples
       expect(await read('src/features/boards/index.ts')).toContain('save_to_board: { id, ref }')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('takes sharing the way kit add and its README say, and a friend’s agent joins one shelf and loses it with the shelf', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-share-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'shelves', '--no-install').status).toBe(0)
+      const app = join(parent, 'shelves')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      expect(cli(app, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      // Every step the part needs, from its registry data, only where the app lacks it
+      const added = cli(app, 'add', 'sharing')
+      expect(added.status, added.stderr).toBe(0)
+      const steps = added.stdout.split('\n').filter((line) => /^(Wire|Setting|Schedule)[: ]/.test(line))
+      expect(steps).toEqual([
+        'Wire sharing: src/kit/sharing/README.md › Wire it',
+        "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one): add it to .dev.vars.example, vitest.config.ts's miniflare bindings as OAUTH_SIGNING_KEY: await generateOAuthKey() (import { generateOAuthKey } from './src/kit/index.js')",
+        "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings as SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only'",
+        "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings as PUBLIC_ORIGIN: 'https://api.test'",
+        'Schedule: "triggers": { "crons": ["17 * * * *"] } in wrangler.jsonc, and a scheduled handler in src/worker.ts that calls sharing\'s sweep()',
+        "Schedule: src/server.ts calls sharing's sweep() on a timer (hourly is enough)",
+      ])
+      // The starter's script finds the part's tables itself
+      expect(added.stdout).not.toContain('lacks')
+      // The README's Wire it, block by block, each where its first line says
+      const readme = await read('src/kit/sharing/README.md')
+      const block = readme.slice(readme.indexOf('## Wire it')).match(/```ts\n([\s\S]*?)```/)![1]!
+      const groups = block.split(/^\/\/ (src\/[^\n]*)\n/m).slice(1)
+      // A line's key: what it declares or sets, at its indent
+      const keyOf = (line: string) => /^\s*(export type \w+|const \w+|\w+:|\w+\()/.exec(line)?.[0]
+      for (let at = 0; at < groups.length; at += 2) {
+        const [, first, second, where] = /^([^,]+?)(?: and (src\/\S+))?, (.*)$/.exec(groups[at]!)!
+        const lines = groups[at + 1]!.replace(/\n$/, '').split('\n')
+        for (const file of [first!, ...(second ? [second] : [])]) {
+          if (where!.startsWith('new')) {
+            await writeFile(join(app, file), groups[at + 1]!)
+            continue
+          }
+          const text = (await read(file)).split('\n')
+          const find = (match: (line: string) => boolean, what: string) => {
+            const found = text.flatMap((line, index) => (match(line) ? [index] : []))
+            expect(found, `${file}: ${what}`).toHaveLength(1)
+            return found[0]!
+          }
+          if (where!.startsWith('in place of')) for (const line of lines) text[find((one) => keyOf(one) === keyOf(line), keyOf(line)!)] = line
+          else if (where!.startsWith('inside')) {
+            const index = find((one) => one.startsWith(/`([^`]+)`/.exec(where!)![1]!), where!)
+            text[index] = text[index]!.replace(/ \}$/, `; ${lines.join(' ')} }`)
+          } else {
+            const [, side, anchor] = /^(before|after) `([^`]+)`/.exec(where!)!
+            text.splice(find((one) => one.trimStart().startsWith(anchor!), anchor!) + (side === 'after' ? 1 : 0), 0, ...lines)
+          }
+          await writeFile(join(app, file), text.join('\n'))
+        }
+      }
+      expect(await read('src/app.ts')).toContain('PUBLIC_ORIGIN?: string }')
+      // Its hooks chain, for an app with hooks of its own, typechecks as written, with every name it uses
+      const chain = [...readme.slice(readme.indexOf('## Wire it'), readme.indexOf('## Options')).matchAll(/```ts\n([\s\S]*?)```/g)][1]![1]!
+      await writeFile(join(app, 'src/hooks.ts'), chain)
+      // The printed steps as printed: each setting in the workerd tests' bindings (so sharing is on there too), the schedule
+      const config = join(app, 'vitest.config.ts')
+      for (const line of steps.filter((step) => step.startsWith('Setting '))) {
+        const [, binding, imported] = /miniflare bindings as (\w+: .+?)(?: \((import .+)\))?$/.exec(line)!
+        const text = await readFile(config, 'utf8')
+        await writeFile(config, (imported ? `${imported}\n` : '') + text.replace("TEST_MIGRATIONS: await readD1Migrations('./migrations')", `$&, ${binding}`))
+      }
+      const wrangler = join(app, 'wrangler.jsonc')
+      await writeFile(wrangler, (await readFile(wrangler, 'utf8')).replace(/^(\s*"compatibility_date": .*)$/m, '$1\n  "triggers": { "crons": ["17 * * * *"] },'))
+      expect(cli(app, 'add', 'sharing').stdout).not.toMatch(/^Schedule: "triggers"/m)
+      // A friend's agent joins Soups with its code, as the README's test line says, and loses it with the shelf
+      await writeFile(
+        join(app, 'test/sharing.test.ts'),
+        `import { expect, it } from 'vitest'
+import { createApp } from '../src/app.js'
+import { generateOAuthKey, hashApiKey, testDb } from '../src/kit/index.js'
+import { approveSignIn, connectAgent } from '../src/kit/testing/index.js'
+
+const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
+const env = { API_KEYS: \`owner:\${hashApiKey('owner-key')}\`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
+const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} }
+
+it('lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', async () => {
+  const app = await createApp({ db: await testDb(), env, address: 'socket' })
+  const shelf = async (name: string) => ((await (await app.request('/api/shelves', { method: 'POST', headers, body: JSON.stringify({ name }) })).json()) as { id: string }).id
+  const [soups, bakes] = [await shelf('Soups'), await shelf('Bakes')]
+  const invite = await app.request(\`/api/spaces/\${soups}/invites\`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'sam' }, body: JSON.stringify({ label: 'Sam' }) })
+  const { code, address } = (await invite.json()) as { code: string; address: string }
+  const { tokens } = await connectAgent(app, { address, approve: (query) => approveSignIn(app, query, { form: { action: '/sharing/join', fields: { code } } }) })
+  const view = (at: string) => app.request(at, { method: 'POST', headers: { authorization: \`Bearer \${tokens!.access_token}\`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': 'view_shelf' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'view_shelf', arguments: {}, _meta: META } }) })
+  expect(await (await view(new URL(address).pathname)).text()).toContain('Soups')
+  expect((await view(\`/s/\${bakes}/mcp\`)).status).toBe(401)
+  expect((await app.request(\`/api/shelves/\${soups}\`, { method: 'DELETE', headers })).status).toBe(204)
+  expect((await view(\`/s/\${soups}/mcp\`)).status).toBe(401)
+})
+`,
+      )
+      const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
+      expect(migrations.status, migrations.stderr).toBe(0)
+      expect((await readdir(join(app, 'migrations'))).filter((file) => file.endsWith('_sharing_1.sql'))).toHaveLength(1)
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+      for (const name of ['lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', 'runs every MCP tool against its route']) expect(tests.stdout).toContain(name)
+      // What the README wired, doctor finds: a sweep, and the Workers address header
+      const doctor = cli(app, 'doctor')
+      expect(doctor.stdout).not.toMatch(/sharing part, but/)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('makes a feature with a field of fixed values, its own singular and no delete, that passes its own tests', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-shapes-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'shelf-api', '--bare', '--no-install').status).toBe(0)
+      const app = join(parent, 'shelf-api')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      // Refused with the rule, and nothing written
+      for (const [spec, error] of [
+        ['status:enum()', 'a field is <name>:<type>'],
+        ['status:enum(To-Read|done)', 'a field is <name>:<type>'],
+        ["status:enum(a|b'c)", 'a field is <name>:<type>'],
+        ['status:enum(done|done)', 'status names done twice'],
+      ]) expect(cli(app, 'feature', 'books', '--fields', spec!).stderr, spec).toContain(error)
+      expect(cli(app, 'feature', 'books', '--singular', 'Book').stderr).toContain('"Book" isn\'t a kebab-case name like book or reading-list')
+      expect(existsSync(join(app, 'src/features/books'))).toBe(false)
+      // The naive singular is said, with how to name another
+      const naive = cli(app, 'feature', 'leaves', '--fields', 'name:string')
+      expect(naive.stdout).toContain('each one a leave (--singular names it otherwise)')
+      const made = cli(app, 'feature', 'shelves', '--singular', 'shelf', '--no-remove', '--fields', 'name:string status:enum(to-read|reading|done) mood:enum(calm|busy)?')
+      expect(made.status, made.stderr).toBe(0)
+      expect(made.stdout).toContain('each one a shelf')
+      expect(made.stdout).toContain('no delete')
+      const schema = await read('src/features/shelves/schema.ts')
+      expect(schema).toContain("status: text('status', { enum: ['to-read', 'reading', 'done'] }).notNull(),")
+      expect(schema).toContain("mood: text('mood', { enum: ['calm', 'busy'] }),")
+      expect(schema).toContain(`"status" text not null check ("status" in (\\'to-read\\', \\'reading\\', \\'done\\')), "mood" text check ("mood" in (\\'calm\\', \\'busy\\'))`)
+      expect(schema).toContain('export type ShelfRow')
+      const routes = await read('src/features/shelves/routes.ts')
+      expect(routes).toContain("status: z.enum(['to-read', 'reading', 'done']).openapi(")
+      expect(routes).toContain("operationId: 'getShelf'")
+      expect(routes).not.toMatch(/delete|remove/i)
+      const tools = await read('src/features/shelves/tools.ts')
+      expect(tools).toContain("name: 'get_shelf'")
+      expect(tools).not.toContain('delete_shelf')
+      for (const file of ['repo.ts', 'handlers.ts', 'index.ts', 'shelves.test.ts']) expect(await read(`src/features/shelves/${file}`), file).not.toMatch(/remove|delete|\/\/ feature:/i)
+      // The action route api-kit-feature gives, pasted where its blocks say
+      expect(cli(app, 'feature', 'books', '--fields', 'title:string status:enum(to-read|reading|done)').status).toBe(0)
+      const skill = await readFile(join(import.meta.dirname, '..', 'skills/api-kit-feature/SKILL.md'), 'utf8')
+      const action = skill.slice(skill.indexOf('## An action route')).match(/```ts\n([\s\S]*?)```/)![1]!
+      const blocks = Object.fromEntries(action.split(/^\/\/ /m).filter(Boolean).map((block) => [block.slice(0, block.indexOf(',')), block.slice(block.indexOf('\n') + 1)]))
+      expect(Object.keys(blocks)).toEqual(['routes.ts', 'handlers.ts', 'index.ts', 'tools.ts'])
+      const paste = async (file: string, at: (text: string) => number, block: string) => {
+        const path = join(app, 'src/features/books', file)
+        const text = await readFile(path, 'utf8')
+        expect(at(text), file).toBeGreaterThan(0)
+        await writeFile(path, text.slice(0, at(text)) + block + text.slice(at(text)))
+      }
+      await paste('routes.ts', (text) => text.lastIndexOf('}\n'), blocks['routes.ts']!)
+      await paste('handlers.ts', (text) => text.indexOf('  return { list'), blocks['handlers.ts']!)
+      await paste('index.ts', (text) => text.indexOf('  },\n  tools:'), blocks['index.ts']!)
+      await paste('index.ts', (text) => text.indexOf('    }\n  },\n}'), '      mark_book_done: { id },\n')
+      await paste('tools.ts', (text) => text.indexOf("  mcpTool({\n    name: 'delete_book'"), blocks['tools.ts']!)
+      const handlers = join(app, 'src/features/books/handlers.ts')
+      await writeFile(handlers, (await readFile(handlers, 'utf8')).replace('return { list, get, create, update, remove }', 'return { list, get, create, update, remove, done }'))
+      // The database refuses a value outside the list too, not only the route
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      const { DatabaseSync } = await import('node:sqlite')
+      const sqlite = new DatabaseSync(':memory:')
+      const step = (await readdir(join(app, 'migrations'))).find((file) => file.endsWith('_shelves_1.sql'))!
+      for (const file of ['0000_kit_migrations.sql', step]) sqlite.exec(await readFile(join(app, 'migrations', file), 'utf8'))
+      expect(() => sqlite.exec("insert into shelves values ('1', 'Fiction', 'lost', null, 'now', 'now')")).toThrow(/CHECK/)
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--project', 'node', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+      expect(tests.stdout).toContain('makes, lists and changes a shelf')
+      expect(tests.stdout).toMatch(/books\.test\.ts > books > makes, lists, changes and deletes a book/)
+      expect(tests.stdout).toContain('runs every MCP tool against its route')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('keeps the starter skills loadable whatever the title holds', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-title-'))
+    try {
+      const title = 'Say "hi": C:\\apps'
+      expect(cli(parent, 'init', 'odd-title', '--title', title, '--bare', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'odd-title')
+      const product = await readFile(join(app, 'guide/skills/odd-title/SKILL.md'), 'utf8')
+      // Never served, so its boolean metadata.internal (which the server refuses) is left out to read the description
+      const developer = (await readFile(join(app, '.agents/skills/odd-title-agent-test/SKILL.md'), 'utf8')).replace('metadata:\n  internal: true\n', '')
+      expect(await guideSkillProblems({ files: { 'skills/odd-title/SKILL.md': product, 'skills/odd-title-agent-test/SKILL.md': developer } })).toEqual([])
+      const { skills } = await guideSkills({ files: { 'skills/odd-title/SKILL.md': product } })
+      expect(skills!.entries[0]!.frontmatter.description).toContain(`Use when a task needs ${title}.`)
+      // Outside the quotes the title stays as typed
+      expect(product).toContain(`# ${title}\n`)
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
@@ -1378,12 +1673,21 @@ describe('the npm-release item', () => {
     expect(readme).toContain('after 1.31.0')
   })
 
+  it('names a version wherever it says `npm create escalay`: without one, npx runs whatever create-escalay it cached', async () => {
+    const tracked = spawnSync('git', ['ls-files'], { cwd: kitDir, encoding: 'utf8' }).stdout.split('\n')
+    // The changelog is history, and the tests name the command as they run it
+    const files = tracked.filter((path) => /\.(md|mjs|ts|tsx|json|jsonc|sh|ya?ml|txt)$/.test(path) && path !== 'CHANGELOG.md' && !path.startsWith('test/'))
+    const unversioned = (await Promise.all(files.map(async (path) => (await read(path)).split('\n').flatMap((line, at) => (/npm create escalay(?!@)/.test(line) ? [`${path}:${at + 1}: ${line.trim()}`] : []))))).flat()
+    expect(unversioned).toEqual([])
+    expect(files.length).toBeGreaterThan(100)
+  })
+
   it('answers --help from create-escalay and from every kit command without making anything', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'kit-help-'))
     for (const flag of ['--help', '-h']) {
       const created = spawnSync(process.execPath, [join(kitDir, 'packages/create-escalay/index.mjs'), flag], { cwd: parent, encoding: 'utf8' })
       expect([created.status, created.stderr], flag).toEqual([0, ''])
-      expect(created.stdout).toMatch(/^Usage: npm create escalay <dir> \[-- options\]$/m)
+      expect(created.stdout).toMatch(/^Usage: npm create escalay@latest <dir> \[-- options\]$/m)
       expect(created.stdout).toContain('--preset api|app')
     }
     expect(await readdir(parent)).toEqual([])
@@ -1491,6 +1795,23 @@ describe('a guide\'s skills over MCP', () => {
     expect(await guideSkills({ files: { 'llms.txt': '# Apps' } })).toEqual({ prompts: [], skills: undefined })
   })
 
+  it('names each skill the server would skip, and why, in the server’s own words', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const files = {
+      'skills/apps/SKILL.md': '---\nname: apps\ndescription: Use when finding apps: by name or by maker.\n---\n\n# Apps\n',
+      'skills/maps/SKILL.md': '---\nname: maps\ndescription: "Use when finding places: by name or by street."\n---\n\n# Maps\n',
+    }
+    expect(await guideSkillProblems({ files })).toEqual(['apps/SKILL.md: SKILL.md frontmatter: line 3: a plain value cannot contain ": "; quote the value (skill skipped)'])
+    // The very skill the server leaves out, and only that one
+    const { skills } = await guideSkills({ files })
+    expect(skills!.entries.map((skill) => skill.frontmatter.name)).toEqual(['maps'])
+    expect(await guideSkillProblems({ files: { 'skills/maps/SKILL.md': files['skills/maps/SKILL.md'] } })).toEqual([])
+    expect(await guideSkillProblems({ files: new Map([['llms.txt', '# Apps']]) })).toEqual([])
+    // Collected, never printed: only guideSkills tells the server log
+    expect(warn.mock.calls.filter(([line]) => String(line).includes('apps/SKILL.md'))).toHaveLength(1)
+    warn.mockRestore()
+  })
+
   /** A server with one skill and ten playbooks, called like a plain MCP client: no extension methods needed. */
   const skillServer = async (references = 10) => {
     const files: Record<string, string> = { 'skills/mail/SKILL.md': '---\nname: mail\ndescription: Use when sending or reading mail.\n---\n\n# Mail\n' }
@@ -1567,10 +1888,13 @@ describe('the skills', () => {
   const PRESETS = kitSays('init', 'no-such-app', '--preset', 'no-such-preset').match(/--preset is one of (.+)/)![1]!.split(', ')
 
   it('gives every `npx skills add` it names `-y`: without it the installer stops to ask, which an agent never answers', async () => {
-    const markdownUnder = async (dir: string) => (await readdir(join(kitDir, dir), { recursive: true })).filter((path) => path.endsWith('.md')).map((path) => join(dir, path))
-    const files = ['README.md', 'AGENTS.md', 'docs/STANDARD.md', ...(await markdownUnder('skills')), ...(await markdownUnder('templates'))]
-    const commands = (await Promise.all(files.map(async (file) => [...(await readFile(join(kitDir, file), 'utf8')).matchAll(/`(npx skills add [^`]*)`/g)].map(([, command]) => `${file}: ${command}`)))).flat()
-    expect(commands.length).toBeGreaterThan(5)
+    // Every file the kit ships or writes into an app, the CLI's own output included; the tests and the changelog aside
+    const tracked = spawnSync('git', ['ls-files'], { cwd: kitDir, encoding: 'utf8' }).stdout.split('\n')
+    const files = tracked.filter((path) => /\.(md|mjs|ts|tsx|json|jsonc|sh|ya?ml|txt)$/.test(path) && path !== 'CHANGELOG.md' && !path.startsWith('test/'))
+    expect(files).toEqual(expect.arrayContaining(['cli.mjs', 'templates/app/AGENTS.md', 'src/mcp/README.md']))
+    // A command names what it installs; a bare mention (`npx skills add.`) runs nothing
+    const commands = (await Promise.all(files.map(async (file) => [...(await readFile(join(kitDir, file), 'utf8')).matchAll(/npx skills add [^\s`'".,)][^`"\n]*/g)].map(([command]) => `${file}: ${command}`)))).flat()
+    expect(commands.length).toBeGreaterThan(10)
     // `--list` only lists, so it never asks
     expect(commands.filter((line) => !/ (-y|--list)\b/.test(line))).toEqual([])
   })
@@ -1608,6 +1932,14 @@ describe('the skills', () => {
     const parts: { name: string; meta?: { root?: boolean } }[] = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8')).items
     const unnamed = parts.filter((part) => !part.meta?.root && !texts.some((text) => text.includes(`\`${part.name}\``))).map((part) => part.name)
     expect(unnamed).toEqual([])
+  })
+
+  it('api-kit-part names every meta.wiring field the registry uses', async () => {
+    const skill = (await skillTexts())['api-kit-part']!
+    const wired: { meta?: { wiring?: Record<string, unknown> & { settings?: Record<string, string>[]; cron?: Record<string, string> } } }[] = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8')).items
+    const fields = new Set(wired.flatMap(({ meta }) => (meta?.wiring ? [...Object.keys(meta.wiring), ...(meta.wiring.settings ?? []).flatMap(Object.keys), ...Object.keys(meta.wiring.cron ?? {})] : [])))
+    expect(fields.size).toBeGreaterThan(0)
+    expect([...fields].filter((field) => !skill.includes(`\`${field}\``))).toEqual([])
   })
 
   it('api-kit-build wires the sharing part as its README does, and api-kit-review checks the threats its tests hold', async () => {

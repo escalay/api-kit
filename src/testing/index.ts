@@ -244,5 +244,53 @@ export const approveSignIn = async (
   })
 }
 
+const base64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+const asForm = (fields: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(fields).toString() })
+const asJson = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+
+/** What `connectAgent` returns: the approval's answer, its page's text when it was no redirect with a code, and the tokens. */
+export type AgentConnection = {
+  page: Response
+  html: string
+  tokens: { access_token: string; token_type: string; scope: string; expires_in?: number; refresh_token?: string } | null
+}
+
+/**
+ * Connects a third-party agent to `address` (the app's `/mcp`, or a space's) the way an MCP client does: a call with no
+ * token, the 401's `resource_metadata`, that document's `resource`, a registration at `/oauth/register` (RFC 7591, a
+ * public client), `/oauth/authorize` with PKCE (S256) for that resource, then the code exchanged at `/oauth/token`.
+ * `approve` stands for the person in the browser: it gets the authorize query and returns the answer to their click,
+ * usually `approveSignIn` (the kit's page or the app's own `form`). `tokens` is null when that answer is no redirect
+ * with a code (a refusal, a page asking again: `page` and `html` say which); a failed step throws, naming it. Web
+ * Crypto only, so it runs in workerd too.
+ *
+ * @example
+ * // A friend's agent joins a shelf with the invite's code, typed on the sharing part's page
+ * const { tokens } = await connectAgent(app, { address: 'https://shelves.example/s/soups/mcp', approve: (query) => approveSignIn(app, query, { form: { action: '/sharing/join', fields: { code } } }) })
+ * await app.request('/s/soups/mcp', { method: 'POST', headers: { authorization: `Bearer ${tokens!.access_token}` }, body })
+ */
+export const connectAgent = async (
+  app: RequestableApp,
+  { address, approve, redirect = 'http://127.0.0.1:33418/callback', scope = 'read write', name = 'Sample Agent' }: { address: string; approve: (query: URLSearchParams) => Promise<Response>; redirect?: string; scope?: string; name?: string },
+): Promise<AgentConnection> => {
+  const refused = await app.request(new URL(address).pathname, asJson({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))
+  const metadataUrl = /resource_metadata="([^"]+)"/.exec(refused.headers.get('www-authenticate') ?? '')?.[1]
+  if (refused.status !== 401 || !metadataUrl) throw new Error(`connectAgent: ${address} answered ${refused.status} without a resource_metadata challenge`)
+  const { resource } = (await (await app.request(new URL(metadataUrl).pathname)).json()) as { resource: string }
+  const registered = await app.request('/oauth/register', asJson({ client_name: name, redirect_uris: [redirect], grant_types: ['authorization_code', 'refresh_token'], token_endpoint_auth_method: 'none' }))
+  if (registered.status !== 201) throw new Error(`connectAgent: /oauth/register answered ${registered.status}: ${await registered.text()}`)
+  const { client_id } = (await registered.json()) as { client_id: string }
+  const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)))
+  const challenge = base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))))
+  const query = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: redirect, scope, resource, code_challenge: challenge, code_challenge_method: 'S256' })
+  const page = await approve(query)
+  const location = page.headers.get('location')
+  const code = page.status === 302 && location ? new URL(location).searchParams.get('code') : null
+  if (!code) return { page, html: await page.text(), tokens: null }
+  const answer = await app.request('/oauth/token', asForm({ grant_type: 'authorization_code', code, client_id, code_verifier: verifier, redirect_uri: redirect }))
+  if (answer.status !== 200) throw new Error(`connectAgent: /oauth/token answered ${answer.status}: ${await answer.text()}`)
+  return { page, html: '', tokens: (await answer.json()) as NonNullable<AgentConnection['tokens']> }
+}
+
 export { softAuthenticator } from './authenticator.js'
 export { cliGaps, cliSnapshot, flagsOf, type CliFlag, type CliJobLike, type CliSnapshot, type CliSnapshotCommand } from './cli.js'

@@ -11,13 +11,13 @@ Each part's rules travel with it in `src/kit/<part>/README.md`; the full standar
 
 ## A new API
 
-1. `npm create escalay my-api` (add `-- --runtime node` or `cloudflare`; the default is both). For a tool people
+1. `npm create escalay@latest my-api` (add `-- --runtime node` or `cloudflare`; the default is both). For a tool people
    also open in a browser: `-- --preset app` (Cloudflare only; `web/` served under `/app` by the same Worker).
-   It installs the app, formats it and writes its migrations, so its gate passes as made. Then run what its `Next:`
-   line prints, up to `pnpm dev`: `cd my-api && pnpm test`; with `-- --no-install`, or without pnpm, it is
-   `cd my-api && pnpm install && pnpm format && pnpm migrations && pnpm test` (with `--runtime node` there is no
-   `pnpm migrations`). Done when it passes. Give your coding agent the kit's
-   skills with `npx skills add escalay/api-kit -y` (without `-y` the installer stops to ask).
+   It installs the app, formats it and writes its migrations, so its gate passes as made. First, as it prints, give
+   your coding agent the kit's skills: `npx skills add escalay/api-kit -y` (without `-y` the installer stops to ask).
+   Then run what its `Next:` line prints, up to `pnpm dev`: `cd my-api && pnpm test`; with `-- --no-install`, or
+   without pnpm, it is `cd my-api && pnpm install && pnpm format && pnpm migrations && pnpm test` (with
+   `--runtime node` there is no `pnpm migrations`). Done when it passes.
 2. Read `AGENTS.md` in the new app, then `src/kit/core/README.md`, `db`, `mcp` and `testing`.
 3. `pnpm dev`, then open `/docs`, `/llms.txt` and `/mcp`. The example `notes` feature shows the shape.
 4. Replace `notes` with real features: the `api-kit-feature` skill, one feature at a time.
@@ -40,12 +40,15 @@ In this order; stop at the first that fits.
    `approve` hook, `complete` with a `resource`, and `onGrant` / `onRevoke` to mirror who holds access
    (`src/kit/oauth/README.md`).
 4. Other people, and their agents, into one part of the app (a space): `sharing`, by single-use invite or the
-   owner's approval at the space (`npx @escalay/kit add sharing --dir src/kit --install`, then its README's Wire it).
+   owner's approval at the space (`npx @escalay/kit add sharing --dir src/kit --install`, then its README's Wire it,
+   whose blocks wire an app made by `init` whole; `add` prints each setting and schedule the app still lacks).
    - `SHARING_SECRET`: 32+ random bytes, its own entry in your secret store, never the OAuth signing key.
    - `createOAuth` with `publicOrigin` and `...sharing.oauth`; `SHARING_OPEN_PATHS` in `auth.open`, `sharing.relay`
      in `auth.relay`, `sharing.neverKept` in `guards.skip`; then `registerSharing`.
-   - `await sharing.sweep()` in the scheduled handler, `sharing.forget(id)` when a space is deleted (`kit doctor`
-     notes an app that never sweeps). On Workers, `address: { header: 'cf-connecting-ip' }`.
+   - `await sharing.sweep()` in the scheduled handler (`sharingOf(app)` finds the part), `sharing.forget(id)` when a
+     space is deleted: a feature reaches it as `parts.sharing` in its `register` (`kit doctor` notes an app that
+     never sweeps). On Workers, `address: { header: 'cf-connecting-ip' }`.
+   - Its test: `connectAgent` (testing) signs a friend's agent in with the invite's code.
    - Behind Cloudflare Access, let exactly `sharingSignInPaths(sharing)` through.
    - `sharingTools` go to the owner's MCP only, never to `mountA2A`: a delegating agent must not mint invites.
 
