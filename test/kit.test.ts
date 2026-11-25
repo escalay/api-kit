@@ -1568,7 +1568,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       // What to run next, and where an action beyond the five routes is shown
       expect(naive.stdout.trim().split('\n').slice(-2)).toEqual([
         'Next: pnpm format (what feature writes is in the kit\'s long-line style), then pnpm test',
-        'An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; a resource inside another: › A resource inside another',
+        'An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; one inside another (recipes on a shelf): `kit feature <name> --under <parent>`',
       ])
       const made = cli(app, 'feature', 'shelves', '--singular', 'shelf', '--no-remove', '--fields', 'name:string status:enum(to-read|reading|done) mood:enum(calm|busy)?')
       expect(made.status, made.stderr).toBe(0)
@@ -1708,6 +1708,53 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       }
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--project', 'node'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('nests a feature under another with feature --under: listed and made under its parent, 404 for an unknown one, tools that take it', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-under-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'nest-api', '--bare', '--no-install').status).toBe(0)
+      const app = join(parent, 'nest-api')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      expect(cli(app, 'feature', 'reading-lists', '--fields', 'title:string').status).toBe(0)
+      expect(cli(app, 'feature', 'pies', '--under', 'books').stderr).toContain('--under books: no src/features/books/ made by `kit feature`')
+      expect(cli(app, 'feature', 'pies', '--under', 'pies').stderr).toContain('--under names another feature')
+      expect(existsSync(join(app, 'src/features/pies'))).toBe(false)
+      const made = cli(app, 'feature', 'books', '--under', 'reading-lists', '--fields', 'title:string status:enum(to-read|done)')
+      expect(made.status, made.stderr).toBe(0)
+      expect(made.stdout).toContain('under reading-lists: GET and POST /api/reading-lists/{readingList}/books, each book with its readingListId')
+      expect(await read('src/features/books/schema.ts')).toContain('"reading_list_id" text not null references reading_lists(id), "title" text not null')
+      expect(await read('src/features/books/routes.ts')).toContain("path: '/api/reading-lists/{readingList}/books'")
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--project', 'node', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+      for (const name of ['answers 404 for a reading list that does not exist', 'makes, lists, changes and deletes a book', 'runs every MCP tool against its route']) expect(tests.stdout, name).toContain(name)
+      // Over HTTP and MCP, as an agent uses it
+      const { createApp: createNest } = await import(join(app, 'src/app.ts'))
+      const { hashApiKey: hashOf, testDb: dbOf } = await import(join(app, 'src/kit/index.ts'))
+      const nest = await createNest({ db: await dbOf(), env: { API_KEYS: `tester:${hashOf('nest-key')}` } })
+      const headers = { authorization: 'Bearer nest-key', 'content-type': 'application/json' }
+      const post = async (path: string, body: object) => nest.request(path, { method: 'POST', headers, body: JSON.stringify(body) })
+      const [mine, other] = await Promise.all(['Mine', 'Other'].map(async (title) => ((await (await post('/api/reading-lists', { title })).json()) as { id: string }).id))
+      const book = await post(`/api/reading-lists/${mine}/books`, { title: 'Dune', status: 'done' })
+      expect([book.status, await book.json()]).toEqual([201, expect.objectContaining({ title: 'Dune', readingListId: mine })])
+      expect((await (await nest.request(`/api/reading-lists/${other}/books`, { headers })).json()).count).toBe(0)
+      const unknown = await post('/api/reading-lists/nope/books', { title: 'Lost', status: 'done' })
+      expect([unknown.status, (await unknown.json()).detail]).toEqual([404, 'No reading list nope. GET /api/reading-lists lists them.'])
+      const listed = await callMcp(nest, 'tools/call', { bearer: 'nest-key', params: { name: 'list_books', arguments: { reading_list: mine } } })
+      expect((listed.result?.content as { text: string }[])[0]!.text).toMatch(/^Dune · status done · id /)
+      const tool = (await callMcp(nest, 'tools/list', { bearer: 'nest-key' })).result!.tools as { name: string; inputSchema: { required?: string[] } }[]
+      expect(tool.find((one) => one.name === 'create_book')!.inputSchema.required).toContain('reading_list')
     } finally {
       await rm(parent, { recursive: true, force: true })
     }

@@ -34,12 +34,14 @@
  *                                             container) and/or Workers (worker.ts, D1); then pnpm install, format and
  *                                             migrations, so its gate passes as made (--no-install leaves them to you).
  *                                             It never asks; --yes is accepted
- *   kit feature <plural-name> [--app .] [--switch] [--singular <name>] [--no-remove] [--fields "name:string minutes:int tags:string[] notes:text?"]
+ *   kit feature <plural-name> [--app .] [--switch] [--singular <name>] [--no-remove] [--under <parent>] [--fields "name:string minutes:int tags:string[] notes:text?"]
  *                                             a new feature folder (schema, repo, routes, handlers, tools), listed;
  *                                             --switch lists it in src/features/catalog.ts so an owner can switch it off;
  *                                             --fields gives its own fields (string, text, int, number, bool, string[],
  *                                             enum(a|b|c); ? when it may be left out) instead of a title and a body;
- *                                             --singular names one (shelves → shelf); --no-remove leaves out delete
+ *                                             --singular names one (shelves → shelf); --no-remove leaves out delete;
+ *                                             --under shelves lists and makes them at /api/shelves/{shelf}/<plural-name>,
+ *                                             each with its shelfId (a foreign key), 404 for a shelf that isn't there
  *   kit feature --remove <plural-name> [--app .]
  *                                             takes a feature out: its folder, its lines in src/features/index.ts and
  *                                             catalog.ts; then `pnpm migrations` drops its D1 files
@@ -125,7 +127,7 @@ const valueOf = (flag) => rest.find((arg, index) => rest[index - 1] === flag) ??
 const dirArg = valueOf('--dir') ?? 'src/kit'
 const webDirArg = valueOf('--web-dir')
 /** Flags that take the next argument as their value, so it is never read as a name. */
-const VALUE_FLAGS = new Set([...ITEMS.flatMap((item) => item.meta?.wiring?.wire?.over?.flag ?? []), '--fields', '--singular', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
+const VALUE_FLAGS = new Set([...ITEMS.flatMap((item) => item.meta?.wiring?.wire?.over?.flag ?? []), '--fields', '--singular', '--under', '--dir', '--web-dir', '--title', '--runtime', '--preset', '--app', '--from', '--out', '--package', '--bin', '--repo', '--merge', '--checks', '--branch', '--subdir', '--private', '--public', '--product', '--licensee', '--plan', '--grants', '--days', '--instance'])
 const names = rest.filter((arg, index) => !arg.startsWith('--') && !VALUE_FLAGS.has(rest[index - 1]))
 const dir = resolve(process.cwd(), dirArg)
 /** The app the kit folder belongs to: `--app`, else the nearest folder at or above `--dir` with a package.json; null when none. */
@@ -572,8 +574,35 @@ const fieldVarsOf = (fields) => {
   }
 }
 
-const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS, singular, remove = true, next = true } = {}) => {
-  const vars = { ...namesOf(name, singular), ...fieldVarsOf(fieldsOf(fieldSpec)) }
+/**
+ * The spellings a feature nested under `parent` needs (`--under`): the parent's path, its id's field and column, its
+ * tool argument, and the field vars with that column added (in the table, the answer and the card, never the input).
+ */
+const underVarsOf = (root, parent, name, fieldVars) => {
+  if (parent === name) fail('--under names another feature: the one this feature lives inside')
+  const routes = textOf(join(root, 'src/features', parent, 'routes.ts')) ?? fail(`--under ${parent}: no src/features/${parent}/ made by \`kit feature\` (make it first)`)
+  const Singular = /export const (\w+)Schema = /.exec(routes)?.[1] ?? fail(`--under ${parent}: its routes.ts exports no <Singular>Schema`)
+  const names = namesOf(parent, Singular.replace(/[A-Z]/g, (letter, at) => `${at ? '-' : ''}${letter.toLowerCase()}`))
+  const param = Singular[0].toLowerCase() + Singular.slice(1)
+  const field = `${param}Id`
+  return {
+    __parent__: parent,
+    __parent_camel__: names.__camel__,
+    __parent_param__: param,
+    __parent_id__: field,
+    __parent_label__: names.__label__,
+    __parent_snake__: names.__snake__,
+    __parent_snake_singular__: names.__snake_singular__,
+    __columns__: `  ${field}: text('${snakeOf(field)}').notNull(),\n${fieldVars.__columns__}`,
+    __sql_columns__: `"${snakeOf(field)}" text not null references ${names.__table__}(id), ${fieldVars.__sql_columns__}`,
+    __out_fields__: `${field}: z.string(), ${fieldVars.__out_fields__}`,
+    __card_fields__: `${field}: string; ${fieldVars.__card_fields__}`,
+  }
+}
+
+const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS, singular, remove = true, next = true, under } = {}) => {
+  const fieldVars = fieldVarsOf(fieldsOf(fieldSpec))
+  const vars = { ...namesOf(name, singular), ...fieldVars, ...(under ? underVarsOf(root, under, name, fieldVars) : {}) }
   const list = join(root, 'src/features/index.ts')
   if (!existsSync(list)) fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
   const folder = join(root, 'src/features', name)
@@ -593,7 +622,7 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
   }
   copyTemplate(join(KIT, 'templates/feature'), folder, vars, (file) => (file === 'feature.test.ts' ? `${name}.test.ts` : file))
   // Delete is a route, a handler, a repo call, a tool and a sample: all or none
-  for (const file of readdirSync(folder)) writeFileSync(join(folder, file), keepMarked(readFileSync(join(folder, file), 'utf8'), { 'feature:remove': remove, 'feature:no-remove': !remove }))
+  for (const file of readdirSync(folder)) writeFileSync(join(folder, file), keepMarked(readFileSync(join(folder, file), 'utf8'), { 'feature:remove': remove, 'feature:no-remove': !remove, 'feature:under': Boolean(under), 'feature:flat': !under }))
   writeFileSync(list, text.replace('// kit:imports', `import { feature as ${vars.__camel__} } from './${name}/index.js'\n// kit:imports`).replace('  // kit:features', `  ${vars.__camel__},\n  // kit:features`))
   if (switchable) {
     const catalog = join(root, 'src/features/catalog.ts')
@@ -604,10 +633,11 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
     writeFileSync(index, readFileSync(index, 'utf8').replace(`  name: '${name}',`, `  name: '${name}',\n  switch: '${name}',`))
   }
   console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test${remove ? '' : '; no delete'}), each one a ${vars.__label__}${singular ? '' : ' (--singular names it otherwise)'}, and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
+  if (under) console.log(`under ${under}: GET and POST /api/${under}/{${vars.__parent_param__}}/${name}, each ${vars.__label__} with its ${vars.__parent_id__}; one by its id at /api/${name}/{id}; a ${vars.__parent_label__} that isn't there is a 404, and the tools take ${vars.__parent_snake_singular__}`)
   // init says its own Next line
   if (!next) return
   console.log("Next: pnpm format (what feature writes is in the kit's long-line style), then pnpm test")
-  console.log('An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; a resource inside another: › A resource inside another')
+  console.log('An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; one inside another (recipes on a shelf): `kit feature <name> --under <parent>`')
 }
 
 /**
@@ -2282,7 +2312,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const [name] = names
     if (!name) fail('name the feature, plural and kebab-case: feature reading-lists')
     if (flags.has('--remove')) return removeFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name)
-    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, { switchable: flags.has('--switch'), fieldSpec: valueOf('--fields'), singular: valueOf('--singular'), remove: !flags.has('--no-remove') })
+    addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, { switchable: flags.has('--switch'), fieldSpec: valueOf('--fields'), singular: valueOf('--singular'), remove: !flags.has('--no-remove'), under: valueOf('--under') })
   },
 
   update: () => {

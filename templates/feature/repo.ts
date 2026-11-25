@@ -11,11 +11,13 @@ export const __camel__Repo = (db: Db) => {
   const now = () => new Date().toISOString()
   return {
     /** The newest first, after `after`: `limit` and one more, which says there is a next page. */
-    list: ({ after, limit }: { after?: __Singular__Position; limit: number }) =>
+    list: ({ after, limit }: { after?: __Singular__Position; limit: number }) => // feature:flat
+    list: ({ after, limit, __parent_param__ }: { after?: __Singular__Position; limit: number; __parent_param__: string }) => // feature:under
       db
         .select()
         .from(__camel__)
-        .where(after ? or(lt(__camel__.createdAt, after.createdAt), and(eq(__camel__.createdAt, after.createdAt), lt(__camel__.id, after.id))) : undefined)
+        .where(after ? or(lt(__camel__.createdAt, after.createdAt), and(eq(__camel__.createdAt, after.createdAt), lt(__camel__.id, after.id))) : undefined) // feature:flat
+        .where(and(eq(__camel__.__parent_id__, __parent_param__), after ? or(lt(__camel__.createdAt, after.createdAt), and(eq(__camel__.createdAt, after.createdAt), lt(__camel__.id, after.id))) : undefined)) // feature:under
         .orderBy(desc(__camel__.createdAt), desc(__camel__.id))
         .limit(limit + 1),
     get: async (id: string) => (await db.select().from(__camel__).where(eq(__camel__.id, id)))[0],

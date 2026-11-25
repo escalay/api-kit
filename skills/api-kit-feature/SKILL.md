@@ -88,12 +88,13 @@ A change with a name of its own (`POST /api/books/{id}/done`) is a route beside 
 
 ## A resource inside another
 
-Recipes on a shelf: `kit feature recipes --fields "shelfId:string name:string"`. After `kit feature`, and before its
-migration step 1 has run anywhere, its SQL in `schema.ts` gets `references shelves(id)` after `"shelf_id" text not
-null`. The rest is a description, with no code to paste as the action route has. The list takes `shelf` in its query
-schema (`GET /api/recipes?shelf=…`) and the repo filters by it; `create` and `update` 404 a `shelfId` no shelf has
-(`detail` names `GET /api/shelves`). Its tools take `shelf_id`; `samples` makes a shelf first. Nest the paths
-(`/api/shelves/{shelf}/recipes`) only when the shelf decides who may see them, as a space of the sharing part does.
+Recipes on a shelf: `kit feature recipes --under shelves --fields "name:string"`, once `shelves` exists. Each recipe
+has a `shelfId` (`"shelf_id" text not null references shelves(id)`, set from the path, never the body); its list and
+making are `GET` and `POST /api/shelves/{shelf}/recipes`, a shelf that isn't there a 404 whose `detail` names
+`GET /api/shelves`; one recipe stays at `/api/recipes/{id}`. `list_recipes` and `create_recipe` take `shelf`, and
+`samples` and the tests make a shelf first, as the shelf's own samples do. When shelves are a sharing part's spaces,
+its `spaceOfPath` (`/api/shelves/<id>`) covers the nested routes, and a recipe's own (`/api/recipes/{id}`) are in no
+space: a member reaches recipes through the shelf's list only.
 
 ## Tools
 
