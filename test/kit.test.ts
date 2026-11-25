@@ -2737,6 +2737,14 @@ describe('the skills', () => {
     expect(await readFile(join(kitDir, 'templates/app/AGENTS.md'), 'utf8')).toContain('`npx skills add escalay/api-kit --skill npm-release -y`')
   })
 
+  it('are in the quick start of both npm READMEs, with what they hold', async () => {
+    for (const file of ['README.md', 'packages/create-escalay/README.md']) {
+      const readme = await readFile(join(kitDir, file), 'utf8')
+      const start = readme.match(/```bash\n([\s\S]*?)```/)![1]!
+      expect(start, file).toMatch(/^npx skills add escalay\/api-kit -y +# .*api-kit-build.*api-kit-feature/m)
+    }
+  })
+
   it('are each listed in the README\'s skills table and in AGENTS.md', async () => {
     const [readme, agents] = await Promise.all(['README.md', 'AGENTS.md'].map((file) => readFile(join(kitDir, file), 'utf8')))
     const agentsRow = agents!.split('\n').find((line) => line.startsWith('| `skills/` |'))!

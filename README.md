@@ -20,6 +20,7 @@ the practices travel with the copy into `src/kit/<part>/README.md`.
 ```bash
 npm create escalay@latest my-api                 # the `api` preset, with an example `notes` feature, installed, formatted, migrations written
 cd my-api && pnpm test && pnpm dev               # http://localhost:4400/docs, /llms.txt, /mcp
+npx skills add escalay/api-kit -y                # your coding agent's skills: api-kit-build (parts, a newer kit), api-kit-feature, api-kit-review, api-kit-cli, api-kit-skills
 npx @escalay/kit feature recipes --fields "name:string minutes:int tags:string[]"   # a new feature folder, its own fields, listed and tested
 npx @escalay/kit sdk                             # a typed TypeScript client in sdk/, a method per operation
 gh repo create my-api --private --source . --push && npx @escalay/kit repo apply   # CI runs; the repository set up as §20 says
