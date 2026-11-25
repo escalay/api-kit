@@ -205,9 +205,13 @@ export const Members = ({ sharing, onShown, className }: { sharing: OwnerSharing
     if (invite) onShown(invite)
   }
 
+  // A failed removal keeps the question open on its row, to try again there
   const remove = async (member: Member) => {
-    await run(() => sharing.removeMember(member.id))
-    setConfirming(null)
+    const removed = await run(async () => {
+      await sharing.removeMember(member.id)
+      return true
+    })
+    if (removed) setConfirming(null)
   }
 
   return (

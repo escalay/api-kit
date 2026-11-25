@@ -229,6 +229,29 @@ describe('SharePanel', () => {
     expect((await client.members('soups')).items).toEqual([])
   })
 
+  it('keeps asking on a member’s row when the removal failed, so Remove can be tried again there', async () => {
+    const { box } = await ownerOf()
+    let failNextDelete = true
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (init?.method !== 'DELETE' || !failNextDelete) return box.app.request(url, init)
+      failNextDelete = false
+      throw new TypeError('Failed to fetch')
+    }) as typeof fetch
+    const client = createSharingClient({ fetchImpl, headers: { authorization: `Bearer ${OWNER_KEY}` } })
+    await joinByInvite(box, (await client.createInvite('soups', { label: 'Sam' })).id)
+    render(<SharePanel client={client} space="soups" />)
+    await waitFor(() => expect(within(rowOf('Members', 'Sam')).getByText('Active')).toBeTruthy())
+
+    fireEvent.click(within(rowOf('Members', 'Sam')).getByRole('button', { name: 'Remove' }))
+    fireEvent.click(within(within(rowOf('Members', 'Sam')).getByRole('alert')).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(within(screen.getByRole('region', { name: 'People' })).getByText('Failed to fetch')).toBeTruthy())
+    const asking = within(rowOf('Members', 'Sam')).getByRole('alert')
+    expect(asking.textContent).toContain('Remove Sam?')
+
+    fireEvent.click(within(asking).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(screen.getByText('Nobody has joined yet.')).toBeTruthy())
+  })
+
   it('retries a lost answer with the same Idempotency-Key, and says the invite it made cannot be shown again', async () => {
     const { box } = await ownerOf()
     const keys: string[] = []
