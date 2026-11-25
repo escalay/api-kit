@@ -120,8 +120,13 @@ describe('a recipe box shares its shelves', () => {
   it('lets the owner approve an app at a shelf in one click, a grant locked to that shelf and never an owner token', async () => {
     const box = await recipeBox()
     const owner = await ownerAgent(box)
-    // At a known return the page's boxes start ticked: the browser posts them
-    const known = await connect(box, { address: shelfAddress('bakes'), redirect: SAMPLE_APP, approve: (query) => approveSignIn(box.app, query, { headers: AS_OWNER, form: { action: '/sharing/owner', fields: { decision: 'approve', write: 'on', untilRevoked: 'on' } } }) })
+    // At a known return the page's boxes start ticked, so the browser posts them
+    const approveTicked = async (query: URLSearchParams) => {
+      const page = await (await box.app.request(`/oauth/authorize?${query}`, { headers: AS_OWNER })).text()
+      for (const name of ['write', 'untilRevoked']) expect(page).toContain(`name="${name}" value="on" checked>`)
+      return approveSignIn(box.app, query, { headers: AS_OWNER, form: { action: '/sharing/owner', fields: { decision: 'approve', write: 'on', untilRevoked: 'on' } } })
+    }
+    const known = await connect(box, { address: shelfAddress('bakes'), redirect: SAMPLE_APP, approve: approveTicked })
     const token = known.tokens!.access_token
     expect(known.tokens!.scope).toBe('read write')
     expect(await toolText(box, '/box/bakes/mcp', token, 'add_recipe', { name: 'Scones' })).toBe('bakes: Rye bread, Scones')

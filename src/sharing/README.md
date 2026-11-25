@@ -45,7 +45,7 @@ const app = createAgentApi({
   guards: { …, skip: sharing.neverKept },
   oauth,
 })
-await registerSharing(app, sharing, { oauth })   // migrates, binds the hooks to oauth, then /sharing/* and the owner routes
+await registerSharing(app, sharing, { oauth })   // migrates, binds the hooks to oauth and brand, then /sharing/* and the owner routes
 mcpServerFactory({ tools: [...FEATURE_TOOLS, ...sharingTools({ noun: 'shelf' })], … })   // the owner's MCP only
 mountMcp(app, { path: sharing.mcpPath, factory: shelfMcp, allowedHostnames })   // its tools read at.params.space
 // the scheduled handler: await sharing.sweep(); deleting a shelf: await sharing.forget(shelf.id)
