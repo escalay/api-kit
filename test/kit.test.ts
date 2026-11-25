@@ -1690,15 +1690,41 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       expect(existsSync(join(parent, 'edge-env/test/env.test.ts'))).toBe(false)
       const run = () => spawnSync(bin('vitest'), ['run', '--root', '.', 'test/env.test.ts'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(run().status, run().stdout).toBe(0)
-      // A setting Env gains that the container never passes, and one the container passes that nothing reads
+      // doctor and the app's test read by one rule: Env's members with comments taken out, and process.env in every
+      // file under src/, so a word before a colon in a comment is no setting, and a key a feature reads is read
       const appTs = join(app, 'src/app.ts')
+      const oneLineEnv = 'export type Env = { API_KEYS?: string; OAUTH_SIGNING_KEY?: string; ACCESS_TEAM?: string; ACCESS_AUD?: string; PUBLIC_HOST?: string; FEATURES_OFF?: string }'
+      const starterApp = await readFile(appTs, 'utf8')
+      expect(starterApp).toContain(oneLineEnv)
+      const commentedEnv = [
+        'export type Env = {',
+        '  API_KEYS?: string; OAUTH_SIGNING_KEY?: string',
+        '  /* ACCESS_TEAM and ACCESS_AUD: both, or neither. note: see {access} */',
+        '  ACCESS_TEAM?: string',
+        '  ACCESS_AUD?: string',
+        '  PUBLIC_HOST?: string // the host, e.g. api.example.com: behind a proxy only',
+        '  // FEATURES_OFF: a comma list',
+        '  FEATURES_OFF?: string // optional, e.g. the first-run code: only set in prod',
+        '}',
+      ].join('\n')
+      await writeFile(appTs, starterApp.replace(oneLineEnv, commentedEnv))
+      await mkdir(join(app, 'src/features/billing'), { recursive: true })
+      await writeFile(join(app, 'src/features/billing/stripe.ts'), "export const stripeKeys = () => [process.env.STRIPE_KEY, process.env['STRIPE_WEBHOOK'], process.env[\"STRIPE_PRICE\"]]\n")
+      await writeFile(entrypoint, starter.replace('${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ', '${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ${STRIPE_KEY:+STRIPE_KEY="$STRIPE_KEY"} ${STRIPE_WEBHOOK:+STRIPE_WEBHOOK="$STRIPE_WEBHOOK"} ${STRIPE_PRICE:+STRIPE_PRICE="$STRIPE_PRICE"} '))
+      expect(envLines(cli(app, 'doctor').stdout)).toEqual([])
+      const ruled = run()
+      expect(ruled.status, ruled.stdout).toBe(0)
+      await writeFile(appTs, starterApp)
+      await rm(join(app, 'src/features/billing'), { recursive: true })
+      await writeFile(entrypoint, starter)
+      // A setting Env gains that the container never passes, and one the container passes that nothing reads
       await writeFile(appTs, (await readFile(appTs, 'utf8')).replace('FEATURES_OFF?: string }', 'FEATURES_OFF?: string; SETUP_CODE?: string }'))
       await writeFile(entrypoint, starter.replace('${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ', '${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ${OLD_TOKEN:+OLD_TOKEN="$OLD_TOKEN"} '))
       const doctor = cli(app, 'doctor')
       expect(doctor.status).toBe(1)
       expect(envLines(doctor.stdout)).toEqual([
         'env      container/entrypoint.sh: passes no SETUP_CODE, which Env in src/app.ts reads, so the container never sees it: add ${SETUP_CODE:+SETUP_CODE="$SETUP_CODE"} before node_modules/.bin/tsx',
-        'env      container/entrypoint.sh: passes OLD_TOKEN, which neither Env in src/app.ts nor src/server.ts reads: take ${OLD_TOKEN:+OLD_TOKEN="$OLD_TOKEN"} out, or add it to Env',
+        'env      container/entrypoint.sh: passes OLD_TOKEN, which neither Env in src/app.ts nor any file under src/ reads: take ${OLD_TOKEN:+OLD_TOKEN="$OLD_TOKEN"} out, or add it to Env',
       ])
       const failed = run()
       expect(failed.status).toBe(1)

@@ -868,13 +868,23 @@ const skillFindings = async (root) => {
   return { findings, notes: [] }
 }
 
-/** The keys of `Env` in src/app.ts, what src/server.ts reads of process.env, and what container/entrypoint.sh passes; null without a container. */
+/**
+ * The members of `Env` in src/app.ts (its body read with comments taken out, one name per member), every
+ * `process.env.NAME` or `process.env['NAME']` in a file under src/, and what container/entrypoint.sh passes; null
+ * without a container. templates/app/test/env.test.ts reads by the same rule.
+ */
 const envKeysOf = (root) => {
-  const [app, server, entrypoint] = ['src/app.ts', 'src/server.ts', 'container/entrypoint.sh'].map((path) => textOf(join(root, path)))
-  const env = app && /export type Env = \{([^}]*)\}/.exec(app)
-  if (!env || !entrypoint) return null
-  const keys = (text, pattern) => [...(text ?? '').matchAll(pattern)].map(([, key]) => key)
-  return { env: keys(env[1], /(\w+)\??\s*:/g), server: keys(server, /process\.env\.(\w+)/g), passed: keys(entrypoint, /\$\{(\w+):\+/g) }
+  const [app, entrypoint] = ['src/app.ts', 'container/entrypoint.sh'].map((path) => textOf(join(root, path)))
+  const start = app && /export type Env = \{/.exec(app)
+  if (!start || !entrypoint) return null
+  const body = app.slice(start.index + start[0].length).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').split('}')[0]
+  const sources = readdirSync(join(root, 'src'), { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name))
+  const read = sources.flatMap((entry) => [...readFileSync(join(entry.parentPath, entry.name), 'utf8').matchAll(/process\.env(?:\.(\w+)|\[\s*['"](\w+)['"]\s*\])/g)].map(([, dotted, quoted]) => dotted ?? quoted))
+  return {
+    env: body.split(/[;,\n]/).flatMap((member) => /^\s*(\w+)\??\s*:/.exec(member)?.[1] ?? []),
+    read,
+    passed: [...entrypoint.matchAll(/\$\{(\w+):\+/g)].map(([, key]) => key),
+  }
 }
 /** The shell for passing one setting through the entrypoint, only when it is set. */
 const passLine = (key) => `\${${key}:+${key}="$${key}"}`
@@ -885,7 +895,7 @@ const envFindings = (root) => {
   if (!keys) return { findings: [], notes: [] }
   const lines = [
     ...keys.env.filter((key) => !keys.passed.includes(key)).map((key) => `container/entrypoint.sh: passes no ${key}, which Env in src/app.ts reads, so the container never sees it: add ${passLine(key)} before node_modules/.bin/tsx`),
-    ...keys.passed.filter((key) => !keys.env.includes(key) && !keys.server.includes(key)).map((key) => `container/entrypoint.sh: passes ${key}, which neither Env in src/app.ts nor src/server.ts reads: take ${passLine(key)} out, or add it to Env`),
+    ...keys.passed.filter((key) => !keys.env.includes(key) && !keys.read.includes(key)).map((key) => `container/entrypoint.sh: passes ${key}, which neither Env in src/app.ts nor any file under src/ reads: take ${passLine(key)} out, or add it to Env`),
   ]
   if (existsSync(join(root, 'test/env.test.ts'))) return { findings: lines.map((line) => `env      ${line}`), notes: [] }
   return { findings: [], notes: lines.map((line) => `note     env ${line} (a failure once the app has test/env.test.ts, which a new app from \`kit init\` has)`) }
