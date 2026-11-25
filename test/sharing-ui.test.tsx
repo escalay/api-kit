@@ -300,5 +300,25 @@ describe('SharePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Make an invite' }))
     expect((await screen.findByRole('alert')).textContent).toContain('Bakes has 100 open invites')
     expect(screen.queryByRole('region', { name: 'Send this once' })).toBeNull()
+
+    // An answered failure spends nothing: once there is room, the same form makes the invite
+    fireEvent.click(within(rowOf('Invites out', 'Guest 99')).getByRole('button', { name: 'Revoke' }))
+    await waitFor(() => expect(within(rowOf('Invites out', 'Guest 99')).getByText('Revoked')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Make an invite' }))
+    await screen.findByRole('region', { name: 'Send this once' })
+    expect((await client.invites('bakes', { limit: 1 })).items[0]!.label).toBe('One too many')
+  })
+
+  it('shows a member whose sign-in ended as signed out, and invites them again', async () => {
+    const { box, client } = await ownerOf()
+    const invite = await client.createInvite('soups', { label: 'Sam' })
+    const joined = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000)
+    await sharingRepo(box.db).claimInvite(invite.id, memberRow('sp_soups', joined, 'grant-sam', { expiresAt: new Date(Date.now() - 60_000).toISOString() }), joined)
+    render(<SharePanel client={client} space="soups" />)
+    await waitFor(() => expect(within(rowOf('Members', 'Sam')).getByText('Signed out')).toBeTruthy())
+    fireEvent.click(within(rowOf('Members', 'Sam')).getByRole('button', { name: 'Invite again' }))
+    const shown = await screen.findByRole('region', { name: 'Send this once' })
+    expect(within(shown).getByText(/[A-Z]{4}-[A-Z]{4}/)).toBeTruthy()
+    expect(within(shown).getByText('Send this to Sam. Its code is shown only this once.')).toBeTruthy()
   })
 })

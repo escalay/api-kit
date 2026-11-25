@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
-import { ShownOnceError, type Invite, type Lifetime, type Member, type NewInvite, type Scope, type SharingClient } from './sharing-client'
+import { SharingError, ShownOnceError, type Invite, type Lifetime, type Member, type NewInvite, type Scope, type SharingClient } from './sharing-client'
 import { useSharing } from './sharing-react'
 
 /** What `useSharing` answers: the one space the parts of the panel share. */
@@ -96,7 +96,7 @@ const ShowMore = ({ name, pending, onClick }: { name: string; pending: boolean; 
 /**
  * The invite form and the space's invites, newest first. The form offers what the owner page offers: read for 30
  * days, unless Allow changes or Until revoked is switched on. A new invite goes to `onShown`, the only place its code
- * is; a retry after a lost answer sends the same Idempotency-Key, so it never makes a second invite.
+ * is; a retry after a lost answer (no answer at all) sends the same Idempotency-Key, so it never makes a second invite.
  *
  * @example
  * <InvitesOut sharing={useSharing(client, 'soups')} onShown={(invite) => setShown(invite)} />
@@ -106,7 +106,7 @@ export const InvitesOut = ({ sharing, onShown, className }: { sharing: OwnerShar
   const [label, setLabel] = useState('')
   const [scope, setScope] = useState<Scope>('read')
   const [lifetime, setLifetime] = useState<Lifetime>('30d')
-  // Kept across a failed try, so a retry is the same invite; a new one once that key made one, or the form changed
+  // Kept while no answer came, so a retry is the same invite; a new one after any answer, or once the form changed
   const [attempt, setAttempt] = useState<string | null>(null)
   const { pending, failure, run } = useChange()
   const title = sharing.sharing?.title ?? ''
@@ -119,8 +119,10 @@ export const InvitesOut = ({ sharing, onShown, className }: { sharing: OwnerShar
   const make = async () => {
     const idempotencyKey = attempt ?? crypto.randomUUID()
     setAttempt(idempotencyKey)
-    const forgetKeyIfSpent = (caught: unknown) => caught instanceof ShownOnceError && setAttempt(null)
-    const invite = await run(() => sharing.createInvite({ label: label.trim(), scope, lifetime }, { idempotencyKey }), forgetKeyIfSpent)
+    const forgetKeyIfAnswered = (caught: unknown) => {
+      if (caught instanceof SharingError) setAttempt(null)
+    }
+    const invite = await run(() => sharing.createInvite({ label: label.trim(), scope, lifetime }, { idempotencyKey }), forgetKeyIfAnswered)
     if (!invite) return
     setAttempt(null)
     setLabel('')

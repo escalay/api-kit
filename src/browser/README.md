@@ -167,8 +167,8 @@ sequenceDiagram
 - Build and read board refs with `boardRef` / `parseBoardRef` (copied with `boards-client`).
 - An invite's code is in the answer that made it and nowhere else: the hook keeps it in no state, a list never
   carries it, and a retry with the same Idempotency-Key is a `ShownOnceError` saying which invite was made.
-- `SharePanel` keeps a code in no storage, and sends one Idempotency-Key per invite until it is made: a retry after a
-  lost answer is the same invite, said to be shown already, never a second.
+- `SharePanel` keeps a code in no storage. Its form keeps an invite's Idempotency-Key until an answer comes: a retry
+  after a lost answer is the same invite, said to be shown already, never a second. Invite again sends a fresh key.
 - A list follows only the cursor of its `next` link, on the client's own path and headers, never a host an answer
   names. `useSharing` drops an answer for a space it has left.
 - Standard: `docs/STANDARD.md` §16, §17, §21, §23
