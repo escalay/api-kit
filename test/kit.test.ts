@@ -1694,6 +1694,17 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       expect(failed.status).toBe(1)
       expect(failed.stdout + failed.stderr).toContain('SETUP_CODE')
       expect(failed.stdout + failed.stderr).toContain('OLD_TOKEN')
+      // An app made before test/env.test.ts (1.33.0 never passed FEATURES_OFF) gets notes, not failures, so doctor stays as it was
+      const toFix = (stdout: string) => Number(/^(\d+) to fix in /m.exec(stdout)?.[1] ?? 0)
+      await writeFile(appTs, (await readFile(appTs, 'utf8')).replace('FEATURES_OFF?: string; SETUP_CODE?: string }', 'FEATURES_OFF?: string }'))
+      await writeFile(entrypoint, starter.replace('${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} ', ''))
+      const withTest = cli(app, 'doctor').stdout
+      expect(envLines(withTest)).toHaveLength(1)
+      await rm(join(app, 'test/env.test.ts'))
+      const older = cli(app, 'doctor').stdout
+      expect(envLines(older)).toEqual([])
+      expect(older).toContain('note     env container/entrypoint.sh: passes no FEATURES_OFF, which Env in src/app.ts reads, so the container never sees it: add ${FEATURES_OFF:+FEATURES_OFF="$FEATURES_OFF"} before node_modules/.bin/tsx (a failure once the app has test/env.test.ts, which a new app from `kit init` has)')
+      expect(toFix(older)).toBe(toFix(withTest) - 1)
     } finally {
       await rm(parent, { recursive: true, force: true })
     }

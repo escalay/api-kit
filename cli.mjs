@@ -875,14 +875,16 @@ const envKeysOf = (root) => {
 /** The shell for passing one setting through the entrypoint, only when it is set. */
 const passLine = (key) => `\${${key}:+${key}="$${key}"}`
 
-/** The container's allowlist against what the app reads, each way: an Env key never passed, a key passed and never read. */
+/** The container's allowlist against what the app reads, each way: findings in an app with test/env.test.ts, notes in one made before it. */
 const envFindings = (root) => {
   const keys = envKeysOf(root)
-  if (!keys) return []
-  return [
-    ...keys.env.filter((key) => !keys.passed.includes(key)).map((key) => `env      container/entrypoint.sh: passes no ${key}, which Env in src/app.ts reads, so the container never sees it: add ${passLine(key)} before node_modules/.bin/tsx`),
-    ...keys.passed.filter((key) => !keys.env.includes(key) && !keys.server.includes(key)).map((key) => `env      container/entrypoint.sh: passes ${key}, which neither Env in src/app.ts nor src/server.ts reads: take ${passLine(key)} out, or add it to Env`),
+  if (!keys) return { findings: [], notes: [] }
+  const lines = [
+    ...keys.env.filter((key) => !keys.passed.includes(key)).map((key) => `container/entrypoint.sh: passes no ${key}, which Env in src/app.ts reads, so the container never sees it: add ${passLine(key)} before node_modules/.bin/tsx`),
+    ...keys.passed.filter((key) => !keys.env.includes(key) && !keys.server.includes(key)).map((key) => `container/entrypoint.sh: passes ${key}, which neither Env in src/app.ts nor src/server.ts reads: take ${passLine(key)} out, or add it to Env`),
   ]
+  if (existsSync(join(root, 'test/env.test.ts'))) return { findings: lines.map((line) => `env      ${line}`), notes: [] }
+  return { findings: [], notes: lines.map((line) => `note     env ${line} (a failure once the app has test/env.test.ts, which a new app from \`kit init\` has)`) }
 }
 
 /** What doctor prints above the starter's lines. */
@@ -2152,15 +2154,16 @@ const commands = {
     const root = lock ? appRootOf() : null
     const brand = root ? brandFindings(root, lock.modules.includes('brand')) : { findings: [], notes: lock?.modules.includes('brand') ? [`note     brand: no package.json above ${dirArg}: \`--app <app>\` names the app whose brand/ to check`] : [] }
     const skills = root ? await skillFindings(root) : { findings: [], notes: [] }
+    const env = root ? envFindings(root) : { findings: [], notes: [] }
     const starter = lock && root ? starterFindings(root) : []
     // The starter's lines last, under a heading of their own: a new app has them all
     const starterLines = starter.length ? [STARTER_HEADING, ...starter] : []
-    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...(root ? envFindings(root) : []), ...starter] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
+    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...env.findings, ...starter] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
     const texts = lock ? appTexts() : []
     const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
     const kept = lock ? keptEditsOf(lock) : []
     const keptLines = kept.map((file) => `kept     ${file}: an edit kit.json records as kept; \`kit diff --dir ${dirArg} --patch\` shows it`)
-    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...skills.notes, ...behindNotes, ...keptLines, ...findings.slice(0, findings.length - starter.length), ...starterLines]) console.log(line)
+    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...skills.notes, ...env.notes, ...behindNotes, ...keptLines, ...findings.slice(0, findings.length - starter.length), ...starterLines]) console.log(line)
     const withKept = kept.length ? `, with ${kept.length} kept ${kept.length === 1 ? 'edit' : 'edits'}` : ''
     console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
