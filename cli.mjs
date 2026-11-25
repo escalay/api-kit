@@ -26,7 +26,8 @@
  *                                             this kit, and what to do: their notes from the kit's docs/upgrading.md, part by part;
  *                                             first, each edit the kit changed too in a part whose notes name a fix
  *   kit doctor [--dir src/kit] [--adopt] [--keep <file…>]
- *                                             missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it);
+ *                                             missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it),
+ *                                             the count naming where they are; first, this kit's version when the copy is another's;
  *                                             --keep records those edited files as kept in kit.json: a note while they stay so
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
  *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--no-install] [--yes]
@@ -2177,14 +2178,21 @@ const commands = {
     const starter = lock && root ? starterFindings(root) : []
     // The starter's lines last, under a heading of their own: a new app has them all
     const starterLines = starter.length ? [STARTER_HEADING, ...starter] : []
-    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...env.findings, ...starter] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
+    // Each finding with where it is, so the count names the places: the copy, or the app's own files
+    const placed = lock
+      ? [...findingsOf(lock).map((line) => [line, dirArg]), ...cliFindings().map((line) => [line, 'src/features (cli)']), ...brand.findings.map((line) => [line, 'brand/']), ...skills.findings.map((line) => [line, 'guide/skills/']), ...env.findings.map((line) => [line, 'src/app.ts and container/entrypoint.sh']), ...starter.map((line) => [line, /^starter +([^:]+):/.exec(line)?.[1] ?? 'the starter'])]
+      : [[`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`, dirArg]]
+    const findings = placed.map(([line]) => line)
+    const places = [...new Set(placed.map(([, place]) => place))]
+    // npx without a version runs the newest kit: said first when it is not the copy's
+    if (lock && lock.version !== VERSION) console.log(`Kit ${VERSION} (this command) checks ${dirArg}, a copy of kit ${lock.version}`)
     const texts = lock ? appTexts() : []
     const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
     const kept = lock ? keptEditsOf(lock) : []
     const keptLines = kept.map((file) => `kept     ${file}: an edit kit.json records as kept; \`kit diff --dir ${dirArg} --patch\` shows it`)
     for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...skills.notes, ...env.notes, ...behindNotes, ...keptLines, ...findings.slice(0, findings.length - starter.length), ...starterLines]) console.log(line)
     const withKept = kept.length ? `, with ${kept.length} kept ${kept.length === 1 ? 'edit' : 'edits'}` : ''
-    console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
+    console.log(findings.length ? `${findings.length} to fix in ${places.join(', ').replace(/, ([^,]*)$/, ' and $1')}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
   },
 

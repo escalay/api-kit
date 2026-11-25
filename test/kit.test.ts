@@ -610,6 +610,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     const sick = cli(app, 'doctor')
     expect(sick.status).toBe(1)
     expect(sick.stdout.trim().split('\n')).toEqual([
+      `Kit ${KIT_VERSION} (this command) checks src/kit, a copy of kit 0.0.1`,
       'note     kit.json says kit 0.0.1: `kit upgrading --dir src/kit` prints what changed for its parts since, and what to do',
       'missing  core/kv.ts: `kit update --dir src/kit` writes it again',
       "edited   core/hal.ts: yours to keep; `kit diff --dir src/kit --patch` shows the change, `kit update core --dir src/kit --force` takes the kit's",
@@ -695,6 +696,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     expect(diff.stdout).toMatch(/unchanged\s+core\/cache\.ts/)
     expect(diff.status).toBe(0)
     expect(cli(app, 'doctor', '--dir', 'kit').stdout.trim().split('\n')).toEqual([
+      `Kit ${KIT_VERSION} (this command) checks kit, a copy of kit 0.0.1`,
       'note     kit.json says kit 0.0.1: `kit upgrading --dir kit` prints what changed for its parts since, and what to do',
       `behind   kit.json says kit 0.0.1, this is ${KIT_VERSION} with the same files: \`kit update --dir kit\` records it`,
       '1 to fix in kit',
@@ -868,7 +870,8 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1', files: { ...lock.files, 'core/cache.ts': 'older' } }))
     const kept = cli(app, 'doctor', '--dir', 'kit')
     expect(kept.status).toBe(1)
-    expect(kept.stdout.trim().split('\n')).toEqual(['note     kit.json says kit 0.0.1: `kit upgrading --dir kit` prints what changed for its parts since, and what to do', keptLine, '1 to fix in kit'])
+    // Which kit runs, against which copy: an npx without a version runs the newest kit
+    expect(kept.stdout.trim().split('\n')).toEqual([`Kit ${KIT_VERSION} (this command) checks kit, a copy of kit 0.0.1`, 'note     kit.json says kit 0.0.1: `kit upgrading --dir kit` prints what changed for its parts since, and what to do', keptLine, '1 to fix in kit'])
     // At this kit's version (an older CLI stamped it over the kept file) the record is all there is: the edit is yours, never 'copied from' the new kit
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, files: { ...lock.files, 'core/cache.ts': 'older' } }))
     const stamped = cli(app, 'doctor', '--dir', 'kit')
@@ -1053,6 +1056,8 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
         'starter  brand/brand.ts: its description is still the starter’s (", an agent-ready API."): say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`',
         'starter  src/features/catalog.ts: a description is still the starter’s ("say here what switching it off stops"): say what switching the feature off stops',
       ])
+      // The count names where they are: none is in src/kit
+      expect(doctor.stdout.trim().split('\n').at(-1)).toBe('3 to fix in guide/skills/demo-api/SKILL.md, brand/brand.ts and src/features/catalog.ts')
       const productSkill = join(app, 'guide/skills/demo-api/SKILL.md')
       await writeFile(productSkill, (await readFile(productSkill, 'utf8')).replace(/Replace this line with[^"\n]*/, 'For reading lists: making one, adding books.'))
       await writeFile(join(app, 'brand/brand.ts'), (await readFile(join(app, 'brand/brand.ts'), 'utf8')).replace('Demo API, an agent-ready API.', 'Reading lists, shared with your agents.'))
