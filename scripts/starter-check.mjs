@@ -4,7 +4,8 @@
  * typecheck, lint, format check and tests for both, and for `api` a client made with `kit sdk` and its command line, built and run. For the `app` preset also the build (its files must land under /app/assets/, the one prefix
  * the Worker leaves to files, its brand's at the root), a dry-run deploy, and that a formatted app still takes a new feature and passes. The
  * `api` starter's brand is rendered with `kit brand` (its PNGs then served on Node and in workerd); the `app` starter
- * keeps the SVG-only brand a new app starts with, as the canaries and the release smoke test do.
+ * keeps the SVG-only brand a new app starts with, as the canaries and the release smoke test do. An `api` app also takes
+ * people, setup, boards and sharing with `add --wire`, formatted, and passes its gate.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -75,6 +76,21 @@ run('pnpm', ['--dir', 'sdk', 'exec', 'tsc', '-p', 'cli/tsconfig.json'], api)
 // The kit's copy and the app's command names, both clean
 run(process.execPath, [cli, 'doctor'], api)
 run(process.execPath, ['sdk/dist/cli/bin.js', 'note', 'list', '--help'], api)
+// people, setup, boards and sharing wired with `add --wire` into an installed (so formatted) app: its whole gate, then
+// --wire again changes nothing
+const wired = join(parent, 'starter-wired')
+run(process.execPath, [create, 'starter-wired', '--preset', 'api', '--yes'], parent)
+run(process.execPath, [cli, 'feature', 'recipes', '--fields', 'name:string status:enum(new|done)'], wired)
+run(process.execPath, [cli, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string'], wired)
+run(process.execPath, [cli, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves', '--install'], wired)
+for (const args of [['format'], ['migrations'], ['gate']]) run('pnpm', args, wired)
+const again = spawnSync(process.execPath, [cli, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves'], { cwd: wired, encoding: 'utf8' })
+if (!again.stdout.includes('Wired already')) {
+  console.error(`add --wire a second time should change nothing, but it said:\n${again.stdout}${again.stderr}`)
+  process.exit(1)
+}
+run(process.execPath, [cli, 'button', '--check'], wired)
+console.log('starter-wired: wired by add --wire, gate green, and a second --wire changed nothing')
 const app = check('starter-app', 'app', [['exec', 'oxfmt', '--check', 'web', 'vite.config.ts', 'tsconfig.web.json', 'index.html'], ['exec', 'wrangler', 'deploy', '--dry-run']])
 const built = [...readFileSync(join(app, 'dist/client/index.html'), 'utf8').matchAll(/(?:src|href)="(\/[^"]+)"/g)].map(([, path]) => path)
 // The brand's files are the Worker's, at the root, never built (the dev server leaves them there with vite-ignore)

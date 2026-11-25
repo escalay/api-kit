@@ -439,6 +439,13 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## boards
 
+### Unreleased (after 1.34.0)
+
+- New: `kit add boards --items <feature> --wire` writes the wiring an app made by `kit init` needs (its README's blocks) at the
+  `// kit:*` markers a new app's `src/app.ts`, `server.ts`, `worker.ts`, `wrangler.jsonc` and `vitest.config.ts`
+  carry; twice changes nothing. An app made before them has no markers: `--wire` prints every edit and writes
+  nothing, as the README does. Nothing to change.
+
 ### 1.32.0
 
 - `itemOf` may return a promise: the routes await it, so a card looked up in the database answers a ref that is not
@@ -468,6 +475,13 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## people
 
+### Unreleased (after 1.34.0)
+
+- New: `kit add people --wire` writes the wiring an app made by `kit init` needs (its README's blocks) at the
+  `// kit:*` markers a new app's `src/app.ts`, `server.ts`, `worker.ts`, `wrangler.jsonc` and `vitest.config.ts`
+  carry; twice changes nothing. An app made before them has no markers: `--wire` prints every edit and writes
+  nothing, as the README does. Nothing to change.
+
 ### 1.32.0
 
 - Nothing changes in the part. Its README now shows it as a feature of its own in an app made by `kit init`, what
@@ -492,6 +506,13 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - A migration step indexes sessions by person; `registerPeople` applies it when the app starts.
 
 ## setup
+
+### Unreleased (after 1.34.0)
+
+- New: `kit add setup --wire` writes the wiring an app made by `kit init` needs (its README's blocks, and
+  `SETUP_CODE` in the container's allowlist) at the `// kit:*` markers a new app's `src/app.ts`, `server.ts`,
+  `worker.ts`, `wrangler.jsonc` and `vitest.config.ts` carry; twice changes nothing. An app made before them has no markers: `--wire` prints every edit and writes
+  nothing, as the README does. Nothing to change.
 
 ### 1.30.1
 
@@ -536,6 +557,13 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - `onSwitch` is guarded: a hook that throws is logged and never answered, so the switch stays made.
 
 ## sharing
+
+### Unreleased (after 1.34.0)
+
+- New: `kit add sharing --spaces <feature> --wire` writes the wiring an app made by `kit init` needs (its README's blocks) at the
+  `// kit:*` markers a new app's `src/app.ts`, `server.ts`, `worker.ts`, `wrangler.jsonc` and `vitest.config.ts`
+  carry; twice changes nothing. An app made before them has no markers: `--wire` prints every edit and writes
+  nothing, as the README does. Nothing to change.
 
 ### 1.33.0
 

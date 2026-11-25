@@ -34,14 +34,14 @@ In this order; stop at the first that fits.
 
 1. Only you: `API_KEYS` (hashes), and the person Cloudflare Access proves approves agents (`owner` in `src/app.ts`).
 2. A team: `people` (passkeys for the owner, Access members with roles) and `setup` (the first person with the
-   deploy's `SETUP_CODE` becomes the owner); then `owner` is the people part's owner (`personOf`, the comment in
-   `src/app.ts`). Keys made through the API: `keys`.
+   deploy's `SETUP_CODE` becomes the owner): `npx @escalay/kit add people setup --wire` wires both, the people
+   part's owner (`personOf`) included. Keys made through the API: `keys`.
 3. Agents signing in for a person: `oauth`, the owner approving on the kit's page. An app's own page deciding: the
    `approve` hook, `complete` with a `resource`, and `onGrant` / `onRevoke` to mirror who holds access
    (`src/kit/oauth/README.md`).
 4. Other people, and their agents, into one part of the app (a space): `sharing`, by single-use invite or the
-   owner's approval at the space (`npx @escalay/kit add sharing --dir src/kit --install`, then its README's Wire it,
-   whose blocks wire an app made by `init` whole; `add` prints each setting and schedule the app still lacks).
+   owner's approval at the space: `npx @escalay/kit add sharing --wire --spaces <feature>` wires an app made by
+   `init` whole, settings and schedule too (its README's Wire it has the same blocks, for an older app).
    - `SHARING_SECRET`: 32+ random bytes, its own entry in your secret store, never the OAuth signing key.
    - `createOAuth` with `publicOrigin` and `...sharing.oauth`; `SHARING_OPEN_PATHS` in `auth.open`, `sharing.relay`
      in `auth.relay`, `sharing.neverKept` in `guards.skip`; then `registerSharing`.
@@ -71,7 +71,8 @@ part, what it needs and the order to add them: the kit's `docs/PARTS.md`):
 | Other people into one part of the app (invites, the owner's approval) | `sharing` (step 4 above); in the browser `sharing-client`, `sharing-react`, `sharing-ui` |
 
 Add one with `npx @escalay/kit add <part> --dir src/kit --install` (browser parts take `--web-dir`), then read its
-`src/kit/<part>/README.md` and wire it in `src/app.ts`. A new feature the owner can switch off:
+`src/kit/<part>/README.md` and wire it in `src/app.ts`; `people`, `setup`, `boards` (`--items <feature>`) and
+`sharing` (`--spaces <feature>`) wire themselves with `--wire`, then `pnpm format`. A new feature the owner can switch off:
 `npx @escalay/kit feature <plural-name> --switch` (`api-kit-feature`).
 
 ## An existing app

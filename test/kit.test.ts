@@ -2206,6 +2206,18 @@ describe('the skills', () => {
     expect(unnamed).toEqual([])
   })
 
+  it('says `--wire` first wherever a part --wire wires says how to wire it', async () => {
+    const items: { name: string; meta?: { wiring?: { code?: string; wire?: object } } }[] = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8')).items
+    const wired = items.filter(({ meta }) => meta?.wiring?.wire)
+    expect(wired.map(({ name }) => name).sort()).toEqual(['boards', 'people', 'setup', 'sharing'])
+    for (const { name, meta } of wired) {
+      const readme = await readFile(join(kitDir, 'src', name, 'README.md'), 'utf8')
+      const heading = meta!.wiring!.code ? `## ${meta!.wiring!.code}\n` : '### In an app made by `kit init`\n'
+      const section = readme.slice(readme.indexOf(heading))
+      expect(section.slice(0, section.indexOf('```')), name).toMatch(new RegExp(`kit add [^\`]*\\b${name}\\b[^\`]*--wire`))
+    }
+  })
+
   it('api-kit-part names every meta.wiring field the registry uses', async () => {
     const skill = (await skillTexts())['api-kit-part']!
     const wired: { meta?: { wiring?: Record<string, unknown> & { settings?: Record<string, string>[]; cron?: Record<string, string> } } }[] = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8')).items

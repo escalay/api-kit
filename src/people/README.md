@@ -40,7 +40,9 @@ await registerSetup(app, { db, code: env.SETUP_CODE, guards, fixedKeys, steps })
 
 ### In an app made by `kit init`
 
-A feature of its own, so its tools reach MCP and `toolsRun` (its tables reach `migrations/` either way):
+`npx @escalay/kit add people --wire` writes all of this (with `setup`: `add people setup --wire`); in an app made
+before its markers it prints the edits instead and changes nothing. By hand: a feature of its own, so its tools reach
+MCP and `toolsRun` (its tables reach `migrations/` either way):
 
 ```ts
 // src/features/people/index.ts, listed in src/features/index.ts before setup

@@ -23,8 +23,8 @@ Node and Workers.
 
 ## Wire it
 
-An app made by `kit init` whose spaces are shelves (`kit feature shelves --singular shelf --fields "name:string"`);
-`kit add sharing` prints the settings and the schedule it lacks. Each block names its file and place:
+In an app made by `kit init` with shelves as spaces (`kit feature shelves --singular shelf --fields "name:string"`),
+`kit add sharing --wire --spaces shelves` writes it all. By hand (an older app), each block names its place:
 
 ```ts
 // src/features/shelves/spaces.ts, new: the shelves as spaces, each shelf's id its space's name

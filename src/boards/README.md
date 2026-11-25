@@ -33,8 +33,9 @@ const tools = boardTools({ noun: 'recipes', label: (recipe) => recipe.title, ref
 
 ### In an app made by `kit init`
 
-A feature of its own, over the rows of another feature (here `recipes`, made with `kit feature recipes --fields
-"name:string"`):
+`npx @escalay/kit add boards --wire --items recipes` writes this feature over the rows of `recipes` (made with
+`kit feature recipes --fields "name:string"`); in an app made before its markers it prints it instead. By hand, a
+feature of its own over the rows of another feature:
 
 ```ts
 // src/features/boards/index.ts, listed in src/features/index.ts
