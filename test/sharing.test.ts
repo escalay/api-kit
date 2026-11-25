@@ -421,6 +421,7 @@ describe('an id from Bakes is not found at Soups', () => {
     ['claimRequest', ({ repo, approvedId }, spaceId) => repo.claimRequest(approvedId, memberRow(spaceId, NOW, 'grant-request'), NOW)],
     ['memberAt', ({ repo, memberId }, spaceId) => repo.memberAt(spaceId, memberId)],
     ['endMember', ({ repo, memberId }, spaceId) => repo.endMember(spaceId, memberId, 'removed', NOW)],
+    ['closeMember', ({ repo, memberId }, spaceId) => repo.closeMember(spaceId, memberId, 'removed', NOW)],
   ])('%s', async (_, statement) => {
     const world = await bakes()
     expect(await statement(world, 'sp_soups')).toBeOneOf([undefined, null, false, 0])
@@ -452,6 +453,28 @@ describe('members', () => {
     const first = await repo.listMembers('sp_soups', { limit: 2 })
     expect(first.map((row) => row.id)).toEqual([ids[4], ids[3]])
     expect((await repo.listMembers('sp_soups', { after: first.at(-1)!.id, limit: 2 })).map((row) => row.id)).toEqual([ids[0]])
+  })
+
+  it('close for the owner’s reason once, live or signed out, and leave the list', async () => {
+    const repo = sharingRepo(await sharingDb())
+    const live = (await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-close-live')))!
+    const signedOut = (await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-close-out')))!
+    await repo.endMemberOfGrant('grant-close-out', 'revoked', NOW)
+    expect(await repo.closeMember('sp_soups', live, 'removed', at(NOW, HOUR))).toBe('grant-close-live')
+    expect(await repo.closeMember('sp_soups', signedOut, 'replaced', at(NOW, HOUR))).toBe('grant-close-out')
+    expect(await repo.closeMember('sp_soups', live, 'replaced', at(NOW, DAY))).toBeNull()
+    expect(await repo.memberByGrant('grant-close-live')).toMatchObject({ endedReason: 'removed', endedAt: at(NOW, HOUR).toISOString() })
+    expect(await repo.memberByGrant('grant-close-out')).toMatchObject({ endedReason: 'replaced', endedAt: NOW.toISOString() })
+    expect(await repo.listMembers('sp_soups', { limit: 10 })).toEqual([])
+  })
+
+  it('revoke the other invites replacing a member, keeping the one named', async () => {
+    const repo = sharingRepo(await sharingDb())
+    const replacing = { replacesMemberId: 'mem_sam' }
+    const older = (await repo.addInvite(inviteRow('sp_soups', NOW, 'again-older', replacing)))!
+    const joined = (await repo.addInvite(inviteRow('sp_soups', NOW, 'again-joined', replacing)))!
+    expect(await repo.revokeInvitesReplacing('sp_soups', 'mem_sam', NOW, joined)).toBe(1)
+    expect([(await repo.inviteAt('sp_soups', older))?.revokedAt, (await repo.inviteAt('sp_soups', joined))?.revokedAt]).toEqual([NOW.toISOString(), null])
   })
 
   it('note a use at most once an hour', async () => {

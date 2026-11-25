@@ -761,6 +761,11 @@
           "target": "~/src/kit/sharing/limits.ts"
         },
         {
+          "path": "src/sharing/owner.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/owner.ts"
+        },
+        {
           "path": "src/sharing/pages.ts",
           "type": "registry:file",
           "target": "~/src/kit/sharing/pages.ts"
@@ -794,6 +799,11 @@
           "path": "src/sharing/states.ts",
           "type": "registry:file",
           "target": "~/src/kit/sharing/states.ts"
+        },
+        {
+          "path": "src/sharing/sweep.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/sweep.ts"
         },
         {
           "path": "src/sharing/tools.ts",

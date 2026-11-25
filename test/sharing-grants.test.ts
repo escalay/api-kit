@@ -375,7 +375,7 @@ describe('accepts', () => {
     const db = await testDb()
     await migrate(db, 'sharing', SHARING_MIGRATIONS)
     const sharing = await createSharing({ db, secret: 'a sharing secret of thirty-two bytes or more, for tests only', spaces: { byName: async () => null, byId: async () => null }, owner: async () => null })
-    sharing.bind({ publicOrigin: ORIGIN, mcpPath: '/mcp' })
+    sharing.bind({ publicOrigin: ORIGIN, mcpPath: '/mcp', revokeGrant: async () => {} })
     const probe = new Hono()
     const caller: TokenCaller = { kind: 'agent', name: 'Sample', client: 'client-1', grant: 'grant-1', scopes: ['read'], owner: OWNER, resource: SOUPS }
     probe.get('*', async (c) => c.json({ judged: await sharing.oauth.accepts(caller, c), resource: sharing.oauth.resourceOf(c) }))
@@ -456,7 +456,7 @@ describe('bind', () => {
   it('refuses an OAuth server with no publicOrigin: a forwarded host would pick the root', async () => {
     const db = await testDb()
     const sharing = await createSharing({ db, secret: 'a sharing secret of thirty-two bytes or more, for tests only', spaces: { byName: async () => null, byId: async () => null }, owner: async () => null })
-    expect(() => sharing.bind({ publicOrigin: undefined, mcpPath: '/mcp' })).toThrow(/publicOrigin/)
+    expect(() => sharing.bind({ publicOrigin: undefined, mcpPath: '/mcp', revokeGrant: async () => {} })).toThrow(/publicOrigin/)
     const oauth = createOAuth({ name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null, ...sharing.oauth })
     await expect(registerSharing(createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A recipe box.', tags: [], auth: { realm: 'sample', keys: new Map() }, oauth }), sharing, { oauth })).rejects.toThrow(/publicOrigin/)
   })

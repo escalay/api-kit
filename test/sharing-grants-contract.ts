@@ -231,6 +231,21 @@ export const sharingGrantsContract = (name: string, makeDb: () => Promise<Db>) =
       expect((await box.memberOfToken(token))?.lastSeenAt).toBe(unseen)
     })
 
+    it('sweep ends a lapsed and an expired member once, from two sweeps at once, and revokes each grant once', async () => {
+      const box = await grantsApp(await makeDb())
+      const expired = (await box.join(await box.makeInvite('soups', { label: 'Sam', lifetime: '7d' }))).tokens.access_token
+      const lapsed = (await box.join(await box.makeInvite('soups', { label: 'Ada' }))).tokens.access_token
+      await box.ageMember(grantOf(expired), { expiresAt: new Date(Date.now() - HOUR).toISOString() })
+      await box.ageMember(grantOf(lapsed), { lastSeenAt: new Date(Date.now() - 31 * DAY).toISOString() })
+      await Promise.all([box.sharing.sweep(), box.sharing.sweep()])
+      // The database may hold other tests' rows: only these two grants are judged
+      for (const [token, reason] of [[expired, 'expired'], [lapsed, 'lapsed']] as const) {
+        expect([reason, (await box.memberOfToken(token))?.endedReason]).toEqual([reason, reason])
+        expect([reason, box.revoked.filter((told) => told.grant === grantOf(token)).map((told) => told.reason)]).toEqual([reason, ['revoked']])
+        expect((await box.call('/s/soups/mcp', token)).status).toBe(401)
+      }
+    })
+
     it('end every member a client made when the client is revoked, and its tokens stop', async () => {
       const box = await grantsApp(await makeDb())
       const joined = await box.join(await box.makeInvite())

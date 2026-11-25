@@ -4,28 +4,38 @@ import { mcpTool, type McpTool } from '../mcp/index.js'
 import { LIFETIMES, SCOPES } from './schema.js'
 
 type InviteCard = { id: string; label: string; scope: string; lifetime: string; state: string; redeemBy: string }
+type MemberCard = { id: string; label: string; appName: string; returnsTo: string; scope: string; lifetime: string; state: string }
 type SharingCard = { space: string; title: string; askToJoin: string; askToJoinOffered: boolean; openInvites: number }
-type InvitePage = { _embedded: { invites: InviteCard[] }; _links: { next?: { href: string } | null } }
+type Paged = { _links: { next?: { href: string } | null } }
+type InvitePage = Paged & { _embedded: { invites: InviteCard[] } }
+type MemberPage = Paged & { _embedded: { members: MemberCard[] } }
 
 const ON_WORD = 'Use it only when the user asks.'
 const inviteLine = (invite: InviteCard) => `${invite.label} · ${invite.state} · ${invite.scope}, ${invite.lifetime} · redeem by ${invite.redeemBy} · id ${invite.id}`
+const memberLine = (member: MemberCard) => `${member.label} · ${member.state === 'active' ? 'active' : 'signed out'} · ${member.scope}, ${member.lifetime} · ${member.appName} (returns to ${member.returnsTo}) · id ${member.id}`
 /** The line that says a page has more after it, with the cursor that continues; none on the last page. */
-const moreLine = (page: InvitePage) => {
+const moreLine = (page: Paged, noun: string, tool: string) => {
   const cursor = page._links.next ? new URL(page._links.next.href).searchParams.get('cursor') : null
-  return cursor ? [`More invites: call list_invites again with cursor ${cursor}`] : []
+  return cursor ? [`More ${noun}: call ${tool} again with cursor ${cursor}`] : []
 }
 /** A page of invites as the agent reads it: a line each, then whether more follow. */
 const invitesText = (page: InvitePage) => {
   const lines = page._embedded.invites.map(inviteLine)
-  return lines.length ? [...lines, ...moreLine(page)].join('\n') : 'No invites yet. create_invite makes one.'
+  return lines.length ? [...lines, ...moreLine(page, 'invites', 'list_invites')].join('\n') : 'No invites yet. create_invite makes one.'
+}
+/** A page of members as the agent reads it: a line each, then whether more follow. */
+const membersText = (page: MemberPage) => {
+  const lines = page._embedded.members.map(memberLine)
+  return lines.length ? [...lines, ...moreLine(page, 'members', 'list_members')].join('\n') : 'No members yet: no one has joined.'
 }
 const sharingLine = (json: SharingCard) =>
   `${json.title} (${json.space}): asking to join ${json.askToJoinOffered ? json.askToJoin : 'not offered by this app'}; ${json.openInvites} open invite${json.openInvites === 1 ? '' : 's'}.`
 
 /**
- * The MCP tools for the owner's sharing routes: a space's sharing, the Ask to join switch, and invites made, listed
- * and revoked. Each acts only on the user's word; `create_invite` returns the message to send and never sends it. Give
- * them to the owner's MCP only, never to `mountA2A`: a delegating agent must not mint invites.
+ * The MCP tools for the owner's sharing routes: a space's sharing, the Ask to join switch, invites made, listed and
+ * revoked, and members listed, removed and invited again. Each acts only on the user's word; `create_invite` and
+ * `invite_again` return the message to send and never send it. Give them to the owner's MCP only, never to
+ * `mountA2A`: a delegating agent must not mint invites.
  *
  * @example
  * mcpServerFactory({ tools: [...FEATURE_TOOLS, ...sharingTools({ noun: 'shelf' })], … })
@@ -88,6 +98,36 @@ export const sharingTools = ({ path = '/api/spaces', noun = 'space' }: { path?: 
       cli: { name: 'invite revoke', examples: [{ run: 'invite revoke soups inv_a1b2 --yes', about: 'Revoke an invite to soups' }] },
       call: ({ space, id }) => ({ method: 'DELETE', path: `${at(space)}/invites/${encodeURIComponent(id)}` }),
       summarize: (_json: unknown, { id }) => `Revoked invite ${id}.`,
+    }),
+    mcpTool({
+      name: 'list_members',
+      title: `A ${noun}’s members`,
+      description: `The apps signed in to a ${noun}, newest first, each active or signed out (invite_again gives a signed-out one a fresh invite), a page at a time: the answer ends with the cursor for the next page while there is more. ${ON_WORD}`,
+      input: z.object({ space, limit: z.number().int().min(1).max(100).optional().describe('At most this many (default 50).'), cursor: z.string().optional().describe('Where to continue, from the last answer.') }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      cli: { name: 'member list', examples: [{ run: 'member list soups', about: 'Everyone signed in to soups' }] },
+      call: ({ space, limit, cursor }) => ({ path: `${at(space)}/members`, query: { limit, cursor } }),
+      summarize: (page: MemberPage) => membersText(page),
+    }),
+    mcpTool({
+      name: 'invite_again',
+      title: 'Invite a member again',
+      description: `A fresh invite for a member who lost their sign-in, with the same label, access and lifetime: shown only now, with a message for the user to send. This tool never sends it. Once it is used, the old sign-in ends. ${ON_WORD}`,
+      input: z.object({ space, id: z.string().describe('The member’s id (`mem_…`), from list_members.') }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      cli: { name: 'member reinvite', examples: [{ run: 'member reinvite soups mem_a1b2', about: 'A fresh invite for a member of soups' }] },
+      call: ({ space, id }) => ({ method: 'POST', path: `${at(space)}/members/${encodeURIComponent(id)}/invite-again` }),
+      summarize: (json: InviteCard & { message: string }) => `Made invite ${json.id} for ${json.label} (${json.scope}, ${json.lifetime}), replacing their old sign-in once used. Its link and code are shown only now: give the user this message to send.\n\n${json.message}`,
+    }),
+    mcpTool({
+      name: 'remove_member',
+      title: 'Remove a member',
+      description: `Ends a member’s sign-in at once and takes it off the list. To let them back, make a new invite. ${ON_WORD}`,
+      input: z.object({ space, id: z.string().describe('The member’s id (`mem_…`), from list_members.') }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      cli: { name: 'member remove', examples: [{ run: 'member remove soups mem_a1b2 --yes', about: 'Remove a member of soups' }] },
+      call: ({ space, id }) => ({ method: 'DELETE', path: `${at(space)}/members/${encodeURIComponent(id)}` }),
+      summarize: (_json: unknown, { id }) => `Removed member ${id}: its sign-in has ended.`,
     }),
   ]
 }

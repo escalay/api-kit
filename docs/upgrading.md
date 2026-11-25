@@ -506,7 +506,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ### Unreleased (after 1.31.0)
 
-- A new part, more of its sign-in pages still to come: its tables (`SHARING_MIGRATIONS` step 1: `sharing_spaces`,
+- A new part (the remembered invite link and asking to join are not built): its tables (`SHARING_MIGRATIONS` step 1: `sharing_spaces`,
   `sharing_invites`, `sharing_requests`, `sharing_members`), `sharingRepo`, the named states of its rows and its
   secrets; `createSharing` and `registerSharing` with the owner's routes under `/api/spaces/{space}` (the space's
   sharing and its invites: made with the link and code shown once, listed, read one at a time, revoked) and
@@ -521,6 +521,13 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
   false` throws); a space's budget counts everyone's codes, so set the app's `address`, else each post names its own.
   The new option `knownReturns` names the apps the app expects. Behind Cloudflare Access, let
   `sharingSignInPaths(sharing)` through.
+- The owner's approval at a space: `approve` shows the signed-in owner their own page (Approve or Refuse; Allow
+  changes and Until revoked start ticked at a known return, unticked elsewhere: read for 30 days), or "No space …
+  here". A space's code page offers Continue as the owner (`POST /sharing/as-owner`, then `POST /sharing/owner`);
+  the new option `signInPath` links "Sign in first". `signInStepOf` takes `found`. Members: `GET {path}/{space}/members`
+  and `/members/{id}`, Remove (`DELETE`), `POST …/invite-again`, and the tools `list_members`, `remove_member`,
+  `invite_again`. Call `sharing.sweep()` from the app's scheduled handler, and `sharing.forget(spaceId)` when it
+  deletes a space.
 
 ## testing
 

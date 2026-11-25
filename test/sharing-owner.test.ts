@@ -6,7 +6,7 @@ import { inProcess, mcpServerFactory, mountMcp } from '../src/mcp/index.js'
 import { createSharing, newInviteCode, registerSharing, sharerOf, sharingRepo, sharingTools, SHARING_TAG, type SharingOptions } from '../src/sharing/index.js'
 import { cliGaps, lintOpenApi, toolRoutes, toolsRun } from '../src/testing/index.js'
 import { approvedCode, signedIn } from './oauth-store-contract.js'
-import { inviteRow, requestRow } from './sharing-rows.js'
+import { inviteRow, memberRow, requestRow } from './sharing-rows.js'
 
 // The real code maker, unless a test asks for the same code twice (a collision)
 vi.mock('../src/sharing/secrets.js', async (importOriginal) => {
@@ -416,14 +416,18 @@ describe('the owner routes and tools', () => {
   })
 
   it('run with toolsRun, the way an agent calls them', async () => {
-    const { app, byKey } = await sharingApi()
+    const { app, byKey, db } = await sharingApi()
     const open = await makeInvite(byKey)
+    const member = (await sharingRepo(db).addOwnerMember(memberRow('sp_soups', new Date(), 'grant-tools')))!
     const args = {
       get_sharing: { space: 'soups' },
       set_ask_to_join: { space: 'soups', askToJoin: true },
       create_invite: { space: 'soups', label: 'Sam', scope: 'write', lifetime: '7d' },
       list_invites: { space: 'soups', limit: 5 },
       revoke_invite: { space: 'soups', id: open.id },
+      list_members: { space: 'soups', limit: 5 },
+      invite_again: { space: 'soups', id: member },
+      remove_member: { space: 'soups', id: member },
     }
     expect(await toolsRun(sharingTools(), app, args, { headers: { authorization: `Bearer ${KEY}` } })).toEqual([])
   })

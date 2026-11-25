@@ -19,7 +19,7 @@ import type { AgentBrand } from '../core/discovery.js'
 import { originOf } from '../core/hal.js'
 import type { OAuth, SignInAsk, SignInGrant, SignInRevoked, TokenCaller } from '../oauth/index.js'
 import type { SharingConfig, Space } from './index.js'
-import type { MemberRow, NewMember, SharingRepo } from './repo.js'
+import type { InviteRow, MemberRow, NewMember, SharingRepo } from './repo.js'
 import { LIFETIMES, type EndedReason, type Lifetime, type Scope } from './schema.js'
 import { memberExpiresAtOf, memberStateOf } from './states.js'
 
@@ -33,10 +33,10 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 export const ONLY_ITS_SPACE = 'This sign-in works only at its own space: connect again from the address you were given.'
 const NOT_READY = 'Sharing is not ready here yet (the app calls registerSharing before serving): try again in a minute.'
 
-/** What `bind` reads from the app's OAuth server: its pinned origin and its MCP path. */
-export type BoundOAuth = Pick<OAuth, 'publicOrigin' | 'mcpPath'>
+/** What `bind` reads from the app's OAuth server: its pinned origin, its MCP path, and how to end a grant. */
+export type BoundOAuth = Pick<OAuth, 'publicOrigin' | 'mcpPath' | 'revokeGrant'>
 /** What the hooks judge by once bound: the root is the issuer's pinned origin, never a request's host. */
-export type Bound = { root: string; mcpPath: string }
+export type Bound = { root: string; mcpPath: string; revokeGrant: OAuth['revokeGrant'] }
 /** The server the hooks are bound to, and the app's brand for the pages: null until `registerSharing` binds it, and the hooks refuse until then. */
 export type Binding = { bound: Bound | null; brand?: AgentBrand }
 /** What every hook works from. */
@@ -47,11 +47,11 @@ type Grants = { config: SharingConfig; repo: SharingRepo; binding: Binding }
  * forwarded host would then name the root and a space token would read as the root's.
  *
  * @example
- * boundOf(oauth)   // { root: 'https://sample.example.test', mcpPath: '/mcp' }
+ * boundOf(oauth)   // { root: 'https://sample.example.test', mcpPath: '/mcp', revokeGrant }
  */
 export const boundOf = (oauth: BoundOAuth): Bound => {
   if (!oauth.publicOrigin) throw new Error('sharing: the OAuth server needs publicOrigin (createOAuth({ publicOrigin })): without it a forwarded host names the root, and a space token would read as a root token.')
-  return { root: oauth.publicOrigin, mcpPath: oauth.mcpPath }
+  return { root: oauth.publicOrigin, mcpPath: oauth.mcpPath, revokeGrant: oauth.revokeGrant }
 }
 
 /** What `memberOf` tells the app about the member behind a request; never its grant. */
@@ -145,17 +145,31 @@ const newMemberOf = (grant: SignInGrant, space: Space, given: { label: string; s
   lastSeenAt: now.toISOString(),
 })
 
+/**
+ * Invite again, joined: the other invites for the member it replaces are revoked, then that member is closed as
+ * `replaced` (live or signed out) and its grant revoked. Closed first, so `onRevoke` finds it ended already.
+ */
+const replaceMember = async ({ repo }: Grants, bound: Bound, invite: Pick<InviteRow, 'id' | 'spaceId' | 'replacesMemberId'>, now: Date) => {
+  const replaced = invite.replacesMemberId
+  if (!replaced) return
+  await repo.revokeInvitesReplacing(invite.spaceId, replaced, now, invite.id)
+  const grant = await repo.closeMember(invite.spaceId, replaced, 'replaced', now)
+  if (grant) await bound.revokeGrant(grant)
+}
+
 /** The invite claim: the grant's approver is that invite, its scope no more than the invite's, and the one statement writes the member. */
-const claimByInvite = async ({ repo }: Grants, grant: SignInGrant, space: Space) => {
+const claimByInvite = async (grants: Grants, bound: Bound, grant: SignInGrant, space: Space) => {
   const inviteId = grant.data?.invite ?? ''
   if (grant.approver !== `invite:${inviteId}`) return false
-  const invite = await repo.inviteAt(space.id, inviteId)
+  const invite = await grants.repo.inviteAt(space.id, inviteId)
   if (!invite) return false
   const scope = scopeOf(grant.scopes)
   if (exceeds(scope, invite.scope)) return false
   const now = new Date()
   const member = newMemberOf(grant, space, { label: invite.label, scope, lifetime: invite.lifetime }, now)
-  return (await repo.claimInvite(invite.id, member, now)) !== null
+  if ((await grants.repo.claimInvite(invite.id, member, now)) === null) return false
+  await replaceMember(grants, bound, invite, now)
+  return true
 }
 
 /** The owner's approval at a space: approved as `owner:<email>`, for the space the resource names, with a lifetime the part has. */
@@ -170,13 +184,13 @@ const memberByOwner = async ({ repo }: Grants, grant: SignInGrant, space: Space)
 }
 
 /** A grant into a space: only a code from one of the part's pages, at a space the app has, by the way that page said. */
-const joinSpace = async (grants: Grants, grant: SignInGrant, root: string) => {
+const joinSpace = async (grants: Grants, grant: SignInGrant, bound: Bound) => {
   if (grant.kind !== 'code') return false
-  const name = spaceOfResource(grants.config, grant.resource ?? '', root)
+  const name = spaceOfResource(grants.config, grant.resource ?? '', bound.root)
   if (!name) return false
   const space = await grants.config.spaces.byName(name)
   if (!space) return false
-  if (grant.data?.sharing === 'invite') return claimByInvite(grants, grant, space)
+  if (grant.data?.sharing === 'invite') return claimByInvite(grants, bound, grant, space)
   if (grant.data?.sharing === 'owner') return memberByOwner(grants, grant, space)
   return false
 }
@@ -192,7 +206,7 @@ export const onGrantFor = (grants: Grants) => async (grant: SignInGrant) => {
   const bound = grants.binding.bound
   if (!bound) return false
   if (isRootAudience(grant.resource, bound.root, bound.mcpPath)) return grant.data?.sharing === undefined
-  return joinSpace(grants, grant, bound.root)
+  return joinSpace(grants, grant, bound)
 }
 
 /**

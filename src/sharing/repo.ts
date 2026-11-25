@@ -10,7 +10,7 @@
  * const repo = sharingRepo(db)
  * const member = await repo.claimInvite({ inviteId, spaceId, grantId, … }, new Date())   // its id, or null: spent, revoked, late
  */
-import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm'
+import { and, desc, eq, getTableColumns, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql, type SQL } from 'drizzle-orm'
 import { newId } from '../core/ids.js'
 import type { SQLiteColumn, SQLiteTable } from 'drizzle-orm/sqlite-core'
 import type { Db } from '../db/index.js'
@@ -127,9 +127,9 @@ export const sharingRepo = (db: Db) => {
       const revoked = await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.id, id), eq(sharingInvites.spaceId, spaceId), unrevoked)).returning({ id: sharingInvites.id })
       return revoked.length > 0
     },
-    /** Invite again: revokes this space's earlier invites for the member, so only the newest works; how many it recorded. */
-    revokeInvitesReplacing: async (spaceId: string, memberId: string, now: Date) =>
-      (await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.replacesMemberId, memberId), eq(sharingInvites.spaceId, spaceId), unrevoked)).returning({ id: sharingInvites.id })).length,
+    /** Invite again: revokes this space's invites for the member but `keep` (the one that joined), so only one works; how many it recorded. */
+    revokeInvitesReplacing: async (spaceId: string, memberId: string, now: Date, keep?: string) =>
+      (await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.replacesMemberId, memberId), eq(sharingInvites.spaceId, spaceId), unrevoked, keep ? ne(sharingInvites.id, keep) : undefined)).returning({ id: sharingInvites.id })).length,
     /** Revokes the invites an agent made under a grant that ended, redeemed ones on the record too; how many it recorded. */
     revokeInvitesMadeByGrant: async (grantId: string, now: Date) =>
       (await db.update(sharingInvites).set({ revokedAt: iso(now) }).where(and(eq(sharingInvites.madeByGrant, grantId), unrevoked)).returning({ id: sharingInvites.id })).length,
@@ -229,6 +229,18 @@ export const sharingRepo = (db: Db) => {
     endMember: async (spaceId: string, id: string, reason: EndedReason, now: Date): Promise<string | null> => {
       const [ended] = await db.update(sharingMembers).set({ endedAt: iso(now), endedReason: reason }).where(and(eq(sharingMembers.id, id), eq(sharingMembers.spaceId, spaceId), isNull(sharingMembers.endedAt))).returning({ grantId: sharingMembers.grantId })
       return ended?.grantId ?? null
+    },
+    /**
+     * Closes a member of this space for the owner's reason, live or signed out, which hides it from the list; its grant,
+     * to revoke, or null when it is not there or closed already. A signed-out member keeps the time it ended.
+     */
+    closeMember: async (spaceId: string, id: string, reason: Extract<EndedReason, 'removed' | 'replaced'>, now: Date): Promise<string | null> => {
+      const shown = or(isNull(sharingMembers.endedReason), notInArray(sharingMembers.endedReason, ['removed', 'replaced']))
+      const [closed] = await db.update(sharingMembers)
+        .set({ endedAt: sql`coalesce(${sharingMembers.endedAt}, ${iso(now)})`, endedReason: reason })
+        .where(and(eq(sharingMembers.id, id), eq(sharingMembers.spaceId, spaceId), shown))
+        .returning({ grantId: sharingMembers.grantId })
+      return closed?.grantId ?? null
     },
     /** Ends the live member a grant made; the row ended, or null when there was none live. */
     endMemberOfGrant: async (grantId: string, reason: EndedReason, now: Date) =>

@@ -1,19 +1,22 @@
 /**
  * Sharing: invites to a space, asks to join and the owner's approval, on the oauth part's hooks (`approve`,
  * `complete`, `onGrant`, `onRevoke`, `accepts`). A **space** is the part of an app that is shared (a shelf, a board, a
- * project); a **member** is one grant into one space. So far the part holds its tables (`SHARING_MIGRATIONS`), the
- * only queries (`sharingRepo`), the named states of its rows (`states.ts`), its secrets (`secrets.ts`), the oauth hooks
- * that make members and hold a space's token to its space (`sharing.oauth`, `grants.ts`), the sign-in pages where an
- * invite's code is typed (`signin.ts`, `pages.ts`, `limits.ts`: `POST /sharing/join`), and the owner's routes and
- * tools for a space's settings and its invites:
- *   GET    {path}/{space}/sharing         how the space is shared
- *   PATCH  {path}/{space}/sharing         switch Ask to join
- *   POST   {path}/{space}/invites         a new invite → 201, its link and code shown this once
- *   GET    {path}/{space}/invites         the space's invites, newest first, a page at a time
- *   GET    {path}/{space}/invites/{id}    one invite and its state, never its link or code
- *   DELETE {path}/{space}/invites/{id}    revoke an invite no one has used
- * The owner's own approval at a space, members, the remembered link and asking to join come next (its README says
- * what is there).
+ * project); a **member** is one grant into one space. The part holds its tables (`SHARING_MIGRATIONS`), the only
+ * queries (`sharingRepo`), the named states of its rows (`states.ts`), its secrets (`secrets.ts`), the oauth hooks that
+ * make members and hold a space's token to its space (`sharing.oauth`, `grants.ts`), the sign-in pages where an
+ * invite's code is typed or the owner approves (`signin.ts`, `owner.ts`, `pages.ts`, `limits.ts`), aging and a deleted
+ * space (`sweep`, `forget`: `sweep.ts`), and the owner's routes and tools:
+ *   GET    {path}/{space}/sharing                       how the space is shared
+ *   PATCH  {path}/{space}/sharing                       switch Ask to join
+ *   POST   {path}/{space}/invites                       a new invite → 201, its link and code shown this once
+ *   GET    {path}/{space}/invites                       the space's invites, newest first, a page at a time
+ *   GET    {path}/{space}/invites/{id}                  one invite and its state, never its link or code
+ *   DELETE {path}/{space}/invites/{id}                  revoke an invite no one has used
+ *   GET    {path}/{space}/members                       who is signed in, newest first, a page at a time
+ *   GET    {path}/{space}/members/{id}                  one member
+ *   DELETE {path}/{space}/members/{id}                  remove a member: its sign-in ends at once
+ *   POST   {path}/{space}/members/{id}/invite-again     a fresh invite that replaces the member once used
+ * The remembered link and asking to join are not built (its README says what is there).
  *
  * @example
  * const sharing = await createSharing({ db, secret: env.SHARING_SECRET, spaces, owner, spaceOfPath, fixedKeys: [...parseApiKeys(env.API_KEYS).values()] })
@@ -21,6 +24,7 @@
  * const app = createAgentApi({ …, tags: [...FEATURE_TAGS, SHARING_TAG], auth: { …, open: [...SHARING_OPEN_PATHS], relay: ['/mcp', '/a2a', sharing.relay] }, guards: { …, skip: sharing.neverKept }, oauth })
  * await registerSharing(app, sharing, { oauth })
  * mcpServerFactory({ tools: [...FEATURE_TOOLS, ...sharingTools({ noun: 'shelf' })], … })
+ * // the scheduled handler: await sharing.sweep()
  */
 import type { OpenAPIHono } from '@hono/zod-openapi'
 import type { Context } from 'hono'
@@ -36,7 +40,9 @@ import { sharingRepo } from './repo.js'
 import { sharingRoutes } from './routes.js'
 import { SHARING_MIGRATIONS } from './schema.js'
 import { sharingKeys, type SharingKeys } from './secrets.js'
+import { ownerRoutesFor } from './owner.js'
 import { approveFor, joinByCodeFor, type SignInOAuth } from './signin.js'
+import { forgetFor, sweepFor } from './sweep.js'
 
 export { appNameOf, boundOf, isRootAudience, ONLY_ITS_SPACE, spaceNameIn, type Binding, type Bound, type BoundOAuth, type MemberView } from './grants.js'
 export { sharerOf, type Sharer, type SharerFacts } from './handlers.js'
@@ -89,11 +95,13 @@ export type SharingOptions = {
    * (core README, The caller's address) or a stranger names a new one on every post.
    */
   limits?: { store?: GuardStore; address?: AddressTrust } | false
+  /** Where the owner signs in, linked from the page that asks them to. Default none: the page says so in words. */
+  signInPath?: string
   tag?: string
 }
 
 /** The options with their defaults, and the keys derived from the secret: what `registerSharing` reads. */
-export type SharingConfig = Required<Omit<SharingOptions, 'secret' | 'limits'>> & { keys: SharingKeys; limits: SharingLimits }
+export type SharingConfig = Required<Omit<SharingOptions, 'secret' | 'limits' | 'signInPath'>> & Pick<SharingOptions, 'signInPath'> & { keys: SharingKeys; limits: SharingLimits }
 
 export type Sharing = {
   /** The space addresses as a pattern for `auth.relay` (`/s/*\/mcp`): a `read` token may POST there. */
@@ -119,6 +127,13 @@ export type Sharing = {
   handles: (ask: Pick<SignInAsk, 'resource'>) => boolean
   /** The member behind a request's space token while it lives, with its space; null for anyone else. */
   memberOf: (c: Context) => Promise<MemberView | null>
+  /**
+   * Ends members past their lifetime or unseen for 30 days and revokes their grants, then deletes what closed long
+   * ago: call it from the app's scheduled handler (hourly is enough). Safe from two instances at once.
+   */
+  sweep: () => Promise<{ ended: number; deleted: number }>
+  /** A space the app deleted: its invites revoked, its members ended and their grants revoked, its settings dropped. */
+  forget: (spaceId: string) => Promise<void>
 }
 
 const SPACE = '{space}'
@@ -158,7 +173,8 @@ export const createSharing = async (options: SharingOptions): Promise<Sharing> =
     spaceOfPath: options.spaceOfPath ?? (() => null),
   }
   const binding: Binding = { bound: null }
-  const grants = { config, repo: sharingRepo(config.db), binding }
+  const repo = sharingRepo(config.db)
+  const grants = { config, repo, binding }
   return {
     relay,
     mcpPath,
@@ -172,11 +188,14 @@ export const createSharing = async (options: SharingOptions): Promise<Sharing> =
     },
     handles: handlesFor(grants),
     memberOf: memberOfFor(grants),
+    sweep: sweepFor({ repo, binding }),
+    forget: forgetFor({ repo, binding }),
   }
 }
 
 /**
- * Registers the sign-in pages' route (`POST /sharing/join`) and the owner's sharing routes on the app, after binding
+ * Registers the sign-in pages' routes (`POST /sharing/join`, `/sharing/as-owner`, `/sharing/owner`) and the owner's
+ * sharing routes on the app, after binding
  * the hooks to the app's `createOAuth` server and brand (`bind`, which throws without `publicOrigin`) and migrating
  * the sharing tables. Call it after `createAgentApi`, before serving: its pinned origin and MCP path say which agents
  * may share and which tokens are root tokens, and name links.
@@ -191,6 +210,9 @@ export const registerSharing = async (app: OpenAPIHono, sharing: Sharing, { oaut
   await migrate(config.db, 'sharing', SHARING_MIGRATIONS)
   const repo = sharingRepo(config.db)
   app.post('/sharing/join', joinByCodeFor({ config, bound, brand, repo, limits: codeLimitsOf(config.limits, config.keys), oauth }))
+  const owner = ownerRoutesFor({ config, bound, brand, oauth })
+  app.post('/sharing/as-owner', owner.asOwner)
+  app.post('/sharing/owner', owner.answer)
   const routes = sharingRoutes({ path: config.path, tag: config.tag })
   const handle = sharingHandlers(config, bound, repo)
   app.openapi(routes.get, handle.get)
@@ -199,6 +221,10 @@ export const registerSharing = async (app: OpenAPIHono, sharing: Sharing, { oaut
   app.openapi(routes.listInvites, handle.listInvites)
   app.openapi(routes.getInvite, handle.getInvite)
   app.openapi(routes.revokeInvite, handle.revokeInvite)
+  app.openapi(routes.listMembers, handle.listMembers)
+  app.openapi(routes.getMember, handle.getMember)
+  app.openapi(routes.removeMember, handle.removeMember)
+  app.openapi(routes.inviteAgain, handle.inviteAgain)
 }
 
 /** The sign-in pages' paths, open without auth: give them to `auth.open`. */

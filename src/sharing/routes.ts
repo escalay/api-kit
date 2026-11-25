@@ -1,9 +1,9 @@
-/** The owner's sharing routes as OpenAPI contracts: a space's settings, and its invites made, listed, read and revoked. */
+/** The owner's sharing routes as OpenAPI contracts: a space's settings, its invites made, listed, read and revoked, and its members listed, read, removed and invited again. */
 import { createRoute, z } from '@hono/zod-openapi'
 import { HAL_JSON, LinksSchema } from '../core/hal.js'
 import { problemResponses } from '../core/problem.js'
 import { cursorQuery, limitQuery, pageSchema } from '../pagination/index.js'
-import { LIFETIMES, SCOPES } from './schema.js'
+import { ENDED_REASONS, LIFETIMES, SCOPES, VIAS } from './schema.js'
 
 /** No control, bidi or zero-width character (Unicode Cc and Cf): what a label shown to people may hold. */
 export const PLAIN_TEXT = /^[^\p{Cc}\p{Cf}]*$/u
@@ -52,6 +52,26 @@ export const sharingRoutes = ({ path, tag }: { path: string; tag: string }) => {
     })
     .openapi('InviteInput', { description: 'Who an invite is for, what it allows and for how long.' })
   const InvitePageSchema = pageSchema('InvitePage', 'invites', InviteSchema, 'A page of a space’s invites, newest first.')
+  const memberId = z.string().min(1).max(80).openapi({ description: 'The member’s id, from the list.', example: 'mem_0mh2k1x9zabcdefghjk' })
+  const MemberSchema = z
+    .object({
+      id: z.string().openapi({ example: 'mem_0mh2k1x9zabcdefghjk' }),
+      label: z.string().openapi({ description: 'Who it is: the invite’s label, or the app’s name when the owner approved it.', example: 'Sam' }),
+      appName: z.string().openapi({ description: 'What the app calls itself: its own claim, never checked.' }),
+      returnsTo: z.string().openapi({ description: 'Where the app returns: a host, a custom scheme, or `this computer`.' }),
+      via: z.enum(VIAS).openapi({ description: 'How it joined: an `invite`, an ask (`request`), or the `owner`’s approval.' }),
+      scope: z.enum(SCOPES),
+      lifetime: z.enum(LIFETIMES),
+      state: z.enum(['active', 'signed_out']).openapi({ description: '`signed_out` once its sign-in ended (revoked, expired, unused for 30 days, its app or space gone): invite it again.' }),
+      joinedAt: z.string(),
+      expiresAt: z.string().nullable().openapi({ description: 'When its access ends; null is until revoked.' }),
+      lastSeenAt: z.string().openapi({ description: 'Its last use, to the hour.' }),
+      endedAt: z.string().nullable(),
+      endedReason: z.enum(ENDED_REASONS).nullable(),
+      _links: LinksSchema,
+    })
+    .openapi('Member', { description: 'One app signed in to a space, by invite or by the owner’s approval. Removed and replaced members are not shown.' })
+  const MemberPageSchema = pageSchema('MemberPage', 'members', MemberSchema, 'A page of a space’s members, newest first.')
 
   return {
     get: createRoute({
@@ -89,6 +109,30 @@ export const sharingRoutes = ({ path, tag }: { path: string; tag: string }) => {
       description: 'Revokes an invite no one has used: its link and code stop working at once. Revoking it again is harmless; 409 when it was already used.',
       request: { params: z.object({ space, id }) },
       responses: { 204: { description: 'Revoked.' }, ...problemResponses(401, 403, 404, 409) },
+    }),
+    listMembers: createRoute({
+      method: 'get', path: `${at}/members`, operationId: 'listMembers', tags: [tag], summary: 'A space’s members',
+      description: 'The apps signed in to the space, newest first: active, or signed out (invite them again). Removed and replaced ones are not shown.',
+      request: { params: z.object({ space }), query: z.object({ limit: limitQuery({ fallback: 50, max: 100 }), cursor: cursorQuery }) },
+      responses: { 200: ok('A page of members.', MemberPageSchema), ...problemResponses(400, 401, 404) },
+    }),
+    getMember: createRoute({
+      method: 'get', path: `${at}/members/{id}`, operationId: 'getMember', tags: [tag], summary: 'One member',
+      description: 'One of the space’s members, as the list shows it. A removed or replaced member is 404.',
+      request: { params: z.object({ space, id: memberId }) },
+      responses: { 200: ok('The member.', MemberSchema), ...problemResponses(401, 404) },
+    }),
+    removeMember: createRoute({
+      method: 'delete', path: `${at}/members/{id}`, operationId: 'removeMember', tags: [tag], summary: 'Remove a member',
+      description: 'Ends the member’s sign-in at once (its next request is 401) and takes it off the list, signed out ones too. Its invite never works again. Removing it again is harmless.',
+      request: { params: z.object({ space, id: memberId }) },
+      responses: { 204: { description: 'Removed.' }, ...problemResponses(401, 403, 404) },
+    }),
+    inviteAgain: createRoute({
+      method: 'post', path: `${at}/members/{id}/invite-again`, operationId: 'inviteAgain', tags: [tag], summary: 'Invite a member again',
+      description: 'A fresh invite with the member’s label, scope and lifetime, for a lost sign-in: shown once, as createInvite’s. Its earlier invites again are revoked, so only the newest works; once it is used, the old member is ended and its sign-in revoked. An agent may not re-invite a member who had until revoked. A retry with the same Idempotency-Key answers 409 `shown_once`.',
+      request: { params: z.object({ space, id: memberId }) },
+      responses: { 201: ok('The invite, its link and code shown this once.', NewInviteSchema), ...problemResponses(400, 401, 403, 404, 409) },
     }),
   }
 }

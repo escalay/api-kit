@@ -1,6 +1,7 @@
 /**
  * The owner's sharing routes' handlers: who is asking, the space they named, then the repo. Anyone who may not share,
- * and a space the app doesn't have, get the same 404 with the same body, so nothing says whether a space exists.
+ * and a space the app doesn't have, get the same 404 with the same body, so nothing says whether a space exists. A
+ * member is closed before its grant is revoked, so the reason the owner gave (`removed`) is the one it keeps.
  */
 import { z, type RouteHandler } from '@hono/zod-openapi'
 import type { Context } from 'hono'
@@ -11,11 +12,11 @@ import { ProblemError } from '../core/problem.js'
 import { decodeCursor, pageOf } from '../pagination/index.js'
 import { isRootAudience, type Bound } from './grants.js'
 import type { SharingConfig, Space } from './index.js'
-import type { InviteWithMember, NewInvite, SharingRepo } from './repo.js'
+import type { InviteWithMember, MemberRow, NewInvite, SharingRepo } from './repo.js'
 import type { SharingRoutes } from './routes.js'
 import type { Lifetime, Scope } from './schema.js'
 import { codeHashOf, linkHashOf, newInviteCode, newLinkToken } from './secrets.js'
-import { askingStateOf, inviteStateOf, MAX_OPEN_INVITES, redeemByOf } from './states.js'
+import { askingStateOf, inviteStateOf, MAX_OPEN_INVITES, memberListingOf, memberStateOf, redeemByOf } from './states.js'
 
 const NO_STORE = { 'cache-control': 'no-store' }
 /** Fresh links and codes tried when the code made is taken. */
@@ -83,6 +84,9 @@ export const sharingHandlers = (config: SharingConfig, bound: Bound, repo: Shari
   const invitePath = (space: Space, id: string) => `${invitesPath(space)}/${encodeURIComponent(id)}`
   const noSuchSpace = (name: string) => new ProblemError('not_found', { detail: `No space ${name} here that you may share. Check the name in its address, or ask its owner.` })
   const noSuchInvite = (space: Space, id: string) => new ProblemError('not_found', { detail: `No invite ${id} at ${space.title}. GET ${invitesPath(space)} lists them.` })
+  const membersPath = (space: Space) => `${spacePath(space)}/members`
+  const memberPath = (space: Space, id: string) => `${membersPath(space)}/${encodeURIComponent(id)}`
+  const noSuchMember = (space: Space, id: string) => new ProblemError('not_found', { detail: `No member ${id} at ${space.title}. GET ${membersPath(space)} lists them.` })
 
   /** Who is asking and the space they named; the same 404 for anyone who may not share and for a space not found. */
   const sharingAt = async (c: Context, name: string) => {
@@ -111,6 +115,35 @@ export const sharingHandlers = (config: SharingConfig, bound: Bound, repo: Shari
       revokedAt: invite.revokedAt,
       _links: linksOf(origin, { self: invitePath(space, invite.id), list: invitesPath(space), revoke }),
     }
+  }
+
+  /** A member as the owner's list shows it: active or signed out, why it ended, and its links; never its grant or client. */
+  const memberCardOf = (origin: string, space: Space, member: MemberRow, now: Date) => {
+    const current = memberStateOf(member, now)
+    const self = memberPath(space, member.id)
+    return {
+      id: member.id,
+      label: member.label,
+      appName: member.appName,
+      returnsTo: member.returnsTo,
+      via: member.via,
+      scope: member.scope,
+      lifetime: member.lifetime,
+      state: current.state === 'active' ? ('active' as const) : ('signed_out' as const),
+      joinedAt: member.joinedAt,
+      expiresAt: member.expiresAt,
+      lastSeenAt: member.lastSeenAt,
+      endedAt: member.endedAt,
+      endedReason: current.state === 'ended' ? current.reason : null,
+      _links: linksOf(origin, { self, list: membersPath(space), remove: { path: self, title: 'DELETE to remove' }, inviteAgain: { path: `${self}/invite-again`, title: 'POST for a fresh invite that replaces it once used' } }),
+    }
+  }
+
+  /** A member the owner's list shows, signed out ones too; the same 404 for one removed, replaced, of another space or made up. */
+  const listedMemberAt = async (space: Space, id: string) => {
+    const member = await repo.memberAt(space.id, id)
+    if (!member || memberListingOf(member, new Date()) === 'hidden') throw noSuchMember(space, id)
+    return member
   }
 
   const summaryOf = async (c: Context, space: Space) => ({
@@ -202,5 +235,44 @@ export const sharingHandlers = (config: SharingConfig, bound: Bound, repo: Shari
     return c.body(null, 204)
   }
 
-  return { get, update, createInvite, listInvites, getInvite, revokeInvite }
+  const listMembers: RouteHandler<SharingRoutes['listMembers']> = async (c) => {
+    const { limit, cursor } = c.req.valid('query')
+    const { space } = await sharingAt(c, c.req.valid('param').space)
+    const after = decodeCursor(cursor, z.object({ id: z.string() }))?.id
+    const rows = await repo.listMembers(space.id, { after, limit: limit + 1 })
+    const shown = rows.slice(0, limit)
+    const origin = originOf(c)
+    const now = new Date()
+    const next = rows.length > limit ? { id: shown.at(-1)!.id } : null
+    return c.json(pageOf({ origin, path: membersPath(space), query: { limit }, name: 'members', items: shown.map((row) => memberCardOf(origin, space, row, now)), next }), 200, NO_STORE)
+  }
+
+  const getMember: RouteHandler<SharingRoutes['getMember']> = async (c) => {
+    const { space: name, id } = c.req.valid('param')
+    const { space } = await sharingAt(c, name)
+    const member = await listedMemberAt(space, id)
+    return c.json(memberCardOf(originOf(c), space, member, new Date()), 200, NO_STORE)
+  }
+
+  /** Closes the member as `removed`, live or signed out, then revokes its grant; again, or once hidden, a 204 that changes nothing. */
+  const removeMember: RouteHandler<SharingRoutes['removeMember']> = async (c) => {
+    const { space: name, id } = c.req.valid('param')
+    const { space } = await sharingAt(c, name)
+    const grant = await repo.closeMember(space.id, id, 'removed', new Date())
+    if (!grant && !(await repo.memberAt(space.id, id))) throw noSuchMember(space, id)
+    if (grant) await bound.revokeGrant(grant)
+    return c.body(null, 204)
+  }
+
+  /** A fresh invite with the member's label, scope and lifetime; its earlier ones revoked first, so only the newest works. */
+  const inviteAgain: RouteHandler<SharingRoutes['inviteAgain']> = async (c) => {
+    const { space: name, id } = c.req.valid('param')
+    const { sharer, space } = await sharingAt(c, name)
+    const member = await listedMemberAt(space, id)
+    const lifetime = lifetimeFor(sharer, member.lifetime)
+    await repo.revokeInvitesReplacing(space.id, member.id, new Date())
+    return answerNewInvite(c, sharer, space, { label: member.label, scope: member.scope, lifetime, replacesMemberId: member.id })
+  }
+
+  return { get, update, createInvite, listInvites, getInvite, revokeInvite, listMembers, getMember, removeMember, inviteAgain }
 }
