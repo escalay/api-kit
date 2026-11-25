@@ -120,7 +120,8 @@ switch can't say it, such as who switched it off; a quiet line shows when a pers
 `FeatureDisabledNotice` says "This feature is disabled.", why, and the app's own action. `useSharing` answers
 `status` (`idle`, `loading`, `ready`, `error`), `error`, `sharing`, `invites`, `members`, `moreInvites` and
 `moreMembers`, `loadMoreInvites` and `loadMoreMembers`, `reload`, and the four changes; `createInvite` and
-`inviteAgain` answer the new invite with its code. `SharePanel` is one space's whole panel: the invite form, a new
+`inviteAgain` answer the new invite with its code. Only the newest reload's answer applies, and a page asked for
+before a reload that started since is dropped, so an older answer landing last never shows a revoked invite as open. `SharePanel` is one space's whole panel: the invite form, a new
 invite's message shown once (gone on Done, or at another space), `InvitesOut` and `Members`. The form offers what the
 owner page offers: read for 30 days, with Allow changes and Until revoked, not 30 days, to switch on (7 days only
 through the hook). Only an open invite has Revoke; each member has Invite again and Remove, which asks first. A

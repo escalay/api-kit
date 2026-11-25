@@ -19,8 +19,9 @@ const NOTHING: Loaded = { sharing: null, invites: [], members: [], nextInvites: 
 
 /**
  * One space's sharing as its owner sees it: reloaded from the first page after each change made through it, and when
- * `space` changes (an answer for a space it left is dropped). Changes throw the client's `SharingError`; `createInvite`
- * and `inviteAgain` answer the new invite with its code, which the hook never keeps.
+ * `space` changes. Only the newest reload's answer applies (an older one landing last, or one for a space it left, is
+ * dropped), as does a page only when no reload started after it was asked. Changes throw the client's `SharingError`;
+ * `createInvite` and `inviteAgain` answer the new invite with its code, which the hook never keeps.
  *
  * @example
  * const { status, sharing, invites, moreInvites, loadMoreInvites, revokeInvite, inviteAgain } = useSharing(client, space, { limit: 20 })
@@ -32,8 +33,11 @@ export const useSharing = (client: SharingClient, space: string | null | undefin
   const current = useRef(space)
   current.current = space
   const stillAt = (asked: string) => current.current === asked
+  // Counts reloads asked for: an answer applies only while its own reload is still the newest
+  const newestReload = useRef(0)
 
   const reload = useCallback(async () => {
+    const asked = ++newestReload.current
     if (!space) {
       setLoaded(NOTHING)
       setStatus('idle')
@@ -41,12 +45,12 @@ export const useSharing = (client: SharingClient, space: string | null | undefin
     }
     try {
       const [sharing, invites, members] = await Promise.all([client.sharing(space), client.invites(space, { limit }), client.members(space, { limit })])
-      if (!stillAt(space)) return
+      if (!stillAt(space) || asked !== newestReload.current) return
       setLoaded({ sharing, invites: invites.items, members: members.items, nextInvites: invites.next, nextMembers: members.next })
       setStatus('ready')
       setError(null)
     } catch (caught) {
-      if (!stillAt(space)) return
+      if (!stillAt(space) || asked !== newestReload.current) return
       setStatus('error')
       setError(caught as SharingError)
     }
@@ -58,19 +62,21 @@ export const useSharing = (client: SharingClient, space: string | null | undefin
     void reload()
   }, [reload])
 
-  // A page whose cursor is no longer the next one (asked twice, or a reload since) is dropped
+  // A page whose cursor is no longer the next one (asked twice), or asked before a reload that started since, is dropped
   const loadMoreInvites = async () => {
     const cursor = loaded.nextInvites
     if (!space || !cursor) return
+    const after = newestReload.current
     const page = await client.invites(space, { limit, cursor })
-    if (!stillAt(space)) return
+    if (!stillAt(space) || after !== newestReload.current) return
     setLoaded((before) => (before.nextInvites === cursor ? { ...before, invites: [...before.invites, ...page.items], nextInvites: page.next } : before))
   }
   const loadMoreMembers = async () => {
     const cursor = loaded.nextMembers
     if (!space || !cursor) return
+    const after = newestReload.current
     const page = await client.members(space, { limit, cursor })
-    if (!stillAt(space)) return
+    if (!stillAt(space) || after !== newestReload.current) return
     setLoaded((before) => (before.nextMembers === cursor ? { ...before, members: [...before.members, ...page.items], nextMembers: page.next } : before))
   }
 

@@ -140,7 +140,74 @@ describe('useSharing', () => {
     })
     expect(result.current.sharing?.title).toBe('Bakes')
   })
+
+  it('keeps only the newest reload’s answer when an older one of the same space arrives late', async () => {
+    const { box } = await ownerOf()
+    const { fetchImpl, holding, held, releaseAll } = holdingReads(box)
+    const client = createSharingClient({ fetchImpl, headers: { authorization: `Bearer ${OWNER_KEY}` } })
+    const sam = await client.createInvite('soups', { label: 'Sam' })
+    const { result } = renderHook(() => useSharing(client, 'soups'))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+
+    holding(true)
+    let older!: Promise<void>
+    act(() => void (older = result.current.reload()))
+    await waitFor(() => expect(held).toHaveLength(3))
+    holding(false)
+    await act(() => result.current.revokeInvite(sam.id))
+    expect(result.current.invites.map((invite) => invite.state)).toEqual(['revoked'])
+
+    await act(async () => {
+      releaseAll()
+      await older
+    })
+    expect(result.current.invites.map((invite) => invite.state)).toEqual(['revoked'])
+    expect(result.current.sharing?.openInvites).toBe(0)
+  })
+
+  it('drops a page asked for before a reload that started after it', async () => {
+    const { box } = await ownerOf()
+    const { fetchImpl, holding, held, releaseAll } = holdingReads(box)
+    const client = createSharingClient({ fetchImpl, headers: { authorization: `Bearer ${OWNER_KEY}` } })
+    const sam = await client.createInvite('soups', { label: 'Sam' })
+    for (const label of ['Ada', 'Lee']) await client.createInvite('soups', { label })
+    const { result } = renderHook(() => useSharing(client, 'soups', { limit: 2 }))
+    await waitFor(() => expect(result.current.invites).toHaveLength(2))
+
+    holding(true)
+    let page!: Promise<void>
+    act(() => void (page = result.current.loadMoreInvites()))
+    await waitFor(() => expect(held).toHaveLength(1))
+    holding(false)
+    await act(() => result.current.revokeInvite(sam.id))
+
+    await act(async () => {
+      releaseAll()
+      await page
+    })
+    // The page holding Sam as open was asked before the revoke's reload: it is not appended
+    expect(result.current.invites.map((invite) => [invite.label, invite.state])).toEqual([['Lee', 'open'], ['Ada', 'open']])
+    await act(() => result.current.loadMoreInvites())
+    expect(result.current.invites.map((invite) => [invite.label, invite.state])).toEqual([['Lee', 'open'], ['Ada', 'open'], ['Sam', 'revoked']])
+  })
 })
+
+/** A fetch over the recipe box that, while holding, answers each read as it was then, but only at `releaseAll`. */
+const holdingReads = (box: RecipeBox) => {
+  let hold = false
+  const held: (() => void)[] = []
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    const answer = await box.app.request(url, init)
+    if (hold && (init?.method ?? 'GET') === 'GET') await new Promise<void>((release) => held.push(release))
+    return answer
+  }) as typeof fetch
+  return {
+    fetchImpl,
+    held,
+    holding: (on: boolean) => void (hold = on),
+    releaseAll: () => held.splice(0).forEach((release) => release()),
+  }
+}
 
 /** The row of a list that names `label`. */
 const rowOf = (list: string, label: string) => within(screen.getByRole('list', { name: list })).getAllByRole('listitem').find((row) => within(row).queryByText(label) !== null)!
