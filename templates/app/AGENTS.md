@@ -6,7 +6,7 @@ an MCP tool.
 
 ## Commands
 
-`pnpm install` · `pnpm test` · `pnpm typecheck` · `pnpm lint` (oxlint) · `pnpm format` (oxfmt) · `pnpm guide` (after editing `guide/`) · `npx @escalay/kit brand` (after editing `brand/`; needs `pnpm add -D @resvg/resvg-js`)
+`pnpm install` · `pnpm test` · `pnpm typecheck` · `pnpm lint` (oxlint) · `pnpm format` (oxfmt) · `pnpm guide` (after editing `guide/`) · `npx @escalay/kit brand` (after editing `brand/`; needs `pnpm add -D @resvg/resvg-js`; the OG card's text takes this machine's sans-serif font)
 
 - `pnpm dev`: the API on Node at http://localhost:4400 (`/docs`, `/llms.txt`, `/mcp`) <!-- runtime:node -->
 - `pnpm __worker_dev__`: the Worker locally over a local D1 (`/docs`, `/llms.txt`, `/mcp`) <!-- preset:api --> <!-- runtime:workers -->
