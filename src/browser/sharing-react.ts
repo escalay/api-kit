@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Invite, InviteInput, Member, SharingClient, SharingError, SharingView, ShownOnceOptions } from './sharing-client'
 
-/** `idle` without a space; `error` when its first load failed. */
+/** `idle` without a space; `error` when its last load failed (the lists it had are kept). */
 type Status = 'idle' | 'loading' | 'ready' | 'error'
 
 type Loaded = { sharing: SharingView | null; invites: Invite[]; members: Member[]; nextInvites: string | null; nextMembers: string | null }
@@ -47,7 +47,6 @@ export const useSharing = (client: SharingClient, space: string | null | undefin
       setError(null)
     } catch (caught) {
       if (!stillAt(space)) return
-      setLoaded(NOTHING)
       setStatus('error')
       setError(caught as SharingError)
     }
@@ -59,17 +58,20 @@ export const useSharing = (client: SharingClient, space: string | null | undefin
     void reload()
   }, [reload])
 
+  // A page whose cursor is no longer the next one (asked twice, or a reload since) is dropped
   const loadMoreInvites = async () => {
-    if (!space || !loaded.nextInvites) return
-    const page = await client.invites(space, { limit, cursor: loaded.nextInvites })
+    const cursor = loaded.nextInvites
+    if (!space || !cursor) return
+    const page = await client.invites(space, { limit, cursor })
     if (!stillAt(space)) return
-    setLoaded((before) => ({ ...before, invites: [...before.invites, ...page.items], nextInvites: page.next }))
+    setLoaded((before) => (before.nextInvites === cursor ? { ...before, invites: [...before.invites, ...page.items], nextInvites: page.next } : before))
   }
   const loadMoreMembers = async () => {
-    if (!space || !loaded.nextMembers) return
-    const page = await client.members(space, { limit, cursor: loaded.nextMembers })
+    const cursor = loaded.nextMembers
+    if (!space || !cursor) return
+    const page = await client.members(space, { limit, cursor })
     if (!stillAt(space)) return
-    setLoaded((before) => ({ ...before, members: [...before.members, ...page.items], nextMembers: page.next }))
+    setLoaded((before) => (before.nextMembers === cursor ? { ...before, members: [...before.members, ...page.items], nextMembers: page.next } : before))
   }
 
   /** Runs a change at this space, then reloads it; without a space it refuses. */

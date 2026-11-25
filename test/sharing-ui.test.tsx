@@ -77,6 +77,33 @@ describe('useSharing', () => {
     expect(result.current.invites.map((invite) => invite.label)).toEqual(['Lee', 'Ada'])
   })
 
+  it('appends a page asked for twice only once', async () => {
+    const { client } = await ownerOf()
+    for (const label of ['Sam', 'Ada', 'Lee']) await client.createInvite('soups', { label })
+    const { result } = renderHook(() => useSharing(client, 'soups', { limit: 2 }))
+    await waitFor(() => expect(result.current.invites).toHaveLength(2))
+    await act(async () => void (await Promise.all([result.current.loadMoreInvites(), result.current.loadMoreInvites()])))
+    expect(result.current.invites.map((invite) => invite.label)).toEqual(['Lee', 'Ada', 'Sam'])
+  })
+
+  it('keeps the lists it had when a reload after a change fails, and says why', async () => {
+    const { box } = await ownerOf()
+    let down = false
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (down && (init?.method ?? 'GET') === 'GET') return new Response(JSON.stringify({ code: 'unavailable', detail: 'The API is down.' }), { status: 503, headers: { 'content-type': 'application/problem+json' } })
+      return box.app.request(url, init)
+    }) as typeof fetch
+    const client = createSharingClient({ fetchImpl, headers: { authorization: `Bearer ${OWNER_KEY}` } })
+    const { result } = renderHook(() => useSharing(client, 'soups'))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => void (await result.current.createInvite({ label: 'Sam' })))
+    down = true
+    await act(async () => void (await result.current.createInvite({ label: 'Ada' })))
+    expect([result.current.status, result.current.error?.status]).toEqual(['error', 503])
+    expect(result.current.invites.map((invite) => invite.label)).toEqual(['Sam'])
+    expect(result.current.sharing?.title).toBe('Soups')
+  })
+
   it('stays idle without a space, follows a new one, and says why a space could not load', async () => {
     const { client } = await ownerOf()
     await client.createInvite('bakes', { label: 'Ada' })

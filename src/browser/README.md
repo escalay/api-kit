@@ -171,7 +171,7 @@ sequenceDiagram
 | `SharingError` 404 `not_found` | no such space, or the caller may not share it (the same answer for both) |
 | `SharingError` 409 `conflict` | revoking a used invite (remove its member), or a space with 100 open invites |
 | `ShownOnceError` (409 `shown_once`) | a retry with an Idempotency-Key that already made an invite: revoke it and make another |
-| `useSharing` with `status: 'error'` | the space's first load failed; a change's failure is thrown to its caller |
+| `useSharing` with `status: 'error'` | its last load failed (it keeps the lists it had); a change's own failure is thrown to its caller |
 | a features state with `status: 'error'` | the first `GET /api/features` failed (the page is not signed in, the API is down); a later failed refresh keeps the list and sets `error` |
 | a feature off while it loads | `useFeature` is `on: false` until the list is `ready` |
 | an import of `@/components/ui/…` that doesn't resolve | the block needs the app's shadcn components: `npx shadcn add button input switch` |
