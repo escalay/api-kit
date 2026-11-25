@@ -950,6 +950,8 @@ describe('the copy-in CLI', () => {
       // and the line before it gives the coding agent the kit's skills, first, so it reads them before it builds
       // -y: without it the installer stops to ask, which an agent's shell never answers
       expect(made.stdout).toMatch(/^Skills first: npx skills add escalay\/api-kit -y .*\nNext: /m)
+      // and that doctor fails on a new app until the starter's text is the product's, with the commands that render the brand
+      expect(made.stdout).toContain("Doctor: `npx @escalay/kit doctor` fails on a new app until the starter's text is yours: the product skill's description (guide/skills/demo-api/SKILL.md), brand/brand.ts's, and each switch's in src/features/catalog.ts; then `pnpm add -D @resvg/resvg-js` and `npx @escalay/kit brand` render the brand")
       const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
@@ -978,6 +980,8 @@ describe('the copy-in CLI', () => {
       // The text the starter leaves for the app to write fails doctor until it is written
       expect(doctor.status).toBe(1)
       const starterLines = (text: string) => text.split('\n').filter((line) => line.startsWith('starter  '))
+      // Under one heading that says they are expected on a new app
+      expect(doctor.stdout.split('\n').find((line) => line.startsWith('starter  ')) && doctor.stdout).toContain("Expected on a new app: the starter's text, until it is yours (doctor passes once each is written and `kit brand` has rendered the brand):\nstarter  ")
       expect(starterLines(doctor.stdout)).toEqual([
         'starter  guide/skills/demo-api/SKILL.md: its description is still the starter’s ("Replace this line with"): say when an agent should use the product, in its users’ words',
         'starter  brand/brand.ts: its description is still the starter’s (", an agent-ready API."): say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`',

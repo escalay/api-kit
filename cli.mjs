@@ -772,6 +772,9 @@ const skillFindings = async (root) => {
   return { findings, notes: [] }
 }
 
+/** What doctor prints above the starter's lines. */
+const STARTER_HEADING = "Expected on a new app: the starter's text, until it is yours (doctor passes once each is written and `kit brand` has rendered the brand):"
+
 /** One line for each file that still holds the starter's text. */
 const starterFindings = (root) =>
   STARTER_TEXT.flatMap(({ files, text, what, instead }) => files(root).filter((path) => textOf(join(root, path))?.includes(text)).map((path) => `starter  ${path}: ${what} is still the starter’s ("${text}"): ${instead}`))
@@ -1683,6 +1686,8 @@ const commands = {
     console.log(`Skills first: npx skills add ${REPO} -y gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
     console.log(`Next: cd ${relative(process.cwd(), root)} && ${[...left.map((args) => `pnpm ${args.join(' ')}`), 'pnpm test', 'pnpm dev'].join(' && ')}`)
     console.log(`Brand: make brand/ yours, then ${RESVG_INSTALL} && \`npx @escalay/kit brand\` renders the favicon, PNG icons and OG card into ${BRAND_MODULE}`)
+    // Every trial agent met this first doctor failure unannounced
+    console.log(`Doctor: \`npx @escalay/kit doctor\` fails on a new app until the starter's text is yours: the product skill's description (guide/skills/${name}/SKILL.md), brand/brand.ts's, and each switch's in src/features/catalog.ts; then ${RESVG_INSTALL} and \`npx @escalay/kit brand\` render the brand`)
   },
 
   adopt,
@@ -1694,12 +1699,15 @@ const commands = {
     const root = lock ? appRootOf() : null
     const brand = root ? brandFindings(root, lock.modules.includes('brand')) : { findings: [], notes: lock?.modules.includes('brand') ? [`note     brand: no package.json above ${dirArg}: \`--app <app>\` names the app whose brand/ to check`] : [] }
     const skills = root ? await skillFindings(root) : { findings: [], notes: [] }
-    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...(root ? starterFindings(root) : [])] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
+    const starter = lock && root ? starterFindings(root) : []
+    // The starter's lines last, under a heading of their own: a new app has them all
+    const starterLines = starter.length ? [STARTER_HEADING, ...starter] : []
+    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...starter] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
     const texts = lock ? appTexts() : []
     const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
     const kept = lock ? keptEditsOf(lock) : []
     const keptLines = kept.map((file) => `kept     ${file}: an edit kit.json records as kept; \`kit diff --dir ${dirArg} --patch\` shows it`)
-    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...skills.notes, ...behindNotes, ...keptLines, ...findings]) console.log(line)
+    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...skills.notes, ...behindNotes, ...keptLines, ...findings.slice(0, findings.length - starter.length), ...starterLines]) console.log(line)
     const withKept = kept.length ? `, with ${kept.length} kept ${kept.length === 1 ? 'edit' : 'edits'}` : ''
     console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
