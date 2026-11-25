@@ -250,12 +250,17 @@ const addCommandOf = (modules) => {
 
 const installCommand = (modules) => addCommandOf(modules)?.join(' ') ?? (Object.keys(dependenciesOf(modules)).length ? 'package.json has them' : 'none')
 
-/** Adds the parts' missing dependencies in the app's folder, or fails naming the command. */
-const install = (modules) => {
+/**
+ * Adds the parts' missing dependencies in the app's folder (true when it ran), or fails naming the command and `then`,
+ * the commands still to run after it.
+ */
+const install = (modules, then = null) => {
   const command = addCommandOf(modules)
-  if (!command) return
+  if (!command) return false
   const result = spawnSync(command[0], command.slice(1), { stdio: 'inherit', cwd: appRootOf() ?? process.cwd() })
-  if (result.status !== 0) fail(`\`${command.join(' ')}\` failed: run it in the app (${relative(process.cwd(), appRootOf() ?? process.cwd()) || '.'}), then its Next line`)
+  const where = relative(process.cwd(), appRootOf() ?? process.cwd()) || '.'
+  if (result.status !== 0) fail(`\`${command.join(' ')}\` failed: run it in the app (${where})${then ? `, then the rest: \`${[command.join(' '), then].join(' && ')}\`` : ''}`)
+  return true
 }
 
 /** Each file's state against kit.json: did you edit it, did the kit change it. A file equal to the kit's is unchanged, whatever kit.json recorded. */
@@ -2012,8 +2017,9 @@ const planWiring = (root, parts) => {
 
 /**
  * `add --wire`: writes the plan, or, in an app without the markers or with code the kit did not write, prints it and
- * writes nothing. `install` installs the parts' dependencies once the plan is written (true, returned, when it ran), or
- * is the command Next starts with.
+ * writes nothing. `install` installs the parts' dependencies once the plan is written (true, returned, when given), told
+ * the rest of Next for its failure, or is the command Next starts with. A re-run that changes nothing still prints Next
+ * while the install is missing, since a failed one left the rest undone.
  */
 const wireParts = (root, parts, install = null) => {
   const { changed, said, missing, conflicts } = planWiring(root, parts)
@@ -2038,13 +2044,14 @@ const wireParts = (root, parts, install = null) => {
     if (after) console.log(fillVars(after, wireVarsOf(root, over ? valueOf(over.flag) : undefined)))
   }
   const installs = typeof install === 'function'
-  if (installs) install()
   const workers = existsSync(join(root, 'scripts/migrations.ts'))
+  const rest = `pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test`
+  const installed = installs && install(rest)
   // Where the settings are, and the one command that makes a local value for each
   const examples = ENV_FILES.filter(({ example }) => existsSync(join(root, example)))
   const settingsIn = [...examples.map(({ example }) => example), ...(existsSync(join(root, 'container/entrypoint.sh')) ? ['container/entrypoint.sh'] : [])].join(', ').replace(/, ([^,]*)$/, ' and $1')
   const making = examples.length ? `; \`npx @escalay/kit env --write\` makes ${examples.map(({ file }) => file).join(' and ')} from ${examples.length > 1 ? 'them' : 'it'}, a value for each` : ''
-  if (changed.length) console.log(`Next: ${installs || !install ? '' : `${install} && `}pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test (each part's README says what it does; its settings are in ${settingsIn}${making})`)
+  if (changed.length || installed || (!installs && install)) console.log(`Next: ${installs || !install ? '' : `${install} && `}${rest} (each part's README says what it does; its settings are in ${settingsIn}${making})`)
   return installs
 }
 
@@ -2136,7 +2143,7 @@ const commands = {
     }
     // --wire installs too (--no-install leaves it to Next): a wired app whose gate fails on a missing module helps no one
     const installing = flags.has('--install') || (wiring && !flags.has('--no-install'))
-    const wired = wiring ? wireParts(wiring, names, installing ? () => install(modules) : addCommandOf(modules)?.join(' ')) : false
+    const wired = wiring ? wireParts(wiring, names, installing ? (rest) => install(modules, rest) : addCommandOf(modules)?.join(' ')) : false
     if (!wiring) for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
     if (installing && !wiring) install(modules)
     // Wiring refused installs nothing: the app is told the edits first

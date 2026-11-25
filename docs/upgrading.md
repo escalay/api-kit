@@ -484,7 +484,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 - `kit add people --wire` now installs `@simplewebauthn/server` with the app's package manager (the one
   `package.json` names, else its lockfile's), as `--install` does, so the gate passes without a step by hand; a failed
-  install exits 1 naming the command. `--no-install` keeps 1.35.0's way: the command starts `Next:`. Nothing to change.
+  install exits 1 naming the whole chain left (`pnpm add … && pnpm format && pnpm test`), and a re-run that
+  changes no file installs again and prints `Next:` while the install is missing. `--no-install` keeps 1.35.0's way: the command starts `Next:`. Nothing to change.
 
 ### 1.35.0
 

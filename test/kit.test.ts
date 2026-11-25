@@ -1747,9 +1747,29 @@ describe('the copy-in CLI', () => {
       const told = wire(join(parent, 'told'), ['--no-install'])
       expect(told.stdout).toContain('Next: pnpm add @simplewebauthn/server@^14.1.0 && pnpm format && pnpm test')
       expect(await calls()).toEqual([])
-      // A failed install fails the command, naming what to run
-      const failed = wire(join(parent, 'failed'), [], '1')
+      // A failed install fails the command, naming the whole chain left to run, since Next is never printed
+      const chain = 'pnpm add @simplewebauthn/server@^14.1.0 && pnpm format && pnpm test'
+      const failedApp = join(parent, 'failed')
+      const failed = wire(failedApp, [], '1')
       expect([failed.status, failed.stderr]).toEqual([1, expect.stringContaining('`pnpm add @simplewebauthn/server@^14.1.0` failed: run it in the app')])
+      expect(failed.stderr).toContain(`\`${chain}\``)
+      expect(failed.stdout).not.toContain('Next:')
+      // A re-run changes no file, but the install is still missing: it installs again, then prints Next
+      await rm(log)
+      const retried = wire(failedApp)
+      expect(retried.status, retried.stdout + retried.stderr).toBe(0)
+      expect(retried.stdout).toContain('Wired already')
+      expect(await calls()).toEqual([`${await realpath(failedApp)} pnpm add @simplewebauthn/server@^14.1.0`])
+      expect(retried.stdout).toContain('Next: pnpm format && pnpm test')
+      // Failing again names the chain again; with --no-install, Next starts with the install
+      expect(wire(failedApp, [], '1').stderr).toContain(`\`${chain}\``)
+      expect(wire(failedApp, ['--no-install']).stdout).toContain(`Next: ${chain}`)
+      // Once package.json has it, a re-run has nothing left to say
+      const done = JSON.parse(await readFile(join(failedApp, 'package.json'), 'utf8'))
+      await writeFile(join(failedApp, 'package.json'), JSON.stringify({ ...done, dependencies: { ...done.dependencies, '@simplewebauthn/server': '^14.1.0' } }))
+      await rm(log)
+      const settled = wire(failedApp)
+      expect([settled.stdout.includes('Wired already'), settled.stdout.includes('Next:'), await calls()]).toEqual([true, false, []])
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
