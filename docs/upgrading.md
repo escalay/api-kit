@@ -339,7 +339,7 @@ Tokens, codes, refresh rows and claims from before grants keep working.
 
 ## mcp
 
-### Unreleased (after 1.32.0)
+### 1.33.0
 
 - New: `guideSkillProblems({ files })`, what the server would warn of reading the guide's skills (`[]` when each
   loads). A SKILL.md whose frontmatter it can't read, such as a `: ` in an unquoted description, was skipped with a
@@ -519,7 +519,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## sharing
 
-### Unreleased (after 1.32.0)
+### 1.33.0
 
 - New: `sharingOf(app)`, the part `registerSharing` bound to that app, for a scheduled handler that holds only the
   app. Nothing to change.
@@ -563,7 +563,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## testing
 
-### Unreleased (after 1.32.0)
+### 1.33.0
 
 - New: `connectAgent(app, { address, approve })`, a third-party agent's whole sign-in (its registration, PKCE, the
   person's click through `approve`, the token exchange), for testing an invite or the owner's approval end to end.
