@@ -1634,6 +1634,22 @@ describe('the copy-in CLI', () => {
     }
   }, 120_000)
 
+  it('titles a shared space’s read tool for a hyphenated child in words, as its README does', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-space-child-title-'))
+    try {
+      expect(cli(parent, 'init', 'pantry-api', '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'pantry-api')
+      expect(cli(app, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      expect(cli(app, 'feature', 'recipe-cards', '--under', 'shelves', '--fields', 'title:string').status).toBe(0)
+      const wired = cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install')
+      expect(wired.status, wired.stdout + wired.stderr).toBe(0)
+      const source = await readFile(join(app, 'src/app.ts'), 'utf8')
+      expect(source).toContain("name: 'list_shelf_recipe_cards', title: 'Recipe cards in this shelf'")
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 60_000)
+
   it('gives a shared space’s MCP a read tool per feature --under it, while a child by its id stays the owner’s', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-space-children-${process.pid}`)
     await rm(parent, { recursive: true, force: true })

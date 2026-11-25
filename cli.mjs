@@ -1903,7 +1903,7 @@ const childrenOf = (root, over) => {
       const names = namesOf(name, singular?.replace(/[A-Z]/g, (letter, at) => `${at ? '-' : ''}${letter.toLowerCase()}`))
       // Its first own field, after the id and its parent's
       const first = /\.object\(\{\s*id: z\.string\(\),\s*(?:\w+Id: z\.string\(\),\s*)?(\w+):/.exec(routes)?.[1] ?? 'id'
-      return { ...Object.fromEntries(Object.entries(names).map(([key, value]) => [`__child_${key.slice(2)}`, value])), __child_first__: first }
+      return { ...Object.fromEntries(Object.entries(names).map(([key, value]) => [`__child_${key.slice(2)}`, value])), __child_Labels__: capital(names.__labels__), __child_first__: first }
     })
 }
 const fillVars = (text, vars) => Object.entries(vars).reduce((filled, [key, value]) => filled.replaceAll(key, value), text)
