@@ -24,7 +24,7 @@ A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string min
 ## Try it
 
 Every route but discovery wants a key. `npx @escalay/kit key` prints one and its `API_KEYS=` line (the app keeps only
-the hash):
+the hash). Keep both from one run: each run makes a new pair, and a key with another run's line is a 401.
 
 - Node: `API_KEYS=dev:<hash> pnpm dev`, at http://localhost:4400 <!-- runtime:node -->
 - Workers: the line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm __worker_dev__`, at http://localhost:8787 <!-- preset:api --> <!-- runtime:workers -->

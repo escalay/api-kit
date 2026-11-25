@@ -446,6 +446,8 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     expect(made.stdout).toContain(`\nAPI_KEYS=dev:${hashOfText(key!)}\n`)
     // The app takes the line as it is
     expect([...parseApiKeys(`dev:${hashOfText(key!)}`).values()]).toEqual(['dev'])
+    // Each run makes a new pair: the key and its line come from one
+    expect(made.stdout).toContain('Keep the key and this line from this one run: each run makes a new pair, and a key with another run’s line is a 401')
     const named = cli(parent, 'key', 'reader')
     expect(named.stdout).toMatch(/^Key       reader_[\w-]{32}$/m)
     expect(named.stdout).toMatch(/^API_KEYS=reader:[0-9a-f]{64}$/m)

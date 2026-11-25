@@ -69,7 +69,8 @@
  *                                             favicon, PNG icons and OG card, committed (needs @resvg/resvg-js in the app);
  *                                             --check exits 1 when brand/ changed since. `kit add brand` scaffolds brand/
  *   kit key [name]                            a key to try the app with (`dev` unless named) and its API_KEYS line: the
- *                                             key printed once, the line for .dev.vars or `API_KEYS=… pnpm dev`; kept nowhere
+ *                                             key printed once, the line for .dev.vars or `API_KEYS=… pnpm dev`; kept nowhere,
+ *                                             so keep both from one run (each run makes a new pair)
  *   kit license keys [--out <folder>]        a product's signing key pair: the private key into <folder>/license-private.jwk
  *                                             (0600, keep it in a secret store), the public JWK printed for the app's code
  *   kit license mint --private <file> --product <name> --licensee <who> --plan <plan> [--grants a,b] [--days 365] [--instance <id>]
@@ -2325,7 +2326,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     // As core's mintApiKey makes one, and parseApiKeys reads the line
     const key = `${name}_${randomBytes(24).toString('base64url')}`
     const line = `API_KEYS=${name}:${sha(key)}`
-    console.log(`Key       ${key}\n${line}\nShown once and kept nowhere: the app holds only the hash. On Node: \`${line} pnpm dev\`; on Workers: the line in .dev.vars. Then send \`authorization: Bearer <the key>\` (the app's AGENTS.md › Try it)`)
+    console.log(`Key       ${key}\n${line}\nShown once and kept nowhere: the app holds only the hash. Keep the key and this line from this one run: each run makes a new pair, and a key with another run’s line is a 401. On Node: \`${line} pnpm dev\`; on Workers: the line in .dev.vars. Then send \`authorization: Bearer <the key>\` (the app's AGENTS.md › Try it)`)
   },
 
   brand: async () => {
