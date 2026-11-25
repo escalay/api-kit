@@ -11,6 +11,7 @@ import {
   parseApiKeys,
   parseFeatureList,
   problemResponses,
+  serveGuide,
   SWITCHES_TAG,
   switches,
   switchesRepo,
@@ -71,6 +72,19 @@ describe('the catalog', () => {
 })
 
 describe('switches', () => {
+  it('names no feature the app lacks: with an empty catalog, no example key in the document, the guide or the tools', async () => {
+    const flags = switches({ catalog: defineFeatures({}), providers: [] })
+    const app = createAgentApi({ title: 'Empty', version: '1.0.0', description: 'Nothing to switch.', tags: [SWITCHES_TAG], auth: { realm: 'empty', keys: parseApiKeys(`owner:${hashApiKey(OWNER)}`) } })
+    await flags.register(app, { isOwner: () => true })
+    serveGuide(app, { files: new Map([['llms.txt', '{{api.endpoints}}']]), vars: () => ({}), full: ['llms.txt'] })
+    const headers = { authorization: `Bearer ${OWNER}` }
+    const guide = await (await app.request('/llms.txt', { headers })).text()
+    expect(guide).toContain('/api/features/{key}')
+    for (const text of [guide, // OpenAPI 3.1's own (empty) webhooks field aside
+      (await (await app.request('/openapi.json', { headers })).text()).replace('"webhooks":{}', ''), JSON.stringify(switchTools().map((tool) => [tool.description, tool.cli]))]) expect(text).not.toContain('webhooks')
+    expect(JSON.stringify(switchTools().find((tool) => tool.name === 'switch_feature')?.cli)).toContain('"run":"feature switch <key> --state off --preview"')
+  })
+
   it('lets a feature work until the owner switches it off, then answers 403 "This feature is disabled."', async () => {
     const { run, flip, switched, owner } = await setup()
     expect((await run(LAPTOP, 'webhooks')).status).toBe(200)

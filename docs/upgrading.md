@@ -568,6 +568,13 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## switches
 
+### Unreleased (after 1.36.0)
+
+- **No feature the app lacks in its guide.** With an empty catalog, the switch routes' key had the example `webhooks`,
+  which the guide printed as `GET /api/features/webhooks`; the example is now the catalog's first key, or none (the
+  guide shows `{key}`). `switchTools()` without `example` gives the command line `feature switch <key>` in place of
+  `webhooks`. Nothing to change in the app.
+
 ### 1.35.0
 
 - **`kit doctor` notes a setting the container never sees** (a `note     env` line): one `Env` in `src/app.ts` reads
