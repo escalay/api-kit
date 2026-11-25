@@ -1367,9 +1367,11 @@ describe('the copy-in CLI', () => {
       ])
       // The starter's script finds the part's tables itself
       expect(added.stdout).not.toContain('lacks')
-      // The README's Wire it, block by block, each where its first line says
+      // Wire it by hand (REFERENCE.md, which the README's Wire it links), block by block, each where its first line says
       const readme = await read('src/kit/sharing/README.md')
-      const block = readme.slice(readme.indexOf('## Wire it')).match(/```ts\n([\s\S]*?)```/)![1]!
+      expect(readme.slice(readme.indexOf('## Wire it'))).toContain('](REFERENCE.md#wire-it-by-hand)')
+      const reference = await read('src/kit/sharing/REFERENCE.md')
+      const block = reference.slice(reference.indexOf('## Wire it by hand')).match(/```ts\n([\s\S]*?)```/)![1]!
       const groups = block.split(/^\/\/ (src\/[^\n]*)\n/m).slice(1)
       // A line's key: what it declares or sets, at its indent
       const keyOf = (line: string) => /^\s*(export type \w+|const \w+|\w+:|\w+\()/.exec(line)?.[0]
@@ -1400,7 +1402,7 @@ describe('the copy-in CLI', () => {
       }
       expect(await read('src/app.ts')).toContain('PUBLIC_ORIGIN?: string }')
       // Its hooks chain, for an app with hooks of its own, typechecks as written, with every name it uses
-      const chain = [...readme.slice(readme.indexOf('## Wire it'), readme.indexOf('## Options')).matchAll(/```ts\n([\s\S]*?)```/g)][1]![1]!
+      const chain = [...readme.slice(readme.indexOf('## Wire it'), readme.indexOf('## Options')).matchAll(/```ts\n([\s\S]*?)```/g)][0]![1]!
       await writeFile(join(app, 'src/hooks.ts'), chain)
       // The printed steps as printed: each setting in the workerd tests' bindings (so sharing is on there too), the schedule
       const config = join(app, 'vitest.config.ts')
@@ -2743,7 +2745,8 @@ describe('the skills', () => {
 
   it('api-kit-build wires the sharing part as its README does, and api-kit-review checks the threats its tests hold', async () => {
     const skills = await skillTexts()
-    const wiring = await readFile(join(kitDir, 'src/sharing/README.md'), 'utf8')
+    // The README and the REFERENCE.md beside it, which holds the wiring by hand
+    const wiring = (await Promise.all(['README.md', 'REFERENCE.md'].map((file) => readFile(join(kitDir, 'src/sharing', file), 'utf8')))).join('\n')
     for (const fact of ['SHARING_SECRET', 'SHARING_OPEN_PATHS', 'sharing.relay', 'sharing.neverKept', 'sharing.sweep()', 'sharing.forget(', 'sharingSignInPaths(sharing)', 'publicOrigin', "address: { header: 'cf-connecting-ip' }", 'mountA2A']) {
       expect(skills['api-kit-build'], fact).toContain(fact)
       if (fact !== 'mountA2A' && !fact.startsWith('address')) expect(wiring, fact).toContain(fact)
