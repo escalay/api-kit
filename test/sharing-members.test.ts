@@ -68,6 +68,22 @@ describe('members', () => {
     expect((await remove('mem_made_up')).status).toBe(404)
   })
 
+  it('are removed for good: a refresh after Remove is refused, and one racing it, either way round, opens nothing', async () => {
+    const { makeInvite, join, call, app, remove, memberIdOf } = await box()
+    const refresh = (joined: Awaited<ReturnType<typeof join>>) =>
+      app.request('/oauth/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: joined.tokens.refresh_token, client_id: joined.client_id }).toString() })
+    const after = await join(await makeInvite())
+    await remove(await memberIdOf(after.tokens.access_token))
+    expect((await refresh(after)).status).toBe(400)
+    for (const order of ['refresh first', 'remove first']) {
+      const joined = await join(await makeInvite())
+      const id = await memberIdOf(joined.tokens.access_token)
+      const refreshed = order === 'refresh first' ? (await Promise.all([refresh(joined), remove(id)]))[0] : (await Promise.all([remove(id), refresh(joined)]))[1]
+      const token = refreshed.status === 200 ? ((await refreshed.json()) as { access_token: string }).access_token : null
+      for (const bearer of [joined.tokens.access_token, token].filter((one): one is string => one !== null)) expect([order, (await call('/s/soups/mcp', bearer)).status]).toEqual([order, 401])
+    }
+  })
+
   it('are removed when signed out too, which hides them', async () => {
     const { makeInvite, join, oauth, remove, listed, memberIdOf, memberOfToken } = await box()
     const token = (await join(await makeInvite())).tokens.access_token
@@ -136,6 +152,20 @@ describe('invite again', () => {
     const fresh = (await join(again)).tokens.access_token
     expect((await memberOfToken(old))?.endedReason).toBe('replaced')
     expect((await listed()).map((card) => [card.id, card.state])).toEqual([[await memberIdOf(fresh), 'active']])
+  })
+
+  it('opens its invite again when the join is withdrawn after the claim, though the old sign-in has ended', async () => {
+    let vetoing = false
+    const made: Awaited<ReturnType<typeof grantsApp>> = await grantsApp(await testDb(), { oauth: { onGrant: async (grant, c) => (await made.sharing.oauth.onGrant(grant, c)) && !vetoing } })
+    const { makeInvite, join, memberOfToken, inviteState, byKey } = made
+    const old = (await join(await makeInvite())).tokens.access_token
+    const again = (await (await byKey(`/api/spaces/soups/members/${(await memberOfToken(old))!.id}/invite-again`, { method: 'POST' })).json()) as NewInvite
+    vetoing = true
+    expect((await join(again)).status).toBe(400)
+    // Its own claim never revoked it, so it opens again; the member it replaced was closed in the claim
+    expect([await inviteState(again.id), (await memberOfToken(old))?.endedReason]).toEqual(['open', 'replaced'])
+    vetoing = false
+    expect((await join(again)).status).toBe(200)
   })
 
   it('never answers the link and code twice: a retry with the same Idempotency-Key is a 409 shown_once', async () => {

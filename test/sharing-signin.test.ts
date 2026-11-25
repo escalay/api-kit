@@ -130,6 +130,14 @@ describe('approve', () => {
     }
   })
 
+  it('escapes a space’s title on the owner’s page', async () => {
+    const { open, shelves } = await box()
+    shelves[0]!.title = 'Soups <script>alert("x")</script> & \'more\''
+    const { html } = await open({ resource: SOUPS, headers: { 'x-test-owner': OWNER } })
+    expect(html).not.toContain('<script')
+    expect(html).toContain('Approve this app at Soups &#60;script&#62;alert(&#34;x&#34;)&#60;/script&#62; &#38; &#39;more&#39;')
+  })
+
   it('carries the account line on every page that approves, the wrong code’s too', async () => {
     const { open, post, postTo } = await box()
     for (const resource of [SOUPS, undefined]) {
