@@ -54,8 +54,9 @@ One `registry:item` per part in `registry.json`; `kit add`, `kit list` and the s
 - `meta.entry: true` when the app imports the part's own folder (`./kit/reminders/index.js`) rather than
   `./kit/index.js`. A part that is repo setup, not code, is a root item (`meta.root`), like `npm-release`.
 - `meta.wiring`, for a part an app made by `init` must wire beyond a feature: `code` (its README's section),
-  `settings` (`{ name, what }`, each printed by `kit add` with the files that still lack it) and `cron`
-  (`{ schedule, calls }`).
+  `settings` (each a `name` and `what`, printed by `kit add` with the files that still lack it; `test`, an expression
+  for its value in `vitest.config.ts`'s miniflare bindings, and `testImport`, the import line that expression needs)
+  and `cron` (`schedule`, and `calls`: what the scheduled handler calls).
 - `meta.standard`: the STANDARD sections the part implements (`docs/PARTS.md` and the README's `Standard:` line read
   it); a browser layer adds `meta.layerOf`, the server part it sits on.
 

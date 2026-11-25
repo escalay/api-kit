@@ -1899,6 +1899,14 @@ describe('the skills', () => {
     expect(unnamed).toEqual([])
   })
 
+  it('api-kit-part names every meta.wiring field the registry uses', async () => {
+    const skill = (await skillTexts())['api-kit-part']!
+    const wired: { meta?: { wiring?: Record<string, unknown> & { settings?: Record<string, string>[]; cron?: Record<string, string> } } }[] = JSON.parse(await readFile(join(kitDir, 'registry.json'), 'utf8')).items
+    const fields = new Set(wired.flatMap(({ meta }) => (meta?.wiring ? [...Object.keys(meta.wiring), ...(meta.wiring.settings ?? []).flatMap(Object.keys), ...Object.keys(meta.wiring.cron ?? {})] : [])))
+    expect(fields.size).toBeGreaterThan(0)
+    expect([...fields].filter((field) => !skill.includes(`\`${field}\``))).toEqual([])
+  })
+
   it('api-kit-build wires the sharing part as its README does, and api-kit-review checks the threats its tests hold', async () => {
     const skills = await skillTexts()
     const wiring = await readFile(join(kitDir, 'src/sharing/README.md'), 'utf8')
