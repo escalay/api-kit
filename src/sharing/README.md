@@ -149,7 +149,7 @@ sequenceDiagram
   O->>A: complete as owner:email, asked scopes the ticks give, 30 days or until revoked
 ```
 
-Invite again: the old sign-in ends once the fresh invite is used.
+Invite again: the old sign-in ends once the fresh invite is used. A withdrawn join reopens it; the old stays replaced.
 
 ```mermaid
 sequenceDiagram
@@ -229,8 +229,8 @@ stateDiagram-v2
   its invite opens again; `client_revoked` ends the client's rows, any other end the grant's. Then, unless withdrawn,
   an agent's open invites under that grant or client are revoked; its joiners keep access. Told twice, nothing moves.
 - **The owner's reason is closed first**: Remove, Invite again joining, `sweep` and `forget` end the row (`removed`,
-  `replaced`, `expired`, `lapsed`, `space_gone`), then `revokeGrant`. The list hides removed and replaced members and
-  shows other ended ones as signed out. `sweep` and `forget` throw before `registerSharing`.
+  `replaced`, `expired`, `lapsed`, `space_gone`), then `revokeGrant`; Remove first revokes its invites, Invite again's
+  too. The list hides removed and replaced members and shows other ended ones as signed out.
 - **`resources` is a pure check of the path** (`spaceNameIn`): cased, encoded and dotted names are no space.
   `handles(ask)`: whether a sign-in is the part's (a space, the root or its MCP). A client's name is its own claim,
   kept after `appNameOf` (no control, bidi or zero-width character, 80 at most).

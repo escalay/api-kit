@@ -84,6 +84,35 @@ describe('members', () => {
     }
   })
 
+  it('are removed for good while their join is still in onGrant: the withdrawn join leaves the invite revoked', async () => {
+    let removing = false
+    const made: Awaited<ReturnType<typeof grantsApp>> = await grantsApp(await testDb(), {
+      oauth: {
+        onGrant: async (grant, c) => {
+          const yes = await made.sharing.oauth.onGrant(grant, c)
+          if (removing) await made.byKey(`/api/spaces/soups/members/${(await made.repo.memberByGrant(grant.grant))!.id}`, { method: 'DELETE' })
+          return yes
+        },
+      },
+    })
+    const { makeInvite, join, inviteState, membersOfInvite } = made
+    const invite = await makeInvite()
+    removing = true
+    expect((await join(invite)).status).toBe(400)
+    removing = false
+    expect([await membersOfInvite(invite.id), await inviteState(invite.id)]).toEqual([[], 'revoked'])
+    expect((await join(invite)).status).toBe(400)
+  })
+
+  it('are removed with their outstanding Invite again, so a re-invite made before Remove lets no one back in', async () => {
+    const { makeInvite, join, inviteAgain, remove, memberIdOf, inviteState } = await box()
+    const id = await memberIdOf((await join(await makeInvite())).tokens.access_token)
+    const again = (await (await inviteAgain(id)).json()) as NewInvite
+    expect((await remove(id)).status).toBe(204)
+    expect(await inviteState(again.id)).toBe('revoked')
+    expect((await join(again)).status).toBe(400)
+  })
+
   it('are removed when signed out too, which hides them', async () => {
     const { makeInvite, join, oauth, remove, listed, memberIdOf, memberOfToken } = await box()
     const token = (await join(await makeInvite())).tokens.access_token

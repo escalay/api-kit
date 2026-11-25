@@ -124,7 +124,7 @@ export const sharingRoutes = ({ path, tag }: { path: string; tag: string }) => {
     }),
     removeMember: createRoute({
       method: 'delete', path: `${at}/members/{id}`, operationId: 'removeMember', tags: [tag], summary: 'Remove a member',
-      description: 'Ends the member’s sign-in at once (its next request is 401) and takes it off the list, signed out ones too. Its invite never works again. Removing it again is harmless.',
+      description: 'Ends the member’s sign-in at once (its next request is 401) and takes it off the list, signed out ones too. Its invite, and any Invite again made for it, never works again. Removing it again is harmless.',
       request: { params: z.object({ space, id: memberId }) },
       responses: { 204: { description: 'Removed.' }, ...problemResponses(401, 403, 404) },
     }),

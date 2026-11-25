@@ -254,12 +254,21 @@ export const sharingHandlers = (config: SharingConfig, bound: Bound, repo: Shari
     return c.json(memberCardOf(originOf(c), space, member, new Date()), 200, NO_STORE)
   }
 
-  /** Closes the member as `removed`, live or signed out, then revokes its grant; again, or once hidden, a 204 that changes nothing. */
+  /**
+   * Revokes the member's invite and its Invite again ones, closes it as `removed`, live or signed out, then revokes its
+   * grant; again, or once hidden, a 204 that changes nothing. Its invites are revoked first, so a join still in `onGrant`
+   * that the kit then withdraws (deleting the row) leaves them closed.
+   */
   const removeMember: RouteHandler<SharingRoutes['removeMember']> = async (c) => {
     const { space: name, id } = c.req.valid('param')
     const { space } = await sharingAt(c, name)
-    const grant = await repo.closeMember(space.id, id, 'removed', new Date())
-    if (!grant && !(await repo.memberAt(space.id, id))) throw noSuchMember(space, id)
+    const member = await repo.memberAt(space.id, id)
+    if (!member) throw noSuchMember(space, id)
+    const now = new Date()
+    if (memberListingOf(member, now) === 'hidden') return c.body(null, 204)
+    if (member.inviteId) await repo.revokeInvite(space.id, member.inviteId, now)
+    await repo.revokeInvitesReplacing(space.id, member.id, now)
+    const grant = await repo.closeMember(space.id, id, 'removed', now)
     if (grant) await bound.revokeGrant(grant)
     return c.body(null, 204)
   }

@@ -525,8 +525,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
   changes and Until revoked start ticked at a known return, unticked elsewhere: read for 30 days), or "No space …
   here". A space's code page offers Continue as the owner (`POST /sharing/as-owner`, then `POST /sharing/owner`);
   the new option `signInPath` links "Sign in first". `signInStepOf` takes `found`. Members: `GET {path}/{space}/members`
-  and `/members/{id}`, Remove (`DELETE`), `POST …/invite-again`, and the tools `list_members`, `remove_member`,
-  `invite_again`. Call `sharing.sweep()` from the app's scheduled handler, and `sharing.forget(spaceId)` when it
+  and `/members/{id}`, Remove (`DELETE`, its invites revoked too), `POST …/invite-again`, and the tools `list_members`,
+  `remove_member`, `invite_again`. Call `sharing.sweep()` from the app's scheduled handler, and `sharing.forget(spaceId)` when it
   deletes a space.
 
 ## testing

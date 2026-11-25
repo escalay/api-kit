@@ -122,7 +122,7 @@ export const sharingTools = ({ path = '/api/spaces', noun = 'space' }: { path?: 
     mcpTool({
       name: 'remove_member',
       title: 'Remove a member',
-      description: `Ends a member’s sign-in at once and takes it off the list. To let them back, make a new invite. ${ON_WORD}`,
+      description: `Ends a member’s sign-in at once, takes it off the list, and ends its invites, Invite again ones too. To let them back, make a new invite. ${ON_WORD}`,
       input: z.object({ space, id: z.string().describe('The member’s id (`mem_…`), from list_members.') }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       cli: { name: 'member remove', examples: [{ run: 'member remove soups mem_a1b2 --yes', about: 'Remove a member of soups' }] },
