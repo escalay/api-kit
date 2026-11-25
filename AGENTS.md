@@ -50,7 +50,7 @@ Every part is a folder under `src/`. A feature with routes and data keeps the on
 `kit add <part> --wire`: `planWiring` in `cli.mjs` writes a part's `meta.wiring.wire` (its new files in
 `templates/wire/<part>/`) into an app made by `init`, at
 the `// kit:*` markers its templates carry and in whole statements compared without their layout, so a formatted app
-takes it and a second run changes nothing; an app without the markers, or with a statement the kit did not write, is
+takes it and a second run changes nothing, and formats what it wrote with the app's own `oxfmt` once installed; an app without the markers, or with a statement the kit did not write, is
 told every edit and nothing is written (`test/kit.test.ts` and `scripts/starter-check.mjs` wire all four parts).
 
 ## Commands

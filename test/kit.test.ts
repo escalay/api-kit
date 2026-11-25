@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRoute, z } from '@hono/zod-openapi'
@@ -1592,6 +1592,32 @@ describe('the copy-in CLI', () => {
       await rm(parent, { recursive: true, force: true })
     }
   }, 240_000)
+
+  it('leaves what --wire writes formatted in an installed app, so an edit by hand meets the shape pnpm format keeps', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-wire-format-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const oxfmt = join(import.meta.dirname, '..', 'node_modules/.bin/oxfmt')
+    try {
+      expect(cli(parent, 'init', 'tidy-shelves', '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'tidy-shelves')
+      expect(cli(app, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      // As installed: the app's own formatter, which `pnpm format` runs
+      await mkdir(join(app, 'node_modules/.bin'), { recursive: true })
+      await symlink(oxfmt, join(app, 'node_modules/.bin/oxfmt'))
+      const sources = ['src/app.ts', 'src/server.ts', 'src/features/shelves/index.ts', 'src/features/shelves/spaces.ts']
+      expect(spawnSync(oxfmt, sources.slice(0, 3), { cwd: app }).status).toBe(0)
+      const wired = cli(app, 'add', 'sharing', '--wire', '--spaces', 'shelves', '--no-install')
+      expect(wired.status, wired.stdout + wired.stderr).toBe(0)
+      const said = /^Formatted (.*)$/m.exec(wired.stdout)?.[1]?.split(', ')
+      expect(said?.sort()).toEqual([...sources].sort())
+      expect(wired.stdout).toContain('Next: pnpm test')
+      const check = spawnSync(oxfmt, ['--check', ...sources], { cwd: app, encoding: 'utf8' })
+      expect(check.status, check.stdout + check.stderr).toBe(0)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
 
   it('gives a shared space’s MCP a read tool per feature --under it, while a child by its id stays the owner’s', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-space-children-${process.pid}`)

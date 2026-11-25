@@ -2106,8 +2106,13 @@ const wireParts = (root, parts, install = null) => {
   }
   const installs = typeof install === 'function'
   const workers = existsSync(join(root, 'scripts/migrations.ts'))
-  const rest = `pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test`
-  const installed = installs && install(rest)
+  const installed = installs && install(`pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test`)
+  // In the shape `pnpm format` keeps, so an edit by hand after --wire meets it; only with the app's own formatter
+  const sources = changed.map(([path]) => path).filter((path) => /\.tsx?$/.test(path))
+  const formatter = join(root, 'node_modules/.bin/oxfmt')
+  const formatted = sources.length > 0 && existsSync(formatter) && spawnSync(formatter, sources, { cwd: root }).status === 0
+  if (formatted) console.log(`Formatted ${sources.join(', ')}`)
+  const rest = `${formatted ? '' : 'pnpm format && '}${workers ? 'pnpm migrations && ' : ''}pnpm test`
   // Where the settings are, and the one command that makes a local value for each
   const examples = ENV_FILES.filter(({ example }) => existsSync(join(root, example)))
   const settingsIn = [...examples.map(({ example }) => example), ...(existsSync(join(root, 'container/entrypoint.sh')) ? ['container/entrypoint.sh'] : [])].join(', ').replace(/, ([^,]*)$/, ' and $1')
