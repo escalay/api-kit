@@ -1498,7 +1498,7 @@ const SETTING_FILES = [
   ['src/app.ts', 'Env in src/app.ts'],
   ['.dev.vars.example', '.dev.vars.example'],
   ['container/entrypoint.sh', 'container/entrypoint.sh'],
-  ['vitest.config.ts', "vitest.config.ts's miniflare bindings (the workerd tests)"],
+  ['vitest.config.ts', "vitest.config.ts's miniflare bindings"],
 ]
 
 /**
@@ -1510,8 +1510,9 @@ const wiringStepsOf = (name, root) => {
   if (!wiring || !root || !existsSync(join(root, 'src/app.ts'))) return []
   const readme = REGISTRY[name].files.find((file) => file.endsWith('README.md'))
   const lacking = (path, text) => existsSync(join(root, path)) && !textOf(join(root, path)).includes(text)
-  const settings = (wiring.settings ?? []).flatMap(({ name: setting, what }) => {
-    const files = SETTING_FILES.filter(([path]) => lacking(path, setting)).map(([, where]) => where)
+  const settings = (wiring.settings ?? []).flatMap(({ name: setting, what, test, testImport }) => {
+    // The workerd tests get a value that works there: their origin, a key made as they start
+    const files = SETTING_FILES.filter(([path]) => lacking(path, setting)).map(([path, where]) => (path === 'vitest.config.ts' && test ? `${where} as ${setting}: ${test}${testImport ? ` (${testImport})` : ''}` : where))
     return files.length ? [`Setting ${setting} (${what}): add it to ${files.join(', ')}`] : []
   })
   const cron = wiring.cron

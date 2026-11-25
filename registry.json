@@ -830,9 +830,9 @@
         "wiring": {
           "code": "Wire it",
           "settings": [
-            { "name": "OAUTH_SIGNING_KEY", "what": "the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one" },
-            { "name": "SHARING_SECRET", "what": "32 random bytes or more, a secret of its own: `openssl rand -base64 32`" },
-            { "name": "PUBLIC_ORIGIN", "what": "the origin people and agents reach the app at, createOAuth's publicOrigin" }
+            { "name": "OAUTH_SIGNING_KEY", "what": "the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one", "test": "await generateOAuthKey()", "testImport": "import { generateOAuthKey } from './src/kit/index.js'" },
+            { "name": "SHARING_SECRET", "what": "32 random bytes or more, a secret of its own: `openssl rand -base64 32`", "test": "'a sharing secret of thirty-two bytes or more, for tests only'" },
+            { "name": "PUBLIC_ORIGIN", "what": "the origin people and agents reach the app at, createOAuth's publicOrigin", "test": "'https://api.test'" }
           ],
           "cron": { "schedule": "17 * * * *", "calls": "sweep()" }
         }

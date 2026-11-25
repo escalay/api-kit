@@ -1228,9 +1228,9 @@ describe('the copy-in CLI', () => {
       const steps = added.stdout.split('\n').filter((line) => /^(Wire|Setting|Schedule)[: ]/.test(line))
       expect(steps).toEqual([
         'Wire sharing: src/kit/sharing/README.md › Wire it',
-        "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one): add it to .dev.vars.example, vitest.config.ts's miniflare bindings (the workerd tests)",
-        "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings (the workerd tests)",
-        "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings (the workerd tests)",
+        "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one): add it to .dev.vars.example, vitest.config.ts's miniflare bindings as OAUTH_SIGNING_KEY: await generateOAuthKey() (import { generateOAuthKey } from './src/kit/index.js')",
+        "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings as SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only'",
+        "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings as PUBLIC_ORIGIN: 'https://api.test'",
         'Schedule: "triggers": { "crons": ["17 * * * *"] } in wrangler.jsonc, and a scheduled handler in src/worker.ts that calls sharing\'s sweep()',
         "Schedule: src/server.ts calls sharing's sweep() on a timer (hourly is enough)",
       ])
@@ -1268,6 +1268,16 @@ describe('the copy-in CLI', () => {
         }
       }
       expect(await read('src/app.ts')).toContain('PUBLIC_ORIGIN?: string }')
+      // The printed steps as printed: each setting in the workerd tests' bindings (so sharing is on there too), the schedule
+      const config = join(app, 'vitest.config.ts')
+      for (const line of steps.filter((step) => step.startsWith('Setting '))) {
+        const [, binding, imported] = /miniflare bindings as (\w+: .+?)(?: \((import .+)\))?$/.exec(line)!
+        const text = await readFile(config, 'utf8')
+        await writeFile(config, (imported ? `${imported}\n` : '') + text.replace("TEST_MIGRATIONS: await readD1Migrations('./migrations')", `$&, ${binding}`))
+      }
+      const wrangler = join(app, 'wrangler.jsonc')
+      await writeFile(wrangler, (await readFile(wrangler, 'utf8')).replace(/^(\s*"compatibility_date": .*)$/m, '$1\n  "triggers": { "crons": ["17 * * * *"] },'))
+      expect(cli(app, 'add', 'sharing').stdout).not.toMatch(/^Schedule: "triggers"/m)
       // A friend's agent joins Soups with its code, as the README's test line says, and loses it with the shelf
       await writeFile(
         join(app, 'test/sharing.test.ts'),

@@ -28,18 +28,17 @@ An app made by `kit init` whose spaces are shelves (`kit feature shelves --singu
 
 ```ts
 // src/features/shelves/spaces.ts, new: the shelves as spaces, each shelf's id its space's name
-import { eq } from 'drizzle-orm'
 import type { Db } from '../../kit/index.js'
-import { shelves } from './schema.js'
+import { shelvesRepo } from './repo.js'
 
 export const shelfSpaces = (db: Db) => {
   const byId = async (id: string) => {
-    const [row] = await db.select().from(shelves).where(eq(shelves.id, id))
+    const row = await shelvesRepo(db).get(id)
     return row ? { id: row.id, name: row.id, title: row.name } : null
   }
   return { byName: byId, byId }
 }
-// src/features/shelves/index.ts, in place of the lines that start the same way: a deleted shelf ends its members
+// src/features/shelves/index.ts, in place of the statements that start the same way: a deleted shelf ends its members
   register: async (app, { db, parts }) => {
     const handle = shelvesHandlers({ ...repo, remove: async (id) => { await repo.remove(id); if (parts.sharing) await parts.sharing.forget(id) } })
 // src/features/shelves/index.ts, before `const handle`
@@ -49,7 +48,7 @@ import { z } from '@hono/zod-openapi'
 import { shelfSpaces } from './features/shelves/spaces.js'
 import { mcpTool } from './kit/mcp/index.js'
 import { createSharing, registerSharing, sharingTools, SHARING_OPEN_PATHS, SHARING_TAG, type Sharing } from './kit/sharing/index.js'
-// src/app.ts, in place of the lines that start the same way (the realm and name stay the app's)
+// src/app.ts, in place of the statements that start the same way (the realm and name stay the app's)
 export type Parts = { sharing?: Sharing }
   const oauth = env.OAUTH_SIGNING_KEY ? createOAuth({ name: 'Shelves', signingKey: env.OAUTH_SIGNING_KEY, store: await dbOAuthStore(db), owner, reuseGraceSeconds: 30, ...(sharing && { publicOrigin: env.PUBLIC_ORIGIN, limits: { store: await dbGuardStore(db) }, ...sharing.oauth }) }) : undefined
     tags: [...FEATURES.map((feature) => feature.tag), ...(sharing ? [SHARING_TAG] : [])],
@@ -71,14 +70,14 @@ import { sharingOf } from './kit/sharing/index.js'
 // src/worker.ts, after `fetch:`: wrangler.jsonc's "triggers": { "crons": ["17 * * * *"] } runs it hourly
   scheduled: (_event, env, ctx) => ctx.waitUntil(appOf(env).then(async (app) => { const sharing = sharingOf(app); if (sharing) await sharing.sweep() })),
 // src/server.ts, after `serve(`: hourly
-setInterval(() => void sharingOf(app)?.sweep(), 3_600_000)
+setInterval(() => void sharingOf(app)?.sweep().catch((error) => console.error('sharing sweep failed', error)), 3_600_000)
 ```
 
 A test signs a friend's agent in with `connectAgent` (testing), the code typed through `approveSignIn`'s `form:
 { action: '/sharing/join', fields: { code } }`, then calls `view_shelf` at the invite's `address`.
 
-An app with hooks of its own chains them, its veto first so a refusal never spends an invite. Behind Cloudflare Access
-it lets exactly `sharingSignInPaths(sharing)` through.
+An app with hooks of its own (`mine`: its `approve`, `onGrant`, `onRevoke` and `accepts`) chains them, its veto
+first so a refusal never spends an invite. Behind Cloudflare Access it lets exactly `sharingSignInPaths(sharing)` through.
 
 ```ts
 approve: async (c, ask) => (sharing.handles(ask) ? sharing.oauth.approve(c, ask) : mine.approve(c, ask)),
