@@ -1,9 +1,9 @@
 /**
- * The owner's own approval at a space (decisions 3, 6, 16, 24): `POST /sharing/as-owner`, the hop from a space's code
- * page when the owner's cookie did not come with a cross-site arrival, and `POST /sharing/owner`, their answer. Each
- * post is same-origin from the browser that opened the ticket, and asks `owner(c)` and the space again, in that order,
- * so no one but the owner learns whether a space exists. Every approval names its scopes (what the app asked that the
- * owner gives: read, and write when ticked) and its lifetime (30 days, or until revoked when ticked).
+ * The owner's own approval at a space: `POST /sharing/as-owner`, the hop from a space's code page when the owner's
+ * cookie did not come with a cross-site arrival, and `POST /sharing/owner`, their answer. Each post is same-origin from
+ * the browser that opened the ticket, and asks `owner(c)` and the space again, in that order, so no one but the owner
+ * learns whether a space exists. Every approval names its scopes (what the app asked that the owner gives: read, and
+ * write when ticked) and its lifetime (30 days, or until revoked when ticked).
  *
  * @example
  * const owner = ownerRoutesFor({ config, bound, brand, oauth })

@@ -82,8 +82,8 @@ const returnOf = (config: SharingConfig, ask: Pick<SignInAsk, 'onThisComputer' |
 const codeViewOf = (config: SharingConfig, bound: Bound, ask: SignInAsk): CodeView => ({ back: returnOf(config, ask), atSpace: askedOf(config, bound, ask) === 'space' })
 
 /**
- * What the owner's page starts with (decisions 16 and 24): at a known return what the app asked, until revoked; at any
- * other, read for 30 days. The owner may narrow either, never widen.
+ * What the owner's page starts with: at a known return what the app asked, until revoked; at any other, read for 30
+ * days. The owner may narrow either, never widen.
  *
  * @example
  * ownerViewOf(config, ask, soups)   // { title: 'Soups', back: { kind: 'unknown', host: 'evil.example.test' }, write: false, untilRevoked: false }

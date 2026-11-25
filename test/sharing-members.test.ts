@@ -173,7 +173,7 @@ describe('invite again', () => {
     expect((await listed()).map((card) => [card.id === oldId, card.label, card.state])).toEqual([[false, 'Sam', 'active']])
   })
 
-  it('gives a signed-out member a fresh invite, and the old row goes once the new one joins (decision 1)', async () => {
+  it('gives a signed-out member a fresh invite, and the old row goes once the new one joins', async () => {
     const { makeInvite, join, oauth, inviteAgain, memberIdOf, memberOfToken, listed } = await box()
     const old = (await join(await makeInvite())).tokens.access_token
     await oauth.revokeGrant(grantOf(old))

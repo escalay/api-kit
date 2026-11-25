@@ -263,7 +263,7 @@ describe('the owner at a space', () => {
     expect(await repo.listMembers('sp_soups', { limit: 10 })).toEqual([])
   })
 
-  it('tells the owner a space does not exist on the approval page, never at the exchange (decision 6)', async () => {
+  it('tells the owner a space does not exist on the approval page, never at the exchange', async () => {
     const { open, postTo, shelves } = await box()
     const pies = await open({ resource: `${ORIGIN}/s/pies/mcp`, headers: asOwner })
     expect([pies.page.status, wordsOf(pies.html)]).toEqual([404, expect.stringContaining('No space pies here')])

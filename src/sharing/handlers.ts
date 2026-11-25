@@ -21,7 +21,7 @@ import { askingStateOf, inviteStateOf, MAX_OPEN_INVITES, memberListingOf, member
 const NO_STORE = { 'cache-control': 'no-store' }
 /** Fresh links and codes tried when the code made is taken. */
 const CODE_TRIES = 3
-/** What an agent may give: never until revoked (decision 17). */
+/** What an agent may give: never until revoked, which is the owner's alone. */
 const AGENT_LIFETIMES: readonly Lifetime[] = ['7d', '30d']
 
 /** Who may share, and as whom the invites they make are recorded. */

@@ -124,7 +124,7 @@ export const sharingPages = (view: PageView) => {
     owner,
     /** A wrong code: the code page again, the ticket still live. */
     wrongCode: (c: Context, ask: Asking, at: CodeView) => code(c, ask, at, NOT_OURS),
-    /** The owner at a space the app does not have (decision 6): refused here, never at the exchange. */
+    /** The owner at a space the app does not have: refused here, never at the exchange. */
     noSuchSpace: (c: Context, name: string) =>
       send(c, view, { status: 404, title: 'No such space', body: `<h1>No space ${escape(name)} here</h1><p>The app was given an address with no space behind it: check the name, then connect it again.</p>` }),
     /** Continue as the owner, by someone the app does not call the owner. */
