@@ -1982,7 +1982,11 @@ const planWiring = (root, parts) => {
       const onNode = read('src/server.ts') !== null
       for (const [path, made] of [['.dev.vars.example', null], ['.env.example', onNode ? readFileSync(join(KIT, 'templates/app/env.example'), 'utf8') : null]]) {
         const text = read(path) ?? made
-        if (text !== null && !dotenvNames(text).includes(key)) write(path, `${text.trimEnd()}\n# ${key}: ${what}\n${key}=""\n`)
+        if (text === null || dotenvNames(text).includes(key)) continue
+        write(path, `${text.trimEnd()}\n# ${key}: ${what}\n${key}=""\n`)
+        // `kit env --write` makes the file beside the example: git must leave it out first
+        const ignore = gitignoreWith(root, path.replace(/\.example$/, ''), read('.gitignore') ?? '')
+        if (ignore !== null) write('.gitignore', ignore)
       }
       const scripts = JSON.parse(read('package.json') ?? '{}').scripts
       if (onNode && scripts?.dev === 'tsx watch src/server.ts') write('package.json', read('package.json').replace('"dev": "tsx watch src/server.ts"', `"dev": "${NODE_DEV}"`))
@@ -2020,11 +2024,14 @@ const wireParts = (root, parts, install = null) => {
     process.exitCode = 1
     return false
   }
+  const ignore = changed.find(([path]) => path === '.gitignore')?.[1]
+  const ignoring = ignore ? ENV_FILES.map(({ file }) => file).filter((file) => ignoreTextCovers(ignore, file) && !ignoreTextCovers(textOf(join(root, '.gitignore')) ?? '', file)) : []
   for (const [path, text] of changed) {
     mkdirSync(dirname(join(root, path)), { recursive: true })
     writeFileSync(join(root, path), text)
   }
   console.log(changed.length ? `Wired ${parts.join(', ')}: ${changed.map(([path]) => path).join(', ')}` : `Wired already: ${parts.join(', ')}; nothing changed`)
+  if (ignoring.length) console.log(`Added ${ignoring.join(' and ')} to .gitignore: \`kit env --write\` puts secrets in it`)
   // What each part says once wired (registry.json's wire.after): where its routes are
   for (const part of parts) {
     const { after, over } = REGISTRY[part].wiring.wire
@@ -2057,6 +2064,20 @@ const localValueOf = (local, origin) => {
   const bytes = /^random:(\d+)$/.exec(local)?.[1] ?? fail(`registry.json: a setting's local is random:<bytes>, es256 or origin, not ${local}`)
   return randomBytes(Number(bytes)).toString('base64')
 }
+/** Whether a line of a .gitignore at the app's root matches `file` there (`*` and `?` globs; negations and folders aside). */
+const ignoreTextCovers = (text, file) =>
+  text.split('\n').map((line) => line.trim().replace(/^\//, '')).filter((line) => line && !/^[#!]/.test(line) && !line.endsWith('/'))
+    .some((line) => new RegExp(`^${line.replace(/^\*\*\//, '').replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')}$`).test(file))
+/**
+ * The app's .gitignore with `file` added, or null when it is ignored already: by a line of `text`, or, in a git
+ * repository, by what `git check-ignore` says (without the person's own global excludes, which no one else has).
+ */
+const gitignoreWith = (root, file, text = textOf(join(root, '.gitignore')) ?? '') => {
+  if (ignoreTextCovers(text, file)) return null
+  if (spawnSync('git', ['-c', 'core.excludesFile=', 'check-ignore', '-q', file], { cwd: root }).status === 0) return null
+  return `${text.trimEnd()}${text.trim() ? '\n' : ''}${file}\n`
+}
+
 /** A dotenv line Node's --env-file and wrangler both read: double quotes, or single ones around a value that has them. */
 const dotenvLine = (name, value) => `${name}=${value.includes('"') ? `'${value}'` : `"${value}"`}`
 
@@ -2429,6 +2450,13 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     }
     const there = texts.filter(([file]) => existsSync(join(root, file))).map(([file]) => file)
     if (there.length) fail(`${there.join(' and ')} exists: nothing written. \`kit env\` prints the lines; add the ones it lacks by hand, or delete it and run this again`)
+    // Secrets go only where git leaves them out: an app made by 1.35.0 or earlier ignores .dev.vars but not .env
+    for (const [file] of texts) {
+      const ignore = gitignoreWith(root, file)
+      if (ignore === null) continue
+      writeFileSync(join(root, '.gitignore'), ignore)
+      console.log(`Added ${file} to .gitignore: it holds secrets, and git would have committed it`)
+    }
     for (const [file, text] of texts) writeFileSync(join(root, file), text, { mode: 0o600 })
     console.log(`Wrote ${texts.map(([file]) => file).join(' and ')}: a value for each setting, made now`)
     for (const line of keyLines) console.log(line)

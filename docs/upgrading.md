@@ -525,8 +525,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - `--wire` lists `SETUP_CODE` in `.env.example` too on Node, each with how to make its value (and makes the file in a Node
   app without one, and points an unchanged `dev` script at `.env`), and its `Next:` names the settings' files and
   `npx @escalay/kit env --write`, which makes `.env` (Node) and `.dev.vars` (Workers) with a value for each, so
-  `pnpm dev` runs the part. A new Node app has `.env.example`, `.env` git-ignored, and `dev` reading it. Nothing to
-  change; an older app's `dev` reads `.env` once it is `tsx watch --env-file-if-exists=.env src/server.ts`.
+  `pnpm dev` runs the part. A new Node app has `.env.example`, `.env` git-ignored, and `dev` reading it; in an older one, whose `.gitignore`
+  lacks `.env`, `--wire` and `kit env --write` add the line and say so. Nothing to change; an older app's `dev` reads `.env` once it is `tsx watch --env-file-if-exists=.env src/server.ts`.
 
 ### 1.35.0
 
@@ -590,8 +590,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - `--wire` lists its settings in `.env.example` too on Node, each with how to make its value (and makes the file in a Node
   app without one, and points an unchanged `dev` script at `.env`), and its `Next:` names the settings' files and
   `npx @escalay/kit env --write`, which makes `.env` (Node) and `.dev.vars` (Workers) with a value for each, so
-  `pnpm dev` runs the part. A new Node app has `.env.example`, `.env` git-ignored, and `dev` reading it. Nothing to
-  change; an older app's `dev` reads `.env` once it is `tsx watch --env-file-if-exists=.env src/server.ts`.
+  `pnpm dev` runs the part. A new Node app has `.env.example`, `.env` git-ignored, and `dev` reading it; in an older one, whose `.gitignore`
+  lacks `.env`, `--wire` and `kit env --write` add the line and say so. Nothing to change; an older app's `dev` reads `.env` once it is `tsx watch --env-file-if-exists=.env src/server.ts`.
 
 ### 1.35.0
 

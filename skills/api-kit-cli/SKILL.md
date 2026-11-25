@@ -130,7 +130,7 @@ default; `--app` is the app's folder, `.` by default.
 | `kit button` | the Deploy to Cloudflare button: `--check` what would stop a stranger's deploy, `--write` into the README, `--smoke` a real deploy |
 | `kit brand` | `brand/` rendered into `src/brand.gen.ts` (needs `@resvg/resvg-js`); `--check` when it is stale |
 | `kit key [name]` | a key to try the app with and its `API_KEYS=` line (`API_KEYS=… pnpm dev`, or `.dev.vars`); kept nowhere, so keep both from one run |
-| `kit env [--write]` | a local value for every setting in `.env.example` (Node) and `.dev.vars.example` (Workers), and a key; `--write` makes `.env` and `.dev.vars`, never over one |
+| `kit env [--write]` | a local value for every setting in `.env.example` (Node) and `.dev.vars.example` (Workers), and a key; `--write` makes `.env` and `.dev.vars`, never over one, adding each to `.gitignore` first when git would commit it |
 | `kit license keys\|mint\|verify` | a product's signing pair and the license keys `licenseOf` accepts for paid features |
 
 Presets (`kit init --preset`): `--preset api` (the default: an API on Node and Workers, or `--runtime`),

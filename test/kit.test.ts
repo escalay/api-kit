@@ -1660,6 +1660,60 @@ describe('the copy-in CLI', () => {
     }
   })
 
+  it('git-ignores .env before kit env --write or --wire puts secrets near it, in an app whose .gitignore (1.35.0 and earlier) lacks it', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-env-ignore-'))
+    const git = (cwd: string, ...args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' } })
+    try {
+      for (const name of ['in-git', 'wired', 'starred']) expect(cli(parent, 'init', name, '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const monorepo = join(parent, 'mono')
+      await mkdir(monorepo)
+      expect(cli(monorepo, 'init', 'inside', '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const ignoreOf = (app: string) => readFile(join(app, '.gitignore'), 'utf8')
+      // As 1.35.0 made it: .dev.vars ignored, .env not
+      const older = async (app: string, more: string[] = []) => writeFile(join(app, '.gitignore'), `${[...(await ignoreOf(app)).split('\n').filter((line) => line && line !== '.env'), ...more].join('\n')}\n`)
+      for (const name of ['in-git', 'wired', 'inside']) await older(join(parent, name === 'inside' ? 'mono/inside' : name))
+      await older(join(parent, 'starred'), ['.env*', '!.env.example'])
+
+      // An app that is a git repository: git check-ignore says .env would be committed, so the line is added and said
+      const inGit = join(parent, 'in-git')
+      expect(git(inGit, 'init', '-q').status).toBe(0)
+      expect(git(inGit, 'check-ignore', '-q', '.env').status).toBe(1)
+      const made = cli(inGit, 'env', '--write')
+      expect(made.status, made.stderr).toBe(0)
+      expect(made.stdout).toContain('Added .env to .gitignore')
+      expect(git(inGit, 'check-ignore', '-q', '.env').status).toBe(0)
+      await rm(join(inGit, '.env'))
+      expect(cli(inGit, 'env', '--write').stdout).not.toContain('.gitignore')
+      expect((await ignoreOf(inGit)).split('\n').filter((line) => line === '.env')).toHaveLength(1)
+
+      // In a monorepo whose root ignores .env, git is the truth: the app's own .gitignore is left as it is
+      await writeFile(join(monorepo, '.gitignore'), '.env\n')
+      expect(git(monorepo, 'init', '-q').status).toBe(0)
+      const inside = join(monorepo, 'inside')
+      const before = await ignoreOf(inside)
+      const there = cli(inside, 'env', '--write')
+      expect([there.status, there.stdout]).toEqual([0, expect.not.stringContaining('.gitignore')])
+      expect(await ignoreOf(inside)).toBe(before)
+
+      // Outside git, a pattern that covers it is enough
+      const starred = join(parent, 'starred')
+      const covered = await ignoreOf(starred)
+      expect(cli(starred, 'env', '--write').stdout).not.toContain('.gitignore')
+      expect(await ignoreOf(starred)).toBe(covered)
+
+      // --wire adds it with the .env.example it extends, and says so
+      const wired = join(parent, 'wired')
+      const wiring = cli(wired, 'add', 'setup', 'people', '--wire', '--no-install')
+      expect(wiring.status, wiring.stdout + wiring.stderr).toBe(0)
+      expect(wiring.stdout).toMatch(/^Wired setup, people: .*\.gitignore/m)
+      expect(wiring.stdout).toContain('Added .env to .gitignore')
+      expect((await ignoreOf(wired)).split('\n')).toContain('.env')
+      expect(cli(wired, 'add', 'setup', 'people', '--wire', '--no-install').stdout).toContain('Wired already')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
   it('installs what the wired parts need with add --wire, with the app’s package manager, or names the command when it cannot', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'kit-wire-install-'))
     // Stand-ins for the package managers: each logs where it ran and what it was asked, and fails when told to
