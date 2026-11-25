@@ -271,7 +271,8 @@ describe('sweep', () => {
 describe('forget', () => {
   it('refuses a deleted space’s members at once, then ends them, revokes their grants and invites, and leaves other spaces be', async () => {
     const { makeInvite, join, call, sharing, shelves, memberOfToken, toldFor, repo } = await box()
-    const soups = (await join(await makeInvite())).tokens.access_token
+    const held = await makeInvite()
+    const soups = (await join(held)).tokens.access_token
     const bakesInvite = await makeInvite('bakes')
     const bakes = (await join(bakesInvite, { resource: BAKES, asked: BAKES })).tokens.access_token
     const open = await makeInvite()
@@ -281,6 +282,8 @@ describe('forget', () => {
     expect((await memberOfToken(soups))?.endedReason).toBe('space_gone')
     expect(toldFor(grantOf(soups))).toEqual(['revoked'])
     expect((await repo.inviteAt('sp_soups', open.id))?.revokedAt).toEqual(expect.any(String))
+    // The invite a member holds is revoked on the record too, so a space_gone withdraw never reopens it
+    expect((await repo.inviteAt('sp_soups', held.id))?.revokedAt).toEqual(expect.any(String))
     expect([(await memberOfToken(bakes))?.endedAt, toldFor(grantOf(bakes)), (await repo.inviteAt('sp_bakes', bakesInvite.id))?.revokedAt]).toEqual([null, [], null])
     // Told twice, nothing moves
     await sharing.forget('sp_soups')
