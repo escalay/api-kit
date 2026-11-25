@@ -1633,7 +1633,8 @@ const commands = {
     const runtime = valueOf('--runtime') ?? (preset === 'app' ? 'cloudflare' : 'both')
     if (!RUNTIMES.includes(runtime)) fail(`--runtime is one of ${RUNTIMES.join(', ')}`)
     if (preset === 'app' && runtime !== 'cloudflare') fail('the app preset runs on Cloudflare Workers; leave --runtime out or use --runtime cloudflare')
-    const vars = { __name__: name, __title__: title, __kit__: VERSION, __date__: COMPATIBILITY_DATE }
+    // __title_quoted__ sits inside a double-quoted YAML value (a skill's description), so its \ and " are escaped
+    const vars = { __name__: name, __title__: title, __title_quoted__: title.replaceAll('\\', '\\\\').replaceAll('"', '\\"'), __kit__: VERSION, __date__: COMPATIBILITY_DATE }
     copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (['gitignore', 'oxlintrc.json', 'oxfmtrc.json', 'github', 'githooks', 'node-version', 'gitleaks.toml'].includes(file) ? `.${file}` : file === 'agents-skills' ? '.agents/skills' : file))
     if (runtime !== 'node') {
       copyTemplate(join(KIT, 'templates/runtime-cloudflare'), root, vars, (file) => (file === 'dev.vars.example' ? '.dev.vars.example' : file))

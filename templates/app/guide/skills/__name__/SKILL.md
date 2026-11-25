@@ -1,6 +1,6 @@
 ---
 name: __name__
-description: "Use when a task needs __title__. Replace this line with the situations, words and tool names that should bring an agent here."
+description: "Use when a task needs __title_quoted__. Replace this line with the situations, words and tool names that should bring an agent here."
 ---
 
 # __title__

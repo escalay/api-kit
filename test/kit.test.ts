@@ -1426,6 +1426,25 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     }
   }, 120_000)
 
+  it('keeps the starter skills loadable whatever the title holds', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-title-'))
+    try {
+      const title = 'Say "hi": C:\\apps'
+      expect(cli(parent, 'init', 'odd-title', '--title', title, '--bare', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'odd-title')
+      const product = await readFile(join(app, 'guide/skills/odd-title/SKILL.md'), 'utf8')
+      // Never served, so its boolean metadata.internal (which the server refuses) is left out to read the description
+      const developer = (await readFile(join(app, '.agents/skills/odd-title-agent-test/SKILL.md'), 'utf8')).replace('metadata:\n  internal: true\n', '')
+      expect(await guideSkillProblems({ files: { 'skills/odd-title/SKILL.md': product, 'skills/odd-title-agent-test/SKILL.md': developer } })).toEqual([])
+      const { skills } = await guideSkills({ files: { 'skills/odd-title/SKILL.md': product } })
+      expect(skills!.entries[0]!.frontmatter.description).toContain(`Use when a task needs ${title}.`)
+      // Outside the quotes the title stays as typed
+      expect(product).toContain(`# ${title}\n`)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('gives a feature the pagination part an app lacks, never moving an older kit copy to this version', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'kit-feature-'))
     expect(cli(parent, 'init', 'old-api', '--no-install', '--no-git').status).toBe(0)
