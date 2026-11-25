@@ -11,7 +11,7 @@ Each part's rules travel with it in `src/kit/<part>/README.md`; the full standar
 
 ## A new API
 
-1. `npm create escalay my-api` (add `-- --runtime node` or `cloudflare`; the default is both). For a tool people
+1. `npm create escalay@latest my-api` (add `-- --runtime node` or `cloudflare`; the default is both). For a tool people
    also open in a browser: `-- --preset app` (Cloudflare only; `web/` served under `/app` by the same Worker).
    It installs the app, formats it and writes its migrations, so its gate passes as made. Then run what its `Next:`
    line prints, up to `pnpm dev`: `cd my-api && pnpm test`; with `-- --no-install`, or without pnpm, it is

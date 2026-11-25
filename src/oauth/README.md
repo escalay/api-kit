@@ -52,7 +52,7 @@ owner: async (c) => {
 },
 ```
 
-The starter (`npm create escalay`) sets `reuseGraceSeconds: 30` and says this beside its `owner`.
+The starter (`npm create escalay@latest`) sets `reuseGraceSeconds: 30` and says this beside its `owner`.
 
 ### The app's own approval page
 

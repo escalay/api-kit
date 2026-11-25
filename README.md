@@ -18,7 +18,7 @@ the practices travel with the copy into `src/kit/<part>/README.md`.
 ## Start a new API
 
 ```bash
-npm create escalay my-api                        # the `api` preset, with an example `notes` feature, installed, formatted, migrations written
+npm create escalay@latest my-api                 # the `api` preset, with an example `notes` feature, installed, formatted, migrations written
 cd my-api && pnpm test && pnpm dev               # http://localhost:4400/docs, /llms.txt, /mcp
 npx @escalay/kit feature recipes --fields "name:string minutes:int tags:string[]"   # a new feature folder, its own fields, listed and tested
 npx @escalay/kit sdk                             # a typed TypeScript client in sdk/, a method per operation
@@ -30,7 +30,7 @@ pnpm add -D @resvg/resvg-js && npx @escalay/kit brand    # brand/ (a monogram to
 Every new app is a git repository with CI (`.github/workflows/ci.yml`), monthly Dependabot, a secrets scan, a
 pre-push hook running `pnpm gate` (what CI runs), and Node and pnpm pinned; its `AGENTS.md` says how changes ship.
 
-`npm create escalay my-api -- --runtime node --title "My API"` passes flags on: `--runtime both|cloudflare|node`
+`npm create escalay@latest my-api -- --runtime node --title "My API"` passes flags on: `--runtime both|cloudflare|node`
 (default `both`), `--preset api`, `--bare` (no example feature), `--no-git`, `--no-install` (leaves `pnpm install`,
 `format` and `migrations` to you), `--yes` (it never asks; accepted for scripts); `-- --help` lists them.
 `--preset selfhosted` is not built yet: it arrives with `escalay/selfhost-kit`.
@@ -47,7 +47,7 @@ generated files are left out of both. What `init` and `feature` write is in the 
 ## Start an app with a browser side
 
 ```bash
-npm create escalay my-tool -- --preset app       # the API plus web/: React, TanStack Router and Query, Tailwind
+npm create escalay@latest my-tool -- --preset app  # the API plus web/: React, TanStack Router and Query, Tailwind
 cd my-tool && pnpm test
 pnpm dev                                         # Vite runs both sides: the app at /app/, the API everywhere else
 pnpm run deploy                                  # guide, migrations, vite build, wrangler deploy: one Worker

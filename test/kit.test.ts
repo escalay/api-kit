@@ -860,7 +860,7 @@ describe('the copy-in CLI', () => {
     await rm(parent, { recursive: true, force: true })
     await mkdir(parent, { recursive: true })
     try {
-      // The way `npm create escalay demo-api` starts: create-escalay hands its arguments to `init`; flags may come first
+      // The way `npm create escalay@latest demo-api` starts: create-escalay hands its arguments to `init`; flags may come first
       // --no-install: the kit's own packages resolve the app here, without a download
       const made = spawnSync(process.execPath, [join(import.meta.dirname, '..', 'packages/create-escalay/index.mjs'), '--preset', 'api', '--yes', '--no-install', '--title', 'Demo API', 'demo-api'], { cwd: parent, encoding: 'utf8' })
       expect(made.status, made.stderr).toBe(0)
@@ -1378,12 +1378,21 @@ describe('the npm-release item', () => {
     expect(readme).toContain('after 1.31.0')
   })
 
+  it('names a version wherever it says `npm create escalay`: without one, npx runs whatever create-escalay it cached', async () => {
+    const tracked = spawnSync('git', ['ls-files'], { cwd: kitDir, encoding: 'utf8' }).stdout.split('\n')
+    // The changelog is history, and the tests name the command as they run it
+    const files = tracked.filter((path) => /\.(md|mjs|ts|tsx|json|jsonc|sh|ya?ml|txt)$/.test(path) && path !== 'CHANGELOG.md' && !path.startsWith('test/'))
+    const unversioned = (await Promise.all(files.map(async (path) => (await read(path)).split('\n').flatMap((line, at) => (/npm create escalay(?!@)/.test(line) ? [`${path}:${at + 1}: ${line.trim()}`] : []))))).flat()
+    expect(unversioned).toEqual([])
+    expect(files.length).toBeGreaterThan(100)
+  })
+
   it('answers --help from create-escalay and from every kit command without making anything', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'kit-help-'))
     for (const flag of ['--help', '-h']) {
       const created = spawnSync(process.execPath, [join(kitDir, 'packages/create-escalay/index.mjs'), flag], { cwd: parent, encoding: 'utf8' })
       expect([created.status, created.stderr], flag).toEqual([0, ''])
-      expect(created.stdout).toMatch(/^Usage: npm create escalay <dir> \[-- options\]$/m)
+      expect(created.stdout).toMatch(/^Usage: npm create escalay@latest <dir> \[-- options\]$/m)
       expect(created.stdout).toContain('--preset api|app')
     }
     expect(await readdir(parent)).toEqual([])

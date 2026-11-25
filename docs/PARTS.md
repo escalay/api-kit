@@ -12,7 +12,7 @@ The parts in the order they go in: each after the parts it needs. `kit add` brin
 
 | Goal | Parts, in order | How |
 |---|---|---|
-| Start a new API | `core` → `db` → `oauth` → `pagination` → `guide` → `mcp` → `brand` → `switches` → `testing` | `npm create escalay <name>`: the starter, with an example feature and its tests; `--preset app` adds `switches-client` and `switches-react` to `web/kit/` |
+| Start a new API | `core` → `db` → `oauth` → `pagination` → `guide` → `mcp` → `brand` → `switches` → `testing` | `npm create escalay@latest <name>`: the starter, with an example feature and its tests; `--preset app` adds `switches-client` and `switches-react` to `web/kit/` |
 | Put an existing API on the standard | `core` → `db` → `pagination` → `guide` → `mcp` → `testing` | `npx @escalay/kit add core db pagination guide mcp testing` |
 | Lists that page | `core` → `pagination` | `npx @escalay/kit add pagination` |
 | Agents and MCP clients sign in without a pasted key | `core` → `db` → `oauth` | `npx @escalay/kit add oauth`: the owner approves each one on the kit’s page |

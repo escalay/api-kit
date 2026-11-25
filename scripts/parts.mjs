@@ -21,7 +21,7 @@ const KIT = 'escalay/api-kit/'
  * `note` is what the parts alone don't say.
  */
 export const GOALS = [
-  { goal: 'Start a new API', command: 'npm create escalay <name>', note: 'the starter, with an example feature and its tests' },
+  { goal: 'Start a new API', command: 'npm create escalay@latest <name>', note: 'the starter, with an example feature and its tests' },
   { goal: 'Put an existing API on the standard', parts: ['core', 'db', 'pagination', 'guide', 'mcp', 'testing'] },
   { goal: 'Lists that page', parts: ['pagination'] },
   { goal: 'Agents and MCP clients sign in without a pasted key', parts: ['oauth'], note: 'the owner approves each one on the kit’s page' },
