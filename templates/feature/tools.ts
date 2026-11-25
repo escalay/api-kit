@@ -5,7 +5,8 @@ import { PATH } from './routes.js'
 
 type Card = { id: string; __card_fields__; updatedAt: string }
 type Page = { _embedded: { __camel__: Card[] }; _links: { next?: { href: string } } }
-const line = (row: Card) => `${row.__first__} · id ${row.id} · changed ${row.updatedAt.slice(0, 10)}`
+// The fields an agent picks by (a state, a short value) on every line, so a list answers "which are done"
+const line = (row: Card) => `${row.__first__}__line_fields__ · id ${row.id} · changed ${row.updatedAt.slice(0, 10)}`
 const id = z.string().describe('The __label__’s id, from list___snake__.')
 
 export const __camel__Tools: McpTool[] = [

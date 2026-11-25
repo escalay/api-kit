@@ -1453,6 +1453,11 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       // The naive singular is said, with how to name another
       const naive = cli(app, 'feature', 'leaves', '--fields', 'name:string')
       expect(naive.stdout).toContain('each one a leave (--singular names it otherwise)')
+      // What to run next, and where an action beyond the five routes is shown
+      expect(naive.stdout.trim().split('\n').slice(-2)).toEqual([
+        'Next: pnpm format (what feature writes is in the kit\'s long-line style), then pnpm test',
+        'An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; a resource inside another: › A resource inside another',
+      ])
       const made = cli(app, 'feature', 'shelves', '--singular', 'shelf', '--no-remove', '--fields', 'name:string status:enum(to-read|reading|done) mood:enum(calm|busy)?')
       expect(made.status, made.stderr).toBe(0)
       expect(made.stdout).toContain('each one a shelf')
@@ -1503,6 +1508,12 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--project', 'node', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
       expect(tests.stdout).toContain('makes, lists and changes a shelf')
+      // Its MCP lines name the fields an agent filters on (an enum, a short one), so list_shelves shows which is done
+      const { shelvesTools } = await import(join(app, 'src/features/shelves/tools.ts'))
+      const tool = (name: string) => shelvesTools.find((one: { name: string }) => one.name === name)
+      const row = { id: 's1', name: 'Fiction', status: 'done', mood: null, createdAt: '2026-11-25T10:00:00Z', updatedAt: '2026-11-25T10:00:00Z' }
+      expect(tool('list_shelves').summarize({ _embedded: { shelves: [row] }, _links: {} }, {})).toBe('Fiction · status done · mood – · id s1 · changed 2026-11-25')
+      expect(tool('update_shelf').summarize({ ...row, mood: 'calm' }, {})).toBe('Changed: Fiction · status done · mood calm · id s1 · changed 2026-11-25')
       expect(tests.stdout).toMatch(/books\.test\.ts > books > makes, lists, changes and deletes a book/)
       expect(tests.stdout).toContain('runs every MCP tool against its route')
     } finally {

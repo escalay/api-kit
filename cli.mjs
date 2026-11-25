@@ -554,6 +554,8 @@ const fieldVarsOf = (fields) => {
     __card_fields__: fields.map((field) => `${field.name}: ${field.type}${field.optional ? ' | null' : ''}`).join('; '),
     __detail_lines__: fields.map((field) => `\`${field.name}: \${row.${field.name}${field.type === 'string[]' ? `${field.optional ? '?' : ''}.join(', ')` : ''}${field.optional ? " ?? '–'" : ''}}\``).join(', '),
     __first__: first.name,
+    // Short fields after the first, each named: long text and lists stay for get_<one>
+    __line_fields__: fields.slice(1).filter((field) => field.type !== 'string[]' && field.input !== FIELD_TYPES.text.input).map((field) => ` · ${snakeOf(field.name).replaceAll('_', ' ')} \${row.${field.name}${field.optional ? " ?? '–'" : ''}}`).join(''),
     __sample__: `{ ${fields.map((field) => `${field.name}: ${literal(field.made)}`).join(', ')} }`,
     __patch_entries__: `${last.name}: ${literal(last.changed)}`,
     __create_flags__: fields.filter((field) => !field.optional).map((field) => flagOf(field)).join(' '),
@@ -561,7 +563,7 @@ const fieldVarsOf = (fields) => {
   }
 }
 
-const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS, singular, remove = true } = {}) => {
+const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS, singular, remove = true, next = true } = {}) => {
   const vars = { ...namesOf(name, singular), ...fieldVarsOf(fieldsOf(fieldSpec)) }
   const list = join(root, 'src/features/index.ts')
   if (!existsSync(list)) fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
@@ -593,6 +595,10 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
     writeFileSync(index, readFileSync(index, 'utf8').replace(`  name: '${name}',`, `  name: '${name}',\n  switch: '${name}',`))
   }
   console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test${remove ? '' : '; no delete'}), each one a ${vars.__label__}${singular ? '' : ' (--singular names it otherwise)'}, and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
+  // init says its own Next line
+  if (!next) return
+  console.log("Next: pnpm format (what feature writes is in the kit's long-line style), then pnpm test")
+  console.log('An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; a resource inside another: › A resource inside another')
 }
 
 /**
@@ -1705,7 +1711,7 @@ const commands = {
     // What the Deploy to Cloudflare form says about each setting (kit button --check wants one for each it asks)
     const cloudflare = runtime === 'node' ? {} : { cloudflare: { bindings: DEPLOY_FORM } }
     writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', packageManager: KIT_PACKAGE_MANAGER, engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps), ...cloudflare }, null, 2) + '\n')
-    if (!flags.has('--bare')) addFeature(root, 'notes', { singular: 'note' })
+    if (!flags.has('--bare')) addFeature(root, 'notes', { singular: 'note', next: false })
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
     // What makes the app pass its own gate as made: what init writes is in the kit's long-line style, and D1 needs migrations/
     const firstRun = [['install'], ['format'], ...(runtime === 'node' ? [] : [['migrations']])]
