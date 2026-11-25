@@ -133,7 +133,7 @@ describe('invites', () => {
     expect([listed.status, listed.headers.get('cache-control')]).toEqual([200, 'no-store'])
     const page = await listed.json() as { count: number; _embedded: { invites: Record<string, unknown>[] } }
     expect(page._embedded.invites.map((one) => [one.id, one.state])).toEqual([[ownerMade.id, 'open'], [invite.id, 'open']])
-    // A listed invite never shows its link, its code, or what is kept of them
+    // A listed invite never shows its code, or what is kept of it and its link token
     const text = JSON.stringify(page)
     for (const secret of [invite.code, ownerMade.code, 'linkHash', 'codeHash', 'madeByGrant']) expect(text).not.toContain(secret)
 
@@ -147,7 +147,7 @@ describe('invites', () => {
     expect(await invitesAt(byKey)).toHaveLength(2)
   })
 
-  it('each have a self, from the 201 (and its Location) and the list, that answers the card without a link or code', async () => {
+  it('each have a self, from the 201 (and its Location) and the list, that answers the card without its code', async () => {
     const { byKey } = await sharingApi()
     const made = await byKey('/api/spaces/soups/invites', { method: 'POST', body: { label: 'Sam' } })
     const invite = (await made.json()) as NewInvite & { _links: { self: { href: string } } }
