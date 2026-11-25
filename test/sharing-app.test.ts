@@ -6,24 +6,18 @@
  */
 import { describe, expect, it } from 'vitest'
 import { ONLY_ITS_SPACE } from '../src/sharing/index.js'
-import { approveSignIn, connectAgent } from '../src/testing/index.js'
+import { approveSignIn, callMcp, connectAgent } from '../src/testing/index.js'
 import { CLIENT_A, ORIGIN, OWNER, OWNER_KEY, READER_KEY, recipeBox, SAMPLE_APP, shelfAddress, type RecipeBox } from './sharing-fixture.js'
 
-const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} }
 const AS_OWNER = { 'x-test-owner': OWNER }
 const json = (body: unknown) => ({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
 type ToolResult = { isError?: boolean; content: { text: string }[] }
 
-/** Calls an MCP tool at `at` with a bearer, as an agent does: the answer's status and, on a 200, its result. */
+/** Calls an MCP tool at `at` with a bearer, as an agent does (the testing part's `callMcp`): the answer's status and, on a 200, its result. */
 const callTool = async (box: RecipeBox, at: string, bearer: string, name: string, args: Record<string, unknown> = {}) => {
-  const answer = await box.app.request(at, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': name },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args, _meta: META } }),
-  })
-  const text = await answer.text()
-  return { status: answer.status, text, result: answer.status === 200 ? ((JSON.parse(text) as { result: ToolResult }).result) : null }
+  const { status, text, result } = await callMcp(box.app, 'tools/call', { path: at, bearer, params: { name, arguments: args } })
+  return { status, text, result: result as ToolResult | null }
 }
 const toolText = async (...args: Parameters<typeof callTool>) => {
   const { status, text, result } = await callTool(...args)

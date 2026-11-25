@@ -11,7 +11,7 @@ import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { createAgentApi, errorHandler, problemResponse, rateLimit, sortQuery, decodeCursor, originOf, fillTemplate, guideFiles, guideModuleSource, HAL_JSON, linksOf, LinksSchema, mintApiKey, pageOf, pageSchema, parseApiKeys, pathWith, problemResponses, ProblemError, serveAiCatalog, serveGuide, snapshotEtag, tarGz, wantsMarkdown } from '../src/index.js'
 import { guideSkillProblems, guideSkills, inProcess, mcpResource, mcpServerFactory, mcpTool, mountMcp, routeOf } from '../src/mcp/index.js'
-import { guideGaps, guideRoutes, lintOpenApi, toolRoutes } from '../src/testing/index.js'
+import { callMcp, guideGaps, guideRoutes, lintOpenApi, toolRoutes } from '../src/testing/index.js'
 import { migrate, openDb } from '../src/db/index.js'
 import { OAUTH_MIGRATIONS } from '../src/oauth/schema.js'
 import { createOAuth, generateOAuthKey, memoryOAuthStore } from '../src/oauth/index.js'
@@ -1390,12 +1390,10 @@ describe('the copy-in CLI', () => {
         `import { expect, it } from 'vitest'
 import { createApp } from '../src/app.js'
 import { generateOAuthKey, hashApiKey, testDb } from '../src/kit/index.js'
-import { approveSignIn, connectAgent } from '../src/kit/testing/index.js'
+import { approveSignIn, callMcp, connectAgent } from '../src/kit/testing/index.js'
 
 const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
 const env = { API_KEYS: \`owner:\${hashApiKey('owner-key')}\`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
-const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} }
-
 it('lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', async () => {
   const app = await createApp({ db: await testDb(), env, address: 'socket' })
   const shelf = async (name: string) => ((await (await app.request('/api/shelves', { method: 'POST', headers, body: JSON.stringify({ name }) })).json()) as { id: string }).id
@@ -1403,8 +1401,8 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
   const invite = await app.request(\`/api/spaces/\${soups}/invites\`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'sam' }, body: JSON.stringify({ label: 'Sam' }) })
   const { code, address } = (await invite.json()) as { code: string; address: string }
   const { tokens } = await connectAgent(app, { address, approve: (query) => approveSignIn(app, query, { form: { action: '/sharing/join', fields: { code } } }) })
-  const view = (at: string) => app.request(at, { method: 'POST', headers: { authorization: \`Bearer \${tokens!.access_token}\`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': 'view_shelf' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'view_shelf', arguments: {}, _meta: META } }) })
-  expect(await (await view(new URL(address).pathname)).text()).toContain('Soups')
+  const view = (at: string) => callMcp(app, 'tools/call', { path: at, bearer: tokens!.access_token, params: { name: 'view_shelf', arguments: {} } })
+  expect((await view(new URL(address).pathname)).text).toContain('Soups')
   expect((await view(\`/s/\${bakes}/mcp\`)).status).toBe(401)
   expect((await app.request(\`/api/shelves/\${soups}\`, { method: 'DELETE', headers })).status).toBe(204)
   expect((await view(\`/s/\${soups}/mcp\`)).status).toBe(401)
@@ -2158,6 +2156,24 @@ describe('MCP (2026-07-28)', () => {
     expect(greeting.result).toMatchObject({ protocolVersion: '2026-07-28', capabilities: { tools: { listChanged: true } }, serverInfo: { name: expect.any(String) } })
     expect(greeting.result.instructions).toMatch(/^Find apps\.[\s\S]*no initialize or session is needed/)
     expect((await rpc(app, 'initialize', {}, {})).status).toBe(401)
+  })
+
+  it('takes the same requests through the testing part’s callMcp, which sets every header and the _meta', async () => {
+    const { app } = await sampleApi()
+    const bearer = auth.authorization.slice('Bearer '.length)
+    const greeting = await callMcp(app, 'initialize', { bearer, params: { protocolVersion: '2026-07-28', capabilities: {}, clientInfo: { name: 'agent', version: '1' } } })
+    expect([greeting.status, greeting.result?.protocolVersion]).toEqual([200, '2026-07-28'])
+    const listed = await callMcp(app, 'tools/list', { bearer })
+    expect((listed.result?.tools as { name: string }[]).map((tool) => tool.name)).toContain('get_app')
+    const called = await callMcp(app, 'tools/call', { bearer, params: { name: 'get_app', arguments: { id: 'a2' } } })
+    expect(called.result?.content).toEqual([{ type: 'text', text: 'Bravo (a2)' }])
+    // A refusal is an answer: its status and text, no result
+    const refused = await callMcp(app, 'tools/list')
+    expect([refused.status, refused.result]).toEqual([401, null])
+    expect(refused.text).toContain('unauthorized')
+    // Any path and headers: a space's MCP, a forwarded host
+    const proxied = await callMcp(app, 'tools/call', { path: '/mcp', headers: { ...auth, 'x-forwarded-proto': 'https', 'x-forwarded-host': 'apps.example' }, params: { name: 'get_app', arguments: { id: 'a1' } } })
+    expect((proxied.result?.structuredContent as { _links: { self: { href: string } } })._links.self.href).toBe('https://apps.example/api/v1/apps/a1')
   })
 
   it('reads a resource through the routes: JSON as text, an image as a blob', async () => {

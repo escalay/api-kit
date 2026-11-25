@@ -573,6 +573,12 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## testing
 
+### Unreleased (after 1.34.0)
+
+- New: `callMcp(app, method, { path, params, bearer, headers })` (and its type `McpAnswer`), one MCP request over
+  HTTP with every header and the `_meta` spec 2026-07-28 asks for, for a test of a space's MCP or the owner's.
+  Nothing to change; a test that sets those headers by hand may call it instead.
+
 ### 1.33.0
 
 - New: `connectAgent(app, { address, approve })`, a third-party agent's whole sign-in (its registration, PKCE, the
