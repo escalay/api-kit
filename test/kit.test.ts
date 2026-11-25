@@ -1835,6 +1835,41 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     }
   }, 120_000)
 
+  it('leaves no __placeholder__ in any file init or feature writes, whatever the flags', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-placeholders-'))
+    // TanStack Router's own name for the root route, not one of the kit's
+    const theirs = new Set(['web/routeTree.gen.ts: __root__'])
+    const leftIn = async (app: string) => {
+      const files = (await readdir(app, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile() && !/[\\/](node_modules|\.git)([\\/]|$)/.test(entry.parentPath.slice(app.length)))
+      const found = await Promise.all(files.map(async (entry) => {
+        const path = join(entry.parentPath, entry.name).slice(app.length + 1)
+        const named = [path, ...(await readFile(join(entry.parentPath, entry.name), 'utf8')).match(/__[a-z_]+__/g) ?? []]
+        return named.flatMap((one) => (/__[a-z_]+__/.test(one) && !theirs.has(`${path}: ${one}`) ? [`${path}: ${one}`] : []))
+      }))
+      return found.flat()
+    }
+    try {
+      for (const [name, ...flags] of [['both-api'], ['node-api', '--runtime', 'node'], ['workers-api', '--runtime', 'cloudflare'], ['web-app', '--preset', 'app'], ['bare-api', '--bare']]) {
+        const made = cli(parent, 'init', name!, ...flags, '--no-install', '--no-git')
+        expect(made.status, made.stderr).toBe(0)
+        expect(await leftIn(join(parent, name!)), name).toEqual([])
+      }
+      const app = join(parent, 'both-api')
+      for (const args of [
+        ['shelves', '--singular', 'shelf', '--fields', 'name:string'],
+        ['recipes', '--under', 'shelves', '--fields', 'name:string minutes:int?'],
+        ['tasks', '--no-remove', '--switch'],
+        ['pages', '--under', 'shelves', '--no-remove', '--switch', '--singular', 'leaf'],
+      ]) {
+        const made = cli(app, 'feature', ...args)
+        expect(made.status, made.stderr).toBe(0)
+      }
+      expect(await leftIn(app)).toEqual([])
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('keeps the starter skills loadable whatever the title holds', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'kit-title-'))
     try {
