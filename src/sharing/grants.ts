@@ -43,14 +43,14 @@ export type Binding = { bound: Bound | null; brand?: AgentBrand }
 type Grants = { config: SharingConfig; repo: SharingRepo; binding: Binding }
 
 /**
- * The root and MCP path the hooks judge by, from an OAuth server with `publicOrigin`; throws without one, since a
- * forwarded host would then name the root and a space token would read as the root's.
+ * The root and MCP path the hooks judge by, from an OAuth server with `publicOrigin`; throws without one, since any
+ * bare host a caller forwards would then name the root, and a token for that host would read as the root's.
  *
  * @example
  * boundOf(oauth)   // { root: 'https://sample.example.test', mcpPath: '/mcp', revokeGrant }
  */
 export const boundOf = (oauth: BoundOAuth): Bound => {
-  if (!oauth.publicOrigin) throw new Error('sharing: the OAuth server needs publicOrigin (createOAuth({ publicOrigin })): without it a forwarded host names the root, and a space token would read as a root token.')
+  if (!oauth.publicOrigin) throw new Error('sharing: the OAuth server needs publicOrigin (createOAuth({ publicOrigin })): without it any bare host a caller forwards names the root, and a token for that host would read as a root token.')
   return { root: oauth.publicOrigin, mcpPath: oauth.mcpPath, revokeGrant: oauth.revokeGrant }
 }
 

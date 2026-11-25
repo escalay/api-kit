@@ -453,10 +453,11 @@ describe('memberOf', () => {
 })
 
 describe('bind', () => {
-  it('refuses an OAuth server with no publicOrigin: a forwarded host would pick the root', async () => {
+  it('refuses an OAuth server with no publicOrigin: a bare forwarded host would pick the root', async () => {
     const db = await testDb()
     const sharing = await createSharing({ db, secret: 'a sharing secret of thirty-two bytes or more, for tests only', spaces: { byName: async () => null, byId: async () => null }, owner: async () => null })
-    expect(() => sharing.bind({ publicOrigin: undefined, mcpPath: '/mcp', revokeGrant: async () => {} })).toThrow(/publicOrigin/)
+    // The reason is the bare host core still takes (a host with a path it never takes): its root, and a token for it
+    expect(() => sharing.bind({ publicOrigin: undefined, mcpPath: '/mcp', revokeGrant: async () => {} })).toThrow('sharing: the OAuth server needs publicOrigin (createOAuth({ publicOrigin })): without it any bare host a caller forwards names the root, and a token for that host would read as a root token.')
     const oauth = createOAuth({ name: 'Sample', signingKey: await generateOAuthKey(), store: memoryOAuthStore(), owner: async () => null, ...sharing.oauth })
     await expect(registerSharing(createAgentApi({ title: 'Sample', version: '1.0.0', description: 'A recipe box.', tags: [], auth: { realm: 'sample', keys: new Map() }, oauth }), sharing, { oauth })).rejects.toThrow(/publicOrigin/)
   })

@@ -9,7 +9,7 @@ import { eq } from 'drizzle-orm'
 import { decodeJwt } from 'jose'
 import { describe, expect, it } from 'vitest'
 import { createAgentApi, createOAuth, dbOAuthStore, generateOAuthKey, hashApiKey, memoryOAuthStore, parseApiKeys, type Db, type AgentBrand, type OAuthConfig, type OAuthStore, type SignInDecision, type SignInRevoked } from '../src/index.js'
-import { createSharing, registerSharing, sharingInvites, sharingMembers, sharingRepo, SHARING_OPEN_PATHS, type SharingOptions, type Space } from '../src/sharing/index.js'
+import { createSharing, memberStateOf, registerSharing, sharingInvites, sharingMembers, sharingRepo, SHARING_OPEN_PATHS, type SharingOptions, type Space } from '../src/sharing/index.js'
 import { approveSignIn } from '../src/testing/index.js'
 import { DAY, HOUR, inviteRow, memberRow } from './sharing-rows.js'
 
@@ -168,6 +168,24 @@ export const sharingGrantsContract = (name: string, makeDb: () => Promise<Db>) =
       const answer = await (await box.signIn({ resource: SOUPS, decision: box.inviteDecision(invite) })).exchange()
       expect([answer.status, (await answer.json()).error]).toEqual([400, 'invalid_grant'])
       expect([box.revoked.map((told) => told.reason), await box.membersOfInvite(invite.id), await box.inviteState(invite.id)]).toEqual([['withdrawn'], [], 'open'])
+    })
+
+    // The withdraw cannot land: the marker write and the app's onRevoke both fail. The row stays with no token, its
+    // invite spent, and it lapses unused (STANDARD §23)
+    it('keep the row of a grant whose withdraw cannot land, its invite spent, until it lapses', async () => {
+      const db = await makeDb()
+      const inner = await dbOAuthStore(db)
+      const store: OAuthStore = { ...inner, put: (row, id, value, expiresAt) => (row === 'revoked-family' ? Promise.reject(new Error('the marker write failed')) : inner.put(row, id, value, expiresAt)) }
+      const box: Awaited<ReturnType<typeof grantsApp>> = await grantsApp(db, {
+        oauth: { store, onGrant: async (grant, c) => (await box.sharing.oauth.onGrant(grant, c)) && false, onRevoke: async () => Promise.reject(new Error('the app’s database is down')) },
+      })
+      // Until revoked, so only going unused ends it
+      const invite = await box.makeInvite('soups', { label: 'Sam', lifetime: 'until_revoked' })
+      const answer = await (await box.signIn({ resource: SOUPS, decision: box.inviteDecision(invite) })).exchange()
+      expect([answer.status, (await answer.json()).error]).toEqual([400, 'invalid_grant'])
+      const [kept] = await box.membersOfInvite(invite.id)
+      expect([kept?.endedAt, await box.inviteState(invite.id)]).toEqual([null, 'redeemed'])
+      expect(memberStateOf(kept!, new Date(Date.parse(kept!.lastSeenAt) + 30 * DAY))).toEqual({ state: 'ended', reason: 'lapsed' })
     })
 
     it('end the right rows for every onRevoke reason, the same when told twice', async () => {

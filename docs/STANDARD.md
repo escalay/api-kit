@@ -738,8 +738,9 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
   and every grant into it carries that audience. The app passes `resources` (a pure check of the path, never a
   lookup) and `resourceOf`, so each space's token works at its own address and nowhere else.
 - **The root is the pinned origin.** An app with spaces passes `publicOrigin`, and judges whether a token's audience
-  is the root (or the root's MCP) against it, never against a request's host: otherwise a forged `X-Forwarded-Host`
-  that ends where a space's address does makes that space's token read as the root's, everywhere.
+  is the root (or the root's MCP) against it, never against a request's host. A forwarded host with a path never
+  counts (§9), but a caller can still forward any bare host, which would then name the root: a token for that host
+  would read as a root token, everywhere.
 - **Invites are single-use, with a link and a typed code.** An invite is for one space and one person, must be used
   within a day, and gives access for a set time or until revoked. Its link opens the app's own page (`approve`), and
   the browser may remember it for a short while (a sealed cookie that holds no code). The invite is spent with the
@@ -768,7 +769,9 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
   says yes, dropped when `onRevoke` names the grant (every grant of a client on `client_revoked`), aged out by its
   last use (`revokeGrant` after 30 days). `accepts` refuses a token whose grant has no row, so removing a member
   stops their agents on the next request. A grant that got no token is told `withdrawn` (a veto, or anything failing
-  after `onGrant`'s yes): its row is deleted, not ended, so a failed exchange never spends an invite.
+  after `onGrant`'s yes): its row is deleted, not ended, so a failed exchange leaves its invite open. Only a withdraw
+  that cannot land (the store and `onRevoke` both failing, or the process dying between the claim and the answer)
+  keeps the row of a grant with no token: that invite stays spent, and the row lapses unused.
 - **Nothing leaks whether a space exists.** A caller who may not see a space gets the same 404, with the same body,
   for a space that exists and one that does not; never a 403 that confirms it. Metadata is 404 only for a path
   `resources` refuses, and a wrong code is "not one of ours" whether or not the space is real. The code page is
