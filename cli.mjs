@@ -2125,7 +2125,7 @@ const commands = {
     console.log(`Skills first: npx skills add ${REPO} -y gives your coding agent the kit's skills: build on the kit, add a feature, review it, its command line`)
     console.log(`Next: cd ${relative(process.cwd(), root)} && ${[...left.map((args) => `pnpm ${args.join(' ')}`), 'pnpm test', 'pnpm dev'].join(' && ')}`)
     console.log(`Brand: make brand/ yours, then ${RESVG_INSTALL} && \`npx @escalay/kit brand\` renders the favicon, PNG icons and OG card into ${BRAND_MODULE}`)
-    // Every trial agent met this first doctor failure unannounced
+    // A new app's first doctor fails on the starter's text: said before it runs
     console.log(`Doctor: \`npx @escalay/kit doctor\` fails on a new app until the starter's text is yours: the product skill's description (guide/skills/${name}/SKILL.md), brand/brand.ts's, and each switch's in src/features/catalog.ts; then ${RESVG_INSTALL} and \`npx @escalay/kit brand\` render the brand`)
   },
 
