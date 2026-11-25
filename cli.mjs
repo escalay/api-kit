@@ -1603,11 +1603,17 @@ const wiringOf = (parts) => {
     const from = `../${relative(root ?? dir, dir).split('\\').join('/')}/${REGISTRY[name].entry ? `${name}/` : ''}index.js`
     return [
       ...wiringStepsOf(name, root),
-      ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts${keepsTables ? ' (its migrations reach migrations/ through it: add no line to scripts/migrations.ts)' : ''}, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}`] : []),
+      ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts${keepsTables ? ' (its migrations reach migrations/ through it: add no line to scripts/migrations.ts)' : ''}, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}${wireHint(name)}`] : []),
       // A wrapped part's feature lists its steps: a line here too wrote every step twice
       ...(keepsTables && !wrapped && migrations !== null && !migrations.includes(constant) ? [`scripts/migrations.ts lacks ${name}'s tables: \`import { ${constant} } from '${from}'\` and \`['${name}', ${constant}]\` in its sets, then \`pnpm migrations\` writes their D1 files`] : []),
     ]
   })
+}
+
+/** For a part `--wire` can wire: the command that writes what its Wire line says. */
+const wireHint = (name) => {
+  const over = REGISTRY[name].wiring?.wire?.over
+  return REGISTRY[name].wiring?.wire ? `; or \`kit add ${name} --wire${over ? ` ${over.flag} <feature>` : ''}\` writes it all, settings too` : ''
 }
 
 /** Where an app made by `init` lists a setting, each file named as the step says it. */
@@ -1641,7 +1647,7 @@ const wiringStepsOf = (name, root) => {
       ]
     : []
   // A part wired as a feature of its own has its Wire line from wiringOf
-  return [...(wiring.code ? [`Wire ${name}: ${dirArg}/${readme} › ${wiring.code}`] : []), ...settings, ...schedules]
+  return [...(wiring.code ? [`Wire ${name}: ${dirArg}/${readme} › ${wiring.code}${wireHint(name)}`] : []), ...settings, ...schedules]
 }
 
 /** Runs each pnpm step in a new app until one fails; returns the steps left, that one first. Without pnpm, all of them. */
@@ -1673,6 +1679,14 @@ const MARKER_PLACES = {
   'kit:schedule': 'after `serve(`',
   'kit:triggers': 'after `"compatibility_flags"`',
   'kit:features': 'in `FEATURES`',
+}
+/** The markers each file of a new app carries for `--wire`: an app missing any, in a file it has, was made before them. */
+const WIRE_MARKERS = {
+  'src/app.ts': ['kit:imports', 'kit:module', 'kit:setup', 'kit:mounts'],
+  'src/server.ts': ['kit:imports', 'kit:schedule'],
+  'src/worker.ts': ['kit:imports', 'kit:handlers'],
+  'wrangler.jsonc': ['kit:triggers'],
+  'vitest.config.ts': ['kit:imports'],
 }
 /** Text with its layout taken out: the same code before and after `pnpm format` (whitespace, semicolons, trailing commas). */
 const squash = (text) => text.replace(/[\s;]+/g, '').replace(/,(?=[)\]}])/g, '')
@@ -1811,7 +1825,7 @@ const planWiring = (root, parts) => {
   const read = (path) => (texts.has(path) ? texts.get(path) : textOf(join(root, path)))
   const write = (path, text) => texts.set(path, text)
   const said = []
-  const missing = new Set()
+  const missing = new Set(Object.entries(WIRE_MARKERS).flatMap(([path, markers]) => (read(path) === null ? [] : markers.filter((marker) => !read(path).split('\n').some((line) => line.trim().startsWith(`// ${marker}`))).map((marker) => `${path} (${marker})`))))
   const conflicts = []
   const markerIn = (path, marker) => {
     const lines = read(path).split('\n')
@@ -1929,10 +1943,10 @@ const planWiring = (root, parts) => {
         write('vitest.config.ts', config.replace(anchor, `${anchor}, ${key}: ${test}`))
         if (testImport) insertAt('vitest.config.ts', 'kit:imports', [testImport])
       }
-      note(`Setting ${key} (${what}): Env in src/app.ts, container/entrypoint.sh, .dev.vars.example and package.json's deploy form, vitest.config.ts's bindings${test ? ` as ${key}: ${test}` : ''}`)
     }
+    // The settings and schedule as `add` prints them: each file named only where the app lacks it
+    for (const step of wiringStepsOf(part, root).filter((line) => !line.startsWith('Wire '))) note(step)
     if (cron && read('wrangler.jsonc') !== null) {
-      note(`wrangler.jsonc, ${MARKER_PLACES['kit:triggers']}: "triggers": { "crons": ["${cron.schedule}"] }`)
       if (!read('wrangler.jsonc').includes('"crons"')) insertAt('wrangler.jsonc', 'kit:triggers', [`  "triggers": { "crons": ["${cron.schedule}"] },`])
     }
     said.push([part, steps])

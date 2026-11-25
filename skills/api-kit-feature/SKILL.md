@@ -92,9 +92,7 @@ Recipes on a shelf: `kit feature recipes --under shelves --fields "name:string"`
 has a `shelfId` (`"shelf_id" text not null references shelves(id)`, set from the path, never the body); its list and
 making are `GET` and `POST /api/shelves/{shelf}/recipes`, a shelf that isn't there a 404 whose `detail` names
 `GET /api/shelves`; one recipe stays at `/api/recipes/{id}`. `list_recipes` and `create_recipe` take `shelf`, and
-`samples` and the tests make a shelf first, as the shelf's own samples do. When shelves are a sharing part's spaces,
-its `spaceOfPath` (`/api/shelves/<id>`) covers the nested routes, and a recipe's own (`/api/recipes/{id}`) are in no
-space: a member reaches recipes through the shelf's list only.
+`samples` and the tests make a shelf first, as the shelf's own samples do.
 
 ## Tools
 

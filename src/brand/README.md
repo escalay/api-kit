@@ -19,9 +19,9 @@ npx @escalay/kit add brand
 pnpm add -D @resvg/resvg-js && npx @escalay/kit brand
 ```
 
-Needs `core`. Rendering needs `@resvg/resvg-js` in the app, only when `kit brand` runs. The OG card's text is set in
-the rendering machine's own sans-serif font (none is bundled), so its PNG differs from machine to machine; the icons
-have no text. `kit doctor` calls the module stale only when `brand/` changes, never for another machine's font.
+Needs `core`. Rendering needs `@resvg/resvg-js` in the app, only when `kit brand` runs. Text is set in the rendering
+machine's own sans-serif font (none is bundled): the OG card's, and the starter's monogram icon's until you draw your
+own, so those PNGs differ from machine to machine. `kit doctor` calls the module stale only when `brand/` changes.
 
 `npx @escalay/kit add brand` scaffolds both files (a monogram of the name's first letter on the accent); swap in your
 own SVG, then `npx @escalay/kit brand` renders it again. The app is the nearest folder at or above `--dir` with a
@@ -153,8 +153,8 @@ sequenceDiagram
 
 ## Limits
 
-- The OG card's text uses the rendering machine's sans-serif font (none is bundled): render where that font looks
-  right, and commit that render; a render on another machine changes the card's bytes, not its staleness.
+- The OG card's text, and the monogram's, use the rendering machine's sans-serif font (none is bundled): render where
+  that font looks right, and commit that render; a render elsewhere changes the bytes, not the staleness.
 - Rendering runs on a developer's machine or in CI, never at runtime; Node and Workers serve the same committed bytes.
 
 ## Tests

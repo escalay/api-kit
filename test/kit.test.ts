@@ -1361,7 +1361,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       expect(added.status, added.stderr).toBe(0)
       const steps = added.stdout.split('\n').filter((line) => /^(Wire|Setting|Schedule)[: ]/.test(line))
       expect(steps).toEqual([
-        'Wire sharing: src/kit/sharing/README.md › Wire it',
+        'Wire sharing: src/kit/sharing/README.md › Wire it; or `kit add sharing --wire --spaces <feature>` writes it all, settings too',
         "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one): add it to .dev.vars.example, vitest.config.ts's miniflare bindings as OAUTH_SIGNING_KEY: await generateOAuthKey() (import { generateOAuthKey } from './src/kit/index.js')",
         "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${SHARING_SECRET:+SHARING_SECRET=\"$SHARING_SECRET\"}, vitest.config.ts's miniflare bindings as SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only'",
         "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${PUBLIC_ORIGIN:+PUBLIC_ORIGIN=\"$PUBLIC_ORIGIN\"}, vitest.config.ts's miniflare bindings as PUBLIC_ORIGIN: 'https://api.test'",
@@ -1538,7 +1538,35 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       expect(told.stdout).toContain('Wired nothing: this app has no wiring markers')
       expect(told.stdout).toContain("src/app.ts, in place of the statement that starts `const owner =`:\n      const owner = async (c: Context) => {")
       expect(told.stdout).toContain('src/features/people/index.ts, new:')
+      // Each setting as add prints it, only where the app lacks it, with the container's line
+      expect(told.stdout).toContain('Setting SETUP_CODE (the code the first person types to claim the deployment, a secret: `openssl rand -base64 18`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${SETUP_CODE:+SETUP_CODE="$SETUP_CODE"}')
       expect(await treeOf(older)).toEqual(untouched)
+      // Even a part whose edits need no marker of their own writes nothing there
+      for (const parts of [['setup'], ['boards', '--items', 'notes']]) {
+        const alone = cli(older, 'add', ...parts, '--wire')
+        expect([parts[0], alone.status, alone.stdout]).toEqual([parts[0], 1, expect.stringContaining('Wired nothing: this app has no wiring markers')])
+        expect(await treeOf(older)).toEqual(untouched)
+      }
+
+      // Each runtime alone: Node (no worker.ts, no D1) and Workers (no server.ts, no container)
+      for (const runtime of ['node', 'cloudflare']) {
+        expect(cli(parent, 'init', `only-${runtime}`, '--runtime', runtime, '--no-install').status).toBe(0)
+        const one = join(parent, `only-${runtime}`)
+        expect(cli(one, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+        await format(one)
+        const done = cli(one, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'notes', '--spaces', 'shelves')
+        expect([runtime, done.status, done.stderr]).toEqual([runtime, 0, ''])
+        if (runtime === 'node') expect(await readFile(join(one, 'src/server.ts'), 'utf8')).toContain('sharingOf(app)?.sweep()')
+        else expect(await readFile(join(one, 'src/worker.ts'), 'utf8')).toContain('scheduled: ')
+        await writeFile(join(one, 'test/sharing.test.ts'), SHARING_FRIEND_TEST)
+        if (runtime === 'cloudflare') expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: one, encoding: 'utf8' }).status).toBe(0)
+        for (const project of ['tsconfig.json', ...(runtime === 'node' ? [] : ['test/workers/tsconfig.json'])]) {
+          const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: one, encoding: 'utf8' })
+          expect(typecheck.status, `${runtime} ${project}: ${typecheck.stdout}`).toBe(0)
+        }
+        const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: one, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+        expect(tests.status, `${runtime}: ${tests.stdout}${tests.stderr}`).toBe(0)
+      }
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
