@@ -71,7 +71,7 @@ PUT|DELETE /api/boards/{id}/items/{ref}  { note? } or no body → the board: 201
 GET /api/boards/{id}/suggestions       { count, _embedded: { items } }
 ```
 
-Writes need `write`. A PUT that says `content-type: application/json` sends a body, `{}` at least: an empty one is a 400.
+Writes need `write`. A PUT with no body, whatever its `content-type`, is `{}`: the item added, its note kept.
 
 ## Options
 

@@ -58,6 +58,15 @@ export const registerBoards = async (app: OpenAPIHono, config: BoardsConfig) => 
   app.openapi(routes.get, handle.get)
   app.openapi(routes.update, handle.update)
   app.openapi(routes.remove, handle.remove)
+  // A PUT without a body is `{}`, also when it says JSON: the validator would read nothing as malformed JSON
+  app.use(`${config.path ?? '/api/boards'}/:id/items/:ref`, async (c, next) => {
+    if (c.req.method === 'PUT' && c.req.header('content-type') && !(await c.req.text()).trim()) {
+      const headers = new Headers(c.req.raw.headers)
+      headers.delete('content-type')
+      c.req.raw = new Request(c.req.raw.url, { method: 'PUT', headers })
+    }
+    await next()
+  })
   app.openapi(routes.save, handle.save)
   app.openapi(routes.unsave, handle.unsave)
   if (config.suggestions) app.openapi(routes.suggestions, handle.suggestions)

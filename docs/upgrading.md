@@ -439,6 +439,11 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## boards
 
+### Unreleased (after 1.35.0)
+
+- `PUT …/items/{ref}` with no body is `{}` also when it says `content-type: application/json` (it was a 400), as
+  the README says. Nothing to change.
+
 ### 1.35.0
 
 - New: `kit add boards --items <feature> --wire` writes the wiring an app made by `kit init` needs (its README's blocks) at the
