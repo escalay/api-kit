@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.32.0](https://github.com/escalay/api-kit/compare/v1.31.0...v1.32.0) (2026-11-25)
+
+
+### New
+
+* **sharing:** share one space with other people's agents ([#112](https://github.com/escalay/api-kit/issues/112)) ([312576c](https://github.com/escalay/api-kit/commit/312576c5b0303aa1e3d23fcff3ded97d6c36979b))
+
+
+### Fixed
+
+* **core:** a forwarded host with a path never widens a token ([#109](https://github.com/escalay/api-kit/issues/109)) ([a5509d7](https://github.com/escalay/api-kit/commit/a5509d7fca8861c7469b21663b648822b2678003))
+* what fresh agents tripped on in the 1.30 trials ([#107](https://github.com/escalay/api-kit/issues/107)) ([8181e42](https://github.com/escalay/api-kit/commit/8181e42d658861c9386772ef793833e432543973))
+
 ## [1.31.0](https://github.com/escalay/api-kit/compare/v1.30.1...v1.31.0) (2026-11-24)
 
 

@@ -27,7 +27,7 @@ the version in `kit.json` up.
 
 ## core
 
-### Unreleased (after 1.31.0)
+### 1.32.0
 
 - A new app names where a caller's address comes from: `createApp({ db, env, address })`, `'socket'` in `server.ts`
   and `{ header: 'cf-connecting-ip' }` in `worker.ts`, passed to `createAgentApi`. An older app that `kit doctor`
@@ -99,7 +99,7 @@ the version in `kit.json` up.
 
 ## db
 
-### Unreleased (after 1.31.0)
+### 1.32.0
 
 - A new app's `scripts/migrations.ts` removes the files of a feature taken out of the app (`--check` fails on them)
   and numbers a new file after the highest, so a file deleted by hand never makes two share a number. An older app
@@ -115,7 +115,7 @@ the version in `kit.json` up.
 
 ## oauth
 
-### Unreleased (after 1.31.0)
+### 1.32.0
 
 - **Fixed: a forwarded host with a path in it no longer widens a token.** Without `publicOrigin`, the root (`rootOf`)
   and every audience check followed `X-Forwarded-Host` as sent, so a client refreshing a token for `/s/soups/mcp`
@@ -311,7 +311,7 @@ Tokens, codes, refresh rows and claims from before grants keep working.
 
 ## pagination
 
-### Unreleased (after 1.31.0)
+### 1.32.0
 
 - A new app has the part, and `kit feature` writes a list paged by cursor with it (`limitQuery`, `cursorQuery`,
   `pageOf`); in an app without it, `kit feature` copies it into `src/kit` first. Features made before keep their
@@ -319,7 +319,7 @@ Tokens, codes, refresh rows and claims from before grants keep working.
 
 ## guide
 
-### Unreleased (after 1.31.0)
+### 1.32.0
 
 - `kit doctor` fails (a `starter` line) while a product skill's description still holds the starter's "Replace this
   line with…": write when an agent should use the product, then `pnpm guide`.
@@ -408,14 +408,14 @@ The part arrived in 1.28.0. In an app made before it, `npx @escalay/kit add bran
 ignore lists in `.oxfmtrc.json` and `.oxlintrc.json` and the allowlist in `.gitleaks.toml`, or prints the line to add
 where it can't read one. An app with its own Dockerfile adds `COPY brand brand` beside `COPY src src`.
 
-### Unreleased (after 1.31.0)
+### 1.32.0
 
 - `kit doctor` fails (a `starter` line) while `brand/brand.ts`'s description is still the starter's
   "<title>, an agent-ready API.": write what the product does, then `kit brand`.
 
 ## boards
 
-### Unreleased (after 1.31.0)
+### 1.32.0
 
 - `itemOf` may return a promise: the routes await it, so a card looked up in the database answers a ref that is not
   there with a 404 on save and `item: null` on the board. A synchronous `itemOf` works as before.
@@ -444,7 +444,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## people
 
-### Unreleased (after 1.31.0)
+### 1.32.0
 
 - Nothing changes in the part. Its README now shows it as a feature of its own in an app made by `kit init`, what
   each route answers, and the whole sign-in as a test. A new app's `scripts/migrations.ts` writes the D1 files of
@@ -490,7 +490,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## switches
 
-### Unreleased (after 1.31.0)
+### 1.32.0
 
 - A new app's `src/features/switches/index.ts` lets an owner signed in by passkey (the people part) switch, beside
   the deployment's keys: `isOwner` is a key, or a person whose role is `owner`. An older app with the people part
@@ -504,7 +504,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## sharing
 
-### Unreleased (after 1.31.0)
+### 1.32.0
 
 - A new part (an invite joins by its typed code; a page for its link and asking to join are not built): its tables (`SHARING_MIGRATIONS` step 1:
   `sharing_invites`, `sharing_members`), `sharingRepo`, the named states of its rows and its
