@@ -288,7 +288,7 @@ stateDiagram-v2
   then 60 per 10 minutes per space (`any` for a client that named none), 5 wrong per sign-in; never the owner's.
   Strangers' codes spend the space's 60 too, locking its invitees out for the window; set the app's `address`, or
   each post names its own.
-- `sweep` deletes members 90 days ended, invites 7 days closed, asks 1.
+- `sweep` deletes members 90 days ended, invites 7 days closed.
 
 ## Tests
 

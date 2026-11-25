@@ -17,8 +17,6 @@ const DAY = 24 * 60 * 60 * 1000
 const ENDED_KEPT = 90 * DAY
 /** How long an invite stays after it stopped being open (revoked, or past `redeem_by`). */
 const CLOSED_INVITE_KEPT = 7 * DAY
-/** How long a refused or lapsed ask stays. */
-const CLOSED_ASK_KEPT = DAY
 
 const before = (now: Date, ms: number) => new Date(now.getTime() - ms)
 
@@ -38,7 +36,7 @@ const revokeAll = async (bound: Bound, grants: string[]) => {
 
 /**
  * `sweep`: ends live members past their lifetime (`expired`) or unseen for 30 days (`lapsed`) and revokes their grants;
- * deletes members ended 90 days ago, invites 7 days after they stopped being open, asks a day after they closed.
+ * deletes members ended 90 days ago, and invites 7 days after they stopped being open.
  * Returns how many members it ended and how many rows it deleted.
  *
  * @example
@@ -53,8 +51,7 @@ export const sweepFor = ({ repo, binding }: Aging) => async () => {
   await revokeAll(bound, ended)
   const members = await repo.deleteEndedMembers(before(now, ENDED_KEPT))
   const invites = await repo.deleteClosedInvites(before(now, CLOSED_INVITE_KEPT))
-  const asks = await repo.deleteClosedRequests(before(now, CLOSED_ASK_KEPT))
-  return { ended: ended.length, deleted: members + invites + asks }
+  return { ended: ended.length, deleted: members + invites }
 }
 
 /**
