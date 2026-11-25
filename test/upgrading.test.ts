@@ -130,6 +130,10 @@ describe('kit upgrading', () => {
     ])
     // Before the notes, so it is read first
     expect(printed.stdout.indexOf('fix      ')).toBeLessThan(printed.stdout.indexOf('## core'))
+    // A part a later kit added, which this one doesn't know, changes nothing
+    await writeFile(lockPath, JSON.stringify({ ...JSON.parse(await readFile(lockPath, 'utf8')), modules: [...lock.modules, 'from-a-later-kit'] }))
+    expect(run(join(kit, 'cli.mjs'), app, 'upgrading').stdout).toContain('fix      core/hal.ts')
+    await writeFile(lockPath, JSON.stringify({ ...JSON.parse(await readFile(lockPath, 'utf8')), modules: lock.modules }))
     // Taken from the kit: nothing to say
     expect(run(join(kit, 'cli.mjs'), app, 'update', 'core', '--force').status).toBe(1)
     expect(run(join(kit, 'cli.mjs'), app, 'upgrading', '--from', '0.0.1').stdout).not.toContain('fix      ')

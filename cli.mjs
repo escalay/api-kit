@@ -1915,9 +1915,11 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     console.log(`Upgrade notes for ${folders.join(', ')} after kit ${since}, up to kit ${VERSION} (the kit's docs/upgrading.md):`)
     // An edit kept over a fix holds the bug: the notes mark a fix `**Fixed` or `**Security`, per part, never per file
     const fixed = new Set(sections.filter(([, notes]) => notes.some((note) => /\*\*(Fixed|Security)\b/.test(note))).map(([folder]) => folder))
-    const overFixes = statusOf(lock, expectedFiles(lock.modules, lock.webDir)).filter(({ file, state }) => state === 'both changed' && fixed.has(notesFolderOf(partOf(file, lock.modules))))
+    // Only the parts this kit knows: a kit.json may name one a later kit added
+    const known = lock.modules.filter((name) => REGISTRY[name])
+    const overFixes = fixed.size ? statusOf(lock, expectedFiles(known, lock.webDir)).filter(({ file, state }) => state === 'both changed' && fixed.has(notesFolderOf(partOf(file, known)))) : []
     if (overFixes.length) console.log('')
-    for (const { file } of overFixes) console.log(`fix      ${file}: your edit, and the kit changed it since; ${notesFolderOf(partOf(file, lock.modules))}'s notes below name a fix: ${keptFix([partOf(file, lock.modules)])}`)
+    for (const { file } of overFixes) console.log(`fix      ${file}: your edit, and the kit changed it since; ${notesFolderOf(partOf(file, known))}'s notes below name a fix: ${keptFix([partOf(file, known)])}`)
     for (const [folder, notes] of sections) console.log(`\n## ${folder}\n\n${notes.join('\n\n')}`)
   },
 }
