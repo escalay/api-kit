@@ -12,6 +12,8 @@ import { cliGaps, guideGaps, lintOpenApi, toolRoutes, toolsRun } from '../src/ki
 const GUIDE_DIR = fileURLToPath(new URL('../guide', import.meta.url))
 const KEY = 'test-key'
 const headers = { authorization: `Bearer ${KEY}` }
+// One app for these checks: each reads the whole app (its document, tools, guide) and none counts rows. A test that
+// counts what it made gets an app of its own, as a feature's test does
 const app = await createApp({ db: await testDb(), env: { API_KEYS: `tester:${hashApiKey(KEY)}` } })
 const request = async (path: string, init: RequestInit = {}) => app.request(path, { ...init, headers: { ...headers, 'content-type': 'application/json', ...(init.headers as Record<string, string>) } })
 const doc = async () => (await app.request('/openapi.json', { headers })).json()
