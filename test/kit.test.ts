@@ -1591,6 +1591,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
         ['status:enum(To-Read|done)', 'a field is <name>:<type>'],
         ["status:enum(a|b'c)", 'a field is <name>:<type>'],
         ['status:enum(done|done)', 'status names done twice'],
+        [', ', '--fields names no field'],
       ]) expect(cli(app, 'feature', 'books', '--fields', spec!).stderr, spec).toContain(error)
       expect(cli(app, 'feature', 'books', '--singular', 'Book').stderr).toContain('"Book" isn\'t a kebab-case name like book or reading-list')
       expect(existsSync(join(app, 'src/features/books'))).toBe(false)
@@ -1602,6 +1603,11 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
         'Next: pnpm format (what feature writes is in the kit\'s long-line style), then pnpm test',
         'An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; one inside another (recipes on a shelf): `kit feature <name> --under <parent>`',
       ])
+      // Fields split by commas as well as spaces, a stray comma ignored; then taken out again
+      const commas = cli(app, 'feature', 'tasks', '--fields', 'title:string,status:enum(todo|done), due:int?,')
+      expect(commas.status, commas.stderr).toBe(0)
+      expect(await read('src/features/tasks/schema.ts')).toContain("status: text('status', { enum: ['todo', 'done'] }).notNull(),")
+      expect(cli(app, 'feature', 'tasks', '--remove').status).toBe(0)
       const made = cli(app, 'feature', 'shelves', '--singular', 'shelf', '--no-remove', '--fields', 'name:string status:enum(to-read|reading|done) mood:enum(calm|busy)?')
       expect(made.status, made.stderr).toBe(0)
       expect(made.stdout).toContain('each one a shelf')

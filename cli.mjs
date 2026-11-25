@@ -38,7 +38,8 @@
  *                                             a new feature folder (schema, repo, routes, handlers, tools), listed;
  *                                             --switch lists it in src/features/catalog.ts so an owner can switch it off;
  *                                             --fields gives its own fields (string, text, int, number, bool, string[],
- *                                             enum(a|b|c); ? when it may be left out) instead of a title and a body;
+ *                                             enum(a|b|c); ? when it may be left out; split by spaces or commas)
+ *                                             instead of a title and a body;
  *                                             --singular names one (shelves → shelf); --no-remove leaves out delete;
  *                                             --under shelves lists and makes them at /api/shelves/{shelf}/<plural-name>,
  *                                             each with its shelfId (a foreign key), 404 for a shelf that isn't there
@@ -529,9 +530,11 @@ const SAMPLE_FIELDS = 'title:string body:text?'
 /** Names a feature's own fields can't take: the kit's, and the list's and the command line's flags. */
 const OWN_FIELDS = ['id', 'createdAt', 'updatedAt', 'limit', 'cursor', 'json', 'yes', 'dryRun', 'input', 'timeout', 'profile', 'help']
 
-/** `name:string minutes:int tags:string[] status:enum(to-read|done) notes:text?`, read: each field's name, type, and whether it may be left out. */
-const fieldsOf = (spec) =>
-  spec.trim().split(/\s+/).map((field) => {
+/** `name:string minutes:int tags:string[] status:enum(to-read|done) notes:text?` (or split by commas), read: each field's name, type, and whether it may be left out. */
+const fieldsOf = (spec) => {
+  const given = spec.split(/[\s,]+/).filter(Boolean)
+  if (!given.length) fail(`--fields names no field: give at least one, like "${SAMPLE_FIELDS}"`)
+  return given.map((field) => {
     const [, name, type, values, optional] = field.match(/^([a-z][a-zA-Z0-9]*):([a-z]+(?:\[\])?|enum\(([a-z0-9][a-z0-9_-]*(?:\|[a-z0-9][a-z0-9_-]*)*)\))(\?)?$/) ?? []
     if (!values && !FIELD_TYPES[type]) fail(`${field}: a field is <name>:<type>, the type one of ${Object.keys(FIELD_TYPES).join(', ')}, enum(a|b|c) (lowercase values, a-z 0-9 - _), and ? after it when it may be left out (notes:text?)`)
     if (OWN_FIELDS.includes(name)) fail(`${name} is the kit’s own field or flag: name it something else`)
@@ -542,6 +545,7 @@ const fieldsOf = (spec) =>
     if (fields.findIndex((other) => other.name === field.name) !== index) fail(`${field.name} is named twice: give each field its own name`)
     return field
   })
+}
 
 const snakeOf = (name) => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
 const literal = (value) => JSON.stringify(value).replaceAll('"', "'")
