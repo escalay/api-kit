@@ -689,6 +689,22 @@ const oauthNotes = (texts, modules) => {
 }
 
 /**
+ * Hints, not findings, on an app with the sharing part that calls `createSharing`: no `sweep(` call, so ended members
+ * keep their grants; and on Workers, no `address: { header }` anywhere, so typed codes count each IPv6 address alone.
+ */
+const sharingNotes = (texts, modules) => {
+  if (!modules.includes('sharing')) return []
+  if (!texts.some((text) => callsOf(text, 'createSharing').length > 0)) return []
+  const sweeps = texts.some((text) => /\bsweep\(/.test(text))
+  const onWorkers = texts.some((text) => /\bExportedHandler\b/.test(text))
+  const namesHeader = texts.some((text) => /\baddress\s*:\s*\{\s*header\s*:/.test(text))
+  return [
+    ...(sweeps ? [] : ['note     the app has the sharing part, but nothing calls sharing.sweep(): call it from the scheduled handler, or members past their lifetime or unused for 30 days keep their grants and old rows are never deleted (sharing README, Wire it)']),
+    ...(onWorkers && !namesHeader ? ["note     the app runs on Workers with the sharing part, but names no header for the caller's address, so typed codes are counted per IPv6 address rather than per /64: pass address: { header: 'cf-connecting-ip' } (sharing README, Limits; STANDARD §9)"] : []),
+  ]
+}
+
+/**
  * Text `init`, `feature --switch` and `add brand` write for the app to replace, each with what to write instead. Agents
  * read it as the product's own, so it fails `doctor` until it is replaced; every check of the app passes with it.
  */
@@ -1587,7 +1603,7 @@ const commands = {
     const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
     const kept = lock ? keptEditsOf(lock) : []
     const keptLines = kept.map((file) => `kept     ${file}: an edit kit.json records as kept; \`kit diff --dir ${dirArg} --patch\` shows it`)
-    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules)] : []), ...brand.notes, ...behindNotes, ...keptLines, ...findings]) console.log(line)
+    for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...behindNotes, ...keptLines, ...findings]) console.log(line)
     const withKept = kept.length ? `, with ${kept.length} kept ${kept.length === 1 ? 'edit' : 'edits'}` : ''
     console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0

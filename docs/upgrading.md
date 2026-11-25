@@ -528,6 +528,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
   and `/members/{id}`, Remove (`DELETE`, its invites revoked too), `POST …/invite-again`, and the tools `list_members`,
   `remove_member`, `invite_again`. Call `sharing.sweep()` from the app's scheduled handler, and `sharing.forget(spaceId)` when it
   deletes a space.
+- `kit doctor` notes an app with the part that never calls `sweep(`, and one on Workers that names no
+  `address: { header: 'cf-connecting-ip' }`.
 
 ## testing
 

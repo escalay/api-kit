@@ -654,6 +654,37 @@ describe('the copy-in CLI', () => {
     expect(cli(app, 'doctor').stdout).toContain(passkeys)
   })
 
+  it('doctor notes an app with the sharing part that never sweeps, and one on Workers that names no address header', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    expect(cli(app, 'add', 'sharing').status).toBe(0)
+    const sweep = 'note     the app has the sharing part, but nothing calls sharing.sweep(): call it from the scheduled handler, or members past their lifetime or unused for 30 days keep their grants and old rows are never deleted (sharing README, Wire it)'
+    const workers = "note     the app runs on Workers with the sharing part, but names no header for the caller's address, so typed codes are counted per IPv6 address rather than per /64: pass address: { header: 'cf-connecting-ip' } (sharing README, Limits; STANDARD §9)"
+    const sharingApp = "const sharing = await createSharing({ db, secret: env.SHARING_SECRET, spaces, owner })\n"
+    await writeFile(join(app, 'src/app.ts'), sharingApp)
+    const noted = cli(app, 'doctor')
+    expect(noted.status).toBe(0)
+    expect(noted.stdout).toContain(sweep)
+    expect(noted.stdout).not.toContain('runs on Workers')
+    // The README's line pasted as a comment is not a call
+    await writeFile(join(app, 'src/app.ts'), `${sharingApp}// the scheduled handler: await sharing.sweep()\n`)
+    expect(cli(app, 'doctor').stdout).toContain(sweep)
+    await writeFile(join(app, 'src/app.ts'), `${sharingApp}export const scheduled = async () => { await sharing.sweep() }\n`)
+    expect(cli(app, 'doctor').stdout).not.toContain('sharing.sweep()')
+    // On Workers, the address left at 'headers' counts each IPv6 address on its own
+    const worker = "export default { fetch: (request, env, ctx) => createApp({ db, env }).then((app) => app.fetch(request, env, ctx)) } satisfies ExportedHandler<Bindings>\n"
+    await writeFile(join(app, 'src/worker.ts'), worker)
+    const onWorkers = cli(app, 'doctor')
+    expect(onWorkers.status).toBe(0)
+    expect(onWorkers.stdout).toContain(workers)
+    await writeFile(join(app, 'src/worker.ts'), worker.replace('createApp({ db, env })', "createApp({ db, env, address: { header: 'cf-connecting-ip' } })"))
+    expect(cli(app, 'doctor').stdout).not.toContain('runs on Workers')
+    await writeFile(join(app, 'src/worker.ts'), `// address: { header: 'cf-connecting-ip' }\n${worker}`)
+    expect(cli(app, 'doctor').stdout).toContain(workers)
+    // Without the sharing part, or without createSharing, neither note
+    await writeFile(join(app, 'src/app.ts'), "const oauth = createOAuth({ name: 'Sample', signingKey, store, owner })\n")
+    expect(cli(app, 'doctor').stdout).not.toMatch(/sharing\.sweep|runs on Workers/)
+  })
+
   it('doctor notes a Node app with no address source wherever its kit sits under src', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     cli(app, 'add', 'core', '--dir', 'src/lib/kit')
