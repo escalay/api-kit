@@ -2079,6 +2079,9 @@ describe('the copy-in CLI', () => {
       expect(cli(parent, 'init', 'shelf-api', '--no-install', '--no-git').status).toBe(0)
       const app = join(parent, 'shelf-api')
       expect(called(await tryIt(app))).toEqual({ paths: ['/api/notes'], tools: ['list_notes', 'list_notes'] })
+      // Started by pnpm dev, which reads .env (tsx alone reads none), and stopped whole: the watcher's child too
+      expect(await tryIt(app)).toContain('Start it with `pnpm dev`, never `tsx src/server.ts` alone, which reads no `.env`')
+      expect(await tryIt(app)).toContain('Stop it with Ctrl-C, or `kill -- -<its process group>`')
       expect(cli(app, 'feature', 'books').status).toBe(0)
       expect(cli(app, 'feature', 'chapters', '--under', 'books').status).toBe(0)
       expect(called(await tryIt(app)).paths).toEqual(['/api/notes'])

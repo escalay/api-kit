@@ -30,6 +30,8 @@ the hash). Keep both from one run: each run makes a new pair, and a key with ano
 - Workers: the line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm __worker_dev__`, at http://localhost:8787 <!-- preset:api --> <!-- runtime:workers -->
 - The line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm dev`, at http://localhost:5173 <!-- preset:app -->
 
+Start it with `pnpm dev`, never `tsx src/server.ts` alone, which reads no `.env`. Stop it with Ctrl-C, or `kill -- -<its process group>`: `tsx watch` runs the server as a child, which killing the watcher's pid alone leaves listening. <!-- runtime:node -->
+
 Each setting, `OAUTH_SIGNING_KEY` (without it OAuth is off, and the app says so) and a wired part's own (`kit add … --wire`), is listed with how to make its value in:
 
 - `.env.example`, which `pnpm dev` reads as `.env` <!-- runtime:node -->
