@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.34.0](https://github.com/escalay/api-kit/compare/v1.33.0...v1.34.0) (2026-11-25)
+
+
+### New
+
+* **sharing-ui:** share a space from the browser ([#115](https://github.com/escalay/api-kit/issues/115)) ([0eb282a](https://github.com/escalay/api-kit/commit/0eb282a19fcb26f168047f7d5756867573dccf35))
+
 ## [1.33.0](https://github.com/escalay/api-kit/compare/v1.32.0...v1.33.0) (2026-11-25)
 
 
