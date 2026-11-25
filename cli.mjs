@@ -42,7 +42,8 @@
  *                                             instead of a title and a body;
  *                                             --singular names one (shelves → shelf); --no-remove leaves out delete;
  *                                             --under shelves lists and makes them at /api/shelves/{shelf}/<plural-name>,
- *                                             each with its shelfId (a foreign key), 404 for a shelf that isn't there
+ *                                             each with its shelfId (a foreign key, on delete cascade: deleting a shelf
+ *                                             deletes its rows), 404 for a shelf that isn't there
  *   kit feature --remove <plural-name> [--app .]
  *                                             takes a feature out: its folder, its lines in src/features/index.ts and
  *                                             catalog.ts; then `pnpm migrations` drops its D1 files
@@ -591,6 +592,7 @@ const underVarsOf = (root, parent, name, fieldVars) => {
   const param = Singular[0].toLowerCase() + Singular.slice(1)
   const field = `${param}Id`
   return {
+    removable: /\bmethod: 'delete'/.test(routes),
     __parent__: parent,
     __parent_camel__: names.__camel__,
     __parent_param__: param,
@@ -599,7 +601,8 @@ const underVarsOf = (root, parent, name, fieldVars) => {
     __parent_snake__: names.__snake__,
     __parent_snake_singular__: names.__snake_singular__,
     __columns__: `  ${field}: text('${snakeOf(field)}').notNull(),\n${fieldVars.__columns__}`,
-    __sql_columns__: `"${snakeOf(field)}" text not null references ${names.__table__}(id), ${fieldVars.__sql_columns__}`,
+    // Deleting the parent deletes its rows here: node:sqlite and D1 both keep foreign keys
+    __sql_columns__: `"${snakeOf(field)}" text not null references ${names.__table__}(id) on delete cascade, ${fieldVars.__sql_columns__}`,
     __out_fields__: `${field}: z.string(), ${fieldVars.__out_fields__}`,
     __card_fields__: `${field}: string; ${fieldVars.__card_fields__}`,
   }
@@ -607,7 +610,8 @@ const underVarsOf = (root, parent, name, fieldVars) => {
 
 const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS, singular, remove = true, next = true, under } = {}) => {
   const fieldVars = fieldVarsOf(fieldsOf(fieldSpec))
-  const vars = { ...namesOf(name, singular), ...fieldVars, ...(under ? underVarsOf(root, under, name, fieldVars) : {}) }
+  const { removable: parentRemovable = false, ...underVars } = under ? underVarsOf(root, under, name, fieldVars) : {}
+  const vars = { ...namesOf(name, singular), ...fieldVars, ...underVars }
   const list = join(root, 'src/features/index.ts')
   if (!existsSync(list)) fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
   const folder = join(root, 'src/features', name)
@@ -627,7 +631,7 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
   }
   copyTemplate(join(KIT, 'templates/feature'), folder, vars, (file) => (file === 'feature.test.ts' ? `${name}.test.ts` : file))
   // Delete is a route, a handler, a repo call, a tool and a sample: all or none
-  for (const file of readdirSync(folder)) writeFileSync(join(folder, file), keepMarked(readFileSync(join(folder, file), 'utf8'), { 'feature:remove': remove, 'feature:no-remove': !remove, 'feature:under': Boolean(under), 'feature:flat': !under }))
+  for (const file of readdirSync(folder)) writeFileSync(join(folder, file), keepMarked(readFileSync(join(folder, file), 'utf8'), { 'feature:remove': remove, 'feature:no-remove': !remove, 'feature:under': Boolean(under), 'feature:flat': !under, 'feature:parent-remove': parentRemovable }))
   writeFileSync(list, text.replace('// kit:imports', `import { feature as ${vars.__camel__} } from './${name}/index.js'\n// kit:imports`).replace('  // kit:features', `  ${vars.__camel__},\n  // kit:features`))
   if (switchable) {
     const catalog = join(root, 'src/features/catalog.ts')
@@ -638,7 +642,7 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
     writeFileSync(index, readFileSync(index, 'utf8').replace(`  name: '${name}',`, `  name: '${name}',\n  switch: '${name}',`))
   }
   console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test${remove ? '' : '; no delete'}), each one a ${vars.__label__}${singular ? '' : ' (--singular names it otherwise)'}, and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
-  if (under) console.log(`under ${under}: GET and POST /api/${under}/{${vars.__parent_param__}}/${name}, each ${vars.__label__} with its ${vars.__parent_id__}; one by its id at /api/${name}/{id}; a ${vars.__parent_label__} that isn't there is a 404, and the tools take ${vars.__parent_snake_singular__}`)
+  if (under) console.log(`under ${under}: GET and POST /api/${under}/{${vars.__parent_param__}}/${name}, each ${vars.__label__} with its ${vars.__parent_id__}; one by its id at /api/${name}/{id}; a ${vars.__parent_label__} that isn't there is a 404, deleting one deletes its ${vars.__labels__} (on delete cascade), and the tools take ${vars.__parent_snake_singular__}`)
   // init says its own Next line
   if (!next) return
   console.log("Next: pnpm format (what feature writes is in the kit's long-line style), then pnpm test")

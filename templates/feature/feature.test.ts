@@ -44,6 +44,14 @@ describe('__labels__', () => {
     expect([rest.count, rest._links.next]).toEqual([1, undefined])
   })
 
+  it('deletes a __parent_label__’s __labels__ with it', async () => { // feature:parent-remove
+    const app = await freshApp() // feature:parent-remove
+    const list = await at(app) // feature:parent-remove
+    const { id } = (await (await app.request(list, { method: 'POST', headers, body: JSON.stringify(sample) })).json()) as { id: string } // feature:parent-remove
+    expect((await app.request(list.slice(0, list.lastIndexOf('/')), { method: 'DELETE', headers })).status).toBe(204) // feature:parent-remove
+    expect((await app.request(`/api/__name__/${id}`, { headers })).status).toBe(404) // feature:parent-remove
+  }) // feature:parent-remove
+
   it('answers 404 for a __parent_label__ that does not exist, listing or making', async () => { // feature:under
     const app = await freshApp() // feature:under
     expect((await app.request('/api/__parent__/nope/__name__', { headers })).status).toBe(404) // feature:under

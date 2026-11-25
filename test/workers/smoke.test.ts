@@ -63,6 +63,15 @@ describe('the kit in workerd', () => {
     await expect(migrate(db, 'broken', ['create table half (id integer); insert into missing values (1)'])).rejects.toThrow()
     expect((await env.DB.prepare("select count(*) as n from sqlite_master where name = 'half'").all<{ n: number }>()).results[0]?.n).toBe(0)
   })
+
+  it('deletes a parent’s rows with it, as `kit feature --under` writes the column, on D1', async () => {
+    const db = await openDb(drizzle(env.DB) as unknown as Db)
+    await migrate(db, 'shelves', ['create table if not exists shelves (id text primary key, "name" text not null)'])
+    await migrate(db, 'recipes', ['create table if not exists recipes (id text primary key, "shelf_id" text not null references shelves(id) on delete cascade, "name" text not null)'])
+    await env.DB.batch([env.DB.prepare("insert into shelves values ('soups', 'Soups'), ('cakes', 'Cakes')"), env.DB.prepare("insert into recipes values ('r1', 'soups', 'Leek'), ('r2', 'cakes', 'Lemon')")])
+    await env.DB.prepare("delete from shelves where id = 'soups'").run()
+    expect((await env.DB.prepare('select id from recipes').all<{ id: string }>()).results).toEqual([{ id: 'r2' }])
+  })
 })
 
 describe('passkeys in workerd', () => {
