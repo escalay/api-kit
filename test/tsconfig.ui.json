@@ -1,0 +1,22 @@
+{
+  "$comment": "The browser tests that run the server in-process (happy-dom hooks against real routes): browser resolution with Node types.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "paths": {
+      "@/components/ui/*": ["./shadcn/*"],
+      "@/lib/utils": ["./shadcn/utils.ts"]
+    }
+  },
+  "include": ["sharing-ui.test.tsx", "switches-ui.test.tsx"]
+}

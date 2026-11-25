@@ -45,11 +45,12 @@ Every part is a folder under `src/`. A feature with routes and data keeps the on
 | `test/brand.test.ts` | the brand on every surface over `test/brand-fixture.ts` (a cookbook API with hand-made PNGs); without one, every surface equals `test/fixtures/no-brand.json`, captured before the part existed |
 | `test/vectors.test.ts`, `test/vector-search.test.ts`, `test/web.test.ts` | ledgers and search; the search routes and tools over `test/logos-fixture.ts`; the front door |
 | `test/search-client.test.ts`, `test/search-ui.test.tsx` | the browser client and controller; the hooks and block in happy-dom |
+| `test/sharing-client.test.ts`, `test/sharing-ui.test.tsx` | the owner's sharing client against the real routes (a member joined through the code page, `shown_once`, cursors); `useSharing` and the Share panel in happy-dom |
 
 ## Commands
 
 `pnpm install` · `pnpm test` (both projects: `node`, and `workers` inside workerd; one alone: `--project <name>`) ·
-`pnpm typecheck` (Node, browser, Workers) · `pnpm test:starter` (needs the network) · `pnpm release:check` (needs the network) · `pnpm exec wrangler dev -c test/workers/wrangler.jsonc` (the probe app,
+`pnpm typecheck` (Node, browser, the browser tests that run the server (`test/tsconfig.ui.json`), Workers) · `pnpm test:starter` (needs the network) · `pnpm release:check` (needs the network) · `pnpm exec wrangler dev -c test/workers/wrangler.jsonc` (the probe app,
 for a look at the kit on Workers by hand)
 
 ## Using it from another repo

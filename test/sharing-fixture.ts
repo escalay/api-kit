@@ -90,7 +90,7 @@ export const recipeBox = async () => {
   const info = { name: 'recipe-box', version: '1.0.0', title: 'Recipe box' }
   mountMcp(app, { factory: mcpServerFactory({ info, instructions: 'The owner’s recipe box and who it is shared with.', tools: sharingTools({ noun: 'shelf' }), callApi: inProcess(app) }), allowedHostnames: ['localhost'] })
   mountMcp(app, { path: sharing.mcpPath, factory: mcpServerFactory({ info, instructions: 'One shelf of recipes.', tools: shelfTools, callApi: inProcess(app) }), allowedHostnames: ['localhost'] })
-  return { app, oauth, sharing, shelves, recipes }
+  return { app, db, oauth, sharing, shelves, recipes }
 }
 
 export type RecipeBox = Awaited<ReturnType<typeof recipeBox>>

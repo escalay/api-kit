@@ -1060,6 +1060,99 @@
       }
     },
     {
+      "name": "sharing-client",
+      "type": "registry:item",
+      "title": "Sharing client",
+      "description": "Browser, no framework: a typed client for the owner's sharing routes at a space (createSharingClient: its sharing; invites made, listed a page at a time, read and revoked; members listed, read, invited again and removed); SharingError carries the problem, ShownOnceError a retry of an invite already shown",
+      "files": [
+        {
+          "path": "src/browser/sharing-client.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/sharing-client.ts"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "web": true,
+        "standard": [
+          23
+        ],
+        "layerOf": "sharing"
+      }
+    },
+    {
+      "name": "sharing-react",
+      "type": "registry:item",
+      "title": "Sharing hooks",
+      "description": "Browser, React: useSharing over sharing-client (headless): one space's sharing, invites and members a page at a time, and every change to them",
+      "dependencies": [
+        "react"
+      ],
+      "registryDependencies": [
+        "escalay/api-kit/sharing-client"
+      ],
+      "files": [
+        {
+          "path": "src/browser/sharing-react.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/sharing-react.ts"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "web": true,
+        "standard": [
+          23
+        ],
+        "layerOf": "sharing"
+      }
+    },
+    {
+      "name": "sharing-ui",
+      "type": "registry:item",
+      "title": "Share panel",
+      "description": "Browser, React + shadcn: SharePanel (one space's invite form with the owner page's choices, a new invite's code shown once, the invites out and the members), InvitesOut and Members over sharing-react",
+      "dependencies": [
+        "react"
+      ],
+      "registryDependencies": [
+        "button",
+        "input",
+        "switch",
+        "escalay/api-kit/sharing-react"
+      ],
+      "files": [
+        {
+          "path": "src/browser/sharing-block.tsx",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/sharing-block.tsx"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "web": true,
+        "standard": [
+          23
+        ],
+        "layerOf": "sharing"
+      }
+    },
+    {
       "name": "boards-client",
       "type": "registry:item",
       "title": "Boards client",
