@@ -34,6 +34,9 @@
  *                                             --fields gives its own fields (string, text, int, number, bool, string[],
  *                                             enum(a|b|c); ? when it may be left out) instead of a title and a body;
  *                                             --singular names one (shelves → shelf); --no-remove leaves out delete
+ *   kit feature --remove <plural-name> [--app .]
+ *                                             takes a feature out: its folder, its lines in src/features/index.ts and
+ *                                             catalog.ts; then `pnpm migrations` drops its D1 files
  *   kit guide [--from guide] [--out src/guide.gen.ts]  the guide folder as a module (GUIDE_FILES), for Workers
  *   kit sdk [--app .] [--package name] [--bin name]
  *                                             a typed TypeScript client in sdk/: generated types, a fetch-only core,
@@ -599,6 +602,41 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
   if (!next) return
   console.log("Next: pnpm format (what feature writes is in the kit's long-line style), then pnpm test")
   console.log('An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; a resource inside another: › A resource inside another')
+}
+
+/**
+ * Takes a feature out whole: its folder, its import and list lines in src/features/index.ts, its switch in catalog.ts,
+ * and (the app's script does it) its migrations/ files. Names what still mentions it elsewhere.
+ */
+const removeFeature = (root, name) => {
+  namesOf(name)
+  if (name === 'switches') fail('switches is the starter’s own feature: the owner switches the others with it')
+  const list = join(root, 'src/features/index.ts')
+  const folder = join(root, 'src/features', name)
+  const text = textOf(list) ?? fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
+  const imported = new RegExp(`^import \\{ feature as (\\w+) \\} from '\\./${name}/index\\.js'\\n`, 'm').exec(text)
+  if (!imported && !existsSync(folder)) fail(`no feature ${name} here: src/features/${name}/ is gone and src/features/index.ts lists no ./${name}/index.js`)
+  rmSync(folder, { recursive: true, force: true })
+  const local = imported?.[1]
+  const listed = local ? text.replace(imported[0], '').replace(new RegExp(`^ {2}${local},\\n`, 'm'), '') : text
+  writeFileSync(list, listed)
+  const stillListed = local && new RegExp(`\\b${local}\\b`).test(listed)
+  const catalog = join(root, 'src/features/catalog.ts')
+  const entry = new RegExp(`^ {2}'${name}': \\{.*\\},\\n`, 'm')
+  const switched = entry.test(textOf(catalog) ?? '')
+  if (switched) writeFileSync(catalog, textOf(catalog).replace(entry, ''))
+  console.log(`Removed src/features/${name}/ and its lines in src/features/index.ts${switched ? ', and its switch in src/features/catalog.ts' : ''}`)
+  if (stillListed) console.log(`src/features/index.ts still names ${local}: take it out of FEATURES by hand`)
+  // What else still reaches into it: another feature over its rows, a test of its own outside the folder
+  const mentions = ['src', 'test', 'web'].filter((top) => existsSync(join(root, top))).flatMap((top) =>
+    readdirSync(join(root, top), { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name) && !join(entry.parentPath, entry.name).includes(`${join('src', 'kit')}`))
+      .map((entry) => join(entry.parentPath, entry.name))
+      .filter((path) => readFileSync(path, 'utf8').includes(`/${name}/`)),
+  )
+  for (const path of mentions) console.log(`${relative(root, path)} still imports from ${name}/: change it before the gate`)
+  const workers = existsSync(join(root, 'scripts/migrations.ts'))
+  console.log(`Next: ${workers ? `pnpm migrations (it removes ${name}’s files from migrations/), then ` : ''}pnpm test`)
 }
 
 /**
@@ -1907,6 +1945,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
   feature: () => {
     const [name] = names
     if (!name) fail('name the feature, plural and kebab-case: feature reading-lists')
+    if (flags.has('--remove')) return removeFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name)
     addFeature(resolve(process.cwd(), valueOf('--app') ?? '.'), name, { switchable: flags.has('--switch'), fieldSpec: valueOf('--fields'), singular: valueOf('--singular'), remove: !flags.has('--no-remove') })
   },
 

@@ -1521,6 +1521,48 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     }
   }, 120_000)
 
+  it('removes a feature whole with feature --remove: its folder, its lines, its switch and, on Workers, its migrations', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-remove-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'tidy-api', '--no-install').status).toBe(0)
+      const app = join(parent, 'tidy-api')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      expect(cli(app, 'feature', 'books', '--switch').status).toBe(0)
+      expect(cli(app, 'feature', 'reading-lists').status).toBe(0)
+      expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
+      const [index, catalog] = [await read('src/features/index.ts'), await read('src/features/catalog.ts')]
+      const removed = cli(app, 'feature', '--remove', 'notes')
+      expect(removed.status, removed.stderr).toBe(0)
+      expect(removed.stdout).toContain('Removed src/features/notes/ and its lines in src/features/index.ts')
+      expect(removed.stdout).toContain('Next: pnpm migrations (it removes notes’s files from migrations/), then pnpm test')
+      expect(existsSync(join(app, 'src/features/notes'))).toBe(false)
+      expect(await read('src/features/index.ts')).toBe(index.replace("import { feature as notes } from './notes/index.js'\n", '').replace('  notes,\n', ''))
+      // A switched feature leaves the catalog too; a kebab name by its camel spelling
+      expect(cli(app, 'feature', '--remove', 'books').stdout).toContain('and its switch in src/features/catalog.ts')
+      expect(await read('src/features/catalog.ts')).toBe(catalog.replace(/^ {2}'books': .*\n/m, ''))
+      expect(cli(app, 'feature', '--remove', 'reading-lists').status).toBe(0)
+      expect(await read('src/features/index.ts')).not.toMatch(/notes|books|readingLists/)
+      // Twice: nothing to remove, said so
+      const again = cli(app, 'feature', '--remove', 'notes')
+      expect([again.status, again.stderr]).toEqual([1, 'kit: no feature notes here: src/features/notes/ is gone and src/features/index.ts lists no ./notes/index.js\n'])
+      expect(cli(app, 'feature', '--remove', 'switches').stderr).toContain('switches is the starter’s own feature')
+      const pruned = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
+      expect(pruned.stdout).toMatch(/Removed \S+_notes_1\.sql/)
+      expect((await readdir(join(app, 'migrations'))).filter((file) => /notes|books|reading-lists/.test(file))).toEqual([])
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--project', 'node'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('keeps the starter skills loadable whatever the title holds', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'kit-title-'))
     try {

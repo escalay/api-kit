@@ -18,8 +18,8 @@ an MCP tool.
 
 A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string minutes:int tags:string[] notes:text?"`
 (its own fields in every file, `status:enum(to-read|done)` for fixed values; `kit feature --help` lists the types, `--singular` and `--no-remove`), then fill in what is its own. Removing one (the
-`notes` sample): delete `src/features/<name>/` and its lines in `src/features/index.ts` (and `catalog.ts`), then
-`pnpm guide`, and on Workers `pnpm migrations` (it removes the feature's files). A PATCH schema never takes `.default()`: it would overwrite what a PATCH leaves out.
+`notes` sample): `npx @escalay/kit feature --remove notes` (its folder, its lines in `src/features/index.ts` and
+`catalog.ts`), then on Workers `pnpm migrations` (it removes the feature's files). A PATCH schema never takes `.default()`: it would overwrite what a PATCH leaves out.
 
 ## Try it
 

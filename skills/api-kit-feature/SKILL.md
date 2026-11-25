@@ -35,9 +35,9 @@ A feature is one folder, `src/features/<name>/`, with one shape. The kit's `boar
 | `<name>.test.ts` | the feature's own behaviour | Through `app.request`, not the repo |
 
 3. On Workers, `pnpm migrations` after adding a migration step.
-   Removing a feature (the starter's `notes` once a real one exists): delete `src/features/<name>/`, its two lines in
-   `src/features/index.ts` (and its entry in `catalog.ts`), then `pnpm migrations` (it removes the feature's files
-   from `migrations/`) and `pnpm guide`.
+   Removing a feature (the starter's `notes` once a real one exists): `npx @escalay/kit feature --remove notes`
+   takes out its folder, its import and list lines in `src/features/index.ts` and its entry in `catalog.ts`, and
+   names any file still importing it; then `pnpm migrations` (it removes the feature's files from `migrations/`).
 4. `pnpm guide` if you touched `guide/`. Never write an endpoint or tool list by hand.
 5. `pnpm test && pnpm typecheck`.
 
