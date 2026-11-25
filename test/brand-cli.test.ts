@@ -138,6 +138,17 @@ describe('kit brand', () => {
     expect(await readFile(join(app, '.oxfmtrc.json'), 'utf8')).toBe('{ // mine\n}\n')
   })
 
+  it('says brand.ts has a syntax error, where, and never blames tsx for it', async () => {
+    const app = await brandedApp('typo')
+    const brand = join(app, 'brand/brand.ts')
+    await writeFile(brand, (await readFile(brand, 'utf8')).replace("'Recipes and menus for agents.'", "'Grandma's recipes, for agents.'"))
+    const broken = cli(app, 'brand')
+    expect(broken.status).toBe(1)
+    expect(broken.stderr).toMatch(/^kit: brand\/brand\.ts has a syntax error: .*brand\.ts:6:/m)
+    expect(broken.stderr).not.toContain('tsx installed')
+    expect(existsSync(join(app, 'src/brand.gen.ts'))).toBe(false)
+  })
+
   it('says how to install the renderer when the app has none', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-brand-'))
     await mkdir(join(app, 'brand'))

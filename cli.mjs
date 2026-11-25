@@ -923,7 +923,13 @@ const loadBrand = (root) => {
   const loaded = spawnSync('pnpm', ['exec', 'tsx', script], { cwd: root, encoding: 'utf8' })
   rmSync(script, { force: true })
   const lines = (loaded.stderr || '').trim().split('\n')
-  if (loaded.status !== 0) fail(`could not load brand/brand.ts (tsx installed? \`pnpm add -D tsx\`): ${lines.find((line) => /Error|brand:/.test(line)) ?? lines[0] ?? ''}`)
+  if (loaded.status !== 0) {
+    // esbuild (tsx's) names a syntax error `<file>:<line>:<column>: ERROR: …`; pnpm says when there is no tsx to run
+    const syntax = lines.find((line) => /:\d+:\d+: ERROR: /.test(line))
+    if (syntax) fail(`brand/brand.ts has a syntax error: ${syntax.slice(syntax.lastIndexOf('brand.ts:') - 'brand/'.length)}`)
+    if (lines.some((line) => /Command "tsx" not found/.test(line))) fail('running brand/brand.ts needs tsx in the app: `pnpm add -D tsx`, then `kit brand` again')
+    fail(`could not load brand/brand.ts: ${lines.find((line) => /Error|brand:/.test(line)) ?? lines[0] ?? ''}`)
+  }
   return JSON.parse(loaded.stdout.trim().split('\n').at(-1))
 }
 
