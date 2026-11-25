@@ -47,9 +47,11 @@ your own features' paths and tools once it is gone.
 
 ## How changes ship
 
-- `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format, `migrations/` and the build) and `pnpm test`.
+- `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format) and `pnpm test`. <!-- runtime:node-only -->
+- `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format, `migrations/`) and `pnpm test`. <!-- preset:api --> <!-- runtime:workers -->
+- `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format, `migrations/` and the build) and `pnpm test`. <!-- preset:app -->
   `git push` runs it first (`.githooks/pre-push`; `--no-verify` skips it once). When it fails: `pnpm format`,
-  `pnpm migrations`, then the error it names.
+  `pnpm migrations` (Workers), then the error it names.
 - A change goes in through a pull request whose title is a Conventional Commit (`feat: add notes`,
   `fix(notes): keep the order`): CI checks it, and the pull request is squash-merged, so the title is the commit on
   `main`. Merge only when every check is green. `npx @escalay/kit repo apply` sets the repository up that way once

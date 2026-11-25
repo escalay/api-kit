@@ -1226,6 +1226,11 @@ describe('the copy-in CLI', () => {
         expect(scripts.check).toMatch(/^pnpm typecheck && pnpm lint && \(oxfmt --check \|\| \(echo 'Not formatted: run pnpm format' >&2 && exit 1\)\)/)
         expect(scripts.check.includes('scripts/migrations.ts --check'), name).toBe(name !== 'box-api')
         expect(scripts.check).not.toContain('vite build')
+        // AGENTS.md says what this app's check runs, and no more
+        const gateLine = (await agentsOf(name)).split('\n').filter((line) => line.startsWith('- `pnpm gate`'))
+        expect(gateLine, name).toHaveLength(1)
+        expect(gateLine[0]!.includes('`migrations/`'), name).toBe(scripts.check.includes('scripts/migrations.ts --check'))
+        expect(gateLine[0]!.includes('the build'), name).toBe(false)
         expect(await readFile(join(parent, name, '.githooks/pre-push'), 'utf8')).toContain('exec pnpm gate')
         expect(statSync(join(parent, name, '.githooks/pre-push')).mode & 0o111, `${name}: the hook is executable`).not.toBe(0)
         // Ready for the Deploy to Cloudflare button: no ids to leave out, a form description for each setting, the block in the README
@@ -1597,6 +1602,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       expect(await read('wrangler.jsonc')).toContain('"assets": { "not_found_handling": "single-page-application", "run_worker_first": ["/*", "!/app/*"] },')
       expect(await read('wrangler.jsonc')).not.toMatch(/account_id": "[0-9a-f]/)
       expect(manifest.scripts.check).toMatch(/scripts\/migrations\.ts --check && vite build$/)
+      expect((await read('AGENTS.md')).split('\n').filter((line) => line.startsWith('- `pnpm gate`'))).toEqual(['- `pnpm gate` is everything CI runs: `pnpm check` (types, lint, format, `migrations/` and the build) and `pnpm test`.'])
       expect(await read('src/app.ts')).toContain("    home: 'app',\n")
       expect(await read('web/routes/index.tsx')).toContain('>Desk</h1>')
       const agents = await read('AGENTS.md')
