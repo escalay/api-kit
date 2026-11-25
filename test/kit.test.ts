@@ -397,28 +397,13 @@ describe('the copy-in CLI', () => {
   const KIT_VERSION: string = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')).version
   const cli = (cwd: string, ...args: string[]) => spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), ...args], { cwd, encoding: 'utf8' })
   const hashOfText = (text: string) => createHash('sha256').update(text).digest('hex')
-  /** A friend's agent joins Soups with its code, as the sharing README's test line says, and loses it with the shelf. */
-  const SHARING_FRIEND_TEST = `import { expect, it } from 'vitest'
-import { createApp } from '../src/app.js'
-import { generateOAuthKey, hashApiKey, testDb } from '../src/kit/index.js'
-import { approveSignIn, callMcp, connectAgent } from '../src/kit/testing/index.js'
-
-const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
-const env = { API_KEYS: \`owner:\${hashApiKey('owner-key')}\`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
-it('lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', async () => {
-  const app = await createApp({ db: await testDb(), env, address: 'socket' })
-  const shelf = async (name: string) => ((await (await app.request('/api/shelves', { method: 'POST', headers, body: JSON.stringify({ name }) })).json()) as { id: string }).id
-  const [soups, bakes] = [await shelf('Soups'), await shelf('Bakes')]
-  const invite = await app.request(\`/api/spaces/\${soups}/invites\`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'sam' }, body: JSON.stringify({ label: 'Sam' }) })
-  const { code, address } = (await invite.json()) as { code: string; address: string }
-  const { tokens } = await connectAgent(app, { address, approve: (query) => approveSignIn(app, query, { form: { action: '/sharing/join', fields: { code } } }) })
-  const view = (at: string) => callMcp(app, 'tools/call', { path: at, bearer: tokens!.access_token, params: { name: 'view_shelf', arguments: {} } })
-  expect((await view(new URL(address).pathname)).text).toContain('Soups')
-  expect((await view(\`/s/\${bakes}/mcp\`)).status).toBe(401)
-  expect((await app.request(\`/api/shelves/\${soups}\`, { method: 'DELETE', headers })).status).toBe(204)
-  expect((await view(\`/s/\${soups}/mcp\`)).status).toBe(401)
-})
-`
+  /** A friend's agent joins Soups with its code and loses it with the shelf: the worked test in the sharing part's REFERENCE.md, as written there. */
+  const SHARING_FRIEND_TEST = (() => {
+    const reference = readFileSync(join(import.meta.dirname, '..', 'src/sharing/REFERENCE.md'), 'utf8')
+    const block = reference.slice(reference.indexOf("## A friend's agent, as a test")).match(/```ts\n\/\/ test\/sharing\.test\.ts\n([\s\S]*?)```/)
+    if (!block) throw new Error("src/sharing/REFERENCE.md has no ```ts block starting // test/sharing.test.ts under ## A friend's agent, as a test")
+    return block[1]!
+  })()
   const kitText = (file: string) => readFile(join(import.meta.dirname, '..', 'src', file), 'utf8')
 
   it('writes the guide folder as a module that serves the same guide (for Workers)', async () => {
@@ -1535,6 +1520,10 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       expect(sharingOnly.status).toBe(0)
       // A part whose dependencies package.json has leaves Next as it was
       expect(sharingOnly.stdout).toContain('Next: pnpm format && pnpm migrations && pnpm test')
+      // Where the owner's routes are, what an invite answers, and the worked test: not under /api/shelves
+      expect(sharingOnly.stdout).toContain("Owner routes: /api/spaces/{shelf id}/invites (POST answers 201 with code, shown once, address and message) and /api/spaces/{shelf id}/members ({ count, _embedded: { members } }); a friend's agent, as a test: src/kit/sharing/REFERENCE.md")
+      const wireIt = (await readFile(join(later, 'src/kit/sharing/README.md'), 'utf8')).split('## Wire it')[1]!.split('```')[0]!
+      for (const said of ['/api/spaces/{shelf id}/invites', '`code`', '`address`', 'members', '](REFERENCE.md#a-friends-agent-as-a-test)']) expect(wireIt, said).toContain(said)
       await format(later)
       expect(cli(later, 'add', 'setup', 'people', '--wire', '--no-install').status).toBe(0)
       const auth = (await readFile(join(later, 'src/app.ts'), 'utf8')).replace(/\s+/g, ' ')

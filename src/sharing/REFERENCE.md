@@ -1,7 +1,7 @@
 # sharing: reference
 
-What the README leaves to this file, which ships beside it: the owner routes, the refusals, the sign-in ladder and two
-more flows.
+What the README leaves to this file, which ships beside it: the owner routes, a friend's agent as a test, the
+refusals, the sign-in ladder, a member's states and two more flows.
 
 ## The owner routes
 
@@ -18,6 +18,40 @@ The owner routes (`{path}` default `/api/spaces`), paged lists newest first (`?l
 | `GET {path}/{space}/members/{id}` | `getMember` | none | 200; 404 |
 | `DELETE {path}/{space}/members/{id}` | `removeMember` | `remove_member`, `member remove` | 204, again 204; 404 |
 | `POST {path}/{space}/members/{id}/invite-again` | `inviteAgain` | `invite_again`, `member reinvite` | 201 as `createInvite`; 400; 409 |
+
+## A friend's agent, as a test
+
+Wired with `kit add sharing --wire --spaces shelves`, the owner routes are at `/api/spaces/{shelf id}/…`, never under
+`/api/shelves`. `POST …/invites` answers 201 with `code` (shown once), `address` (the shelf's MCP, where the friend's
+app connects; the code page opens from there) and `message` (both in words, to send). `GET …/members` answers
+`{ count, _embedded: { members: [{ id, label, via, scope, state, … }] }, _links }`. The whole join, with
+`connectAgent` and `approveSignIn` from the testing part (the kit runs this block in a wired app):
+
+```ts
+// test/sharing.test.ts
+import { expect, it } from 'vitest'
+import { createApp } from '../src/app.js'
+import { generateOAuthKey, hashApiKey, testDb } from '../src/kit/index.js'
+import { approveSignIn, callMcp, connectAgent } from '../src/kit/testing/index.js'
+
+const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
+const env = { API_KEYS: `owner:${hashApiKey('owner-key')}`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
+it('lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', async () => {
+  const app = await createApp({ db: await testDb(), env, address: 'socket' })
+  const shelf = async (name: string) => ((await (await app.request('/api/shelves', { method: 'POST', headers, body: JSON.stringify({ name }) })).json()) as { id: string }).id
+  const [soups, bakes] = [await shelf('Soups'), await shelf('Bakes')]
+  const invite = await app.request(`/api/spaces/${soups}/invites`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'sam' }, body: JSON.stringify({ label: 'Sam' }) })
+  const { code, address } = (await invite.json()) as { code: string; address: string }
+  const { tokens } = await connectAgent(app, { address, approve: (query) => approveSignIn(app, query, { form: { action: '/sharing/join', fields: { code } } }) })
+  const members = (await (await app.request(`/api/spaces/${soups}/members`, { headers })).json()) as { _embedded: { members: unknown[] } }
+  expect(members._embedded.members).toEqual([expect.objectContaining({ label: 'Sam', via: 'invite', scope: 'read', state: 'active' })])
+  const view = (at: string) => callMcp(app, 'tools/call', { path: at, bearer: tokens!.access_token, params: { name: 'view_shelf', arguments: {} } })
+  expect((await view(new URL(address).pathname)).text).toContain('Soups')
+  expect((await view(`/s/${bakes}/mcp`)).status).toBe(401)
+  expect((await app.request(`/api/shelves/${soups}`, { method: 'DELETE', headers })).status).toBe(204)
+  expect((await view(`/s/${soups}/mcp`)).status).toBe(401)
+})
+```
 
 ## Refusals: 401 or 403
 
@@ -48,6 +82,18 @@ for what it may not do; a 404 hides a space the caller may not see.
 | a space `byName` finds | yes | `owner` |
 | a space `byName` misses | yes | `no-such-space` (404, to the owner only) |
 | a space | no | `code`, with Continue as the owner |
+
+## A member's states
+
+`memberStateOf`. Past its lifetime or unseen for 30 days it reads as ended before `sweep` writes it.
+
+```mermaid
+stateDiagram-v2
+  [*] --> active: a claim, or the owner's approval
+  active --> ended: its grant revoked or replayed, its lifetime, 30 days unseen, removed, replaced, its space gone
+  active --> [*]: withdrawn (a veto, or a failed exchange), so deleted and its invite open again
+  ended --> [*]: 90 days
+```
 
 ## Two more flows
 

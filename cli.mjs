@@ -2025,6 +2025,11 @@ const wireParts = (root, parts, install = null) => {
     writeFileSync(join(root, path), text)
   }
   console.log(changed.length ? `Wired ${parts.join(', ')}: ${changed.map(([path]) => path).join(', ')}` : `Wired already: ${parts.join(', ')}; nothing changed`)
+  // What each part says once wired (registry.json's wire.after): where its routes are
+  for (const part of parts) {
+    const { after, over } = REGISTRY[part].wiring.wire
+    if (after) console.log(fillVars(after, wireVarsOf(root, over ? valueOf(over.flag) : undefined)))
+  }
   const installs = typeof install === 'function'
   if (installs) install()
   const workers = existsSync(join(root, 'scripts/migrations.ts'))

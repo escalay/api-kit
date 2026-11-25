@@ -870,6 +870,7 @@
           "cron": { "schedule": "17 * * * *", "calls": "sweep()" },
           "wire": {
             "over": {"flag": "--spaces", "what": "the feature whose rows are the spaces", "example": "kit feature shelves --singular shelf --fields \"name:string\""},
+            "after": "Owner routes: /api/spaces/{__over_label__ id}/invites (POST answers 201 with code, shown once, address and message) and /api/spaces/{__over_label__ id}/members ({ count, _embedded: { members } }); a friend's agent, as a test: src/kit/sharing/REFERENCE.md",
             "files": ["src/features/__over_name__/spaces.ts"],
             "edits": [
               {"file": "src/features/__over_name__/index.ts", "line": "register: async (app, { db }) => {", "to": ["  register: async (app, { db, parts }) => {"], "if": "routes.remove"},

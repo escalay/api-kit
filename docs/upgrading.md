@@ -582,6 +582,11 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ### Unreleased (after 1.35.0)
 
+- `--wire` says where the owner routes are once it has written (`/api/spaces/{shelf id}/invites` and `…/members`, not
+  under the spaces' own path), what an invite answers, and where the worked test of a friend's agent is: REFERENCE.md,
+  which the kit runs in a wired app. The README's Wire it says the same; a member's states moved to REFERENCE.md.
+  Nothing to change.
+
 - `--wire` lists its settings in `.env.example` too on Node, each with how to make its value (and makes the file in a Node
   app without one, and points an unchanged `dev` script at `.env`), and its `Next:` names the settings' files and
   `npx @escalay/kit env --write`, which makes `.env` (Node) and `.dev.vars` (Workers) with a value for each, so

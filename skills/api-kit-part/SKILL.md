@@ -63,6 +63,7 @@ One `registry:item` per part in `registry.json`; `kit add`, `kit list` and the s
   `origin`), `cron` (`schedule`, and `calls`: what the scheduled handler calls), and `wire`,
   what `kit add <part> --wire` writes, `__over_*__` and `__name__`/`__title__` filled in:
   - `over`: the feature it works over, named by `flag` (`--spaces`), with `what` it is and an `example` that makes one;
+  - `after`: a line `--wire` prints once it has written (where the part's routes are);
   - `files`: its new files, each from `templates/wire/<part>/<the same path>`;
   - `features`: each listed in `src/features/index.ts` (`name`, and `before` another);
   - `edits`, each in a `file` and one of: `import` with `names`; `at` a marker (`kit:setup`, `kit:mounts`, …) with
