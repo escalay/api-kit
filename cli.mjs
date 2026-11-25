@@ -670,12 +670,46 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
     const index = join(folder, 'index.ts')
     writeFileSync(index, readFileSync(index, 'utf8').replace(`  name: '${name}',`, `  name: '${name}',\n  switch: '${name}',`))
   }
+  syncTryIt(root)
   console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test${remove ? '' : '; no delete'}), each one a ${vars.__label__}${singular ? '' : ' (--singular names it otherwise)'}, and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
   if (under) console.log(`under ${under}: GET and POST /api/${under}/{${vars.__parent_param__}}/${name}, each ${vars.__label__} with its ${vars.__parent_id__}; one by its id at /api/${name}/{id}; a ${vars.__parent_label__} that isn't there is a 404, deleting one deletes its ${vars.__labels__} (on delete cascade), and the tools take ${vars.__parent_snake_singular__}`)
   // init says its own Next line
   if (!next) return
   console.log("Next: pnpm format (what feature writes is in the kit's long-line style), then pnpm test")
   console.log('An action beyond make, list, change and delete (mark one done): the api-kit-feature skill › An action route; one inside another (recipes on a shelf): `kit feature <name> --under <parent>`')
+}
+
+/** What AGENTS.md › Try it calls: the first feature listed with a list of its own (a child needs its parent's id), else the switches'. */
+const tryItTargetOf = (root) => {
+  const list = textOf(join(root, 'src/features/index.ts')) ?? ''
+  for (const [, name] of list.matchAll(/^import \{ feature as \w+ \} from '\.\/([\w-]+)\/index\.js'/gm)) {
+    const routes = textOf(join(root, 'src/features', name, 'routes.ts')) ?? ''
+    const tool = /name: '(list_\w+)'/.exec(textOf(join(root, 'src/features', name, 'tools.ts')) ?? '')?.[1]
+    if (tool && /path: PATH, operationId: 'list/.test(routes)) return { path: `/api/${name}`, tool, paged: true }
+  }
+  // The switches' list takes no page size
+  return { path: '/api/features', tool: 'list_features', paged: false }
+}
+/** The sentence 1.36.0's AGENTS.md closed Try it with, naming the sample. */
+const OLD_TRY_IT_NOTE = "`notes` is the sample: use one of\nyour own features' paths and tools once it is gone."
+const TRY_IT_NOTE = '`kit feature` and `feature --remove` keep these calls on the\nfirst feature in `src/features/index.ts`.'
+/** Points AGENTS.md › Try it at a feature the app has, as `feature` and `feature --remove` leave it; says what it did. */
+const syncTryIt = (root) => {
+  const path = join(root, 'AGENTS.md')
+  const text = textOf(path)
+  if (text === null) return
+  const { path: route, tool, paged } = tryItTargetOf(root)
+  const rest = /"\$BASE\/api\/[\w-]+(?:\?limit=5)?"/
+  const calls = [/mcp-name: list_\w+'/, /"name":"list_\w+","arguments":\{(?:"limit":5)?\}/]
+  if (!rest.test(text) || calls.some((call) => !call.test(text))) return console.log('AGENTS.md › Try it: no example call as init wrote it, so it was left as it is')
+  const next = text
+    .replace(rest, `"$BASE${route}${paged ? '?limit=5' : ''}"`)
+    .replace(calls[0], `mcp-name: ${tool}'`)
+    .replace(calls[1], `"name":"${tool}","arguments":{${paged ? '"limit":5' : ''}}`)
+    .replace(OLD_TRY_IT_NOTE, TRY_IT_NOTE)
+  if (next === text) return
+  writeFileSync(path, next)
+  console.log(`AGENTS.md › Try it: now calls ${route} and ${tool}`)
 }
 
 /**
@@ -701,6 +735,7 @@ const removeFeature = (root, name) => {
   if (switched) writeFileSync(catalog, textOf(catalog).replace(entry, ''))
   console.log(`Removed src/features/${name}/ and its lines in src/features/index.ts${switched ? ', and its switch in src/features/catalog.ts' : ''}`)
   if (stillListed) console.log(`src/features/index.ts still names ${local}: take it out of FEATURES by hand`)
+  syncTryIt(root)
   // What else still reaches into it: another feature over its rows, a test of its own outside the folder
   const mentions = ['src', 'test', 'web'].filter((top) => existsSync(join(root, top))).flatMap((top) =>
     readdirSync(join(root, top), { recursive: true, withFileTypes: true })
@@ -2255,6 +2290,7 @@ const commands = {
     const cloudflare = runtime === 'node' ? {} : { cloudflare: { bindings: DEPLOY_FORM } }
     writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version: '0.1.0', private: true, type: 'module', packageManager: KIT_PACKAGE_MANAGER, engines: { node: '>=22.16.0' }, scripts: scriptsFor(runtime, preset), dependencies: sorted({ ...dependenciesOf(modules), ...runtimeDeps }), devDependencies: sorted(devDeps), ...cloudflare }, null, 2) + '\n')
     if (!flags.has('--bare')) addFeature(root, 'notes', { singular: 'note', next: false })
+    else syncTryIt(root)
     console.log(`Made ${title} in ${relative(process.cwd(), root)} for ${runtime === 'both' ? 'Node and Cloudflare Workers' : runtime === 'node' ? 'Node' : 'Cloudflare Workers'}${preset === 'app' ? ', with a browser app in web/,' : ''} with kit ${VERSION} (${modules.join(', ')})`)
     // What makes the app pass its own gate as made: what init writes is in the kit's long-line style, and D1 needs migrations/
     const firstRun = [['install'], ['format'], ...(runtime === 'node' ? [] : [['migrations']])]

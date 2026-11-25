@@ -1997,6 +1997,56 @@ describe('the copy-in CLI', () => {
     }
   }, 120_000)
 
+  it('keeps AGENTS.md’s Try it on a feature the app has: the first one listed, after feature and feature --remove', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-try-it-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const tryIt = async (app: string) => {
+      const agents = await readFile(join(app, 'AGENTS.md'), 'utf8')
+      return agents.slice(agents.indexOf('## Try it'), agents.indexOf('## How changes ship'))
+    }
+    /** The REST path and the MCP tool Try it calls, each as many times as it names one. */
+    const called = (text: string) => ({ paths: [...text.matchAll(/"\$BASE(\/api\/[^"?]*)/g)].map(([, path]) => path), tools: [...text.matchAll(/mcp-name: (\w+)'|"name":"(\w+)"/g)].map(([, header, body]) => header ?? body) })
+    try {
+      expect(cli(parent, 'init', 'shelf-api', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'shelf-api')
+      expect(called(await tryIt(app))).toEqual({ paths: ['/api/notes'], tools: ['list_notes', 'list_notes'] })
+      expect(cli(app, 'feature', 'books').status).toBe(0)
+      expect(cli(app, 'feature', 'chapters', '--under', 'books').status).toBe(0)
+      expect(called(await tryIt(app)).paths).toEqual(['/api/notes'])
+      const removed = cli(app, 'feature', '--remove', 'notes')
+      expect(removed.status, removed.stderr).toBe(0)
+      expect(removed.stdout).toContain("AGENTS.md › Try it: now calls /api/books and list_books")
+      const now = await tryIt(app)
+      expect(called(now)).toEqual({ paths: ['/api/books'], tools: ['list_books', 'list_books'] })
+      expect(now).not.toMatch(/\bnotes?\b/)
+      // A child needs its parent's id, so it is never the example; with no feature of its own, the switches' list
+      expect(cli(app, 'feature', '--remove', 'books').status).toBe(0)
+      expect(called(await tryIt(app))).toEqual({ paths: ['/api/features'], tools: ['list_features', 'list_features'] })
+      // init --bare makes no notes, so its Try it never names them
+      expect(cli(parent, 'init', 'bare-api', '--bare', '--no-install', '--no-git').status).toBe(0)
+      const bare = join(parent, 'bare-api')
+      expect(called(await tryIt(bare))).toEqual({ paths: ['/api/features'], tools: ['list_features', 'list_features'] })
+      // The calls work as written there
+      const { createApp: createBare } = await import(join(bare, 'src/app.ts'))
+      const { testDb, hashApiKey: hashOf } = await import(join(bare, 'src/kit/index.ts'))
+      const served = await createBare({ db: await testDb(), env: { API_KEYS: `dev:${hashOf('dev-key')}` } })
+      const [rest, mcp] = [...(await tryIt(bare)).matchAll(/^curl ((?:.*\\\n)*.*)$/gm)].map(([, call]) => call!.replaceAll('\\\n', ' '))
+      const pathOf = (call: string) => /"\$BASE(\/[^"]*)"/.exec(call)![1]!
+      expect((await served.request(pathOf(rest!), { headers: { authorization: 'Bearer dev-key' } })).status).toBe(200)
+      const sent = Object.fromEntries([...mcp!.matchAll(/-H ['"]([^:]+): ([^'"]+)['"]/g)].map(([, name, value]) => [name, value!.replace('$KEY', 'dev-key')]))
+      const answer = await served.request(pathOf(mcp!), { method: 'POST', headers: sent, body: /-d '([^']+)'/.exec(mcp!)![1] })
+      expect([answer.status, JSON.stringify(await answer.json())]).toEqual([200, expect.stringContaining('everything is core')])
+      // A Try it the owner rewrote is left alone, and said so
+      await writeFile(join(bare, 'AGENTS.md'), '# Bare\n\n## Try it\n\nOur own words.\n\n## How changes ship\n')
+      const own = cli(bare, 'feature', 'books')
+      expect(own.stdout).toContain('AGENTS.md › Try it: no example call as init wrote it, so it was left as it is')
+      expect(await readFile(join(bare, 'AGENTS.md'), 'utf8')).toContain('Our own words.')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('removes a feature whole with feature --remove: its folder, its lines, its switch and, on Workers, its migrations', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-remove-${process.pid}`)
     await rm(parent, { recursive: true, force: true })

@@ -50,8 +50,8 @@ curl "$BASE/mcp" -H "authorization: Bearer $KEY" -H 'content-type: application/j
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_notes","arguments":{"limit":5},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
 
-`tools/list` takes the same headers with `mcp-method: tools/list` and no `mcp-name`. `notes` is the sample: use one of
-your own features' paths and tools once it is gone.
+`tools/list` takes the same headers with `mcp-method: tools/list` and no `mcp-name`. `kit feature` and `feature --remove` keep these calls on the
+first feature in `src/features/index.ts`.
 
 ## How changes ship
 
