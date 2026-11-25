@@ -2362,6 +2362,16 @@ describe('the skills', () => {
     }
   })
 
+  it('marks the skills for this repository internal, so `npx skills add escalay/api-kit -y` gives an app only its own', async () => {
+    const skills = await skillTexts()
+    // The skills CLI skips a skill whose frontmatter has metadata.internal, unless it is named with --skill
+    const internal = Object.entries(skills).filter(([, text]) => /^metadata:\n {2}internal: true$/m.test(text.split('\n---\n')[0]!)).map(([name]) => name)
+    const forThisRepository = Object.entries(skills).filter(([, text]) => text.includes('in the escalay/api-kit repository itself')).map(([name]) => name)
+    expect(forThisRepository).toEqual(['api-kit-part'])
+    expect(internal).toEqual(forThisRepository)
+    expect(await readFile(join(kitDir, 'README.md'), 'utf8')).toContain('`npx skills add escalay/api-kit --skill api-kit-part -y`')
+  })
+
   it('are each listed in the README\'s skills table and in AGENTS.md', async () => {
     const [readme, agents] = await Promise.all(['README.md', 'AGENTS.md'].map((file) => readFile(join(kitDir, file), 'utf8')))
     const agentsRow = agents!.split('\n').find((line) => line.startsWith('| `skills/` |'))!

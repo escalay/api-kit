@@ -1,6 +1,8 @@
 ---
 name: api-kit-part
 description: Use when working in the escalay/api-kit repository itself - adding a part, changing what a part ships, needs or exports, adding a browser layer (a client, React hooks, a shadcn block), or deciding whether new apps start with a part. Covers the part's files, its README, the registry item, meta.web, shadcn stand-ins, tsconfig.web.json, happy-dom tests, the STANDARD section, APP_MODULES, docs/PARTS.md and the release note. Not for an app built on the kit (api-kit-build).
+metadata:
+  internal: true
 ---
 
 # Add or change a part of the kit
