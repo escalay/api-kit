@@ -80,7 +80,7 @@ describe('kit upgrading', () => {
     const app = await appAt(KIT_VERSION, 'db')
     const printed = run(join(kit, 'cli.mjs'), app, 'upgrading')
     // Plainly: nothing to change in src/kit, nor in the app's own files, whose changes to make are notes too
-    expect([printed.status, printed.stdout]).toEqual([0, `No upgrade notes for core, db after kit ${KIT_VERSION} (this is kit ${KIT_VERSION}): nothing to change, in src/kit or in the app's own files. \`kit update\` changes only src/kit, and a change an app must make to its own files (src/app.ts, the examples, CI) is a note here under its part\n`])
+    expect([printed.status, printed.stdout]).toEqual([0, `No upgrade notes for core, db after kit ${KIT_VERSION} (this is kit ${KIT_VERSION}): nothing to do by hand beyond \`kit update\`, which changes only src/kit. A change an app must make to its own files (src/app.ts, the examples, CI) would be a note here under its part, and there is none\n`])
     const none = await mkdtemp(join(tmpdir(), 'kit-upgrading-'))
     expect(cli(none, 'upgrading').stderr).toContain('no kit.json in src/kit')
   })

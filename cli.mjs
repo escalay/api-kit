@@ -2632,7 +2632,7 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const folders = [...new Set(lock.modules.filter((name) => REGISTRY[name]).map(notesFolderOf))]
     const sections = folders.map((folder) => [folder, notesSince(markdown, folder, since)]).filter(([, notes]) => notes.length)
     if (!sections.length) {
-      console.log(`No upgrade notes for ${folders.join(', ')} after kit ${since} (this is kit ${VERSION}): nothing to change, in ${dirArg} or in the app's own files. \`kit update\` changes only ${dirArg}, and a change an app must make to its own files (src/app.ts, the examples, CI) is a note here under its part`)
+      console.log(`No upgrade notes for ${folders.join(', ')} after kit ${since} (this is kit ${VERSION}): nothing to do by hand beyond \`kit update\`, which changes only ${dirArg}. A change an app must make to its own files (src/app.ts, the examples, CI) would be a note here under its part, and there is none`)
       for (const line of keepLineOf(lock)) console.log(line)
       return
     }
