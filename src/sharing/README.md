@@ -68,7 +68,7 @@ accepts: async (caller, c) => { const judged = await sharing.oauth.accepts(calle
 | Option | Type | Default | What it does |
 |---|---|---|---|
 | `db` | `Db` | required | the app's database, its OAuth state's too; `registerSharing` migrates `SHARING_MIGRATIONS` into it |
-| `secret` | string | required | 32 bytes or more, four keys derived from it (HKDF-SHA256). Rotating it voids open invites, not members |
+| `secret` | string | required | 32 bytes or more, three keys derived from it (HKDF-SHA256). Rotating it voids open invites, not members |
 | `spaces` | `{ byName(name), byId(id) }` | required | the app's space by the name in its address, and by id: `{ id, name, title }` (`Space`), or null. Ids are never reused |
 | `spaceOfPath` | `(path) => string \| null` | none | the space an `/api` request is about (an MCP tool's in-process call), from its path alone. Without it a space token reaches no `/api` route |
 | `owner` | `(c) => Promise<string \| null>` | required | the signed-in owner's email, or null: the same function the app gives `createOAuth` |

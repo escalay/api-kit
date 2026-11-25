@@ -123,11 +123,12 @@ describe('the sharing secrets', () => {
     expect(codeHashOf(keys, 'BDKM-QXTW')).not.toBe(codeHashOf(keys, 'BDKM-QXTB'))
   })
 
-  it('derive four keys of their own, so one use never opens another', () => {
+  it('derive three keys of their own, one per use, so one use never opens another', () => {
     const keys = sharingKeys(SECRET)
-    const all = [keys.link, keys.code, keys.cookie, keys.address].map((key) => key.toString('hex'))
-    expect(new Set(all).size).toBe(4)
-    for (const key of [keys.link, keys.code, keys.cookie, keys.address]) expect(key).toHaveLength(32)
+    expect(Object.keys(keys).sort()).toEqual(['address', 'code', 'link'])
+    const all = [keys.link, keys.code, keys.address].map((key) => key.toString('hex'))
+    expect(new Set(all).size).toBe(3)
+    for (const key of [keys.link, keys.code, keys.address]) expect(key).toHaveLength(32)
     expect(linkHashOf(keys, 'same text')).not.toBe(codeHashOf(keys, 'same text'))
     expect(addressKeyOf(keys, '203.0.113.7')).not.toBe(linkHashOf(keys, '203.0.113.7'))
     expect(sharingKeys(SECRET).link.equals(keys.link)).toBe(true)
