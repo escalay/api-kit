@@ -1489,7 +1489,8 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       const wired = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves')
       expect(wired.status, wired.stdout + wired.stderr).toBe(0)
       expect(wired.stdout).toMatch(/^Wired people, setup, boards, sharing: /m)
-      expect(wired.stdout).toContain('Next: pnpm format && pnpm migrations && pnpm test')
+      // people's dependency, which --wire leaves to pnpm add, comes first in Next
+      expect(wired.stdout).toContain('Next: pnpm add @simplewebauthn/server@^14.1.0 && pnpm format && pnpm migrations && pnpm test')
       expect(wired.stdout).not.toMatch(/^(Wire|Setting|Schedule)[: ]/m)
       // Twice, formatted or not, changes nothing
       const once = await treeOf(app)
@@ -1519,7 +1520,10 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       const later = join(parent, 'later')
       expect(cli(later, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
       await format(later)
-      expect(cli(later, 'add', 'sharing', '--wire', '--spaces', 'shelves').status).toBe(0)
+      const sharingOnly = cli(later, 'add', 'sharing', '--wire', '--spaces', 'shelves')
+      expect(sharingOnly.status).toBe(0)
+      // A part whose dependencies package.json has leaves Next as it was
+      expect(sharingOnly.stdout).toContain('Next: pnpm format && pnpm migrations && pnpm test')
       await format(later)
       expect(cli(later, 'add', 'setup', 'people', '--wire').status).toBe(0)
       const auth = (await readFile(join(later, 'src/app.ts'), 'utf8')).replace(/\s+/g, ' ')

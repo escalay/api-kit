@@ -1957,8 +1957,8 @@ const planWiring = (root, parts) => {
   return { changed, said, missing: [...missing], conflicts }
 }
 
-/** `add --wire`: writes the plan, or, in an app without the markers or with code the kit did not write, prints it and writes nothing. */
-const wireParts = (root, parts) => {
+/** `add --wire`: writes the plan, or, in an app without the markers or with code the kit did not write, prints it and writes nothing. `install` is the `pnpm add` its Next line starts with, if any. */
+const wireParts = (root, parts, install = null) => {
   const { changed, said, missing, conflicts } = planWiring(root, parts)
   if (missing.length || conflicts.length) {
     const why = missing.length ? `this app has no wiring markers (made before kit ${VERSION}'s init): ${missing.join(', ')}` : conflicts.join('; ')
@@ -1974,7 +1974,7 @@ const wireParts = (root, parts) => {
   if (!changed.length) return console.log(`Wired already: ${parts.join(', ')}; nothing changed`)
   console.log(`Wired ${parts.join(', ')}: ${changed.map(([path]) => path).join(', ')}`)
   const workers = existsSync(join(root, 'scripts/migrations.ts'))
-  console.log(`Next: pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test (each part's README says what it does; its settings are in .dev.vars.example${existsSync(join(root, 'container/entrypoint.sh')) ? ' and container/entrypoint.sh' : ''})`)
+  console.log(`Next: ${install ? `${install} && ` : ''}pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test (each part's README says what it does; its settings are in .dev.vars.example${existsSync(join(root, 'container/entrypoint.sh')) ? ' and container/entrypoint.sh' : ''})`)
 }
 
 const commands = {
@@ -2030,7 +2030,7 @@ const commands = {
       for (const line of ignored.todo) console.log(line)
       console.log(`Brand: ${RESVG_INSTALL} && \`kit brand\` renders ${BRAND_MODULE}, then createAgentApi({ …, brand: createBrand(BRAND, BRAND_ASSETS) }) (src/kit/brand/README.md)`)
     }
-    if (wiring) wireParts(wiring, names)
+    if (wiring) wireParts(wiring, names, !flags.has('--install') && installCommand(modules).startsWith('pnpm add') ? installCommand(modules) : null)
     else for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
     if (flags.has('--install')) install(modules)
     else console.log(`Dependencies: ${installCommand(modules)}`)

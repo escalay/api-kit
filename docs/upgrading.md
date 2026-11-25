@@ -481,6 +481,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
   `// kit:*` markers a new app's `src/app.ts`, `server.ts`, `worker.ts`, `wrangler.jsonc` and `vitest.config.ts`
   carry; twice changes nothing. An app made before them has no markers: `--wire` prints every edit and writes
   nothing, as the README does. Nothing to change.
+- `--wire` leaves the part's dependency (`@simplewebauthn/server`) to `pnpm add`, and its `Next:` line now starts
+  with that `pnpm add` when `package.json` lacks it (`--install` runs it instead).
 
 ### 1.32.0
 
