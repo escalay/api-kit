@@ -7,7 +7,7 @@ import { BRAND_ASSETS } from '../src/brand.gen.js'
 import { FEATURES } from '../src/features/index.js'
 import { guideFiles, guideModuleSource, hashApiKey, testDb } from '../src/kit/index.js'
 import { guideSkillProblems } from '../src/kit/mcp/index.js'
-import { cliGaps, guideGaps, lintOpenApi, toolRoutes, toolsRun } from '../src/kit/testing/index.js'
+import { cliGaps, guideGaps, guideRoutes, lintOpenApi, toolRoutes, toolsRun } from '../src/kit/testing/index.js'
 
 const GUIDE_DIR = fileURLToPath(new URL('../guide', import.meta.url))
 const KEY = 'test-key'
@@ -35,6 +35,10 @@ describe('the API', () => {
 
   it('fills every placeholder in the agent guide', async () => {
     expect(guideGaps(guideFiles(GUIDE_DIR), {}, { doc: await doc(), tools: TOOLS, brand: BRAND })).toEqual([])
+  })
+
+  it('names only routes the API has in the agent guide', async () => {
+    expect(guideRoutes(guideFiles(GUIDE_DIR), await doc())).toEqual([])
   })
 
   it('names itself with brand/ on MCP and the Server Card, and serves its icon', async () => {

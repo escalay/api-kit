@@ -98,7 +98,7 @@ first feature in `src/features/index.ts`.
 | `guide/skills/__name__/` | the skill this product ships to the agents that use it: `SKILL.md` routes, `references/<job>.md` is one playbook per job. Served at `/skills/*`, offered over MCP as skills and prompts, and installed with `npx skills add <this deployment's address> -y` or from the repository |
 | `.agents/skills/` | skills for developing this repository (`.claude/skills` links here). Never served, and marked `metadata.internal: true` so installing from the repository does not offer them |
 | `skills.sh.json` | tells `npx skills add <this repository> -y` that the product's skill is in `guide/skills/` |
-| `test/api.test.ts` | every route linted, every MCP tool run (`toolsRun`), every guide placeholder filled |
+| `test/api.test.ts` | every route linted, every MCP tool run (`toolsRun`), every guide placeholder filled and every route the guide names real (`guideRoutes`) |
 | `container/entrypoint.sh` | the env allowlist: the API sees only the variables it reads (`test/env.test.ts` keeps it equal to `Env`) | <!-- runtime:node -->
 
 ## Rules

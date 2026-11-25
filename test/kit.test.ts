@@ -423,6 +423,15 @@ describe('the copy-in CLI', () => {
     expect((await app.request('/llms.txt', { headers: auth })).status).toBe(200)
   })
 
+  it('gives every new app’s test/api.test.ts each check the testing README’s Wire it runs', async () => {
+    const readme = await kitText('testing/README.md')
+    const wireIt = readme.slice(readme.indexOf('## Wire it')).match(/```ts\n([\s\S]*?)```/)![1]!
+    const checks = [...wireIt.matchAll(/expect\((?:await )?(\w+)\(/g)].map(([, name]) => name!)
+    expect(checks).toContain('guideRoutes')
+    const test = await readFile(join(import.meta.dirname, '..', 'templates/app/test/api.test.ts'), 'utf8')
+    expect(checks.filter((name) => !test.includes(`${name}(`))).toEqual([])
+  })
+
   it('prints a dev key and the API_KEYS line that lets it in, keeping nothing', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'kit-key-'))
     const made = cli(parent, 'key')
@@ -1124,7 +1133,7 @@ describe('the copy-in CLI', () => {
       // Plain output: CI asks for colour, which would sit between the words matched below
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      expect(tests.stdout).toMatch(/Tests\s+19 passed/)
+      expect(tests.stdout).toMatch(/Tests\s+20 passed/)
       // AGENTS.md's Try it, as written: a key from `kit key`, the REST call and the MCP call it gives
       const agents = await readFile(join(app, 'AGENTS.md'), 'utf8')
       const tryIt = agents.slice(agents.indexOf('## Try it'), agents.indexOf('## How changes ship'))

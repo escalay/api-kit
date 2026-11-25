@@ -675,6 +675,13 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## testing
 
+### Unreleased (after 1.36.0)
+
+- A new app's `test/api.test.ts` runs every check this part's README wires, `guideRoutes` too: a route the guide
+  names that the spec lacks fails the gate. An older app adds `guideRoutes` to its import in `test/api.test.ts`
+  (`import { guideRoutes } from '../src/kit/testing/index.js'`) and a test that
+  `expect(guideRoutes(guideFiles(GUIDE_DIR), await doc())).toEqual([])`.
+
 ### 1.35.0
 
 - New: `callMcp(app, method, { path, params, bearer, headers })` (and its type `McpAnswer`), one MCP request over
