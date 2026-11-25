@@ -781,15 +781,18 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
     describe('a grant ended while onGrant runs', () => {
       /**
        * An app that mirrors grants in its own rows: written at the end of `onGrant`, ended when `onRevoke` names the grant
-       * (or its client). `during` runs inside `onGrant`, before the row is written: what a slow `onGrant` lets in.
+       * (or its client). `during` runs inside `onGrant`, before the row is written: what a slow `onGrant` lets in; `after`
+       * runs once it is written (a hook chained after it), and `store` stands in for the kit's.
        */
-      const mirroring = async (during: (grant: { grant: string; client: { id: string } }, oauth: OAuth) => Promise<unknown>) => {
+      const mirroring = async (during: (grant: { grant: string; client: { id: string } }, oauth: OAuth) => Promise<unknown>, { after, store }: { after?: () => Promise<unknown>; store?: (inner: OAuthStore) => OAuthStore } = {}) => {
         const rows = new Map<string, { client: string; state: 'live' | 'ended' }>()
         const told: string[] = []
-        const made = await oauthApp(await make(), {
+        const inner = await make()
+        const made = await oauthApp(store ? store(inner) : inner, {
           onGrant: async (grant) => {
             await during(grant, made.oauth)
             rows.set(grant.grant, { client: grant.client.id, state: 'live' })
+            await after?.()
             return true
           },
           onRevoke: async ({ grant, client, reason }) => {
@@ -803,7 +806,7 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
       const revokedMeanwhile = { error: 'invalid_grant', error_description: 'This sign-in was revoked: start again.' }
 
       // The attack review's race.mts: a client retries its token request while the first is still in onGrant
-      it('issues nothing when a retried exchange ends the grant, and tells onRevoke again once the row is written', async () => {
+      it('issues nothing when a retried exchange ends the grant, and withdraws it once the row is written', async () => {
         let retry: () => Response | Promise<Response> = () => Promise.reject(new Error('no code yet'))
         let retried: Promise<Response> | undefined
         const { app, told, states } = await mirroring(async () => (retried ??= Promise.resolve(retry())))
@@ -813,7 +816,7 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
         const second = await retried!
         expect([first.status, await first.json()]).toEqual([400, revokedMeanwhile])
         expect([second.status, (await second.json()).error]).toEqual([400, 'invalid_grant'])
-        expect(told).toEqual(['replayed: no row', 'replayed: row ended'])
+        expect(told).toEqual(['replayed: no row', 'withdrawn: row ended'])
         expect(states()).toEqual(['ended'])
       })
 
@@ -828,15 +831,15 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
         expect(states()).toEqual(['ended'])
       })
 
-      it('issues nothing for a code whose client is revoked meanwhile, and tells onRevoke again', async () => {
+      it('issues nothing for a code whose client is revoked meanwhile, and withdraws its grant', async () => {
         const { app, told, states } = await mirroring((grant, oauth) => oauth.revokeClient(grant.client.id))
         const answer = await (await approvedCode(app)).exchange()
         expect([answer.status, await answer.json()]).toEqual([400, revokedMeanwhile])
-        expect(told).toEqual(['client_revoked: no row', 'client_revoked: row ended'])
+        expect(told).toEqual(['client_revoked: no row', 'withdrawn: row ended'])
         expect(states()).toEqual(['ended'])
       })
 
-      it('issues nothing for a device approval whose grant is revoked meanwhile, and tells onRevoke again', async () => {
+      it('issues nothing for a device approval whose grant is revoked meanwhile, and withdraws it', async () => {
         const { app, told, states } = await mirroring((grant, oauth) => oauth.revokeGrant(grant.grant))
         const device = 'urn:ietf:params:oauth:grant-type:device_code'
         const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
@@ -844,7 +847,7 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
         await app.request('/oauth/device', { ...form({ user_code, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
         const answer = await app.request('/oauth/token', form({ grant_type: device, device_code, client_id }))
         expect([answer.status, await answer.json()]).toEqual([400, revokedMeanwhile])
-        expect(told).toEqual(['revoked: no row', 'revoked: row ended'])
+        expect(told).toEqual(['revoked: no row', 'withdrawn: row ended'])
         expect(states()).toEqual(['ended'])
       })
 
@@ -855,8 +858,46 @@ export const oauthStoreContract = (name: string, make: () => Promise<OAuthStore>
         expect((await typeClaim(app, claim_attempt)).status).toBe(200)
         const answer = await claimPoll(app, claim_token)
         expect([answer.status, await answer.json()]).toEqual([400, revokedMeanwhile])
-        expect(told).toEqual(['revoked: no row', 'revoked: row ended'])
+        expect(told).toEqual(['revoked: no row', 'withdrawn: row ended'])
         expect(states()).toEqual(['ended'])
+        const bearing = await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: identity_assertion }))
+        expect((await bearing.json()).error).toBe('invalid_grant')
+      })
+
+      // Whatever fails after onGrant said yes withdraws the grant once, before the error: no token, no row left live
+      const failing = (failsOn: string) => (inner: OAuthStore): OAuthStore => ({ ...inner, put: (kind, id, value, expiresAt) => (kind === failsOn ? Promise.reject(new Error(`the ${kind} write failed`)) : inner.put(kind, id, value, expiresAt)) })
+      const failures = [
+        ['a hook chained after it throws', { after: () => Promise.reject(new Error('the app’s store is down')) }],
+        ['the access token write throws', { store: failing('access') }],
+        ['the refresh token write throws', { store: failing('refresh') }],
+      ] as const
+      it.each(failures)('withdraws a code’s grant once when %s, telling onRevoke before the 500', async (_, failure) => {
+        const { app, told, states } = await mirroring(async () => undefined, failure)
+        const code = await approvedCode(app)
+        expect((await code.exchange()).status).toBe(500)
+        expect(told).toEqual(['withdrawn: row ended'])
+        expect(states()).toEqual(['ended'])
+        // The code is spent: a retry issues nothing, and the grant stays ended
+        expect((await (await code.exchange()).json()).error).toBe('invalid_grant')
+      })
+
+      it.each(failures)('withdraws a device approval’s grant once when %s', async (_, failure) => {
+        const { app, told } = await mirroring(async () => undefined, failure)
+        const device = 'urn:ietf:params:oauth:grant-type:device_code'
+        const { client_id } = await (await app.request('/oauth/register', json({ client_name: 'Terminal', grant_types: [device] }))).json()
+        const { device_code, user_code } = await (await app.request('/oauth/device_authorization', form({ client_id }))).json()
+        await app.request('/oauth/device', { ...form({ user_code, decision: 'allow' }), headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-test-owner': OWNER, 'sec-fetch-site': 'same-origin' } })
+        expect((await app.request('/oauth/token', form({ grant_type: device, device_code, client_id }))).status).toBe(500)
+        expect(told).toEqual(['withdrawn: row ended'])
+      })
+
+      it.each(failures)('withdraws a claim’s grant once when %s, and its identity assertion buys nothing', async (_, failure) => {
+        const { app, told } = await mirroring(async () => undefined, failure)
+        const { claim_token, identity_assertion } = await (await app.request('/agent/identity', json({ type: 'anonymous', client_name: 'Night shift' }))).json()
+        const { claim_attempt } = await (await app.request('/agent/identity/claim', json({ claim_token, email: OWNER }))).json()
+        expect((await typeClaim(app, claim_attempt)).status).toBe(200)
+        expect((await claimPoll(app, claim_token)).status).toBe(500)
+        expect(told).toEqual(['withdrawn: row ended'])
         const bearing = await app.request('/oauth/token', form({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: identity_assertion }))
         expect((await bearing.json()).error).toBe('invalid_grant')
       })

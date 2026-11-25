@@ -124,6 +124,16 @@ the version in `kit.json` up.
   host, so the root never has a path. Update core with it. An app reachable by more than one host or behind a proxy
   sets `publicOrigin`: a caller can still forward any bare host, which moves the root to that origin but never puts
   a path in it, so no token widens.
+- New: `oauth.publicOrigin`, the origin the server is pinned to (canonical), or undefined when the app set none.
+  Nothing to do.
+- **A grant `onGrant` said yes to that gets no token is withdrawn, once.** A throw in `onGrant` (a hook chained
+  after another) or in the token writes now ends the grant and tells `onRevoke` `withdrawn` before the 500; before,
+  nothing was told and a row the app wrote in `onGrant` stayed. A grant ended while `onGrant` ran is also told
+  `withdrawn` now, where 1.31.0 told the marker's reason (`replayed`, `revoked`, `client_revoked`) again. An app whose
+  `onRevoke` treats `withdrawn` as "never became a member" (deletes the row) needs nothing else.
+- When `onGrant` says no and the store then fails to write the grant's marker, `onRevoke` is still told `withdrawn`
+  and the answer is 400 `invalid_grant`; 1.31.0 answered 500 and told nothing, so a row a hook chained inside
+  `onGrant` wrote (its yes before the app's no) stayed.
 
 ### 1.31.0
 
@@ -491,6 +501,36 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 ### 1.30.0
 
 - `onSwitch` is guarded: a hook that throws is logged and never answered, so the switch stays made.
+
+## sharing
+
+### Unreleased (after 1.31.0)
+
+- A new part (an invite joins by its typed code; a page for its link and asking to join are not built): its tables (`SHARING_MIGRATIONS` step 1:
+  `sharing_invites`, `sharing_members`), `sharingRepo`, the named states of its rows and its
+  secrets; `createSharing` and `registerSharing` with the owner's routes under `/api/spaces/{space}` (the space's
+  sharing and its invites: made with the code shown once beside the space's address and a message to send, listed, read one at a time, revoked) and
+  `sharingTools`; and the oauth hooks, `sharing.oauth` (`approve`, `onGrant`, `onRevoke`, `accepts`, `resources`,
+  `resourceOf`) to spread into `createOAuth`, with `handles`, `memberOf` and `bind` (`registerSharing` calls it).
+  `spaces` takes `byId` beside `byName`, and the new option `spaceOfPath` names the space of an in-process `/api` call.
+  It needs `createOAuth`'s `publicOrigin`: `registerSharing` throws without it. Nothing to do in an app that doesn't
+  add it.
+- Signing in with an invite's code: `approve` shows the code page (`signInStepOf` picks it), and `registerSharing`
+  adds `POST /sharing/join`, which needs `SHARING_OPEN_PATHS` in `auth.open`. Typed codes are always limited
+  (`limits`, by default counted in the app's database: `createSharing` makes the guard table there, and `limits:
+  false` throws): 10 a minute per address, 10 per 10 minutes per address at a space, 600 per 10 minutes per space;
+  set the app's `address`, else each post names its own.
+  The new option `knownReturns` names the apps the app expects. Behind Cloudflare Access, let
+  `sharingSignInPaths(sharing)` through.
+- The owner's approval at a space: `approve` shows the signed-in owner their own page (Approve or Refuse; Allow
+  changes and Until revoked start ticked at a known return, unticked elsewhere: read for 30 days), or "No space …
+  here". A space's code page offers Continue as the owner (`POST /sharing/as-owner`, then `POST /sharing/owner`);
+  the new option `signInPath` links "Sign in first". `signInStepOf` takes `found`. Members: `GET {path}/{space}/members`
+  and `/members/{id}`, Remove (`DELETE`, its invites revoked too), `POST …/invite-again`, and the tools `list_members`,
+  `remove_member`, `invite_again`. Call `sharing.sweep()` from the app's scheduled handler, and `sharing.forget(spaceId)` when it
+  deletes a space.
+- `kit doctor` notes an app with the part that never calls `sweep(`, and one on Workers that names no
+  `address: { header: 'cf-connecting-ip' }`.
 
 ## testing
 

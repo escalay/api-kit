@@ -26,7 +26,7 @@ The parts in the order they go in: each after the parts it needs. `kit add` brin
 | One brand on every surface | `core` → `brand` | `npx @escalay/kit add brand`: then `npx @escalay/kit brand` renders it |
 | Other agents delegate through A2A | `core` → `mcp` → `a2a` | `npx @escalay/kit add a2a` |
 | A public front page and the browser app under `/app`, on Node | `core` → `web` | `npx @escalay/kit add web` |
-| Sharing: invites to a space, asks to join, the owner’s approval | `core` → `db` → `oauth` → `mcp` → `people` | `npx @escalay/kit add oauth people`: no sharing part yet: build it on oauth’s `approve`, `complete` with `resource`, `holdTicket`, `onGrant` and `onRevoke` (oauth README) |
+| Sharing: invites to a space, the owner’s approval at it | `core` → `db` → `oauth` → `pagination` → `mcp` → `sharing` | `npx @escalay/kit add sharing`: then `await sharing.sweep()` in the scheduled handler (its README, Wire it) |
 
 ## Server parts
 
@@ -49,6 +49,7 @@ The parts in the order they go in: each after the parts it needs. `kit add` brin
 | `setup` | Claiming a fresh deployment with the SETUP_CODE secret (fails closed, rate-limited), recovery by rotating it, and a self-checking setup checklist of the app's own steps | `people` | `./kit/index.js` | §7 | — | [README](../src/setup/README.md) |
 | `telemetry` | A daily anonymous usage report to the product's collector (`{ schema, instance, version, report }`, coarse ranges and booleans only), off with `DO_NOT_TRACK=1`, `TELEMETRY=off` or the owner's switch; `GET`/`PATCH /api/telemetry` and its MCP tool | `db`, `mcp` | `./kit/index.js` | §18 | — | [README](../src/telemetry/README.md) |
 | `switches` | One catalog of the app's additive features (`defineFeatures`, stable kebab-case keys), each on or off for everyone, one person or one API key; providers in order (`databaseProvider`, `memoryProvider`, `fromSdk` for any flag service), `FEATURES_OFF` locks, `needs`, `requires` and offline license keys (`licenseOf`, ES256, `kit license`) for paid features; `gated` routes answer 403 `feature_disabled`, `isOn` for background work; `GET`/`PATCH /api/features` and its MCP tools | `db`, `mcp` | `./kit/index.js` | §21 | `switches-client`, `switches-react`, `switches-ui` | [README](../src/switches/README.md) |
+| `sharing` | Invites to a space and the owner's approval at it, on the oauth part's hooks: single-use invites joined with a typed code, members mirrored from grants and held to their space (`sharing.oauth`), the sign-in pages, the owner's routes and MCP tools for invites and members, and `sweep` and `forget`; no page for an invite's link or asking to join yet | `db`, `mcp`, `oauth`, `pagination` | `./kit/sharing/index.js` | §7, §23 | — | [README](../src/sharing/README.md) |
 | `testing` | Checks for an app's tests: lintOpenApi, guideRoutes, guideGaps, toolRoutes, toolsRun, cliGaps and cliSnapshot (the command line), softAuthenticator (passkeys in CI) and approveSignIn (an OAuth approval as a browser makes it) | `guide` | `./kit/testing/index.js` | §13 | — | [README](../src/testing/README.md) |
 
 ## Browser layers
@@ -96,6 +97,7 @@ flowchart LR
   setup[setup]
   telemetry[telemetry]
   switches[switches]
+  sharing[sharing]
   testing[testing]
   search_client[search-client]
   search_react[search-react]
@@ -127,6 +129,10 @@ flowchart LR
   telemetry --> mcp
   switches --> db
   switches --> mcp
+  sharing --> db
+  sharing --> mcp
+  sharing --> oauth
+  sharing --> pagination
   testing --> guide
   search_react --> search_client
   vector_search_ui --> search_react

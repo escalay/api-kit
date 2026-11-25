@@ -82,12 +82,23 @@ its own page the same way with `approveSignIn(app, query, { form: { action, fiel
 | Row | Passes when |
 |---|---|
 | Owner approval | `approveSignIn` answers 302 with a `code`; with `decision: 'deny'`, `access_denied`; without the owner signed in there is no consent page to approve |
-| Invite | a known app's return redeems a remembered invite in one click; any other return sees "This app returns to <host>" and needs the typed code; either way the token is bound to the invite's space (`aud`), and the invite again, a wrong code or an expired invite gets none |
+| Invite | the typed code joins; a return not listed in `knownReturns` (nor loopback) sees "This app returns to <host>"; the token is bound to the invite's space (`aud`), and the invite again, a wrong code or an expired invite gets none |
 | Account line | every approval page says it connects the app signed in in this browser |
-| Ask to join | nothing is granted until the owner decides; the grant names the asker, not the owner, and works at that space only |
 | Revoke | after `revokeGrant`, `revokeClient` or a removed member, the next call with the token answers 401, and `onRevoke` dropped the app's row |
 | Another space | a space's token at another space answers 401; a root token is given only to the owner's own sign-ins |
 | Leaks nothing | an unknown space and a space the caller may not see answer the same 404 with the same body; no 403 confirms it exists |
+
+With the `sharing` part, also (its tests hold each; the app's tests run them against its own wiring):
+
+| Row | Passes when |
+|---|---|
+| Typed codes | with no `limits` option given, codes past the limit answer 429 with `Retry-After`, and the fifth wrong code ends the sign-in (`access_denied`) |
+| Known return | a custom scheme not in `knownReturns` is warned and needs the code; only an http loopback redirect is "on this computer" |
+| Owner’s one click | at an unknown return the owner page starts at read for 30 days; the token's scopes and the member's lifetime are what the page named, never what the client asked |
+| Withdrawn | a code exchanged twice at once makes one member; one the app's own `onGrant` refuses makes none and leaves the invite open |
+| Shown once | `POST …/invites` again with the same Idempotency-Key answers 409 `shown_once`, and nothing the guard store keeps holds the code |
+| Never through A2A | read the wiring: `sharingTools` are in the owner's MCP only, never passed to `mountA2A` |
+| Agent invites | an agent's invite is for 7 or 30 days (`until_revoked`: 400) and names its maker; once that agent's grant ends its open invites stop working, and people who joined keep access |
 
 ## 6. The agent test
 

@@ -729,6 +729,102 @@
       }
     },
     {
+      "name": "sharing",
+      "type": "registry:item",
+      "title": "Sharing",
+      "description": "Invites to a space and the owner's approval at it, on the oauth part's hooks: single-use invites joined with a typed code, members mirrored from grants and held to their space (`sharing.oauth`), the sign-in pages, the owner's routes and MCP tools for invites and members, and `sweep` and `forget`; no page for an invite's link or asking to join yet",
+      "registryDependencies": [
+        "escalay/api-kit/db",
+        "escalay/api-kit/mcp",
+        "escalay/api-kit/oauth",
+        "escalay/api-kit/pagination"
+      ],
+      "files": [
+        {
+          "path": "src/sharing/grants.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/grants.ts"
+        },
+        {
+          "path": "src/sharing/handlers.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/handlers.ts"
+        },
+        {
+          "path": "src/sharing/index.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/index.ts"
+        },
+        {
+          "path": "src/sharing/limits.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/limits.ts"
+        },
+        {
+          "path": "src/sharing/owner.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/owner.ts"
+        },
+        {
+          "path": "src/sharing/pages.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/pages.ts"
+        },
+        {
+          "path": "src/sharing/repo.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/repo.ts"
+        },
+        {
+          "path": "src/sharing/routes.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/routes.ts"
+        },
+        {
+          "path": "src/sharing/schema.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/schema.ts"
+        },
+        {
+          "path": "src/sharing/secrets.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/secrets.ts"
+        },
+        {
+          "path": "src/sharing/signin.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/signin.ts"
+        },
+        {
+          "path": "src/sharing/states.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/states.ts"
+        },
+        {
+          "path": "src/sharing/sweep.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/sweep.ts"
+        },
+        {
+          "path": "src/sharing/tools.ts",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/tools.ts"
+        },
+        {
+          "path": "src/sharing/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/sharing/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "standard": [
+          7,
+          23
+        ]
+      }
+    },
+    {
       "name": "testing",
       "type": "registry:item",
       "title": "Testing",

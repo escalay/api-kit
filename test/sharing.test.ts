@@ -1,0 +1,430 @@
+import { sql } from 'drizzle-orm'
+import { describe, expect, it } from 'vitest'
+import { migrate, testDb, type Db } from '../src/index.js'
+import {
+  addressKeyOf,
+  CODE_ALPHABET,
+  codeHashOf,
+  inviteStateOf,
+  linkHashOf,
+  MAX_OPEN_INVITES,
+  memberExpiresAtOf,
+  memberListingOf,
+  memberStateOf,
+  newInviteCode,
+  newLinkToken,
+  normalisedCode,
+  redeemByOf,
+  sharingKeys,
+  sharingRepo,
+  SHARING_MIGRATIONS,
+  ticketHashOf,
+} from '../src/sharing/index.js'
+import { at, DAY, HOUR, inviteRow, memberRow } from './sharing-rows.js'
+
+const SECRET = 'a sharing secret of thirty-two bytes or more, for tests only'
+const NOW = new Date('2026-03-12T09:00:00.000Z')
+
+const sharingDb = async () => {
+  const db = await testDb()
+  await migrate(db, 'sharing', SHARING_MIGRATIONS)
+  return db
+}
+
+/** The names of a kind of schema object the part made: its tables, or its indexes. */
+const namesOf = async (db: Db, type: 'table' | 'index') => {
+  const rows = await db.all<{ name: string } | [string]>(sql`select name from sqlite_master where type = ${type} and name like 'sharing%' order by name`)
+  return rows.map((row) => (Array.isArray(row) ? row[0] : row.name))
+}
+
+describe('the sharing tables', () => {
+  it('migrate into exactly the two tables and seven indexes the step names', async () => {
+    const db = await sharingDb()
+    expect(await namesOf(db, 'table')).toEqual(['sharing_invites', 'sharing_members'])
+    expect(await namesOf(db, 'index')).toEqual([
+      'sharing_invites_maker', 'sharing_invites_redeem_by', 'sharing_invites_space',
+      'sharing_members_client', 'sharing_members_ended', 'sharing_members_seen', 'sharing_members_space',
+    ])
+    await migrate(db, 'sharing', SHARING_MIGRATIONS)
+    expect(await namesOf(db, 'table')).toHaveLength(2)
+  })
+
+  it('hold no comment and no quote in the step, so it splits into its nine statements', () => {
+    for (const step of SHARING_MIGRATIONS) expect(step).not.toMatch(/--|\/\*|['"`]/)
+    expect(SHARING_MIGRATIONS[0].split(';')).toHaveLength(9)
+  })
+
+  it('keep an apostrophe in any value as it was given', async () => {
+    const repo = sharingRepo(await sharingDb())
+    const id = await repo.addInvite(inviteRow('sp_soups', NOW, 'apostrophe', { label: "Sam's phone; drop table sharing_invites" }))
+    expect((await repo.inviteAt('sp_soups', id!))?.label).toBe("Sam's phone; drop table sharing_invites")
+  })
+})
+
+describe('the named states', () => {
+  const invite = { revokedAt: null, redeemBy: at(NOW, HOUR).toISOString() }
+  it.each([
+    ['open', invite, null, NOW],
+    ['redeemed', invite, { id: 'mem_1' }, NOW],
+    ['redeemed', { ...invite, revokedAt: NOW.toISOString() }, { id: 'mem_1' }, at(NOW, 2 * HOUR)],
+    ['revoked', { ...invite, revokedAt: NOW.toISOString() }, null, NOW],
+    ['revoked', { ...invite, revokedAt: NOW.toISOString() }, null, at(NOW, 2 * HOUR)],
+    ['expired', invite, null, at(NOW, HOUR)],
+    ['expired', invite, null, at(NOW, 2 * HOUR)],
+  ] as const)('an invite is %s', (state, row, member, now) => {
+    expect(inviteStateOf(row, member, now)).toBe(state)
+  })
+
+  const member = { endedAt: null, endedReason: null, expiresAt: at(NOW, 7 * DAY).toISOString(), lastSeenAt: NOW.toISOString() }
+  it.each([
+    [{ state: 'active' }, member, NOW],
+    [{ state: 'active' }, { ...member, expiresAt: null }, at(NOW, 29 * DAY)],
+    [{ state: 'ended', reason: 'removed' }, { ...member, endedAt: NOW.toISOString(), endedReason: 'removed' }, NOW],
+    [{ state: 'ended', reason: 'expired' }, member, at(NOW, 7 * DAY)],
+    [{ state: 'ended', reason: 'lapsed' }, { ...member, expiresAt: null }, at(NOW, 30 * DAY)],
+  ] as const)('a member is %j', (state, row, now) => {
+    expect(memberStateOf(row, now)).toEqual(state)
+  })
+
+  it.each([
+    ['active', member],
+    ['signed_out', { ...member, endedAt: NOW.toISOString(), endedReason: 'revoked' }],
+    ['signed_out', { ...member, endedAt: NOW.toISOString(), endedReason: 'lapsed' }],
+    ['hidden', { ...member, endedAt: NOW.toISOString(), endedReason: 'removed' }],
+    ['hidden', { ...member, endedAt: NOW.toISOString(), endedReason: 'replaced' }],
+  ] as const)('the owner sees a member as %s', (listing, row) => {
+    expect(memberListingOf(row, NOW)).toBe(listing)
+  })
+
+  it('times an invite a day to redeem, and a member by its lifetime', () => {
+    expect(redeemByOf(NOW)).toBe('2026-03-13T09:00:00.000Z')
+    expect(memberExpiresAtOf('7d', NOW)).toBe('2026-03-19T09:00:00.000Z')
+    expect(memberExpiresAtOf('30d', NOW)).toBe('2026-04-11T09:00:00.000Z')
+    expect(memberExpiresAtOf('until_revoked', NOW)).toBeNull()
+  })
+})
+
+describe('the sharing secrets', () => {
+  it('make a 192-bit link token and an 8-letter code with no vowels', () => {
+    const tokens = new Set(Array.from({ length: 50 }, newLinkToken))
+    expect(tokens.size).toBe(50)
+    for (const token of tokens) expect(Buffer.from(token, 'base64url')).toHaveLength(24)
+    for (const code of Array.from({ length: 200 }, newInviteCode)) {
+      expect(code).toMatch(/^[A-Z]{4}-[A-Z]{4}$/)
+      for (const letter of normalisedCode(code)) expect(CODE_ALPHABET).toContain(letter)
+    }
+    expect(CODE_ALPHABET).toBe('BCDFGHJKLMNPQRSTVWXZ')
+  })
+
+  it('compare a typed code whatever its case, dashes and spaces', () => {
+    const keys = sharingKeys(SECRET)
+    expect(normalisedCode(' bdkm qxtw ')).toBe('BDKMQXTW')
+    expect(codeHashOf(keys, 'bdkm-qxtw')).toBe(codeHashOf(keys, 'BDKMQXTW'))
+    expect(codeHashOf(keys, 'BDKM-QXTW')).not.toBe(codeHashOf(keys, 'BDKM-QXTB'))
+  })
+
+  it('derive three keys of their own, one per use, so one use never opens another', () => {
+    const keys = sharingKeys(SECRET)
+    expect(Object.keys(keys).sort()).toEqual(['address', 'code', 'link'])
+    const all = [keys.link, keys.code, keys.address].map((key) => key.toString('hex'))
+    expect(new Set(all).size).toBe(3)
+    for (const key of [keys.link, keys.code, keys.address]) expect(key).toHaveLength(32)
+    expect(linkHashOf(keys, 'same text')).not.toBe(codeHashOf(keys, 'same text'))
+    expect(addressKeyOf(keys, '203.0.113.7')).not.toBe(linkHashOf(keys, '203.0.113.7'))
+    expect(sharingKeys(SECRET).link.equals(keys.link)).toBe(true)
+  })
+
+  it('change every hash when the secret is rotated', () => {
+    const [before, after] = [sharingKeys(SECRET), sharingKeys(`${SECRET}, rotated`)]
+    expect(linkHashOf(before, 'token')).not.toBe(linkHashOf(after, 'token'))
+    expect(codeHashOf(before, 'BDKM-QXTW')).not.toBe(codeHashOf(after, 'BDKM-QXTW'))
+    expect(addressKeyOf(before, '203.0.113.7')).not.toBe(addressKeyOf(after, '203.0.113.7'))
+  })
+
+  it('refuse a secret shorter than 32 bytes', () => {
+    expect(() => sharingKeys('too short')).toThrow(/sharing: the secret holds 9 bytes; give it 32 or more/)
+    expect(() => sharingKeys('x'.repeat(32))).not.toThrow()
+  })
+
+  it('hash a consent ticket with SHA-256', () => {
+    expect(ticketHashOf('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+  })
+
+  it('leave no table holding a link, a code or a bare hash of either', async () => {
+    const db = await sharingDb()
+    const repo = sharingRepo(db)
+    const keys = sharingKeys(SECRET)
+    const [token, code] = [newLinkToken(), newInviteCode()]
+    const inviteId = await repo.addInvite(inviteRow('sp_soups', NOW, 'unused', { linkHash: linkHashOf(keys, token), codeHash: codeHashOf(keys, code) }))
+    await repo.claimInvite(inviteId!, memberRow('sp_soups', NOW, 'grant-secret'), NOW)
+    const sha256 = (text: string) => [ticketHashOf(text), Buffer.from(ticketHashOf(text), 'hex').toString('base64url')]
+    const secrets = [token, code, normalisedCode(code), ...sha256(token), ...sha256(code), ...sha256(normalisedCode(code))]
+    const dumps: string[] = []
+    for (const table of ['sharing_invites', 'sharing_members']) {
+      const dump = JSON.stringify(await db.all(sql.raw(`select * from ${table}`)))
+      for (const secret of secrets) expect(dump, `${table} holds ${secret}`).not.toContain(secret)
+      dumps.push(dump)
+    }
+    // What is kept instead: the HMACs
+    for (const kept of [linkHashOf(keys, token), codeHashOf(keys, code)]) expect(dumps.join('')).toContain(kept)
+  })
+})
+
+describe('an invite claim', () => {
+  const opened = async (change = {}) => {
+    const repo = sharingRepo(await sharingDb())
+    const inviteId = (await repo.addInvite(inviteRow('sp_soups', NOW, 'claim', change)))!
+    return { repo, inviteId }
+  }
+
+  it('makes one member when two exchanges claim the invite at once', async () => {
+    const { repo, inviteId } = await opened()
+    const claims = await Promise.all([repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-a'), NOW), repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-b'), NOW)])
+    expect(claims.filter(Boolean)).toHaveLength(1)
+    const invite = await repo.inviteAt('sp_soups', inviteId)
+    expect(invite?.memberId).toBe(claims.find(Boolean))
+    expect(inviteStateOf(invite!, { id: invite!.memberId! }, NOW)).toBe('redeemed')
+    expect(await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-c'), at(NOW, HOUR))).toBeNull()
+  })
+
+  it('works once, in time, at its own space, unrevoked', async () => {
+    const late = await opened()
+    expect(await late.repo.claimInvite(late.inviteId, memberRow('sp_soups', NOW, 'grant-late'), at(NOW, DAY))).toBeNull()
+    const elsewhere = await opened()
+    expect(await elsewhere.repo.claimInvite(elsewhere.inviteId, memberRow('sp_bakes', NOW, 'grant-bakes'), NOW)).toBeNull()
+    const revoked = await opened()
+    expect(await revoked.repo.revokeInvite('sp_soups', revoked.inviteId, NOW)).toBe(true)
+    expect(await revoked.repo.claimInvite(revoked.inviteId, memberRow('sp_soups', NOW, 'grant-revoked'), NOW)).toBeNull()
+    const inTime = await opened()
+    expect(await inTime.repo.claimInvite(inTime.inviteId, memberRow('sp_soups', NOW, 'grant-in-time'), at(NOW, DAY - 1))).toEqual(expect.stringMatching(/^mem_/))
+  })
+
+  it('makes one member per grant', async () => {
+    const { repo, inviteId } = await opened()
+    const other = (await repo.addInvite(inviteRow('sp_soups', NOW, 'other')))!
+    expect(await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-once'), NOW)).not.toBeNull()
+    expect(await repo.claimInvite(other, memberRow('sp_soups', NOW, 'grant-once'), NOW)).toBeNull()
+    expect(inviteStateOf((await repo.inviteAt('sp_soups', other))!, null, NOW)).toBe('open')
+  })
+
+  it('opens the invite again when its grant is withdrawn, and never once the member is ended', async () => {
+    const { repo, inviteId } = await opened()
+    await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-vetoed'), NOW)
+    await repo.deleteMemberOfGrant('grant-vetoed')
+    const invite = (await repo.inviteAt('sp_soups', inviteId))!
+    expect(inviteStateOf(invite, invite.memberId ? { id: invite.memberId } : null, NOW)).toBe('open')
+    const memberId = await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-kept'), NOW)
+    expect(await repo.endMember('sp_soups', memberId!, 'removed', NOW)).toBe('grant-kept')
+    expect(await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-after'), NOW)).toBeNull()
+    // A revoke of an invite a member holds is recorded all the same, once; the member keeps its own row
+    expect(await repo.revokeInvite('sp_soups', inviteId, NOW)).toBe(true)
+    expect(await repo.revokeInvite('sp_soups', inviteId, NOW)).toBe(false)
+    expect((await repo.inviteAt('sp_soups', inviteId))?.revokedAt).toBe(NOW.toISOString())
+  })
+
+  it('never opens a revoked invite again, even when the member holding it at the revoke is withdrawn', async () => {
+    const { repo, inviteId } = await opened()
+    await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-mid-exchange'), NOW)
+    expect(await repo.revokeInvite('sp_soups', inviteId, NOW)).toBe(true)
+    await repo.deleteMemberOfGrant('grant-mid-exchange')
+    const invite = (await repo.inviteAt('sp_soups', inviteId))!
+    expect(inviteStateOf(invite, invite.memberId ? { id: invite.memberId } : null, NOW)).toBe('revoked')
+    expect(await repo.claimInvite(inviteId, memberRow('sp_soups', NOW, 'grant-after'), NOW)).toBeNull()
+  })
+
+  it('refuses a code collision on create without throwing', async () => {
+    const { repo } = await opened()
+    expect(await repo.addInvite(inviteRow('sp_soups', NOW, 'claim', { linkHash: 'a fresh link' }))).toBeNull()
+    expect(await repo.addInvite(inviteRow('sp_bakes', NOW, 'claim', { codeHash: 'a fresh code' }))).toBeNull()
+    expect(await repo.addInvite(inviteRow('sp_soups', NOW, 'fresh'))).toEqual(expect.stringMatching(/^inv_/))
+  })
+
+  it('adds no invite past 100 open at a space, even all at once, and counts only open ones', async () => {
+    const { repo } = await opened()
+    const redeemed = (await repo.addInvite(inviteRow('sp_soups', NOW, 'redeemed')))!
+    await repo.claimInvite(redeemed, memberRow('sp_soups', NOW, 'grant-redeemed'), NOW)
+    await repo.revokeInvite('sp_soups', (await repo.addInvite(inviteRow('sp_soups', NOW, 'revoked')))!, NOW)
+    await repo.addInvite(inviteRow('sp_soups', at(NOW, -DAY), 'late'))
+    const open = await repo.countOpenInvites('sp_soups', NOW)
+    const added = await Promise.all(Array.from({ length: 110 - open }, (_, index) => repo.addInvite(inviteRow('sp_soups', NOW, `cap-${index}`))))
+    expect(added.filter(Boolean)).toHaveLength(MAX_OPEN_INVITES - open)
+    expect(await repo.countOpenInvites('sp_soups', NOW)).toBe(MAX_OPEN_INVITES)
+    expect(await repo.addInvite(inviteRow('sp_bakes', NOW, 'elsewhere'))).toEqual(expect.stringMatching(/^inv_/))
+  })
+})
+
+describe('finding and listing', () => {
+  it('finds an invite by its link, by its code at its space, and by its code anywhere', async () => {
+    const repo = sharingRepo(await sharingDb())
+    const keys = sharingKeys(SECRET)
+    const [token, code] = [newLinkToken(), newInviteCode()]
+    const id = await repo.addInvite(inviteRow('sp_bakes', NOW, 'found', { linkHash: linkHashOf(keys, token), codeHash: codeHashOf(keys, code) }))
+    expect((await repo.inviteByLink(linkHashOf(keys, token)))?.id).toBe(id)
+    expect(await repo.inviteByLink(linkHashOf(keys, newLinkToken()))).toBeUndefined()
+    expect((await repo.inviteByCodeAt('sp_bakes', codeHashOf(keys, code.toLowerCase())))?.id).toBe(id)
+    expect(await repo.inviteByCodeAt('sp_soups', codeHashOf(keys, code))).toBeUndefined()
+    expect((await repo.inviteByCodeAnywhere(codeHashOf(keys, code)))?.spaceId).toBe('sp_bakes')
+  })
+
+  it('counts only the open invites of a space', async () => {
+    const repo = sharingRepo(await sharingDb())
+    await repo.addInvite(inviteRow('sp_soups', NOW, 'open'))
+    const redeemed = (await repo.addInvite(inviteRow('sp_soups', NOW, 'redeemed')))!
+    await repo.claimInvite(redeemed, memberRow('sp_soups', NOW, 'grant-count'), NOW)
+    const revoked = (await repo.addInvite(inviteRow('sp_soups', NOW, 'revoked')))!
+    await repo.revokeInvite('sp_soups', revoked, NOW)
+    await repo.addInvite(inviteRow('sp_soups', at(NOW, -DAY), 'late'))
+    await repo.addInvite(inviteRow('sp_bakes', NOW, 'elsewhere'))
+    expect(await repo.countOpenInvites('sp_soups', NOW)).toBe(1)
+    expect(await repo.countOpenInvites('sp_soups', at(NOW, DAY))).toBe(0)
+  })
+
+  it('lists a space’s invites newest first, by page, each with the member that used it', async () => {
+    const repo = sharingRepo(await sharingDb())
+    const invites: string[] = []
+    for (const one of ['a', 'b', 'c']) invites.push((await repo.addInvite(inviteRow('sp_soups', NOW, `invite-${one}`)))!)
+    await repo.addInvite(inviteRow('sp_bakes', NOW, 'invite-bakes'))
+    const memberId = await repo.claimInvite(invites[0]!, memberRow('sp_soups', NOW, 'grant-listed'), NOW)
+    const firstInvites = await repo.listInvites('sp_soups', { limit: 2 })
+    expect(firstInvites.map((row) => row.id)).toEqual([invites[2], invites[1]])
+    expect((await repo.listInvites('sp_soups', { after: firstInvites.at(-1)!.id, limit: 2 })).map((row) => [row.id, row.memberId])).toEqual([[invites[0], memberId]])
+  })
+})
+
+/** Bakes with an open invite and a member: what each by-id statement is tried on. */
+const bakes = async () => {
+  const repo = sharingRepo(await sharingDb())
+  const memberId = (await repo.addOwnerMember(memberRow('sp_bakes', NOW, 'grant-bakes')))!
+  const inviteId = (await repo.addInvite(inviteRow('sp_bakes', NOW, 'bakes', { replacesMemberId: memberId })))!
+  return { repo, memberId, inviteId }
+}
+type Bakes = Awaited<ReturnType<typeof bakes>>
+
+describe('an id from Bakes is not found at Soups', () => {
+  // Each statement, tried at Soups (nothing found, nothing changed), then at Bakes (found): the space is what refused it
+  it.each<[string, (bakes: Bakes, spaceId: string) => Promise<unknown>]>([
+    ['inviteAt', ({ repo, inviteId }, spaceId) => repo.inviteAt(spaceId, inviteId)],
+    ['inviteByCodeAt', ({ repo }, spaceId) => repo.inviteByCodeAt(spaceId, 'code-bakes')],
+    ['revokeInvite', ({ repo, inviteId }, spaceId) => repo.revokeInvite(spaceId, inviteId, NOW)],
+    ['revokeInvitesReplacing', ({ repo, memberId }, spaceId) => repo.revokeInvitesReplacing(spaceId, memberId, NOW)],
+    ['claimInvite', ({ repo, inviteId }, spaceId) => repo.claimInvite(inviteId, memberRow(spaceId, NOW, 'grant-invite'), NOW)],
+    ['memberAt', ({ repo, memberId }, spaceId) => repo.memberAt(spaceId, memberId)],
+    ['endMember', ({ repo, memberId }, spaceId) => repo.endMember(spaceId, memberId, 'removed', NOW)],
+    ['closeMember', ({ repo, memberId }, spaceId) => repo.closeMember(spaceId, memberId, 'removed', NOW)],
+  ])('%s', async (_, statement) => {
+    const world = await bakes()
+    expect(await statement(world, 'sp_soups')).toBeOneOf([undefined, null, false, 0])
+    expect(await statement(world, 'sp_bakes')).toBeOneOf([expect.any(Object), expect.any(String), true, 1])
+  })
+})
+
+describe('members', () => {
+  it('end once for each reason the kit gives, told twice', async () => {
+    const repo = sharingRepo(await sharingDb())
+    await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-one'))
+    await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-two', { clientId: 'client-shared' }))
+    await repo.addOwnerMember(memberRow('sp_bakes', NOW, 'grant-three', { clientId: 'client-shared' }))
+    expect(await repo.endMemberOfGrant('grant-one', 'revoked', NOW)).toMatchObject({ grantId: 'grant-one', spaceId: 'sp_soups' })
+    expect(await repo.endMemberOfGrant('grant-one', 'replayed', NOW)).toBeNull()
+    expect((await repo.memberByGrant('grant-one'))?.endedReason).toBe('revoked')
+    expect((await repo.endMembersOfClient('client-shared', NOW)).map((row) => row.grantId).sort()).toEqual(['grant-three', 'grant-two'])
+    expect(await repo.endMembersOfClient('client-shared', NOW)).toEqual([])
+  })
+
+  it('list newest first by page, without the removed and the replaced', async () => {
+    const repo = sharingRepo(await sharingDb())
+    const ids: string[] = []
+    for (const grant of ['g1', 'g2', 'g3', 'g4', 'g5']) ids.push((await repo.addOwnerMember(memberRow('sp_soups', NOW, grant)))!)
+    await repo.endMember('sp_soups', ids[1]!, 'removed', NOW)
+    await repo.endMember('sp_soups', ids[2]!, 'replaced', NOW)
+    await repo.endMember('sp_soups', ids[3]!, 'revoked', NOW)
+    await repo.addOwnerMember(memberRow('sp_bakes', NOW, 'g6'))
+    const first = await repo.listMembers('sp_soups', { limit: 2 })
+    expect(first.map((row) => row.id)).toEqual([ids[4], ids[3]])
+    expect((await repo.listMembers('sp_soups', { after: first.at(-1)!.id, limit: 2 })).map((row) => row.id)).toEqual([ids[0]])
+  })
+
+  it('close for the owner’s reason once, live or signed out, and leave the list', async () => {
+    const repo = sharingRepo(await sharingDb())
+    const live = (await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-close-live')))!
+    const signedOut = (await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-close-out')))!
+    await repo.endMemberOfGrant('grant-close-out', 'revoked', NOW)
+    expect(await repo.closeMember('sp_soups', live, 'removed', at(NOW, HOUR))).toBe('grant-close-live')
+    expect(await repo.closeMember('sp_soups', signedOut, 'replaced', at(NOW, HOUR))).toBe('grant-close-out')
+    expect(await repo.closeMember('sp_soups', live, 'replaced', at(NOW, DAY))).toBeNull()
+    expect(await repo.memberByGrant('grant-close-live')).toMatchObject({ endedReason: 'removed', endedAt: at(NOW, HOUR).toISOString() })
+    expect(await repo.memberByGrant('grant-close-out')).toMatchObject({ endedReason: 'replaced', endedAt: NOW.toISOString() })
+    expect(await repo.listMembers('sp_soups', { limit: 10 })).toEqual([])
+  })
+
+  it('revoke the other invites replacing a member, keeping the one named', async () => {
+    const repo = sharingRepo(await sharingDb())
+    const replacing = { replacesMemberId: 'mem_sam' }
+    const older = (await repo.addInvite(inviteRow('sp_soups', NOW, 'again-older', replacing)))!
+    const joined = (await repo.addInvite(inviteRow('sp_soups', NOW, 'again-joined', replacing)))!
+    expect(await repo.revokeInvitesReplacing('sp_soups', 'mem_sam', NOW, joined)).toBe(1)
+    expect([(await repo.inviteAt('sp_soups', older))?.revokedAt, (await repo.inviteAt('sp_soups', joined))?.revokedAt]).toEqual([NOW.toISOString(), null])
+  })
+
+  it('note a use at most once an hour', async () => {
+    const repo = sharingRepo(await sharingDb())
+    await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-seen'))
+    await repo.noteSeen('grant-seen', NOW, at(NOW, 30 * 60 * 1000))
+    expect((await repo.memberByGrant('grant-seen'))?.lastSeenAt).toBe(NOW.toISOString())
+    await repo.noteSeen('grant-seen', at(NOW, 1), at(NOW, HOUR))
+    expect((await repo.memberByGrant('grant-seen'))?.lastSeenAt).toBe(at(NOW, HOUR).toISOString())
+  })
+})
+
+describe('an agent’s invites', () => {
+  it('are revoked with its grant or its client, redeemed ones recorded too, and the people who joined through them stay', async () => {
+    const repo = sharingRepo(await sharingDb())
+    const agent = { madeByClient: 'client-agent', madeByGrant: 'grant-agent', invitedBy: 'agent:client-agent' }
+    const joined = (await repo.addInvite(inviteRow('sp_soups', NOW, 'joined', agent)))!
+    await repo.addInvite(inviteRow('sp_soups', NOW, 'open', agent))
+    await repo.addInvite(inviteRow('sp_bakes', NOW, 'other-grant', { ...agent, madeByGrant: 'grant-later' }))
+    await repo.claimInvite(joined, memberRow('sp_soups', NOW, 'grant-sam'), NOW)
+    expect(await repo.revokeInvitesMadeByGrant('grant-agent', NOW)).toBe(2)
+    expect(await repo.revokeInvitesMadeByGrant('grant-agent', NOW)).toBe(0)
+    expect(await repo.revokeInvitesMadeByClient('client-agent', NOW)).toBe(1)
+    expect((await repo.inviteAt('sp_soups', joined))?.revokedAt).toBe(NOW.toISOString())
+    expect(memberStateOf((await repo.memberByGrant('grant-sam'))!, NOW)).toEqual({ state: 'active' })
+  })
+})
+
+describe('a space', () => {
+  it('is forgotten: its invites revoked, its members ended', async () => {
+    const repo = sharingRepo(await sharingDb())
+    const inviteId = (await repo.addInvite(inviteRow('sp_soups', NOW, 'gone')))!
+    await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-gone'))
+    await repo.addOwnerMember(memberRow('sp_bakes', NOW, 'grant-stays'))
+    expect(await repo.revokeInvitesOf('sp_soups', NOW)).toBe(1)
+    expect(await repo.endMembersOf('sp_soups', NOW)).toEqual(['grant-gone'])
+    expect(inviteStateOf((await repo.inviteAt('sp_soups', inviteId))!, null, NOW)).toBe('revoked')
+    expect((await repo.memberByGrant('grant-gone'))?.endedReason).toBe('space_gone')
+    expect((await repo.memberByGrant('grant-stays'))?.endedAt).toBeNull()
+  })
+})
+
+describe('aging', () => {
+  it('ends expired and lapsed members once, and deletes what closed long enough ago', async () => {
+    const repo = sharingRepo(await sharingDb())
+    await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-week', { lifetime: '7d', expiresAt: at(NOW, 7 * DAY).toISOString() }))
+    await repo.addOwnerMember(memberRow('sp_soups', NOW, 'grant-quiet', { lifetime: 'until_revoked', expiresAt: null }))
+    await repo.addOwnerMember(memberRow('sp_soups', at(NOW, 20 * DAY), 'grant-busy', { lifetime: 'until_revoked', expiresAt: null }))
+    const later = at(NOW, 31 * DAY)
+    expect((await repo.endExpiredMembers(later)).map((row) => row.grantId)).toEqual(['grant-week'])
+    expect((await repo.endLapsedMembers(at(later, -30 * DAY), later)).map((row) => row.grantId)).toEqual(['grant-quiet'])
+    expect(await repo.endExpiredMembers(later)).toEqual([])
+    expect(await repo.endLapsedMembers(at(later, -30 * DAY), later)).toEqual([])
+    expect(await repo.deleteEndedMembers(at(later, -1))).toBe(0)
+    expect(await repo.deleteEndedMembers(later)).toBe(2)
+    expect((await repo.memberByGrant('grant-busy'))?.endedAt).toBeNull()
+
+    await repo.addInvite(inviteRow('sp_soups', NOW, 'old'))
+    const revoked = (await repo.addInvite(inviteRow('sp_soups', at(NOW, 3 * DAY), 'revoked')))!
+    await repo.revokeInvite('sp_soups', revoked, at(NOW, 3 * DAY))
+    expect(await repo.deleteClosedInvites(at(NOW, 2 * DAY))).toBe(1)
+    expect(await repo.deleteClosedInvites(at(NOW, 3 * DAY))).toBe(1)
+  })
+})

@@ -123,6 +123,7 @@ the parts depend on each other, and which parts a goal takes, in the order they 
 | `setup` | Claiming a fresh deployment with the SETUP_CODE secret (fails closed, rate-limited), recovery by rotating it, and a self-checking setup checklist of the app's own steps | [setup](src/setup/README.md) |
 | `telemetry` | A daily anonymous usage report to the product's collector (`{ schema, instance, version, report }`, coarse ranges and booleans only), off with `DO_NOT_TRACK=1`, `TELEMETRY=off` or the owner's switch; `GET`/`PATCH /api/telemetry` and its MCP tool | [telemetry](src/telemetry/README.md) |
 | `switches` | One catalog of the app's additive features (`defineFeatures`, stable kebab-case keys), each on or off for everyone, one person or one API key; providers in order (`databaseProvider`, `memoryProvider`, `fromSdk` for any flag service), `FEATURES_OFF` locks, `needs`, `requires` and offline license keys (`licenseOf`, ES256, `kit license`) for paid features; `gated` routes answer 403 `feature_disabled`, `isOn` for background work; `GET`/`PATCH /api/features` and its MCP tools | [switches](src/switches/README.md) |
+| `sharing` | Invites to a space and the owner's approval at it, on the oauth part's hooks: single-use invites joined with a typed code, members mirrored from grants and held to their space (`sharing.oauth`), the sign-in pages, the owner's routes and MCP tools for invites and members, and `sweep` and `forget`; no page for an invite's link or asking to join yet | [sharing](src/sharing/README.md) |
 | `testing` | Checks for an app's tests: lintOpenApi, guideRoutes, guideGaps, toolRoutes, toolsRun, cliGaps and cliSnapshot (the command line), softAuthenticator (passkeys in CI) and approveSignIn (an OAuth approval as a browser makes it) | [testing](src/testing/README.md) |
 | `search-client` | Browser, no framework: a typed client for vector-search's routes, a controller for one search's state (debounced, cancelling), paste and drop of pictures | [browser](src/browser/README.md) |
 | `search-react` | Browser, React: useVectorSearch, usePictureInput, useSimilar over search-client; headless, each app draws its own UI | [browser](src/browser/README.md) |
@@ -180,6 +181,18 @@ and writes the generated `index.ts`. A file you already changed shows as edited.
 `version`, the parts (`modules`), `webDir` when browser files live elsewhere, and a sha256 per file **as the kit
 wrote it**. Comparing that hash with the file on disk and with the current kit is how `diff`, `update` and `doctor`
 tell "you changed it" from "the kit changed it".
+
+## Share part of an app
+
+People other than the owner, and their agents, into one part of an app (a **space**: a shelf, a board, a project) and
+nothing else: the `sharing` part. The owner, a deployment key or the owner's own agent makes a single-use invite; the
+person's app signs in at the space's own address with its typed code, and its token works there only. The
+owner can also approve an app at a space, list and remove members, and invite one again. Rules:
+[docs/STANDARD.md §23](docs/STANDARD.md#23-sharing); wiring: [its README](src/sharing/README.md).
+
+```bash
+npx @escalay/kit add sharing --dir src/kit --install
+```
 
 ## Using it with agents
 

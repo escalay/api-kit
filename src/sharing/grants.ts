@@ -1,0 +1,318 @@
+/**
+ * The part's word on tokens, as the oauth hooks it hands `createOAuth` (`sharing.oauth`): which grants become members
+ * (`onGrant`), which rows end when the kit ends a grant (`onRevoke`), which tokens fit a request (`accepts`), and the
+ * space addresses this server issues for (`resources`, `resourceOf`).
+ *
+ * Which tokens the part judges:
+ *   no audience, the root, the root's MCP   onGrant: yes, untouched (unless a sharing page made it)   accepts: everywhere
+ *   a space, from the part's pages          onGrant: the claim writes the member, or no                accepts: its member's space only, while it lives
+ *   a space any other way                   onGrant: no (withdrawn)                                    accepts: no member, refused
+ * A member is known by its grant, and its space by the id on its row: a renamed space keeps its members, and a name
+ * another space takes later never opens to them.
+ *
+ * @example
+ * const oauth = createOAuth({ name: 'Sample', signingKey, store, owner, publicOrigin, ...sharing.oauth })
+ */
+import type { Context } from 'hono'
+import type { Caller } from '../core/auth.js'
+import type { AgentBrand } from '../core/discovery.js'
+import { originOf } from '../core/hal.js'
+import type { OAuth, SignInAsk, SignInGrant, SignInRevoked, TokenCaller } from '../oauth/index.js'
+import type { SharingConfig, Space } from './index.js'
+import type { InviteRow, MemberRow, NewMember, SharingRepo } from './repo.js'
+import { LIFETIMES, type EndedReason, type Lifetime, type Scope } from './schema.js'
+import { memberExpiresAtOf, memberStateOf } from './states.js'
+
+const HOUR = 60 * 60 * 1000
+const SPACE = '{space}'
+/** The longest client name the part keeps or shows. */
+const APP_NAME_LENGTH = 80
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
+/** One sentence for every live member's token out of place, whether or not the asked space exists; an ended one hears why instead. */
+export const ONLY_ITS_SPACE = 'This sign-in works only at its own space: connect again from the address you were given.'
+const NOT_READY = 'Sharing is not ready here yet (the app calls registerSharing before serving): try again in a minute.'
+
+/** What `bind` reads from the app's OAuth server: its pinned origin, its MCP path, and how to end a grant. */
+export type BoundOAuth = Pick<OAuth, 'publicOrigin' | 'mcpPath' | 'revokeGrant'>
+/** What the hooks judge by once bound: the root is the issuer's pinned origin, never a request's host. */
+export type Bound = { root: string; mcpPath: string; revokeGrant: OAuth['revokeGrant'] }
+/** The server the hooks are bound to, and the app's brand for the pages: null until `registerSharing` binds it, and the hooks refuse until then. */
+export type Binding = { bound: Bound | null; brand?: AgentBrand }
+/** What every hook works from. */
+type Grants = { config: SharingConfig; repo: SharingRepo; binding: Binding }
+
+/**
+ * The root and MCP path the hooks judge by, from an OAuth server with `publicOrigin`; throws without one, since any
+ * bare host a caller forwards would then name the root, and a token for that host would read as the root's.
+ *
+ * @example
+ * boundOf(oauth)   // { root: 'https://sample.example.test', mcpPath: '/mcp', revokeGrant }
+ */
+export const boundOf = (oauth: BoundOAuth): Bound => {
+  if (!oauth.publicOrigin) throw new Error('sharing: the OAuth server needs publicOrigin (createOAuth({ publicOrigin })): without it any bare host a caller forwards names the root, and a token for that host would read as a root token.')
+  return { root: oauth.publicOrigin, mcpPath: oauth.mcpPath, revokeGrant: oauth.revokeGrant }
+}
+
+/** What `memberOf` tells the app about the member behind a request; never its grant. */
+export type MemberView = Pick<MemberRow, 'id' | 'label' | 'appName' | 'returnsTo' | 'via' | 'scope' | 'lifetime' | 'joinedAt' | 'expiresAt'> & { space: Space }
+
+/**
+ * A token for the whole app: no audience (from before audiences), the root, or the root's MCP.
+ *
+ * @example
+ * isRootAudience(undefined, root, '/mcp')            // true
+ * isRootAudience(`${root}/s/soups/mcp`, root, '/mcp') // false
+ */
+export const isRootAudience = (resource: string | undefined, root: string, mcpPath: string) => !resource || resource === root || resource === root + mcpPath
+
+/**
+ * A client's name as the part keeps and shows it: no control, bidi or zero-width character (Unicode Cc and Cf), 80
+ * characters at most. It stays the client's own claim, never verified.
+ *
+ * @example
+ * appNameOf('Sam\u202Eppa') // 'Samppa'
+ */
+export const appNameOf = (name: string) => Array.from(name.replace(/[\p{Cc}\p{Cf}]/gu, '').trim()).slice(0, APP_NAME_LENGTH).join('').trim() || 'An unnamed client'
+
+/**
+ * The space a path names at the space address: its one segment where `resourcePath` has `{space}`, when it passes
+ * `spaceName`; else null. With `under`, a path below the address names it too (`/s/soups/mcp/server-card`).
+ *
+ * @example
+ * spaceNameIn(config, '/s/soups/mcp')   // 'soups'
+ * spaceNameIn(config, '/s/Soups/mcp')   // null
+ */
+export const spaceNameIn = (config: Pick<SharingConfig, 'resourcePath' | 'spaceName'>, path: string, under = false) => {
+  const [prefix = '', suffix = ''] = config.resourcePath.split(SPACE)
+  if (!path.startsWith(prefix)) return null
+  const rest = path.slice(prefix.length)
+  const end = rest.indexOf('/')
+  if (end < 0) return null
+  const name = rest.slice(0, end)
+  const tail = rest.slice(end)
+  const fits = tail === suffix || (under && tail.startsWith(`${suffix}/`))
+  return fits && config.spaceName.test(name) ? name : null
+}
+
+/** A resource's path: what follows its scheme and authority (empty for the origin). */
+const pathOf = (resource: string) => resource.replace(/^[a-z][a-z\d+.-]*:\/\/[^/]*/i, '')
+
+/**
+ * The space a grant's (or a sign-in's) resource names on this origin, or null.
+ *
+ * @example
+ * spaceOfResource(config, 'https://sample.example.test/s/soups/mcp', 'https://sample.example.test')   // 'soups'
+ */
+export const spaceOfResource = (config: SharingConfig, resource: string, root: string) => (resource.startsWith(`${root}/`) ? spaceNameIn(config, resource.slice(root.length)) : null)
+
+/** What a request is about: the space in its path at a space address, else the app's `spaceOfPath`. */
+const askedSpaceOf = (config: SharingConfig, path: string) => spaceNameIn(config, path, true) ?? config.spaceOfPath(path)
+
+/** `write` when the grant may change things, else `read`. */
+const scopeOf = (scopes: string[]): Scope => (scopes.includes('write') ? 'write' : 'read')
+
+/** Whether a grant's scope is more than what was given: `write` where only `read` was. */
+const exceeds = (granted: Scope, given: Scope) => granted === 'write' && given === 'read'
+
+const lifetimeIn = (text: string | undefined): Lifetime | null => LIFETIMES.find((lifetime) => lifetime === text) ?? null
+
+/** A day as people read it, in UTC: `12 March 2026`. */
+const dayOf = (at: string) => {
+  const day = new Date(at)
+  return `${day.getUTCDate()} ${MONTHS[day.getUTCMonth()]} ${day.getUTCFullYear()}`
+}
+
+/** Why an ended member's token is refused, in words. */
+const endedSentence = (member: MemberRow, reason: EndedReason) => {
+  if (reason === 'expired' && member.expiresAt) return `This access ended on ${dayOf(member.expiresAt)} (UTC): ask the owner for a new invite.`
+  if (reason === 'lapsed') return 'This access lapsed: it went unused for 30 days. Ask the owner for a new invite.'
+  return 'This access has ended: ask the owner for a new invite.'
+}
+
+/** A member row for a grant at a space, joined now. */
+const newMemberOf = (grant: SignInGrant, space: Space, given: { label: string; scope: Scope; lifetime: Lifetime }, now: Date): NewMember => ({
+  grantId: grant.grant,
+  clientId: grant.client.id,
+  spaceId: space.id,
+  label: given.label,
+  appName: appNameOf(grant.client.name),
+  returnsTo: grant.data?.returnsTo ?? '',
+  scope: given.scope,
+  lifetime: given.lifetime,
+  joinedAt: now.toISOString(),
+  expiresAt: memberExpiresAtOf(given.lifetime, now),
+  lastSeenAt: now.toISOString(),
+})
+
+/**
+ * Invite again, joined: the other invites for the member it replaces are revoked, then that member is closed as
+ * `replaced` (live or signed out) and its grant revoked. Closed first, so `onRevoke` finds it ended already.
+ */
+const replaceMember = async ({ repo }: Grants, bound: Bound, invite: Pick<InviteRow, 'id' | 'spaceId' | 'replacesMemberId'>, now: Date) => {
+  const replaced = invite.replacesMemberId
+  if (!replaced) return
+  await repo.revokeInvitesReplacing(invite.spaceId, replaced, now, invite.id)
+  const grant = await repo.closeMember(invite.spaceId, replaced, 'replaced', now)
+  if (grant) await bound.revokeGrant(grant)
+}
+
+/** The invite claim: the grant's approver is that invite, its scope no more than the invite's, and the one statement writes the member. */
+const claimByInvite = async (grants: Grants, bound: Bound, grant: SignInGrant, space: Space) => {
+  const inviteId = grant.data?.invite ?? ''
+  if (grant.approver !== `invite:${inviteId}`) return false
+  const invite = await grants.repo.inviteAt(space.id, inviteId)
+  if (!invite) return false
+  const scope = scopeOf(grant.scopes)
+  if (exceeds(scope, invite.scope)) return false
+  const now = new Date()
+  const member = newMemberOf(grant, space, { label: invite.label, scope, lifetime: invite.lifetime }, now)
+  if ((await grants.repo.claimInvite(invite.id, member, now)) === null) return false
+  await replaceMember(grants, bound, invite, now)
+  return true
+}
+
+/** The owner's approval at a space: approved as `owner:<email>`, for the space the resource names, with a lifetime the part has. */
+const memberByOwner = async ({ repo }: Grants, grant: SignInGrant, space: Space) => {
+  if (!grant.approver.startsWith('owner:')) return false
+  if (grant.data?.space !== space.id) return false
+  const lifetime = lifetimeIn(grant.data?.lifetime)
+  if (!lifetime) return false
+  const now = new Date()
+  const member = newMemberOf(grant, space, { label: appNameOf(grant.client.name), scope: scopeOf(grant.scopes), lifetime }, now)
+  return (await repo.addOwnerMember(member)) !== null
+}
+
+/** A grant into a space: only a code from one of the part's pages, at a space the app has, by the way that page said. */
+const joinSpace = async (grants: Grants, grant: SignInGrant, bound: Bound) => {
+  if (grant.kind !== 'code') return false
+  const name = spaceOfResource(grants.config, grant.resource ?? '', bound.root)
+  if (!name) return false
+  const space = await grants.config.spaces.byName(name)
+  if (!space) return false
+  if (grant.data?.sharing === 'invite') return claimByInvite(grants, bound, grant, space)
+  if (grant.data?.sharing === 'owner') return memberByOwner(grants, grant, space)
+  return false
+}
+
+/**
+ * `onGrant`: a root grant passes untouched, unless one of the part's pages made it (they bind a space, never the root).
+ * A space grant becomes a member, or is withdrawn. Before `bind`, no.
+ *
+ * @example
+ * const onGrant = onGrantFor({ config, repo, binding })   // what sharing.oauth.onGrant is
+ */
+export const onGrantFor = (grants: Grants) => async (grant: SignInGrant) => {
+  const bound = grants.binding.bound
+  if (!bound) return false
+  if (isRootAudience(grant.resource, bound.root, bound.mcpPath)) return grant.data?.sharing === undefined
+  return joinSpace(grants, grant, bound)
+}
+
+/**
+ * `onRevoke`: a withdrawn grant's row is deleted (it never became a member, so its invite opens again); any other
+ * reason ends the rows of that grant, or of that client. Then, unless withdrawn, the open invites an agent made under
+ * that grant or client are revoked; people who joined through them keep access. Each statement is conditional, so being
+ * told twice changes nothing.
+ *
+ * @example
+ * const onRevoke = onRevokeFor({ repo })   // what sharing.oauth.onRevoke is
+ */
+export const onRevokeFor = ({ repo }: Pick<Grants, 'repo'>) => async ({ grant, client, reason }: SignInRevoked) => {
+  const now = new Date()
+  if (reason === 'withdrawn') {
+    if (grant) await repo.deleteMemberOfGrant(grant)
+    return
+  }
+  if (reason === 'client_revoked') {
+    if (!client) return
+    await repo.endMembersOfClient(client, now)
+    await repo.revokeInvitesMadeByClient(client, now)
+    return
+  }
+  if (!grant) return
+  await repo.endMemberOfGrant(grant, reason, now)
+  await repo.revokeInvitesMadeByGrant(grant, now)
+}
+
+/** A space token at this request: its member lives, and this request is about the member's space by its name now. */
+const spaceTokenFits = async ({ config, repo }: Grants, caller: TokenCaller, c: Context): Promise<true | string> => {
+  const member = caller.grant ? await repo.memberByGrant(caller.grant) : undefined
+  if (!member) return ONLY_ITS_SPACE
+  const now = new Date()
+  const state = memberStateOf(member, now)
+  if (state.state === 'ended') return endedSentence(member, state.reason)
+  const space = await config.spaces.byId(member.spaceId)
+  if (!space || askedSpaceOf(config, c.req.path) !== space.name) return ONLY_ITS_SPACE
+  await repo.noteSeen(member.grantId, new Date(now.getTime() - HOUR), now)
+  return true
+}
+
+/**
+ * `accepts`: a root token fits everywhere; a space token only at its member's space. Which is which is judged against
+ * the issuer's pinned origin, never the request's host. Before `bind`, only a token with no audience.
+ *
+ * @example
+ * await acceptsFor(grants)(caller, c)   // true, or the sentence a 401 carries
+ */
+export const acceptsFor = (grants: Grants) => async (caller: TokenCaller, c: Context): Promise<true | string> => {
+  const bound = grants.binding.bound
+  if (!bound) return caller.resource ? NOT_READY : true
+  if (isRootAudience(caller.resource, bound.root, bound.mcpPath)) return true
+  return spaceTokenFits(grants, caller, c)
+}
+
+/**
+ * `resources`: this server issues for a space address whose name passes `spaceName`; a pure check of the path.
+ *
+ * @example
+ * resourcesFor({ config })('/s/soups/mcp')   // true
+ */
+export const resourcesFor = ({ config }: Pick<Grants, 'config'>) => (path: string) => spaceNameIn(config, path) !== null
+
+/** The resource path a request is for: its space's address, the root's MCP, or the root (''). */
+const resourcePathOf = (config: SharingConfig, path: string, mcpPath: string | undefined) => {
+  const name = spaceNameIn(config, path, true)
+  if (name) return config.resourcePath.replace(SPACE, name)
+  if (mcpPath && (path === mcpPath || path.startsWith(`${mcpPath}/`))) return mcpPath
+  return ''
+}
+
+/**
+ * `resourceOf`: the space address a request is at, the root's MCP, or the root. Before `bind`, on the request's own origin.
+ *
+ * @example
+ * resourceOfFor({ config, binding })(c)   // 'https://sample.example.test/s/soups/mcp' for /s/soups/mcp/server-card
+ */
+export const resourceOfFor = ({ config, binding }: Pick<Grants, 'config' | 'binding'>) => (c: Context) => {
+  const root = binding.bound?.root ?? originOf(c)
+  return root + resourcePathOf(config, c.req.path, binding.bound?.mcpPath)
+}
+
+/**
+ * Whether a sign-in is the part's to judge: its audience a space, the root, or (once bound) the root's MCP.
+ *
+ * @example
+ * handlesFor({ config, binding })(ask)   // what sharing.handles is
+ */
+export const handlesFor = ({ config, binding }: Pick<Grants, 'config' | 'binding'>) => (ask: Pick<SignInAsk, 'resource'>) => {
+  const path = pathOf(ask.resource)
+  return path === '' || path === binding.bound?.mcpPath || spaceNameIn(config, path) !== null
+}
+
+/**
+ * The member behind a request's space token while it lives, with its space; null for anyone else.
+ *
+ * @example
+ * const member = await memberOfFor({ config, repo })(c)   // what sharing.memberOf is
+ */
+export const memberOfFor = ({ config, repo }: Pick<Grants, 'config' | 'repo'>) => async (c: Context): Promise<MemberView | null> => {
+  const caller = c.get('caller' as never) as Caller | undefined
+  if (caller?.kind !== 'agent' || !caller.grant) return null
+  const member = await repo.memberByGrant(caller.grant)
+  if (!member || memberStateOf(member, new Date()).state === 'ended') return null
+  const space = await config.spaces.byId(member.spaceId)
+  if (!space) return null
+  const { id, label, appName, returnsTo, via, scope, lifetime, joinedAt, expiresAt } = member
+  return { id, space, label, appName, returnsTo, via, scope, lifetime, joinedAt, expiresAt }
+}

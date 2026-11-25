@@ -1882,7 +1882,7 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     const [a, b] = await Promise.all([first, second])
     expect([a.status, b.status]).toEqual([400, 400])
     expect([(await a.json()).access_token, (await b.json()).access_token]).toEqual([undefined, undefined])
-    expect(events).toEqual(['onGrant starts', 'onRevoke replayed: row not found', 'member row written active', 'onRevoke replayed: row found, ended'])
+    expect(events).toEqual(['onGrant starts', 'onRevoke replayed: row not found', 'member row written active', 'onRevoke withdrawn: row found, ended'])
     expect([...members.values()]).toEqual(['ended'])
   })
 
@@ -2054,6 +2054,8 @@ describe('OAuth open endpoints: one public origin, lifetimes, caps and limits fo
     const canonicalApp = (await oauthApp(store, { publicOrigin: 'HTTPS://Sample.Example.test:443/' })).app
     expect(await (await canonicalApp.request('/.well-known/oauth-authorization-server')).json()).toMatchObject({ issuer: PUBLIC })
     for (const wrong of ['https://sample.example.test/app', 'sample.example.test', 'https://sample.example.test/?x=1']) expect(() => createOAuth({ ...keyed, publicOrigin: wrong }), wrong).toThrow(/publicOrigin/)
+    // oauth.publicOrigin: the pinned origin, canonical, or undefined
+    expect([createOAuth({ ...keyed, publicOrigin: 'HTTPS://Sample.Example.test:443/' }).publicOrigin, createOAuth(keyed).publicOrigin]).toEqual([PUBLIC, undefined])
   })
 
   it('a forged x-forwarded-host reaches no publicly cached discovery document when publicOrigin is set', async () => {

@@ -239,8 +239,6 @@ const deviceUserCode = () => {
   const letters = Array.from({ length: 8 }, () => USER_CODE_ALPHABET[randomInt(USER_CODE_ALPHABET.length)]).join('')
   return `${letters.slice(0, 4)}-${letters.slice(4)}`
 }
-/** Why a grant's revoke marker says it ended; a marker from before it kept one reads as `revoked`. */
-const reasonOf = (marker: Record<string, unknown>): SignInRevoked['reason'] => (marker.reason === 'replayed' || marker.reason === 'withdrawn' ? marker.reason : 'revoked')
 /** A typed code as stored: case, dashes and spaces don't matter. */
 const userCodeKey = (typed: string) => sha(typed.toUpperCase().replace(/[^A-Z]/g, ''))
 
@@ -302,6 +300,7 @@ const oauthError = (c: Context, status: 400 | 401 | 403 | 410 | 429, error: stri
 
 export const createOAuth = (config: OAuthConfig) => {
   const { store } = config
+  /** The one origin the server answers as, canonical (`oauth.publicOrigin`); undefined when the app pinned none. */
   const publicOrigin = config.publicOrigin === undefined ? undefined : (canonical(config.publicOrigin) ?? '')
   if (publicOrigin !== undefined && (!publicOrigin || pathOf(publicOrigin))) throw new Error(`createOAuth: publicOrigin must be an origin with no path, query or fragment (https://sample.example.test), not ${config.publicOrigin}.`)
   for (const cap of ['maxUnusedClients', 'maxUnusedTickets'] as const) {
@@ -499,15 +498,26 @@ export const createOAuth = (config: OAuthConfig) => {
   }
 
   /**
-   * Whether a grant ended while `onGrant` ran (a replayed code, `revokeGrant`, `revokeClient`): then `onRevoke` hears it
-   * again, since the app may have written its row after it first heard. Read after `onGrant` answers, before anything
-   * is issued, so no token comes from a dead grant and no row outlives it.
+   * Whether a grant ended while `onGrant` ran (a replayed code, `revokeGrant`, `revokeClient`). Read after `onGrant`
+   * answers, before anything is issued, so no token comes from a dead grant.
    */
   const endedDuringOnGrant = async ({ grant, client }: Grant) => {
     const [grantMarker, clientMarker] = await Promise.all([store.get('revoked-family', grant), store.get('revoked-client', client)])
-    if (grantMarker) await tellRevoked({ grant, client, reason: reasonOf(grantMarker) })
-    else if (clientMarker) await tellRevoked({ client, reason: 'client_revoked' })
     return Boolean(grantMarker || clientMarker)
+  }
+
+  /**
+   * Ends a grant that got no token, as `withdrawn`, and tells the app, so a row it wrote in `onGrant` never outlives it
+   * (a no from the app may follow a yes from a hook it chained). Never throws: a store that fails here is logged, and
+   * the answer is an error either way.
+   */
+  const withdrawAfterYes = async ({ grant, client }: Grant) => {
+    try {
+      await store.put('revoked-family', grant, { reason: 'withdrawn' }, now() + REVOKED_TTL)
+    } catch (error) {
+      console.error(`withdrawing grant ${grant} failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    await tellRevoked({ grant, client, reason: 'withdrawn' })
   }
 
   /**
@@ -1191,21 +1201,36 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const origin = issuerOf(c)
       /** More than one resource for a row bound to one, checked before any write; a row from before audiences ignores resource altogether. */
       const manyFor = async (row: Record<string, unknown>) => typeof row.audience === 'string' && (await manyResources(c))
-      /** onGrant said no: the grant ends before any token, and the app hears it did. */
+      /** onGrant said no: the grant ends before any token, and the app hears it did, even when the store fails. */
       const withdrawn = async (issued: Grant) => {
-        await endGrant(issued.grant, 'withdrawn', issued.client)
+        await withdrawAfterYes(issued)
         return oauthError(c, 400, 'invalid_grant', 'This sign-in was withdrawn: start again.')
       }
+      /** `onGrant`'s word on a grant; a throw withdraws the grant before it goes on to the 500. */
+      const askApp = async (onGrant: NonNullable<OAuthConfig['onGrant']>, kind: SignInGrant['kind'], issued: Grant, data?: unknown) => {
+        try {
+          return await onGrant({ kind, grant: issued.grant, client: { id: issued.client, name: issued.name }, approver: issued.owner, scopes: issued.scopes, ...(issued.audience ? { resource: issued.audience } : {}), ...(data ? { data: data as Record<string, string> } : {}) }, c)
+        } catch (error) {
+          await withdrawAfterYes(issued)
+          throw error
+        }
+      }
       /**
-       * The app's word on the first token of a grant, null to go on: a refusal when `onGrant` says no (the grant
-       * withdrawn) or the grant ended while it ran (nothing issued, `onRevoke` told again). Without `onGrant`, null.
+       * A grant's first tokens, past the app's word. `onGrant` says no: withdrawn. It says yes and then anything fails (a
+       * throw in it, the grant ended while it ran, the tokens' writes): the grant is withdrawn once and `onRevoke` told,
+       * before the error. Without `onGrant`, just the tokens.
        */
-      const refusedByApp = async (kind: SignInGrant['kind'], issued: Grant, data?: unknown) => {
-        if (!config.onGrant) return null
-        const yes = await config.onGrant({ kind, grant: issued.grant, client: { id: issued.client, name: issued.name }, approver: issued.owner, scopes: issued.scopes, ...(issued.audience ? { resource: issued.audience } : {}), ...(data ? { data: data as Record<string, string> } : {}) }, c)
-        if (!yes) return withdrawn(issued)
-        if (await endedDuringOnGrant(issued)) return oauthError(c, 400, 'invalid_grant', 'This sign-in was revoked: start again.')
-        return null
+      const firstTokens = async (kind: SignInGrant['kind'], issued: Grant, data: unknown, tokens: () => Promise<Response>) => {
+        if (!config.onGrant) return tokens()
+        if (!(await askApp(config.onGrant, kind, issued, data))) return withdrawn(issued)
+        try {
+          if (!(await endedDuringOnGrant(issued))) return await tokens()
+        } catch (error) {
+          await withdrawAfterYes(issued)
+          throw error
+        }
+        await withdrawAfterYes(issued)
+        return oauthError(c, 400, 'invalid_grant', 'This sign-in was revoked: start again.')
       }
       switch (body.grant_type) {
         case 'authorization_code': {
@@ -1231,10 +1256,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (await store.get('revoked-client', String(row.client))) return oauthError(c, 400, 'invalid_grant', 'This client was revoked: register again.')
           const issued = { client: String(row.client), name: String(row.name), owner: String(row.owner), scopes: row.scopes as string[], grant, ...boundOf(row) }
           // The code is spent either way: a refusal issues nothing
-          const refused = await refusedByApp('code', issued, row.data)
-          if (refused) return refused
-          await usedClient(issued.client)
-          return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
+          return firstTokens('code', issued, row.data, async () => {
+            await usedClient(issued.client)
+            return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
+          })
         }
         case 'refresh_token': {
           const refresh = body.refresh_token ?? ''
@@ -1305,14 +1330,12 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const [revokedGrant, revokedLate] = await Promise.all([store.get('revoked-family', grant), store.get('revoked-client', client)])
           if (revokedGrant || revokedLate) return oauthError(c, 400, 'invalid_grant', 'This sign-in is revoked: register again.')
           const issued = { client, name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant, ...boundOf(registration) }
-          if (config.onGrant) {
-            // Refused, the grant ends, so the agent's identity assertion buys nothing either; heard, jwt-bearer may follow
-            const refused = await refusedByApp('claim', issued)
-            if (refused) return refused
-            await store.put('registration', client, { ...registration, collected: true }, now() + REGISTRATION_TTL)
-          }
-          const assertion = await sign({ sub: client, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
-          return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued), identity_assertion: assertion, assertion_expires: new Date((now() + REGISTRATION_TTL) * 1000).toISOString() }, 200, { 'cache-control': 'no-store' })
+          // Refused or failed, the grant ends, so the agent's identity assertion buys nothing either; heard, jwt-bearer may follow
+          return firstTokens('claim', issued, undefined, async () => {
+            if (config.onGrant) await store.put('registration', client, { ...registration, collected: true }, now() + REGISTRATION_TTL)
+            const assertion = await sign({ sub: client, typ: 'agent_identity', email: registration.owner, email_verified: true }, REGISTRATION_TTL, origin)
+            return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued), identity_assertion: assertion, assertion_expires: new Date((now() + REGISTRATION_TTL) * 1000).toISOString() }, 200, { 'cache-control': 'no-store' })
+          })
         }
         case DEVICE_GRANT: {
           const key = sha(body.device_code ?? '')
@@ -1340,10 +1363,10 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           if (decision?.status === 'denied') return oauthError(c, 400, 'access_denied', 'The owner said no.')
           if (decision?.status === 'approved') {
             const issued = { client: String(record.client), name: String(record.name), owner: String(decision.owner), scopes: record.scopes as string[], grant: newGrant(), ...boundOf(record) }
-            const refused = await refusedByApp('device', issued)
-            if (refused) return refused
-            await usedClient(issued.client)
-            return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
+            return firstTokens('device', issued, undefined, async () => {
+              await usedClient(issued.client)
+              return c.json({ ...(await issue(origin, issued)), refresh_token: await refreshFor(issued) }, 200, { 'cache-control': 'no-store' })
+            })
           }
           const interval = Number(record.interval)
           if (now() - Number(record.polledAt) < interval) {
@@ -1413,7 +1436,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     await tellRevoked({ client: clientId, reason: 'client_revoked' })
   }
 
-  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, issuerOf, mcpPath, revokeGrant, revokeClient, ticketOf, answeredOf, holdTicket, complete, authorizationServer, protectedResource, authMd }
+  return { mount, verify, resourceMetadataFor, resourceOf, rootOf, issuerOf, publicOrigin, mcpPath, revokeGrant, revokeClient, ticketOf, answeredOf, holdTicket, complete, authorizationServer, protectedResource, authMd }
 }
 
 export type OAuth = ReturnType<typeof createOAuth>
