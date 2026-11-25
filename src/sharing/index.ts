@@ -15,7 +15,7 @@
  *   GET    {path}/{space}/members/{id}                  one member
  *   DELETE {path}/{space}/members/{id}                  remove a member: its sign-in ends at once
  *   POST   {path}/{space}/members/{id}/invite-again     a fresh invite that replaces the member once used
- * The remembered link and asking to join are not built (its README says what is there).
+ * The page an invite's link opens and asking to join are not built (its README says what is there).
  *
  * @example
  * const sharing = await createSharing({ db, secret: env.SHARING_SECRET, spaces, owner, spaceOfPath, fixedKeys: [...parseApiKeys(env.API_KEYS).values()] })

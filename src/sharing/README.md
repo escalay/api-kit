@@ -1,11 +1,11 @@
 # sharing
 
-Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), and the owner's approval at a space, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite or by the owner's approval. The remembered invite link and asking to join are not built yet.
+Invites to a **space** (the part of an app that is shared: a shelf, a board, a project), and the owner's approval at a space, built on the oauth part's hooks. A **member** is one grant into one space: one app, signed in once, by invite or by the owner's approval. Not built yet: the page an invite's link opens, and asking to join; the typed code is how an invite joins.
 
 ## Use it when
 
 - People other than the owner, and their agents, should reach one part of the app (one space) and nothing else.
-- The owner hands out single-use invites (a link and a typed code), or approves an app at a space themselves.
+- The owner hands out single-use invites (a typed code), or approves an app at a space themselves.
 
 ## Don't use it when
 
@@ -274,7 +274,7 @@ stateDiagram-v2
 | 401 "works only at its own space" | a live space token anywhere but its space's name now, or a space `byId` misses |
 | 401 "ended on …", "lapsed", "not ready" | its lifetime passed; 30 days unused; a token with an audience before `bind` |
 | 500 at `/oauth/token`, the invite open again | a throw after the claim: the kit withdraws the grant, so the row goes |
-| a member who never got in, its code spent | the withdraw could not land (the store and `onRevoke` failed, or a crash): the row lapses |
+| a member who never got in, its code spent | the withdraw could not land (`onRevoke` failed, or a crash): the row lapses |
 
 ## Limits
 

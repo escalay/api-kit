@@ -170,14 +170,12 @@ export const sharingGrantsContract = (name: string, makeDb: () => Promise<Db>) =
       expect([box.revoked.map((told) => told.reason), await box.membersOfInvite(invite.id), await box.inviteState(invite.id)]).toEqual([['withdrawn'], [], 'open'])
     })
 
-    // The withdraw cannot land: the marker write and the app's onRevoke both fail. The row stays with no token, its
-    // invite spent, and it lapses unused (STANDARD §23)
+    // The withdraw cannot land: onRevoke fails, so nothing deletes the row. It stays with no token, its invite spent,
+    // and it lapses unused (STANDARD §23)
     it('keep the row of a grant whose withdraw cannot land, its invite spent, until it lapses', async () => {
       const db = await makeDb()
-      const inner = await dbOAuthStore(db)
-      const store: OAuthStore = { ...inner, put: (row, id, value, expiresAt) => (row === 'revoked-family' ? Promise.reject(new Error('the marker write failed')) : inner.put(row, id, value, expiresAt)) }
       const box: Awaited<ReturnType<typeof grantsApp>> = await grantsApp(db, {
-        oauth: { store, onGrant: async (grant, c) => (await box.sharing.oauth.onGrant(grant, c)) && false, onRevoke: async () => Promise.reject(new Error('the app’s database is down')) },
+        oauth: { store: await dbOAuthStore(db), onGrant: async (grant, c) => (await box.sharing.oauth.onGrant(grant, c)) && false, onRevoke: async () => Promise.reject(new Error('the app’s database is down')) },
       })
       // Until revoked, so only going unused ends it
       const invite = await box.makeInvite('soups', { label: 'Sam', lifetime: 'until_revoked' })

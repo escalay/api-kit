@@ -733,8 +733,9 @@ every surface, so none of them can disagree.
 
 An app that lets people into a part of it (a **space**: a project, a list, a household) and not the whole of it. The
 `sharing` part does this on the `oauth` hooks (§7: `approve`, `complete`, `onGrant`, `onRevoke`, `resources`,
-`accepts`), and the sharing README wires it; an app that builds its own keeps the same rules. Not built yet: an invite
-link the browser remembers, and asking to join (the owner deciding later, through `holdTicket`).
+`accepts`), and the sharing README wires it; an app that builds its own keeps the same rules. Not built yet: the page
+an invite's link opens (and the browser remembering it), and asking to join (the owner deciding later, through
+`holdTicket`).
 
 - **A space is named by its resource.** Each space has its own address on the app's origin (`<origin>/s/<space>/mcp`),
   and every grant into it carries that audience. The app passes `resources` (a pure check of the path, never a
@@ -743,14 +744,14 @@ link the browser remembers, and asking to join (the owner deciding later, throug
   is the root (or the root's MCP) against it, never against a request's host. A forwarded host with a path never
   counts (§9), but a caller can still forward any bare host, which would then name the root: a token for that host
   would read as a root token, everywhere.
-- **Invites are single-use, with a link and a typed code.** An invite is for one space and one person, must be used
-  within a day, and gives access for 7 days, 30 days or until revoked. Its link opens the app's own page (`approve`),
-  where the person types the code. The invite is spent with the grant's first token (`onGrant`), never at the click,
+- **Invites are single-use, joined with a typed code.** An invite is for one space and one person, must be used
+  within a day, and gives access for 7 days, 30 days or until revoked. The person's app connects at the space's
+  address (or names none), and the person types the code on the app's own page (`approve`). The invite is spent with the grant's first token (`onGrant`), never at the click,
   so a second use is refused and junk cannot spend it. Typed codes are always limited (per address, per space, and
   five wrong per sign-in), and links and codes are kept only as HMACs. A revoke is recorded whatever holds the invite
   (a member who joined by it keeps access), so a revoked invite never opens again, even when the grant that held it
   is withdrawn.
-- **Who may invite.** The owner signed in, a key from `API_KEYS`, or an agent with a root token from a known grant,
+- **Who may invite.** The owner signed in, a key from `API_KEYS` the app names (`fixedKeys`), or an agent with a root token from a known grant,
   for 7 or 30 days only (until revoked is the owner's to give). Each invite names who made it, an agent's its client
   and grant, and an agent's open invites are revoked when that grant or client ends; people who joined through them
   keep access. A team member, a key made through the API and a space's own token may not invite.
@@ -777,9 +778,9 @@ link the browser remembers, and asking to join (the owner deciding later, throug
   row stays on the record, shown to the owner as signed out (a removed or replaced one hidden), until it is deleted.
   `accepts` refuses a token whose grant has no live row, so removing a member stops their agents on the next request.
   A grant that got no token is told `withdrawn` (a veto, or anything failing after `onGrant`'s yes): its row is
-  deleted, not ended, so a failed exchange leaves its invite open. Only a withdraw that cannot land (the store and
-  `onRevoke` both failing, or the process dying between the claim and the answer) keeps the row of a grant with no
-  token: that invite stays spent, and the row lapses unused.
+  deleted, not ended, so a failed exchange leaves its invite open. Only a withdraw that cannot land (`onRevoke`
+  failing, or the process dying between the claim and the answer) keeps the row of a grant with no token: that invite
+  stays spent, and the row lapses unused.
 - **Nothing leaks whether a space exists.** A caller who may not see a space gets the same 404, with the same body,
   for a space that exists and one that does not; never a 403 that confirms it. Metadata is 404 only for a path
   `resources` refuses, and a wrong code is "not one of ours" whether or not the space is real. The code page is
