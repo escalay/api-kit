@@ -1,6 +1,6 @@
 /**
  * A React hook over `sharing-client.ts`: the owner's view of one space (how it is shared, its invites and members, a
- * page at a time) and every change to it, with no markup. Each app draws its own Share panel.
+ * page at a time) and every change to it, with no markup: each app draws its own Share panel, or takes `sharing-block.tsx`.
  *
  * @example
  * const sharing = useMemo(() => createSharingClient(), [])

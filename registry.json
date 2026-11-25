@@ -1118,6 +1118,41 @@
       }
     },
     {
+      "name": "sharing-ui",
+      "type": "registry:item",
+      "title": "Share panel",
+      "description": "Browser, React + shadcn: SharePanel (one space's invite form with the owner page's choices, a new invite's code shown once, the invites out and the members), InvitesOut and Members over sharing-react",
+      "dependencies": [
+        "react"
+      ],
+      "registryDependencies": [
+        "button",
+        "input",
+        "switch",
+        "escalay/api-kit/sharing-react"
+      ],
+      "files": [
+        {
+          "path": "src/browser/sharing-block.tsx",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/sharing-block.tsx"
+        },
+        {
+          "path": "src/browser/README.md",
+          "type": "registry:file",
+          "target": "~/src/kit/browser/README.md"
+        }
+      ],
+      "meta": {
+        "entry": true,
+        "web": true,
+        "standard": [
+          23
+        ],
+        "layerOf": "sharing"
+      }
+    },
+    {
       "name": "boards-client",
       "type": "registry:item",
       "title": "Boards client",

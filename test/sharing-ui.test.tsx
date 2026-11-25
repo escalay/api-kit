@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
+import { SharePanel } from '../src/browser/sharing-block.js'
 import { createSharingClient } from '../src/browser/sharing-client.js'
 import { useSharing } from '../src/browser/sharing-react.js'
 import { sharingRepo } from '../src/sharing/index.js'
@@ -138,5 +139,166 @@ describe('useSharing', () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
     expect(result.current.sharing?.title).toBe('Bakes')
+  })
+})
+
+/** The row of a list that names `label`. */
+const rowOf = (list: string, label: string) => within(screen.getByRole('list', { name: list })).getAllByRole('listitem').find((row) => within(row).queryByText(label) !== null)!
+
+/** Types a label into the panel's invite form and makes the invite. */
+const makeInvite = async (label: string) => {
+  fireEvent.change(screen.getByLabelText('Who it is for'), { target: { value: label } })
+  fireEvent.click(screen.getByRole('button', { name: 'Make an invite' }))
+  return within(await screen.findByRole('region', { name: 'Send this once' })).getByText(/[A-Z]{4}-[A-Z]{4}/).textContent ?? ''
+}
+
+describe('SharePanel', () => {
+  it('makes an invite with the owner page’s defaults, read for 30 days, and shows its code once', async () => {
+    const { client } = await ownerOf()
+    render(<SharePanel client={client} space="soups" />)
+    expect(await screen.findByRole('heading', { name: 'Share Soups' })).toBeTruthy()
+    expect(screen.getByText('No invites yet.')).toBeTruthy()
+    expect(screen.getByText('Whoever uses it can read Soups for 30 days.')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Make an invite' }) as HTMLButtonElement).disabled).toBe(true)
+
+    const message = await makeInvite('Sam')
+    const sam = (await client.invites('soups')).items[0]!
+    expect([sam.label, sam.scope, sam.lifetime]).toEqual(['Sam', 'read', '30d'])
+    expect(message).toMatch(/[A-Z]{4}-[A-Z]{4}/)
+    await waitFor(() => expect(within(rowOf('Invites out', 'Sam')).getByText('Open')).toBeTruthy())
+    expect(within(rowOf('Invites out', 'Sam')).getByText('Can read, for 30 days')).toBeTruthy()
+    // The form starts over for the next invite
+    expect((screen.getByLabelText('Who it is for') as HTMLInputElement).value).toBe('')
+
+    // Once dismissed, the code is nowhere on the page
+    const code = message.match(/[A-Z]{4}-[A-Z]{4}/)![0]
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    expect(screen.queryByRole('region', { name: 'Send this once' })).toBeNull()
+    expect(document.body.textContent).not.toContain(code)
+  })
+
+  it('gives changes and until revoked only when the owner ticks them, in the owner page’s words', async () => {
+    const { client } = await ownerOf()
+    render(<SharePanel client={client} space="soups" />)
+    await screen.findByRole('heading', { name: 'Share Soups' })
+    fireEvent.click(screen.getByRole('switch', { name: 'Allow changes' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Until revoked, not 30 days' }))
+    expect(screen.getByText('Whoever uses it can read and make changes to Soups until revoked.')).toBeTruthy()
+    await makeInvite('Ada')
+    const ada = (await client.invites('soups')).items[0]!
+    expect([ada.scope, ada.lifetime]).toEqual(['write', 'until_revoked'])
+    await waitFor(() => expect(within(rowOf('Invites out', 'Ada')).getByText('Can read and make changes, until revoked')).toBeTruthy())
+  })
+
+  it('revokes an open invite, and offers no revoke on one that is not open', async () => {
+    const { client } = await ownerOf()
+    await client.createInvite('soups', { label: 'Sam' })
+    render(<SharePanel client={client} space="soups" />)
+    await waitFor(() => expect(within(rowOf('Invites out', 'Sam')).getByText('Open')).toBeTruthy())
+    fireEvent.click(within(rowOf('Invites out', 'Sam')).getByRole('button', { name: 'Revoke' }))
+    await waitFor(() => expect(within(rowOf('Invites out', 'Sam')).getByText('Revoked')).toBeTruthy())
+    expect(within(rowOf('Invites out', 'Sam')).queryByRole('button', { name: 'Revoke' })).toBeNull()
+    expect((await client.invites('soups')).items[0]!.state).toBe('revoked')
+  })
+
+  it('lists members by the app’s own words as text, invites one again and removes one after asking', async () => {
+    const { box, client } = await ownerOf()
+    const invite = await client.createInvite('soups', { label: 'Sam' })
+    const now = new Date()
+    expect(await sharingRepo(box.db).claimInvite(invite.id, memberRow('sp_soups', now, 'grant-sam', { appName: '<b>Sample</b>', returnsTo: 'sample-app:/callback' }), now)).not.toBeNull()
+    render(<SharePanel client={client} space="soups" />)
+    await waitFor(() => expect(within(rowOf('Members', 'Sam')).getByText('Active')).toBeTruthy())
+    const sam = rowOf('Members', 'Sam')
+    // What the app calls itself and where it returns are its own claim: text, never markup or a link
+    expect(within(sam).getByText('<b>Sample</b>, returns to sample-app:/callback')).toBeTruthy()
+    expect(sam.querySelector('b, a')).toBeNull()
+
+    fireEvent.click(within(sam).getByRole('button', { name: 'Invite again' }))
+    const shown = await screen.findByRole('region', { name: 'Send this once' })
+    expect(within(shown).getByText(/[A-Z]{4}-[A-Z]{4}/)).toBeTruthy()
+    expect((await client.invites('soups')).items.map((one) => [one.label, one.state])).toEqual([['Sam', 'open'], ['Sam', 'redeemed']])
+
+    fireEvent.click(within(rowOf('Members', 'Sam')).getByRole('button', { name: 'Remove' }))
+    const asking = within(rowOf('Members', 'Sam')).getByRole('alert')
+    expect(asking.textContent).toContain('Remove Sam? Their app stops working at once.')
+    fireEvent.click(within(asking).getByRole('button', { name: 'Keep' }))
+    expect(within(rowOf('Members', 'Sam')).queryByRole('alert')).toBeNull()
+    fireEvent.click(within(rowOf('Members', 'Sam')).getByRole('button', { name: 'Remove' }))
+    fireEvent.click(within(within(rowOf('Members', 'Sam')).getByRole('alert')).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(screen.getByText('Nobody has joined yet.')).toBeTruthy())
+    expect((await client.members('soups')).items).toEqual([])
+  })
+
+  it('retries a lost answer with the same Idempotency-Key, and says the invite it made cannot be shown again', async () => {
+    const { box } = await ownerOf()
+    const keys: string[] = []
+    let dropNext = true
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') return box.app.request(url, init)
+      keys.push((init.headers as Record<string, string>)['idempotency-key'] ?? '')
+      const answer = await box.app.request(url, init)
+      if (!dropNext) return answer
+      dropNext = false
+      throw new TypeError('Failed to fetch')
+    }) as typeof fetch
+    const client = createSharingClient({ fetchImpl, headers: { authorization: `Bearer ${OWNER_KEY}` } })
+    render(<SharePanel client={client} space="soups" />)
+    await screen.findByRole('heading', { name: 'Share Soups' })
+
+    fireEvent.change(screen.getByLabelText('Who it is for'), { target: { value: 'Sam' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Make an invite' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('Failed to fetch')
+    fireEvent.click(screen.getByRole('button', { name: 'Make an invite' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('That invite was made, but its code cannot be shown again: revoke it and make another.'))
+    expect(keys).toHaveLength(2)
+    expect(keys[1]).toBe(keys[0])
+    expect(screen.queryByRole('region', { name: 'Send this once' })).toBeNull()
+    expect((await client.invites('soups')).items.map((one) => one.label)).toEqual(['Sam'])
+
+    // That key is spent: the next try is a new invite
+    fireEvent.click(screen.getByRole('button', { name: 'Make an invite' }))
+    await screen.findByRole('region', { name: 'Send this once' })
+    expect(keys[2]).not.toBe(keys[0])
+    expect((await client.invites('soups')).items.map((one) => one.label)).toEqual(['Sam', 'Sam'])
+  })
+
+  it('drops a shown code when the space changes', async () => {
+    const { client } = await ownerOf()
+    const { rerender } = render(<SharePanel client={client} space="soups" />)
+    await screen.findByRole('heading', { name: 'Share Soups' })
+    const code = (await makeInvite('Sam')).match(/[A-Z]{4}-[A-Z]{4}/)![0]
+    rerender(<SharePanel client={client} space="bakes" />)
+    await screen.findByRole('heading', { name: 'Share Bakes' })
+    expect(screen.queryByRole('region', { name: 'Send this once' })).toBeNull()
+    expect(document.body.textContent).not.toContain(code)
+  })
+
+  it('shows more invites and members a page at a time', async () => {
+    const { box, client } = await ownerOf()
+    for (const label of ['Sam', 'Ada', 'Lee']) await client.createInvite('soups', { label })
+    const now = new Date()
+    for (const grant of ['g1', 'g2', 'g3']) await sharingRepo(box.db).claimInvite((await client.createInvite('soups', { label: grant })).id, memberRow('sp_soups', now, grant, { label: `Member ${grant}` }), now)
+    render(<SharePanel client={client} space="soups" limit={2} />)
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Members' })).getAllByRole('listitem')).toHaveLength(2))
+    fireEvent.click(screen.getByRole('button', { name: 'Show more members' }))
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Members' })).getAllByRole('listitem')).toHaveLength(3))
+    expect(screen.queryByRole('button', { name: 'Show more members' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show more invites' }))
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Invites out' })).getAllByRole('listitem')).toHaveLength(4))
+  })
+
+  it('says why a space could not load, and what a failed change answered', async () => {
+    const { client } = await ownerOf()
+    const { rerender } = render(<SharePanel client={client} space="pies" />)
+    expect((await screen.findByRole('alert')).textContent).toContain('No space pies here that you may share.')
+    expect(screen.queryByRole('button', { name: 'Make an invite' })).toBeNull()
+
+    for (let made = 0; made < 100; made++) await client.createInvite('bakes', { label: `Guest ${made}` })
+    rerender(<SharePanel client={client} space="bakes" />)
+    await screen.findByRole('heading', { name: 'Share Bakes' })
+    fireEvent.change(screen.getByLabelText('Who it is for'), { target: { value: 'One too many' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Make an invite' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('Bakes has 100 open invites')
+    expect(screen.queryByRole('region', { name: 'Send this once' })).toBeNull()
   })
 })

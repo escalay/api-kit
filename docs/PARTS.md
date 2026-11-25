@@ -26,7 +26,7 @@ The parts in the order they go in: each after the parts it needs. `kit add` brin
 | One brand on every surface | `core` → `brand` | `npx @escalay/kit add brand`: then `npx @escalay/kit brand` renders it |
 | Other agents delegate through A2A | `core` → `mcp` → `a2a` | `npx @escalay/kit add a2a` |
 | A public front page and the browser app under `/app`, on Node | `core` → `web` | `npx @escalay/kit add web` |
-| Sharing: invites to a space, the owner’s approval at it | `core` → `db` → `oauth` → `pagination` → `mcp` → `sharing` → `sharing-client` → `sharing-react` | `npx @escalay/kit add sharing sharing-client sharing-react`: then `await sharing.sweep()` in the scheduled handler (its README, Wire it); the browser layers go into the frontend (`--web-dir`) |
+| Sharing: invites to a space, the owner’s approval at it | `core` → `db` → `oauth` → `pagination` → `mcp` → `sharing` → `sharing-client` → `sharing-react` → `sharing-ui` | `npx @escalay/kit add sharing sharing-client sharing-react sharing-ui`: then `await sharing.sweep()` in the scheduled handler (its README, Wire it); the browser layers go into the frontend (`--web-dir`) |
 
 ## Server parts
 
@@ -49,7 +49,7 @@ The parts in the order they go in: each after the parts it needs. `kit add` brin
 | `setup` | Claiming a fresh deployment with the SETUP_CODE secret (fails closed, rate-limited), recovery by rotating it, and a self-checking setup checklist of the app's own steps | `people` | `./kit/index.js` | §7 | — | [README](../src/setup/README.md) |
 | `telemetry` | A daily anonymous usage report to the product's collector (`{ schema, instance, version, report }`, coarse ranges and booleans only), off with `DO_NOT_TRACK=1`, `TELEMETRY=off` or the owner's switch; `GET`/`PATCH /api/telemetry` and its MCP tool | `db`, `mcp` | `./kit/index.js` | §18 | — | [README](../src/telemetry/README.md) |
 | `switches` | One catalog of the app's additive features (`defineFeatures`, stable kebab-case keys), each on or off for everyone, one person or one API key; providers in order (`databaseProvider`, `memoryProvider`, `fromSdk` for any flag service), `FEATURES_OFF` locks, `needs`, `requires` and offline license keys (`licenseOf`, ES256, `kit license`) for paid features; `gated` routes answer 403 `feature_disabled`, `isOn` for background work; `GET`/`PATCH /api/features` and its MCP tools | `db`, `mcp` | `./kit/index.js` | §21 | `switches-client`, `switches-react`, `switches-ui` | [README](../src/switches/README.md) |
-| `sharing` | Invites to a space and the owner's approval at it, on the oauth part's hooks: single-use invites joined with a typed code, members mirrored from grants and held to their space (`sharing.oauth`), the sign-in pages, the owner's routes and MCP tools for invites and members, and `sweep` and `forget`; no page for an invite's link or asking to join yet | `db`, `mcp`, `oauth`, `pagination` | `./kit/sharing/index.js` | §7, §23 | `sharing-client`, `sharing-react` | [README](../src/sharing/README.md) |
+| `sharing` | Invites to a space and the owner's approval at it, on the oauth part's hooks: single-use invites joined with a typed code, members mirrored from grants and held to their space (`sharing.oauth`), the sign-in pages, the owner's routes and MCP tools for invites and members, and `sweep` and `forget`; no page for an invite's link or asking to join yet | `db`, `mcp`, `oauth`, `pagination` | `./kit/sharing/index.js` | §7, §23 | `sharing-client`, `sharing-react`, `sharing-ui` | [README](../src/sharing/README.md) |
 | `testing` | Checks for an app's tests: lintOpenApi, guideRoutes, guideGaps, toolRoutes, toolsRun, cliGaps and cliSnapshot (the command line), softAuthenticator (passkeys in CI) and approveSignIn (an OAuth approval as a browser makes it) | `guide` | `./kit/testing/index.js` | §13 | — | [README](../src/testing/README.md) |
 
 ## Browser layers
@@ -66,6 +66,7 @@ Headless clients, React hooks and optional shadcn blocks over a server part’s 
 | `switches-ui` | Browser, React + shadcn: FeatureSwitches (every feature with its switch, a confirm naming what else stops; read-only for members) and FeatureDisabledNotice ("This feature is disabled.", why, the app's own action) over switches-react | `switches-react`, `react` (peer), shadcn `button`, shadcn `switch` | `./kit/browser/switches-block.js` | §21 | `switches` | [README](../src/browser/README.md) |
 | `sharing-client` | Browser, no framework: a typed client for the owner's sharing routes at a space (createSharingClient: its sharing; invites made, listed a page at a time, read and revoked; members listed, read, invited again and removed); SharingError carries the problem, ShownOnceError a retry of an invite already shown | nothing | `./kit/browser/sharing-client.js` | §23 | `sharing` | [README](../src/browser/README.md) |
 | `sharing-react` | Browser, React: useSharing over sharing-client (headless): one space's sharing, invites and members a page at a time, and every change to them | `sharing-client`, `react` (peer) | `./kit/browser/sharing-react.js` | §23 | `sharing` | [README](../src/browser/README.md) |
+| `sharing-ui` | Browser, React + shadcn: SharePanel (one space's invite form with the owner page's choices, a new invite's code shown once, the invites out and the members), InvitesOut and Members over sharing-react | `sharing-react`, `react` (peer), shadcn `button`, shadcn `input`, shadcn `switch` | `./kit/browser/sharing-block.js` | §23 | `sharing` | [README](../src/browser/README.md) |
 | `boards-client` | Browser, no framework: a typed client for the board routes | nothing | `./kit/browser/boards-client.js` | §17 | `boards` | [README](../src/browser/README.md) |
 | `boards-react` | Browser, React: useBoards, useItemBoards over boards-client (headless) | `boards-client`, `react` (peer) | `./kit/browser/boards-react.js` | §17 | `boards` | [README](../src/browser/README.md) |
 
@@ -109,6 +110,7 @@ flowchart LR
   switches_ui[switches-ui]
   sharing_client[sharing-client]
   sharing_react[sharing-react]
+  sharing_ui[sharing-ui]
   boards_client[boards-client]
   boards_react[boards-react]
   db --> core
@@ -143,9 +145,10 @@ flowchart LR
   switches_react --> switches_client
   switches_ui --> switches_react
   sharing_react --> sharing_client
+  sharing_ui --> sharing_react
   boards_react --> boards_client
   classDef layer stroke-dasharray: 4 3
-  class search_client,search_react,vector_search_ui,switches_client,switches_react,switches_ui,sharing_client,sharing_react,boards_client,boards_react layer
+  class search_client,search_react,vector_search_ui,switches_client,switches_react,switches_ui,sharing_client,sharing_react,sharing_ui,boards_client,boards_react layer
 ```
 
 Dashed: browser layers.

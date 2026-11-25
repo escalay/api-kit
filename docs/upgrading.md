@@ -587,3 +587,5 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - New parts for the owner's sharing in the browser, over the `sharing` part's routes: `sharing-client`
   (`createSharingClient`, `SharingError`, `ShownOnceError`) and `sharing-react` (`useSharing`). Nothing to change; an app
   adds them with `npx @escalay/kit add sharing-client sharing-react` (`--web-dir` for its frontend).
+- New part `sharing-ui` (`SharePanel`, `InvitesOut`, `Members`): the owner's Share panel over `useSharing`, with the
+  owner page's choices. It needs the shadcn `button`, `input` and `switch`: `npx @escalay/kit add sharing-ui`.

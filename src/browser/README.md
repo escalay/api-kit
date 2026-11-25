@@ -28,12 +28,13 @@ The browser side, for the app's frontend (not the API): typed clients for the se
 | `switches-ui` | `switches-block.tsx` | `FeatureSwitches` (the owner's panel) and `FeatureDisabledNotice` (shadcn `button` + `switch`) |
 | `sharing-client` | `sharing-client.ts` | `createSharingClient`: a space's sharing, invites (make, list a page at a time, read, revoke), members (list a page at a time, read, invite again, remove); `SharingError` carries the problem, `ShownOnceError` is a retried invite's 409 `shown_once` |
 | `sharing-react` | `sharing-react.ts` | `useSharing`: one space as its owner sees it, more by cursor, each change then a reload |
+| `sharing-ui` | `sharing-block.tsx` | `SharePanel`, `InvitesOut`, `Members` (shadcn `button` + `input` + `switch`); `OwnerSharing`, the hook's answer they share |
 
 ```bash
 npx @escalay/kit add search-client search-react vector-search-ui --dir apps/web/src/kit
 npx @escalay/kit add boards-client boards-react --dir apps/web/src/kit
 npx @escalay/kit add switches-client switches-react switches-ui --dir apps/web/src/kit
-npx @escalay/kit add sharing-client sharing-react --dir apps/web/src/kit
+npx @escalay/kit add sharing-client sharing-react sharing-ui --dir apps/web/src/kit
 # into the frontend, tracked by the API's kit.json
 npx @escalay/kit add boards-react --dir apps/api/src/kit --web-dir ../../web/src/kit
 # or one part with the shadcn CLI, into src/kit
@@ -73,6 +74,8 @@ const sharing = useMemo(() => createSharingClient({ path: '/api/shelves' }), [])
 const { status, invites, members, moreInvites, loadMoreInvites, createInvite, revokeInvite, inviteAgain, removeMember } = useSharing(sharing, 'soups')
 const invite = await createInvite({ label: 'Sam', scope: 'read', lifetime: '30d' }, { idempotencyKey: crypto.randomUUID() })
 setShown(invite.message)                                     // the address and code: shown once, never kept by the hook
+
+<SharePanel client={sharing} space="soups" limit={20} />          // or all of it, drawn: the block
 ```
 
 Search with the block:
@@ -98,6 +101,8 @@ const search = createSearchClient<RecipeCard>({ path: '/api/search', similarPath
 | `createSharingClient({ path, headers, fetchImpl })` | string | `/api/spaces` | the sharing part's `path` |
 | `createInvite(…, { idempotencyKey })`, `inviteAgain(…, { idempotencyKey })` | string | none | sent as Idempotency-Key: a retry is a `ShownOnceError`, never a second invite |
 | `useSharing(client, space, { limit })` | number | the route's (50) | each page's size; without `space` it stays `idle` |
+| `SharePanel` `client`, `space`, `limit` | | required, required, the route's | the sharing client, the space (none: nothing shown), each list's page |
+| `InvitesOut`, `Members` `sharing`, `onShown` | | required | `useSharing`'s answer, and where a new invite goes to be shown once |
 | `createFeaturesClient({ path })` | string | `/api/features` | where the switch routes live |
 | `createFeaturesClient({ fetch })` | `fetch` | the window's | the fetch that carries the page's own sign-in |
 | `createFeaturesClient({ refreshOnFocus })` | boolean | true | refresh when the page comes back into view |
@@ -115,7 +120,11 @@ switch can't say it, such as who switched it off; a quiet line shows when a pers
 `FeatureDisabledNotice` says "This feature is disabled.", why, and the app's own action. `useSharing` answers
 `status` (`idle`, `loading`, `ready`, `error`), `error`, `sharing`, `invites`, `members`, `moreInvites` and
 `moreMembers`, `loadMoreInvites` and `loadMoreMembers`, `reload`, and the four changes; `createInvite` and
-`inviteAgain` answer the new invite with its code.
+`inviteAgain` answer the new invite with its code. `SharePanel` is one space's whole panel: the invite form, a new
+invite's message shown once (gone on Done, or at another space), `InvitesOut` and `Members`. The form offers what the
+owner page offers: read for 30 days, with Allow changes and Until revoked, not 30 days, to switch on (7 days only
+through the hook). Only an open invite has Revoke; each member has Invite again and Remove, which asks first. A
+member's app name and return are its own claim, shown as text.
 
 ## Flows
 
@@ -158,6 +167,8 @@ sequenceDiagram
 - Build and read board refs with `boardRef` / `parseBoardRef` (copied with `boards-client`).
 - An invite's code is in the answer that made it and nowhere else: the hook keeps it in no state, a list never
   carries it, and a retry with the same Idempotency-Key is a `ShownOnceError` saying which invite was made.
+- `SharePanel` keeps a code in no storage, and sends one Idempotency-Key per invite until it is made: a retry after a
+  lost answer is the same invite, said to be shown already, never a second.
 - A list follows only the cursor of its `next` link, on the client's own path and headers, never a host an answer
   names. `useSharing` drops an answer for a space it has left.
 - Standard: `docs/STANDARD.md` §16, §17, §21, §23
@@ -171,6 +182,7 @@ sequenceDiagram
 | `SharingError` 404 `not_found` | no such space, or the caller may not share it (the same answer for both) |
 | `SharingError` 409 `conflict` | revoking a used invite (remove its member), or a space with 100 open invites |
 | `ShownOnceError` (409 `shown_once`) | a retry with an Idempotency-Key that already made an invite: revoke it and make another |
+| "That invite was made, but its code cannot be shown again" | `SharePanel`'s retry found its invite made: revoke it and make another |
 | `useSharing` with `status: 'error'` | its last load failed (it keeps the lists it had); a change's own failure is thrown to its caller |
 | a features state with `status: 'error'` | the first `GET /api/features` failed (the page is not signed in, the API is down); a later failed refresh keeps the list and sets `error` |
 | a feature off while it loads | `useFeature` is `on: false` until the list is `ready` |
@@ -186,7 +198,7 @@ sequenceDiagram
 
 - `test/search-client.test.ts` (the client and controller), `test/search-ui.test.tsx` (the hooks and block in
   happy-dom), `test/boards-ui.test.tsx`, `test/switches-ui.test.tsx`, `test/sharing-client.test.ts` and `test/sharing-ui.test.tsx`
-  (against the real routes). The blocks' shadcn
+  (against the real routes; the Share panel too). The blocks' shadcn
   imports resolve to `test/shadcn/` stand-ins.
 
 ## Upgrading

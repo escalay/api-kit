@@ -133,6 +133,7 @@ the parts depend on each other, and which parts a goal takes, in the order they 
 | `switches-ui` | Browser, React + shadcn: FeatureSwitches (every feature with its switch, a confirm naming what else stops; read-only for members) and FeatureDisabledNotice ("This feature is disabled.", why, the app's own action) over switches-react | [browser](src/browser/README.md) |
 | `sharing-client` | Browser, no framework: a typed client for the owner's sharing routes at a space (createSharingClient: its sharing; invites made, listed a page at a time, read and revoked; members listed, read, invited again and removed); SharingError carries the problem, ShownOnceError a retry of an invite already shown | [browser](src/browser/README.md) |
 | `sharing-react` | Browser, React: useSharing over sharing-client (headless): one space's sharing, invites and members a page at a time, and every change to them | [browser](src/browser/README.md) |
+| `sharing-ui` | Browser, React + shadcn: SharePanel (one space's invite form with the owner page's choices, a new invite's code shown once, the invites out and the members), InvitesOut and Members over sharing-react | [browser](src/browser/README.md) |
 | `boards-client` | Browser, no framework: a typed client for the board routes | [browser](src/browser/README.md) |
 | `boards-react` | Browser, React: useBoards, useItemBoards over boards-client (headless) | [browser](src/browser/README.md) |
 <!-- parts:end -->
