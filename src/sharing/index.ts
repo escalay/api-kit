@@ -83,7 +83,11 @@ export type SharingOptions = {
    * instead of warning. A loopback http redirect is always known (an app on this computer). Default none.
    */
   knownReturns?: { name: string; callback: string }[]
-  /** Where typed codes are counted, and how the caller's address is read. Default `{ store: await dbGuardStore(db) }`; `false` throws. */
+  /**
+   * Where typed codes are counted, and how the caller's address is read. Default `{ store: await dbGuardStore(db) }`
+   * and the app's `address`; `false` throws. Under `'headers'` an address is as sent, so set the app's `address`
+   * (core README, The caller's address) or a stranger names a new one on every post.
+   */
   limits?: { store?: GuardStore; address?: AddressTrust } | false
   tag?: string
 }

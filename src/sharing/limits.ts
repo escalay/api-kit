@@ -44,7 +44,7 @@ export const codeLimitsOf = ({ store, address }: SharingLimits, keys: SharingKey
     /**
      * Counts a typed code from this address (kept by its HMAC), then at this space (`any` for none); the seconds to wait
      * when either is spent, else null. A code refused at its address never spends the space's budget, so one address
-     * can't lock others out.
+     * needs six minutes to spend it; codes from many addresses, wrong or right, spend it sooner, for everyone.
      */
     retryAfter: async (c: Context, space: string) => {
       const fromHere = await overBy(`sharing-code ip:${addressKeyOf(keys, addressOf(c, address))}`, PER_ADDRESS)

@@ -220,8 +220,6 @@ stateDiagram-v2
 - **`onRevoke` mirrors the kit**: `withdrawn` (a veto, or anything failing after `onGrant`'s yes) deletes its row, so
   its invite opens again; `client_revoked` ends the client's rows, any other end the grant's. Then, unless withdrawn,
   an agent's open invites under that grant or client are revoked; its joiners keep access. Told twice, nothing moves.
-- **Before `bind`** (`registerSharing`), `approve` shows a 503 page, `onGrant` says no and `accepts` takes only a token
-  with no audience.
 - **`resources` is a pure check of the path** (`spaceNameIn`): cased, encoded and dotted names are no space.
   `handles(ask)`: whether a sign-in is the part's (a space, the root or its MCP). A client's name is its own claim,
   kept after `appNameOf` (no control, bidi or zero-width character, 80 at most).
@@ -263,7 +261,7 @@ stateDiagram-v2
 | the page "Use the address in your invite" | a client named the owner's whole app: no invite binds it |
 | the code page again, "not one of ours" (400) | no open invite of the asked space (or, for a client that named none, of a space the app has) |
 | `access_denied` at the app | the fifth wrong code on one sign-in: start again |
-| 429 page "Too many codes" | 10 a minute from an address, or 60 in 10 minutes at one space |
+| 429 page "Too many codes" | a typed-code limit (Limits), spent by this address or by anyone at the space |
 | 403 page "Not allowed" | a post from another site, or of a sign-in these pages don't approve |
 | 400 page "expired", "refused", "already joined" | the ticket ran out or is another browser's, the fifth wrong code, or a double click |
 | the code page, "asks only to make changes" | a client asking only `write`, at a read invite |
@@ -273,7 +271,7 @@ stateDiagram-v2
 | 409 on `createInvite` | 100 open at the space, or `shown_once` (a retry with the same Idempotency-Key) |
 | 409 on `updateSharing` | the app's `askToJoin` option is off |
 | 409 on `revokeInvite` | the invite was used already: revoked all the same, its member keeps access |
-| 400 `invalid_grant` "withdrawn" | `onGrant` said no: a space grant not from the part's pages, an invite not open at its space, more than it gives, or a sharing approval at the root |
+| 400 `invalid_grant` "withdrawn" | `onGrant` said no: a space grant not from the part's pages, an invite not open at its space, more than it gives, a sharing approval at the root, or before `bind` |
 | 401 "works only at its own space" | a live space token anywhere but its space's name now (`spaceOfPath` for `/api`), or a space `byId` misses |
 | 401 "ended on …", "lapsed", "not ready" | the member's lifetime passed; 30 days unused; a token with an audience before `bind` |
 | 500 at `/oauth/token`, the invite open again | a throw after the claim (a hook after the part's, a store): the kit withdraws the grant, so the row goes |
@@ -283,7 +281,8 @@ stateDiagram-v2
 
 - 100 open invites per space; lists 50 a page by default, 100 at most.
 - An invite's code: 8 letters from 20 (about 34.6 bits), redeemable for a day. Typed codes: 10 a minute per address,
-  then 60 per 10 minutes per space (`any` for a client that named none), 5 wrong per sign-in.
+  then 60 per 10 minutes per space (`any` for a client that named none), 5 wrong per sign-in. Strangers' codes spend
+  the space's 60 too, locking its invitees out for the window; set the app's `address`, or each post names its own.
 
 ## Tests
 
