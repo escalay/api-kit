@@ -91,6 +91,7 @@ const REGISTRY = Object.fromEntries(
       dependencies: Object.fromEntries((item.dependencies ?? []).filter((dependency) => dependency.lastIndexOf('@') > 0).map(rangeOf)),
       entry: item.meta?.entry,
       web: item.meta?.web,
+      wiring: item.meta?.wiring,
     },
   ]),
 )
@@ -1484,11 +1485,43 @@ const wiringOf = (parts) => {
     // An entry part's tables are exported from its own folder, never the kit's index
     const from = `../${relative(root ?? dir, dir).split('\\').join('/')}/${REGISTRY[name].entry ? `${name}/` : ''}index.js`
     return [
+      ...wiringStepsOf(name, root),
       ...(wrapped ? [`Wire ${name}: a feature in src/features/${name}/ listed in src/features/index.ts${keepsTables ? ' (its migrations reach migrations/ through it: add no line to scripts/migrations.ts)' : ''}, and the lines in src/app.ts: ${dirArg}/${readme} › ${WRAPPER_HEADING.slice(4)}`] : []),
       // A wrapped part's feature lists its steps: a line here too wrote every step twice
       ...(keepsTables && !wrapped && migrations !== null && !migrations.includes(constant) ? [`scripts/migrations.ts lacks ${name}'s tables: \`import { ${constant} } from '${from}'\` and \`['${name}', ${constant}]\` in its sets, then \`pnpm migrations\` writes their D1 files`] : []),
     ]
   })
+}
+
+/** Where an app made by `init` lists a setting, each file named as the step says it. */
+const SETTING_FILES = [
+  ['src/app.ts', 'Env in src/app.ts'],
+  ['.dev.vars.example', '.dev.vars.example'],
+  ['container/entrypoint.sh', 'container/entrypoint.sh'],
+  ['vitest.config.ts', "vitest.config.ts's miniflare bindings (the workerd tests)"],
+]
+
+/**
+ * The steps a part's `meta.wiring` (registry.json) asks of an app made by `init`, each only where the app lacks it: its
+ * settings in every file that lists the app's settings, a schedule for its scheduled work, and its README's code.
+ */
+const wiringStepsOf = (name, root) => {
+  const wiring = REGISTRY[name].wiring
+  if (!wiring || !root || !existsSync(join(root, 'src/app.ts'))) return []
+  const readme = REGISTRY[name].files.find((file) => file.endsWith('README.md'))
+  const lacking = (path, text) => existsSync(join(root, path)) && !textOf(join(root, path)).includes(text)
+  const settings = (wiring.settings ?? []).flatMap(({ name: setting, what }) => {
+    const files = SETTING_FILES.filter(([path]) => lacking(path, setting)).map(([, where]) => where)
+    return files.length ? [`Setting ${setting} (${what}): add it to ${files.join(', ')}`] : []
+  })
+  const cron = wiring.cron
+  const schedules = cron
+    ? [
+        ...(lacking('wrangler.jsonc', '"crons"') ? [`Schedule: "triggers": { "crons": ["${cron.schedule}"] } in wrangler.jsonc, and a scheduled handler in src/worker.ts that calls ${name}'s ${cron.calls}`] : []),
+        ...(lacking('src/server.ts', cron.calls) ? [`Schedule: src/server.ts calls ${name}'s ${cron.calls} on a timer (hourly is enough)`] : []),
+      ]
+    : []
+  return [`Wire ${name}: ${dirArg}/${readme} › ${wiring.code}`, ...settings, ...schedules]
 }
 
 /** Runs each pnpm step in a new app until one fails; returns the steps left, that one first. Without pnpm, all of them. */

@@ -1212,6 +1212,107 @@ describe('the copy-in CLI', () => {
     }
   }, 120_000)
 
+  it('takes sharing the way kit add and its README say, and a friend’s agent joins one shelf and loses it with the shelf', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-share-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    const bin = (name: string) => join(import.meta.dirname, '..', 'node_modules/.bin', name)
+    try {
+      expect(cli(parent, 'init', 'shelves', '--no-install').status).toBe(0)
+      const app = join(parent, 'shelves')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      expect(cli(app, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      // Every step the part needs, from its registry data, only where the app lacks it
+      const added = cli(app, 'add', 'sharing')
+      expect(added.status, added.stderr).toBe(0)
+      const steps = added.stdout.split('\n').filter((line) => /^(Wire|Setting|Schedule)[: ]/.test(line))
+      expect(steps).toEqual([
+        'Wire sharing: src/kit/sharing/README.md › Wire it',
+        "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one): add it to .dev.vars.example, vitest.config.ts's miniflare bindings (the workerd tests)",
+        "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings (the workerd tests)",
+        "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh, vitest.config.ts's miniflare bindings (the workerd tests)",
+        'Schedule: "triggers": { "crons": ["17 * * * *"] } in wrangler.jsonc, and a scheduled handler in src/worker.ts that calls sharing\'s sweep()',
+        "Schedule: src/server.ts calls sharing's sweep() on a timer (hourly is enough)",
+      ])
+      // The starter's script finds the part's tables itself
+      expect(added.stdout).not.toContain('lacks')
+      // The README's Wire it, block by block, each where its first line says
+      const readme = await read('src/kit/sharing/README.md')
+      const block = readme.slice(readme.indexOf('## Wire it')).match(/```ts\n([\s\S]*?)```/)![1]!
+      const groups = block.split(/^\/\/ (src\/[^\n]*)\n/m).slice(1)
+      // A line's key: what it declares or sets, at its indent
+      const keyOf = (line: string) => /^\s*(export type \w+|const \w+|\w+:|\w+\()/.exec(line)?.[0]
+      for (let at = 0; at < groups.length; at += 2) {
+        const [, first, second, where] = /^([^,]+?)(?: and (src\/\S+))?, (.*)$/.exec(groups[at]!)!
+        const lines = groups[at + 1]!.replace(/\n$/, '').split('\n')
+        for (const file of [first!, ...(second ? [second] : [])]) {
+          if (where!.startsWith('new')) {
+            await writeFile(join(app, file), groups[at + 1]!)
+            continue
+          }
+          const text = (await read(file)).split('\n')
+          const find = (match: (line: string) => boolean, what: string) => {
+            const found = text.flatMap((line, index) => (match(line) ? [index] : []))
+            expect(found, `${file}: ${what}`).toHaveLength(1)
+            return found[0]!
+          }
+          if (where!.startsWith('in place of')) for (const line of lines) text[find((one) => keyOf(one) === keyOf(line), keyOf(line)!)] = line
+          else if (where!.startsWith('inside')) {
+            const index = find((one) => one.startsWith(/`([^`]+)`/.exec(where!)![1]!), where!)
+            text[index] = text[index]!.replace(/ \}$/, `; ${lines.join(' ')} }`)
+          } else {
+            const [, side, anchor] = /^(before|after) `([^`]+)`/.exec(where!)!
+            text.splice(find((one) => one.trimStart().startsWith(anchor!), anchor!) + (side === 'after' ? 1 : 0), 0, ...lines)
+          }
+          await writeFile(join(app, file), text.join('\n'))
+        }
+      }
+      expect(await read('src/app.ts')).toContain('PUBLIC_ORIGIN?: string }')
+      // A friend's agent joins Soups with its code, as the README's test line says, and loses it with the shelf
+      await writeFile(
+        join(app, 'test/sharing.test.ts'),
+        `import { expect, it } from 'vitest'
+import { createApp } from '../src/app.js'
+import { generateOAuthKey, hashApiKey, testDb } from '../src/kit/index.js'
+import { approveSignIn, connectAgent } from '../src/kit/testing/index.js'
+
+const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
+const env = { API_KEYS: \`owner:\${hashApiKey('owner-key')}\`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
+const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} }
+
+it('lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', async () => {
+  const app = await createApp({ db: await testDb(), env, address: 'socket' })
+  const shelf = async (name: string) => ((await (await app.request('/api/shelves', { method: 'POST', headers, body: JSON.stringify({ name }) })).json()) as { id: string }).id
+  const [soups, bakes] = [await shelf('Soups'), await shelf('Bakes')]
+  const invite = await app.request(\`/api/spaces/\${soups}/invites\`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'sam' }, body: JSON.stringify({ label: 'Sam' }) })
+  const { code, address } = (await invite.json()) as { code: string; address: string }
+  const { tokens } = await connectAgent(app, { address, approve: (query) => approveSignIn(app, query, { form: { action: '/sharing/join', fields: { code } } }) })
+  const view = (at: string) => app.request(at, { method: 'POST', headers: { authorization: \`Bearer \${tokens!.access_token}\`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call', 'mcp-name': 'view_shelf' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'view_shelf', arguments: {}, _meta: META } }) })
+  expect(await (await view(new URL(address).pathname)).text()).toContain('Soups')
+  expect((await view(\`/s/\${bakes}/mcp\`)).status).toBe(401)
+  expect((await app.request(\`/api/shelves/\${soups}\`, { method: 'DELETE', headers })).status).toBe(204)
+  expect((await view(\`/s/\${soups}/mcp\`)).status).toBe(401)
+})
+`,
+      )
+      const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
+      expect(migrations.status, migrations.stderr).toBe(0)
+      expect((await readdir(join(app, 'migrations'))).filter((file) => file.endsWith('_sharing_1.sql'))).toHaveLength(1)
+      for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
+        const typecheck = spawnSync(bin('tsc'), ['--noEmit', '-p', project], { cwd: app, encoding: 'utf8' })
+        expect(typecheck.status, `${project}: ${typecheck.stdout}`).toBe(0)
+      }
+      const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+      expect(tests.status, tests.stdout + tests.stderr).toBe(0)
+      for (const name of ['lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', 'runs every MCP tool against its route']) expect(tests.stdout).toContain(name)
+      // What the README wired, doctor finds: a sweep, and the Workers address header
+      const doctor = cli(app, 'doctor')
+      expect(doctor.stdout).not.toMatch(/sharing part, but/)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   it('makes a feature with a field of fixed values, its own singular and no delete, that passes its own tests', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-shapes-${process.pid}`)
     await rm(parent, { recursive: true, force: true })

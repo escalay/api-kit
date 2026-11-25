@@ -204,6 +204,7 @@ export const registerSharing = async (app: OpenAPIHono, sharing: Sharing, { oaut
   const { config } = sharing
   const { brand } = mountedOf(app)
   const bound = sharing.bind(oauth, brand)
+  REGISTERED.set(app, sharing)
   await migrate(config.db, 'sharing', SHARING_MIGRATIONS)
   const repo = sharingRepo(config.db)
   app.post('/sharing/join', joinByCodeFor({ config, bound, brand, repo, limits: codeLimitsOf(config.limits, config.keys), oauth }))
@@ -222,6 +223,17 @@ export const registerSharing = async (app: OpenAPIHono, sharing: Sharing, { oaut
   app.openapi(routes.removeMember, handle.removeMember)
   app.openapi(routes.inviteAgain, handle.inviteAgain)
 }
+
+const REGISTERED = new WeakMap<object, Sharing>()
+
+/**
+ * The part `registerSharing` bound to this app, or undefined: for code that holds only the app, as a Worker's
+ * scheduled handler does.
+ *
+ * @example
+ * scheduled: (_, env, ctx) => ctx.waitUntil(appOf(env).then(async (app) => { const sharing = sharingOf(app); if (sharing) await sharing.sweep() }))
+ */
+export const sharingOf = (app: object) => REGISTERED.get(app)
 
 /** The sign-in pages' paths, open without auth: give them to `auth.open`. */
 export const SHARING_OPEN_PATHS = ['/sharing/*']

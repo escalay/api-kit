@@ -10,11 +10,14 @@ type Bindings = Env & { DB: D1Database }
 
 let ready: ReturnType<typeof createApp> | undefined
 
+/** The app, built once per isolate; a scheduled handler gets it here too. */
+const appOf = (env: Bindings) =>
+  // Cloudflare writes the caller's address into cf-connecting-ip, and nothing reaches a Worker any other way
+  (ready ??= openDb(drizzle(env.DB) as unknown as Db).then((db) => createApp({ db, env, address: { header: 'cf-connecting-ip' } })).catch((error) => {
+    ready = undefined
+    throw error
+  }))
+
 export default {
-  fetch: (request, env, ctx) =>
-    // Cloudflare writes the caller's address into cf-connecting-ip, and nothing reaches a Worker any other way
-    (ready ??= openDb(drizzle(env.DB) as unknown as Db).then((db) => createApp({ db, env, address: { header: 'cf-connecting-ip' } })).catch((error) => {
-      ready = undefined
-      throw error
-    })).then((app) => app.fetch(request, env, ctx)),
+  fetch: (request, env, ctx) => appOf(env).then((app) => app.fetch(request, env, ctx)),
 } satisfies ExportedHandler<Bindings>

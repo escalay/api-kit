@@ -40,12 +40,15 @@ In this order; stop at the first that fits.
    `approve` hook, `complete` with a `resource`, and `onGrant` / `onRevoke` to mirror who holds access
    (`src/kit/oauth/README.md`).
 4. Other people, and their agents, into one part of the app (a space): `sharing`, by single-use invite or the
-   owner's approval at the space (`npx @escalay/kit add sharing --dir src/kit --install`, then its README's Wire it).
+   owner's approval at the space (`npx @escalay/kit add sharing --dir src/kit --install`, then its README's Wire it,
+   whose blocks wire an app made by `init` whole; `add` prints each setting and schedule the app still lacks).
    - `SHARING_SECRET`: 32+ random bytes, its own entry in your secret store, never the OAuth signing key.
    - `createOAuth` with `publicOrigin` and `...sharing.oauth`; `SHARING_OPEN_PATHS` in `auth.open`, `sharing.relay`
      in `auth.relay`, `sharing.neverKept` in `guards.skip`; then `registerSharing`.
-   - `await sharing.sweep()` in the scheduled handler, `sharing.forget(id)` when a space is deleted (`kit doctor`
-     notes an app that never sweeps). On Workers, `address: { header: 'cf-connecting-ip' }`.
+   - `await sharing.sweep()` in the scheduled handler (`sharingOf(app)` finds the part), `sharing.forget(id)` when a
+     space is deleted: a feature reaches it as `parts.sharing` in its `register` (`kit doctor` notes an app that
+     never sweeps). On Workers, `address: { header: 'cf-connecting-ip' }`.
+   - Its test: `connectAgent` (testing) signs a friend's agent in with the invite's code.
    - Behind Cloudflare Access, let exactly `sharingSignInPaths(sharing)` through.
    - `sharingTools` go to the owner's MCP only, never to `mountA2A`: a delegating agent must not mint invites.
 

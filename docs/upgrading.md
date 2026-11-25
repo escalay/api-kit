@@ -516,6 +516,18 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## sharing
 
+### Unreleased (after 1.32.0)
+
+- New: `sharingOf(app)`, the part `registerSharing` bound to that app, for a scheduled handler that holds only the
+  app. Nothing to change.
+- The README's Wire it is the whole wiring for an app made by `kit init` (a spaces source, the feature's delete
+  calling `forget`, `src/app.ts`, the scheduled handlers), tested in the kit; the owner routes, the sign-in ladder
+  and two flows moved to `REFERENCE.md` beside it, which `update` adds. `kit add sharing` prints each setting
+  (`OAUTH_SIGNING_KEY`, `SHARING_SECRET`, `PUBLIC_ORIGIN`) and schedule the app still lacks.
+- A new app's `scripts/migrations.ts` writes the part's D1 files, and its features' `register` gets `parts` (a
+  feature calls `parts.sharing.forget(id)`). An older app adds `['sharing', SHARING_MIGRATIONS]` from
+  `./kit/sharing/index.js`, as `kit add` says, and `parts` to its `Feature` type and `createApp` (Wire it).
+
 ### 1.32.0
 
 - A new part (an invite joins by its typed code; a page for its link and asking to join are not built): its tables (`SHARING_MIGRATIONS` step 1:
