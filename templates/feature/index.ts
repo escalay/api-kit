@@ -36,7 +36,7 @@ export const feature: Feature = {
       list___snake__: { __parent_snake_singular__: __parent_param__ }, // feature:under
       get___snake_singular__: { id },
       create___snake_singular__: __sample__, // feature:flat
-      create___snake_singular__: { __parent_snake_singular__: __parent_param__, ...__sample__ }, // feature:under
+      create___snake_singular__: { __parent_snake_singular__: __parent_param__, __sample_entries__ }, // feature:under
       update___snake_singular__: { id, __patch_entries__ },
       delete___snake_singular__: { id }, // feature:remove
     }

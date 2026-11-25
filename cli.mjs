@@ -568,6 +568,7 @@ const fieldVarsOf = (fields) => {
     // Short fields after the first, each named: long text and lists stay for get_<one>
     __line_fields__: fields.slice(1).filter((field) => field.type !== 'string[]' && field.input !== FIELD_TYPES.text.input).map((field) => ` · ${snakeOf(field.name).replaceAll('_', ' ')} \${row.${field.name}${field.optional ? " ?? '–'" : ''}}`).join(''),
     __sample__: `{ ${fields.map((field) => `${field.name}: ${literal(field.made)}`).join(', ')} }`,
+    __sample_entries__: fields.map((field) => `${field.name}: ${literal(field.made)}`).join(', '),
     __patch_entries__: `${last.name}: ${literal(last.changed)}`,
     __create_flags__: fields.filter((field) => !field.optional).map((field) => flagOf(field)).join(' '),
     __edit_flags__: flagOf(last, last.changed),
