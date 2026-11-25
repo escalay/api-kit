@@ -1,11 +1,12 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRoute, z } from '@hono/zod-openapi'
 import { describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
+import { parseEnv } from 'node:util'
 import { gunzipSync } from 'node:zlib'
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
@@ -396,28 +397,13 @@ describe('the copy-in CLI', () => {
   const KIT_VERSION: string = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')).version
   const cli = (cwd: string, ...args: string[]) => spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), ...args], { cwd, encoding: 'utf8' })
   const hashOfText = (text: string) => createHash('sha256').update(text).digest('hex')
-  /** A friend's agent joins Soups with its code, as the sharing README's test line says, and loses it with the shelf. */
-  const SHARING_FRIEND_TEST = `import { expect, it } from 'vitest'
-import { createApp } from '../src/app.js'
-import { generateOAuthKey, hashApiKey, testDb } from '../src/kit/index.js'
-import { approveSignIn, callMcp, connectAgent } from '../src/kit/testing/index.js'
-
-const headers = { authorization: 'Bearer owner-key', 'content-type': 'application/json' }
-const env = { API_KEYS: \`owner:\${hashApiKey('owner-key')}\`, OAUTH_SIGNING_KEY: await generateOAuthKey(), SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only', PUBLIC_ORIGIN: 'http://localhost' }
-it('lets a friend’s agent read the shelf it was invited to, and no other, until the shelf goes', async () => {
-  const app = await createApp({ db: await testDb(), env, address: 'socket' })
-  const shelf = async (name: string) => ((await (await app.request('/api/shelves', { method: 'POST', headers, body: JSON.stringify({ name }) })).json()) as { id: string }).id
-  const [soups, bakes] = [await shelf('Soups'), await shelf('Bakes')]
-  const invite = await app.request(\`/api/spaces/\${soups}/invites\`, { method: 'POST', headers: { ...headers, 'idempotency-key': 'sam' }, body: JSON.stringify({ label: 'Sam' }) })
-  const { code, address } = (await invite.json()) as { code: string; address: string }
-  const { tokens } = await connectAgent(app, { address, approve: (query) => approveSignIn(app, query, { form: { action: '/sharing/join', fields: { code } } }) })
-  const view = (at: string) => callMcp(app, 'tools/call', { path: at, bearer: tokens!.access_token, params: { name: 'view_shelf', arguments: {} } })
-  expect((await view(new URL(address).pathname)).text).toContain('Soups')
-  expect((await view(\`/s/\${bakes}/mcp\`)).status).toBe(401)
-  expect((await app.request(\`/api/shelves/\${soups}\`, { method: 'DELETE', headers })).status).toBe(204)
-  expect((await view(\`/s/\${soups}/mcp\`)).status).toBe(401)
-})
-`
+  /** A friend's agent joins Soups with its code and loses it with the shelf: the worked test in the sharing part's REFERENCE.md, as written there. */
+  const SHARING_FRIEND_TEST = (() => {
+    const reference = readFileSync(join(import.meta.dirname, '..', 'src/sharing/REFERENCE.md'), 'utf8')
+    const block = reference.slice(reference.indexOf("## A friend's agent, as a test")).match(/```ts\n\/\/ test\/sharing\.test\.ts\n([\s\S]*?)```/)
+    if (!block) throw new Error("src/sharing/REFERENCE.md has no ```ts block starting // test/sharing.test.ts under ## A friend's agent, as a test")
+    return block[1]!
+  })()
   const kitText = (file: string) => readFile(join(import.meta.dirname, '..', 'src', file), 'utf8')
 
   it('writes the guide folder as a module that serves the same guide (for Workers)', async () => {
@@ -446,6 +432,8 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     expect(made.stdout).toContain(`\nAPI_KEYS=dev:${hashOfText(key!)}\n`)
     // The app takes the line as it is
     expect([...parseApiKeys(`dev:${hashOfText(key!)}`).values()]).toEqual(['dev'])
+    // Each run makes a new pair: the key and its line come from one
+    expect(made.stdout).toContain('Keep the key and this line from this one run: each run makes a new pair, and a key with another run’s line is a 401')
     const named = cli(parent, 'key', 'reader')
     expect(named.stdout).toMatch(/^Key       reader_[\w-]{32}$/m)
     expect(named.stdout).toMatch(/^API_KEYS=reader:[0-9a-f]{64}$/m)
@@ -608,6 +596,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     const sick = cli(app, 'doctor')
     expect(sick.status).toBe(1)
     expect(sick.stdout.trim().split('\n')).toEqual([
+      `Kit ${KIT_VERSION} (this command) checks src/kit, a copy of kit 0.0.1`,
       'note     kit.json says kit 0.0.1: `kit upgrading --dir src/kit` prints what changed for its parts since, and what to do',
       'missing  core/kv.ts: `kit update --dir src/kit` writes it again',
       "edited   core/hal.ts: yours to keep; `kit diff --dir src/kit --patch` shows the change, `kit update core --dir src/kit --force` takes the kit's",
@@ -693,6 +682,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     expect(diff.stdout).toMatch(/unchanged\s+core\/cache\.ts/)
     expect(diff.status).toBe(0)
     expect(cli(app, 'doctor', '--dir', 'kit').stdout.trim().split('\n')).toEqual([
+      `Kit ${KIT_VERSION} (this command) checks kit, a copy of kit 0.0.1`,
       'note     kit.json says kit 0.0.1: `kit upgrading --dir kit` prints what changed for its parts since, and what to do',
       `behind   kit.json says kit 0.0.1, this is ${KIT_VERSION} with the same files: \`kit update --dir kit\` records it`,
       '1 to fix in kit',
@@ -866,7 +856,8 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1', files: { ...lock.files, 'core/cache.ts': 'older' } }))
     const kept = cli(app, 'doctor', '--dir', 'kit')
     expect(kept.status).toBe(1)
-    expect(kept.stdout.trim().split('\n')).toEqual(['note     kit.json says kit 0.0.1: `kit upgrading --dir kit` prints what changed for its parts since, and what to do', keptLine, '1 to fix in kit'])
+    // Which kit runs, against which copy: an npx without a version runs the newest kit
+    expect(kept.stdout.trim().split('\n')).toEqual([`Kit ${KIT_VERSION} (this command) checks kit, a copy of kit 0.0.1`, 'note     kit.json says kit 0.0.1: `kit upgrading --dir kit` prints what changed for its parts since, and what to do', keptLine, '1 to fix in kit'])
     // At this kit's version (an older CLI stamped it over the kept file) the record is all there is: the edit is yours, never 'copied from' the new kit
     await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...lock, files: { ...lock.files, 'core/cache.ts': 'older' } }))
     const stamped = cli(app, 'doctor', '--dir', 'kit')
@@ -1015,7 +1006,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       // -y: without it the installer stops to ask, which an agent's shell never answers
       expect(made.stdout).toMatch(/^Skills first: npx skills add escalay\/api-kit -y .*\nNext: /m)
       // and that doctor fails on a new app until the starter's text is the product's, with the commands that render the brand
-      expect(made.stdout).toContain("Doctor: `npx @escalay/kit doctor` fails on a new app until the starter's text is yours: the product skill's description (guide/skills/demo-api/SKILL.md), brand/brand.ts's, and each switch's in src/features/catalog.ts; then `pnpm add -D @resvg/resvg-js` and `npx @escalay/kit brand` render the brand")
+      expect(made.stdout).toContain("Doctor: `npx @escalay/kit doctor` fails on a new app until the starter's text is yours, in the files it names: guide/skills/demo-api/SKILL.md (its description), brand/brand.ts (its description), src/features/catalog.ts (each switch's description, once `feature --switch` writes one); then `pnpm add -D @resvg/resvg-js` and `npx @escalay/kit brand` render the brand")
       const later = cli(parent, 'init', 'box', '--preset', 'selfhosted', '--yes')
       expect([later.status, later.stderr]).toEqual([1, 'kit: the selfhosted preset arrives with escalay/selfhost-kit; use --preset api\n'])
       expect(existsSync(join(parent, 'box'))).toBe(false)
@@ -1051,6 +1042,11 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
         'starter  brand/brand.ts: its description is still the starter’s (", an agent-ready API."): say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`',
         'starter  src/features/catalog.ts: a description is still the starter’s ("say here what switching it off stops"): say what switching the feature off stops',
       ])
+      // init named each file doctor names
+      const doctorLine = made.stdout.split('\n').find((line) => line.startsWith('Doctor: '))!
+      for (const line of starterLines(doctor.stdout)) expect(doctorLine).toContain(` ${/^starter +([^:]+):/.exec(line)![1]} (`)
+      // The count names where they are: none is in src/kit
+      expect(doctor.stdout.trim().split('\n').at(-1)).toBe('3 to fix in guide/skills/demo-api/SKILL.md, brand/brand.ts and src/features/catalog.ts')
       const productSkill = join(app, 'guide/skills/demo-api/SKILL.md')
       await writeFile(productSkill, (await readFile(productSkill, 'utf8')).replace(/Replace this line with[^"\n]*/, 'For reading lists: making one, adding books.'))
       await writeFile(join(app, 'brand/brand.ts'), (await readFile(join(app, 'brand/brand.ts'), 'utf8')).replace('Demo API, an agent-ready API.', 'Reading lists, shared with your agents.'))
@@ -1076,7 +1072,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       expect(await readFile(join(app, 'src/app.ts'), 'utf8')).toContain('reuseGraceSeconds: 30')
       // Both runtimes by default: Node's server.ts and container, and Workers' worker.ts, wrangler.jsonc and D1 files
       for (const path of ['src/server.ts', 'Dockerfile', 'src/worker.ts', 'wrangler.jsonc', 'scripts/migrations.ts', 'src/guide.gen.ts', '.dev.vars.example']) expect(existsSync(join(app, path)), path).toBe(true)
-      expect(JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).scripts).toMatchObject({ dev: 'tsx watch src/server.ts', 'dev:worker': 'wrangler dev', deploy: expect.stringContaining('wrangler d1 migrations apply DB --remote') })
+      expect(JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).scripts).toMatchObject({ dev: 'tsx watch --env-file-if-exists=.env src/server.ts', 'dev:worker': 'wrangler dev', deploy: expect.stringContaining('wrangler d1 migrations apply DB --remote') })
       const migrations = spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' })
       expect(migrations.status, migrations.stderr).toBe(0)
       expect((await readdir(join(app, 'migrations'))).sort()).toEqual(['0000_kit_migrations.sql', '0001_oauth_1.sql', '0002_oauth_2.sql', '0003_guards_1.sql', '0004_guards_2.sql', '0005_switches_1.sql', '0006_notes_1.sql', '0007_reading-lists_1.sql'])
@@ -1318,7 +1314,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       await edit('src/app.ts', 'FEATURES_OFF?: string }', 'FEATURES_OFF?: string; SETUP_CODE?: string }')
       // and in the container's allowlist, as the printed step says (the app's test/env.test.ts holds them in step)
       const passSetupCode = '${SETUP_CODE:+SETUP_CODE="$SETUP_CODE"}'
-      expect(added.stdout).toContain(`Setting SETUP_CODE (the code the first person types to claim the deployment, a secret: \`openssl rand -base64 18\`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${passSetupCode}\n`)
+      expect(added.stdout).toContain(`Setting SETUP_CODE (the code the first person types to claim the deployment, a secret: \`openssl rand -base64 18\`): add it to Env in src/app.ts, .env.example, .dev.vars.example, container/entrypoint.sh as ${passSetupCode}\n`)
       await edit('container/entrypoint.sh', ' \\\n  node_modules/.bin/tsx', ` ${passSetupCode} \\\n  node_modules/.bin/tsx`)
       await edit('src/app.ts', "    auth: { realm: 'team-api', keys: parseApiKeys(env.API_KEYS), access },", auth)
       await edit('src/app.ts', '  const owner = access ? accessOwner(access) : async () => null', owner)
@@ -1362,9 +1358,9 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       const steps = added.stdout.split('\n').filter((line) => /^(Wire|Setting|Schedule)[: ]/.test(line))
       expect(steps).toEqual([
         'Wire sharing: src/kit/sharing/README.md › Wire it; or `kit add sharing --wire --spaces <feature>` writes it all, settings too',
-        "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one): add it to .dev.vars.example, vitest.config.ts's miniflare bindings as OAUTH_SIGNING_KEY: await generateOAuthKey() (import { generateOAuthKey } from './src/kit/index.js')",
-        "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${SHARING_SECRET:+SHARING_SECRET=\"$SHARING_SECRET\"}, vitest.config.ts's miniflare bindings as SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only'",
-        "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${PUBLIC_ORIGIN:+PUBLIC_ORIGIN=\"$PUBLIC_ORIGIN\"}, vitest.config.ts's miniflare bindings as PUBLIC_ORIGIN: 'https://api.test'",
+        "Setting OAUTH_SIGNING_KEY (the OAuth server's ES256 key, a secret: `generateOAuthKey()` from ./kit/index.js makes one): add it to .env.example, .dev.vars.example, vitest.config.ts's miniflare bindings as OAUTH_SIGNING_KEY: await generateOAuthKey() (import { generateOAuthKey } from './src/kit/index.js')",
+        "Setting SHARING_SECRET (32 random bytes or more, a secret of its own: `openssl rand -base64 32`): add it to Env in src/app.ts, .env.example, .dev.vars.example, container/entrypoint.sh as ${SHARING_SECRET:+SHARING_SECRET=\"$SHARING_SECRET\"}, vitest.config.ts's miniflare bindings as SHARING_SECRET: 'a sharing secret of thirty-two bytes or more, for tests only'",
+        "Setting PUBLIC_ORIGIN (the origin people and agents reach the app at, createOAuth's publicOrigin): add it to Env in src/app.ts, .env.example, .dev.vars.example, container/entrypoint.sh as ${PUBLIC_ORIGIN:+PUBLIC_ORIGIN=\"$PUBLIC_ORIGIN\"}, vitest.config.ts's miniflare bindings as PUBLIC_ORIGIN: 'https://api.test'",
         'Schedule: "triggers": { "crons": ["17 * * * *"] } in wrangler.jsonc, and a scheduled handler in src/worker.ts that calls sharing\'s sweep()',
         "Schedule: src/server.ts calls sharing's sweep() on a timer (hourly is enough)",
       ])
@@ -1486,20 +1482,20 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       // As an installed app has it: formatted, the long Env type wrapped
       await format(app)
       expect(await read('src/app.ts')).toMatch(/^export type Env = \{\n/m)
-      const wired = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves')
+      const wired = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--no-install', '--items', 'recipes', '--spaces', 'shelves')
       expect(wired.status, wired.stdout + wired.stderr).toBe(0)
       expect(wired.stdout).toMatch(/^Wired people, setup, boards, sharing: /m)
-      // people's dependency, which --wire leaves to pnpm add, comes first in Next
+      // With --no-install, people's dependency comes first in Next
       expect(wired.stdout).toContain('Next: pnpm add @simplewebauthn/server@^14.1.0 && pnpm format && pnpm migrations && pnpm test')
       expect(wired.stdout).not.toMatch(/^(Wire|Setting|Schedule)[: ]/m)
       // Twice, formatted or not, changes nothing
       const once = await treeOf(app)
-      const again = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves')
+      const again = cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--no-install', '--items', 'recipes', '--spaces', 'shelves')
       expect(again.stdout).toContain('Wired already: people, setup, boards, sharing; nothing changed')
       expect(await treeOf(app)).toEqual(once)
       await format(app)
       const formatted = await treeOf(app)
-      expect(cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves').stdout).toContain('Wired already')
+      expect(cli(app, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--no-install', '--items', 'recipes', '--spaces', 'shelves').stdout).toContain('Wired already')
       expect(await treeOf(app)).toEqual(formatted)
       // people's sign-in as its README tests it, the owner switching a feature, and the sharing friend's agent
       const people = await read('src/kit/people/README.md')
@@ -1520,15 +1516,28 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       const later = join(parent, 'later')
       expect(cli(later, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
       await format(later)
-      const sharingOnly = cli(later, 'add', 'sharing', '--wire', '--spaces', 'shelves')
+      const sharingOnly = cli(later, 'add', 'sharing', '--wire', '--no-install', '--spaces', 'shelves')
       expect(sharingOnly.status).toBe(0)
       // A part whose dependencies package.json has leaves Next as it was
       expect(sharingOnly.stdout).toContain('Next: pnpm format && pnpm migrations && pnpm test')
+      // On both runtimes: both files, and the one command that makes them
+      expect(sharingOnly.stdout).toContain('its settings are in .env.example, .dev.vars.example and container/entrypoint.sh; `npx @escalay/kit env --write` makes .env and .dev.vars from them, a value for each')
+      // Where the owner's routes are, what an invite answers, and the worked test: not under /api/shelves
+      expect(sharingOnly.stdout).toContain("Owner routes: /api/spaces/{shelf id}/invites (POST answers 201 with code, shown once, address and message) and /api/spaces/{shelf id}/members ({ count, _embedded: { members } }); a friend's agent, as a test: src/kit/sharing/REFERENCE.md")
+      const wireIt = (await readFile(join(later, 'src/kit/sharing/README.md'), 'utf8')).split('## Wire it')[1]!.split('```')[0]!
+      for (const said of ['/api/spaces/{shelf id}/invites', '`code`', '`address`', 'members', '](REFERENCE.md#a-friends-agent-as-a-test)']) expect(wireIt, said).toContain(said)
       await format(later)
-      expect(cli(later, 'add', 'setup', 'people', '--wire').status).toBe(0)
+      expect(cli(later, 'add', 'setup', 'people', '--wire', '--no-install').status).toBe(0)
       const auth = (await readFile(join(later, 'src/app.ts'), 'utf8')).replace(/\s+/g, ' ')
       for (const open of ['...PEOPLE_OPEN_PATHS', '...SETUP_OPEN_PATHS', '...(sharing ? SHARING_OPEN_PATHS : [])', 'session: sessionOf(db)']) expect(auth, open).toContain(open)
       expect(await readFile(join(later, 'src/features/index.ts'), 'utf8')).toMatch(/ {2}people,\n {2}setup,\n/)
+      // kit env --write: the same key and secrets for both runtimes, each its own origin
+      expect(cli(later, 'env', '--write').stdout).toContain('Wrote .env and .dev.vars')
+      const nodeEnv = parseEnv(await readFile(join(later, '.env'), 'utf8'))
+      const workersEnv = parseEnv(await readFile(join(later, '.dev.vars'), 'utf8'))
+      expect(Object.keys(nodeEnv).sort()).toEqual(['API_KEYS', 'OAUTH_SIGNING_KEY', 'PUBLIC_ORIGIN', 'SETUP_CODE', 'SHARING_SECRET'])
+      expect([nodeEnv.PUBLIC_ORIGIN, workersEnv.PUBLIC_ORIGIN]).toEqual(['http://localhost:4400', 'http://localhost:8787'])
+      for (const name of ['API_KEYS', 'OAUTH_SIGNING_KEY', 'SETUP_CODE', 'SHARING_SECRET']) expect(workersEnv[name], name).toBe(nodeEnv[name])
       await writeFile(join(later, 'test/sharing.test.ts'), SHARING_FRIEND_TEST)
       expect(await checked(later)).toContain('lets a friend’s agent read the shelf it was invited to')
 
@@ -1543,7 +1552,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       expect(told.stdout).toContain("src/app.ts, in place of the statement that starts `const owner =`:\n      const owner = async (c: Context) => {")
       expect(told.stdout).toContain('src/features/people/index.ts, new:')
       // Each setting as add prints it, only where the app lacks it, with the container's line
-      expect(told.stdout).toContain('Setting SETUP_CODE (the code the first person types to claim the deployment, a secret: `openssl rand -base64 18`): add it to Env in src/app.ts, .dev.vars.example, container/entrypoint.sh as ${SETUP_CODE:+SETUP_CODE="$SETUP_CODE"}')
+      expect(told.stdout).toContain('Setting SETUP_CODE (the code the first person types to claim the deployment, a secret: `openssl rand -base64 18`): add it to Env in src/app.ts, .env.example, .dev.vars.example, container/entrypoint.sh as ${SETUP_CODE:+SETUP_CODE="$SETUP_CODE"}')
       expect(await treeOf(older)).toEqual(untouched)
       // Even a part whose edits need no marker of their own writes nothing there
       for (const parts of [['setup'], ['boards', '--items', 'notes']]) {
@@ -1558,10 +1567,15 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
         const one = join(parent, `only-${runtime}`)
         expect(cli(one, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
         await format(one)
-        const done = cli(one, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'notes', '--spaces', 'shelves')
+        const done = cli(one, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--no-install', '--items', 'notes', '--spaces', 'shelves')
         expect([runtime, done.status, done.stderr]).toEqual([runtime, 0, ''])
         if (runtime === 'node') expect(await readFile(join(one, 'src/server.ts'), 'utf8')).toContain('sharingOf(app)?.sweep()')
         else expect(await readFile(join(one, 'src/worker.ts'), 'utf8')).toContain('scheduled: ')
+        // Each runtime's own settings file, named in Next, and no other
+        const [own, other] = runtime === 'node' ? ['.env', '.dev.vars'] : ['.dev.vars', '.env']
+        expect(done.stdout, runtime).toContain(`its settings are in ${own}.example${runtime === 'node' ? ' and container/entrypoint.sh' : ''}; \`npx @escalay/kit env --write\` makes ${own} from it`)
+        expect([runtime, existsSync(join(one, `${other}.example`))]).toEqual([runtime, false])
+        expect(await readFile(join(one, `${own}.example`), 'utf8')).toMatch(/^# SHARING_SECRET: .*\nSHARING_SECRET=""$/m)
         await writeFile(join(one, 'test/sharing.test.ts'), SHARING_FRIEND_TEST)
         if (runtime === 'cloudflare') expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: one, encoding: 'utf8' }).status).toBe(0)
         for (const project of ['tsconfig.json', ...(runtime === 'node' ? [] : ['test/workers/tsconfig.json'])]) {
@@ -1575,6 +1589,191 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       await rm(parent, { recursive: true, force: true })
     }
   }, 240_000)
+
+  it('runs a wired Node app locally: .env.example lists every setting and how to make it, kit env --write makes .env, and pnpm dev reads it', async () => {
+    const parent = join(import.meta.dirname, '.generated', `run-env-file-${process.pid}`)
+    await rm(parent, { recursive: true, force: true })
+    await mkdir(parent, { recursive: true })
+    try {
+      expect(cli(parent, 'init', 'local-api', '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'local-api')
+      const read = (path: string) => readFile(join(app, path), 'utf8')
+      // A new Node app: the file pnpm dev reads, git-ignored, and its example
+      expect(JSON.parse(await read('package.json')).scripts.dev).toBe('tsx watch --env-file-if-exists=.env src/server.ts')
+      expect((await read('.gitignore')).split('\n')).toContain('.env')
+      expect(await read('.env.example')).toMatch(/^API_KEYS=""$/m)
+      expect(existsSync(join(app, '.dev.vars.example'))).toBe(false)
+      expect(await read('AGENTS.md')).toContain('`npx @escalay/kit env --write`')
+      expect(cli(app, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string').status).toBe(0)
+      const wired = cli(app, 'add', 'setup', 'sharing', '--wire', '--spaces', 'shelves', '--no-install')
+      expect(wired.status, wired.stdout + wired.stderr).toBe(0)
+      // Each setting with how to make it, and Next names the file and the one command that makes the values
+      const example = await read('.env.example')
+      for (const [name, how] of [['SETUP_CODE', 'openssl rand -base64 18'], ['OAUTH_SIGNING_KEY', 'generateOAuthKey()'], ['SHARING_SECRET', 'openssl rand -base64 32'], ['PUBLIC_ORIGIN', 'publicOrigin']] as const) {
+        expect(example, name).toMatch(new RegExp(`^# ${name}: .*${how.replace(/[()]/g, '\\$&')}.*\\n${name}=""$`, 'm'))
+      }
+      expect(wired.stdout).toContain('its settings are in .env.example and container/entrypoint.sh; `npx @escalay/kit env --write` makes .env from it, a value for each')
+      expect(wired.stdout).not.toContain('.dev.vars')
+      // The values, made once, kept nowhere but the file; a second run refuses to overwrite it
+      const made = cli(app, 'env', '--write')
+      expect(made.status, made.stderr).toBe(0)
+      const [, key] = /Key {7}(\S+)/.exec(made.stdout)!
+      expect(made.stdout).toContain('Wrote .env')
+      const again = cli(app, 'env', '--write')
+      expect([again.status, again.stderr]).toEqual([1, expect.stringContaining('.env exists')])
+      const values = parseEnv(await read('.env'))
+      expect(Object.keys(values).sort()).toEqual(['API_KEYS', 'OAUTH_SIGNING_KEY', 'PUBLIC_ORIGIN', 'SETUP_CODE', 'SHARING_SECRET'])
+      expect(values.PUBLIC_ORIGIN).toBe('http://localhost:4400')
+      expect(Buffer.from(values.SHARING_SECRET!, 'base64')).toHaveLength(32)
+      // The app takes them as they are: the key lets it in, and sharing is on (its OAuth server signs with the key)
+      const { createApp: createLocal } = await import(join(app, 'src/app.ts'))
+      const { testDb: dbOf } = await import(join(app, 'src/kit/index.ts'))
+      const local = await createLocal({ db: await dbOf(), env: values })
+      expect((await local.request('/api/shelves', { headers: { authorization: `Bearer ${key}` } })).status).toBe(200)
+      const metadata = await local.request('http://localhost:4400/.well-known/oauth-authorization-server')
+      expect([metadata.status, ((await metadata.json()) as { issuer: string }).issuer]).toEqual([200, 'http://localhost:4400'])
+      // Printed without --write, nothing written
+      await rm(join(app, '.env'))
+      const printed = cli(app, 'env')
+      expect(printed.stdout).toMatch(/^SHARING_SECRET="[A-Za-z0-9+/=]{44}"$/m)
+      expect(existsSync(join(app, '.env'))).toBe(false)
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('wires the settings into an older Node app’s .env.example, made when missing, and its dev script', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-env-older-'))
+    try {
+      expect(cli(parent, 'init', 'older-api', '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'older-api')
+      // As 1.35.0 made it: no .env.example, a dev script that reads no file
+      await rm(join(app, '.env.example'))
+      const manifest = JSON.parse(await readFile(join(app, 'package.json'), 'utf8'))
+      await writeFile(join(app, 'package.json'), JSON.stringify({ ...manifest, scripts: { ...manifest.scripts, dev: 'tsx watch src/server.ts' } }, null, 2))
+      const wired = cli(app, 'add', 'setup', 'people', '--wire', '--no-install')
+      expect(wired.stdout).toMatch(/^Wired setup, people: .*\.env\.example/m)
+      expect(await readFile(join(app, '.env.example'), 'utf8')).toMatch(/^SETUP_CODE=""$/m)
+      expect(JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).scripts.dev).toBe('tsx watch --env-file-if-exists=.env src/server.ts')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  it('git-ignores .env before kit env --write or --wire puts secrets near it, in an app whose .gitignore (1.35.0 and earlier) lacks it', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-env-ignore-'))
+    const git = (cwd: string, ...args: string[]) => spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' } })
+    try {
+      for (const name of ['in-git', 'wired', 'starred']) expect(cli(parent, 'init', name, '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const monorepo = join(parent, 'mono')
+      await mkdir(monorepo)
+      expect(cli(monorepo, 'init', 'inside', '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const ignoreOf = (app: string) => readFile(join(app, '.gitignore'), 'utf8')
+      // As 1.35.0 made it: .dev.vars ignored, .env not
+      const older = async (app: string, more: string[] = []) => writeFile(join(app, '.gitignore'), `${[...(await ignoreOf(app)).split('\n').filter((line) => line && line !== '.env'), ...more].join('\n')}\n`)
+      for (const name of ['in-git', 'wired', 'inside']) await older(join(parent, name === 'inside' ? 'mono/inside' : name))
+      await older(join(parent, 'starred'), ['.env*', '!.env.example'])
+
+      // An app that is a git repository: git check-ignore says .env would be committed, so the line is added and said
+      const inGit = join(parent, 'in-git')
+      expect(git(inGit, 'init', '-q').status).toBe(0)
+      expect(git(inGit, 'check-ignore', '-q', '.env').status).toBe(1)
+      const made = cli(inGit, 'env', '--write')
+      expect(made.status, made.stderr).toBe(0)
+      expect(made.stdout).toContain('Added .env to .gitignore')
+      expect(git(inGit, 'check-ignore', '-q', '.env').status).toBe(0)
+      await rm(join(inGit, '.env'))
+      expect(cli(inGit, 'env', '--write').stdout).not.toContain('.gitignore')
+      expect((await ignoreOf(inGit)).split('\n').filter((line) => line === '.env')).toHaveLength(1)
+
+      // In a monorepo whose root ignores .env, git is the truth: the app's own .gitignore is left as it is
+      await writeFile(join(monorepo, '.gitignore'), '.env\n')
+      expect(git(monorepo, 'init', '-q').status).toBe(0)
+      const inside = join(monorepo, 'inside')
+      const before = await ignoreOf(inside)
+      const there = cli(inside, 'env', '--write')
+      expect([there.status, there.stdout]).toEqual([0, expect.not.stringContaining('.gitignore')])
+      expect(await ignoreOf(inside)).toBe(before)
+
+      // Outside git, a pattern that covers it is enough
+      const starred = join(parent, 'starred')
+      const covered = await ignoreOf(starred)
+      expect(cli(starred, 'env', '--write').stdout).not.toContain('.gitignore')
+      expect(await ignoreOf(starred)).toBe(covered)
+
+      // --wire adds it with the .env.example it extends, and says so
+      const wired = join(parent, 'wired')
+      const wiring = cli(wired, 'add', 'setup', 'people', '--wire', '--no-install')
+      expect(wiring.status, wiring.stdout + wiring.stderr).toBe(0)
+      expect(wiring.stdout).toMatch(/^Wired setup, people: .*\.gitignore/m)
+      expect(wiring.stdout).toContain('Added .env to .gitignore')
+      expect((await ignoreOf(wired)).split('\n')).toContain('.env')
+      expect(cli(wired, 'add', 'setup', 'people', '--wire', '--no-install').stdout).toContain('Wired already')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  it('installs what the wired parts need with add --wire, with the app’s package manager, or names the command when it cannot', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-wire-install-'))
+    // Stand-ins for the package managers: each logs where it ran and what it was asked, and fails when told to
+    const bins = join(parent, 'bin')
+    await mkdir(bins)
+    const log = join(parent, 'calls.log')
+    for (const name of ['pnpm', 'npm']) await writeFile(join(bins, name), `#!/bin/sh\necho "$(pwd -P) ${name} $*" >> "${log}"\nexit \${FAKE_PM_EXIT:-0}\n`, { mode: 0o755 })
+    const wire = (cwd: string, more: string[] = [], exit = '0') =>
+      spawnSync(process.execPath, [join(import.meta.dirname, '..', 'cli.mjs'), 'add', 'people', 'setup', '--wire', ...more], { cwd, encoding: 'utf8', env: { ...process.env, PATH: `${bins}:${process.env.PATH}`, FAKE_PM_EXIT: exit } })
+    const calls = async () => (existsSync(log) ? (await readFile(log, 'utf8')).trim().split('\n') : [])
+    try {
+      for (const name of ['by-pnpm', 'by-npm', 'told', 'failed']) expect(cli(parent, 'init', name, '--runtime', 'node', '--no-install', '--no-git').status).toBe(0)
+      const app = join(parent, 'by-pnpm')
+      // In the app's folder, with the package manager package.json names, before Next
+      const wired = wire(join(app, 'src'), ['--dir', 'kit'])
+      expect(wired.status, wired.stdout + wired.stderr).toBe(0)
+      expect(await calls()).toEqual([`${await realpath(app)} pnpm add @simplewebauthn/server@^14.1.0`])
+      expect(wired.stdout).toContain('Next: pnpm format && pnpm test')
+      expect(wired.stdout).not.toContain('Dependencies: pnpm add')
+      // An app on npm: npm install
+      const npmApp = join(parent, 'by-npm')
+      const manifest = JSON.parse(await readFile(join(npmApp, 'package.json'), 'utf8'))
+      delete manifest.packageManager
+      await writeFile(join(npmApp, 'package.json'), JSON.stringify(manifest))
+      await writeFile(join(npmApp, 'package-lock.json'), '{}')
+      await rm(log)
+      expect(wire(npmApp).status).toBe(0)
+      expect(await calls()).toEqual([`${await realpath(npmApp)} npm install @simplewebauthn/server@^14.1.0`])
+      // --no-install installs nothing and puts the command first in Next, as before
+      await rm(log)
+      const told = wire(join(parent, 'told'), ['--no-install'])
+      expect(told.stdout).toContain('Next: pnpm add @simplewebauthn/server@^14.1.0 && pnpm format && pnpm test')
+      expect(await calls()).toEqual([])
+      // A failed install fails the command, naming the whole chain left to run, since Next is never printed
+      const chain = 'pnpm add @simplewebauthn/server@^14.1.0 && pnpm format && pnpm test'
+      const failedApp = join(parent, 'failed')
+      const failed = wire(failedApp, [], '1')
+      expect([failed.status, failed.stderr]).toEqual([1, expect.stringContaining('`pnpm add @simplewebauthn/server@^14.1.0` failed: run it in the app')])
+      expect(failed.stderr).toContain(`\`${chain}\``)
+      expect(failed.stdout).not.toContain('Next:')
+      // A re-run changes no file, but the install is still missing: it installs again, then prints Next
+      await rm(log)
+      const retried = wire(failedApp)
+      expect(retried.status, retried.stdout + retried.stderr).toBe(0)
+      expect(retried.stdout).toContain('Wired already')
+      expect(await calls()).toEqual([`${await realpath(failedApp)} pnpm add @simplewebauthn/server@^14.1.0`])
+      expect(retried.stdout).toContain('Next: pnpm format && pnpm test')
+      // Failing again names the chain again; with --no-install, Next starts with the install
+      expect(wire(failedApp, [], '1').stderr).toContain(`\`${chain}\``)
+      expect(wire(failedApp, ['--no-install']).stdout).toContain(`Next: ${chain}`)
+      // Once package.json has it, a re-run has nothing left to say
+      const done = JSON.parse(await readFile(join(failedApp, 'package.json'), 'utf8'))
+      await writeFile(join(failedApp, 'package.json'), JSON.stringify({ ...done, dependencies: { ...done.dependencies, '@simplewebauthn/server': '^14.1.0' } }))
+      await rm(log)
+      const settled = wire(failedApp)
+      expect([settled.stdout.includes('Wired already'), settled.stdout.includes('Next:'), await calls()]).toEqual([true, false, []])
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
 
   it('makes a feature with a field of fixed values, its own singular and no delete, that passes its own tests', async () => {
     const parent = join(import.meta.dirname, '.generated', `run-shapes-${process.pid}`)
@@ -1804,7 +2003,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       const made = cli(app, 'feature', 'books', '--under', 'reading-lists', '--fields', 'title:string status:enum(to-read|done)')
       expect(made.status, made.stderr).toBe(0)
       expect(made.stdout).toContain('under reading-lists: GET and POST /api/reading-lists/{readingList}/books, each book with its readingListId')
-      expect(await read('src/features/books/schema.ts')).toContain('"reading_list_id" text not null references reading_lists(id), "title" text not null')
+      expect(await read('src/features/books/schema.ts')).toContain('"reading_list_id" text not null references reading_lists(id) on delete cascade, "title" text not null')
       expect(await read('src/features/books/routes.ts')).toContain("path: '/api/reading-lists/{readingList}/books'")
       expect(spawnSync(bin('tsx'), ['scripts/migrations.ts'], { cwd: app, encoding: 'utf8' }).status).toBe(0)
       for (const project of ['tsconfig.json', 'test/workers/tsconfig.json']) {
@@ -1813,7 +2012,7 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       }
       const tests = spawnSync(bin('vitest'), ['run', '--root', '.', '--project', 'node', '--reporter', 'verbose'], { cwd: app, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
       expect(tests.status, tests.stdout + tests.stderr).toBe(0)
-      for (const name of ['answers 404 for a reading list that does not exist', 'makes, lists, changes and deletes a book', 'runs every MCP tool against its route']) expect(tests.stdout, name).toContain(name)
+      for (const name of ['answers 404 for a reading list that does not exist', 'makes, lists, changes and deletes a book', 'deletes a reading list’s books with it', 'runs every MCP tool against its route']) expect(tests.stdout, name).toContain(name)
       // Over HTTP and MCP, as an agent uses it
       const { createApp: createNest } = await import(join(app, 'src/app.ts'))
       const { hashApiKey: hashOf, testDb: dbOf } = await import(join(app, 'src/kit/index.ts'))
@@ -1822,7 +2021,8 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       const post = async (path: string, body: object) => nest.request(path, { method: 'POST', headers, body: JSON.stringify(body) })
       const [mine, other] = await Promise.all(['Mine', 'Other'].map(async (title) => ((await (await post('/api/reading-lists', { title })).json()) as { id: string }).id))
       const book = await post(`/api/reading-lists/${mine}/books`, { title: 'Dune', status: 'done' })
-      expect([book.status, await book.json()]).toEqual([201, expect.objectContaining({ title: 'Dune', readingListId: mine })])
+      const dune = (await book.json()) as { id: string }
+      expect([book.status, dune]).toEqual([201, expect.objectContaining({ title: 'Dune', readingListId: mine })])
       expect((await (await nest.request(`/api/reading-lists/${other}/books`, { headers })).json()).count).toBe(0)
       const unknown = await post('/api/reading-lists/nope/books', { title: 'Lost', status: 'done' })
       expect([unknown.status, (await unknown.json()).detail]).toEqual([404, 'No reading list nope. GET /api/reading-lists lists them.'])
@@ -1830,6 +2030,45 @@ it('lets a friend’s agent read the shelf it was invited to, and no other, unti
       expect((listed.result?.content as { text: string }[])[0]!.text).toMatch(/^Dune · status done · id /)
       const tool = (await callMcp(nest, 'tools/list', { bearer: 'nest-key' })).result!.tools as { name: string; inputSchema: { required?: string[] } }[]
       expect(tool.find((one) => one.name === 'create_book')!.inputSchema.required).toContain('reading_list')
+      // Deleting a reading list deletes its books: no 500 from the foreign key
+      expect((await nest.request(`/api/reading-lists/${mine}`, { method: 'DELETE', headers })).status).toBe(204)
+      expect((await nest.request(`/api/books/${dune.id}`, { headers })).status).toBe(404)
+      expect((await (await nest.request(`/api/reading-lists/${other}`, { headers })).json()).title).toBe('Other')
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  it('leaves no __placeholder__ in any file init or feature writes, whatever the flags', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'kit-placeholders-'))
+    // TanStack Router's own name for the root route, not one of the kit's
+    const theirs = new Set(['web/routeTree.gen.ts: __root__'])
+    const leftIn = async (app: string) => {
+      const files = (await readdir(app, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile() && !/[\\/](node_modules|\.git)([\\/]|$)/.test(entry.parentPath.slice(app.length)))
+      const found = await Promise.all(files.map(async (entry) => {
+        const path = join(entry.parentPath, entry.name).slice(app.length + 1)
+        const named = [path, ...(await readFile(join(entry.parentPath, entry.name), 'utf8')).match(/__[a-z_]+__/g) ?? []]
+        return named.flatMap((one) => (/__[a-z_]+__/.test(one) && !theirs.has(`${path}: ${one}`) ? [`${path}: ${one}`] : []))
+      }))
+      return found.flat()
+    }
+    try {
+      for (const [name, ...flags] of [['both-api'], ['node-api', '--runtime', 'node'], ['workers-api', '--runtime', 'cloudflare'], ['web-app', '--preset', 'app'], ['bare-api', '--bare']]) {
+        const made = cli(parent, 'init', name!, ...flags, '--no-install', '--no-git')
+        expect(made.status, made.stderr).toBe(0)
+        expect(await leftIn(join(parent, name!)), name).toEqual([])
+      }
+      const app = join(parent, 'both-api')
+      for (const args of [
+        ['shelves', '--singular', 'shelf', '--fields', 'name:string'],
+        ['recipes', '--under', 'shelves', '--fields', 'name:string minutes:int?'],
+        ['tasks', '--no-remove', '--switch'],
+        ['pages', '--under', 'shelves', '--no-remove', '--switch', '--singular', 'leaf'],
+      ]) {
+        const made = cli(app, 'feature', ...args)
+        expect(made.status, made.stderr).toBe(0)
+      }
+      expect(await leftIn(app)).toEqual([])
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
@@ -2310,6 +2549,16 @@ describe('the skills', () => {
       // Only commands the CLI has
       for (const [, command] of text.matchAll(/npx @escalay\/kit ([a-z]+)/g)) expect(KIT_COMMANDS, `${name}: ${command}`).toContain(command)
     }
+  })
+
+  it('marks the skills for this repository internal, so `npx skills add escalay/api-kit -y` gives an app only its own', async () => {
+    const skills = await skillTexts()
+    // The skills CLI skips a skill whose frontmatter has metadata.internal, unless it is named with --skill
+    const internal = Object.entries(skills).filter(([, text]) => /^metadata:\n {2}internal: true$/m.test(text.split('\n---\n')[0]!)).map(([name]) => name)
+    const forThisRepository = Object.entries(skills).filter(([, text]) => text.includes('in the escalay/api-kit repository itself')).map(([name]) => name)
+    expect(forThisRepository).toEqual(['api-kit-part'])
+    expect(internal).toEqual(forThisRepository)
+    expect(await readFile(join(kitDir, 'README.md'), 'utf8')).toContain('`npx skills add escalay/api-kit --skill api-kit-part -y`')
   })
 
   it('are each listed in the README\'s skills table and in AGENTS.md', async () => {

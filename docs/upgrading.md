@@ -439,6 +439,11 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## boards
 
+### Unreleased (after 1.35.0)
+
+- `PUT …/items/{ref}` with no body is `{}` also when it says `content-type: application/json` (it was a 400), as
+  the README says. Nothing to change.
+
 ### 1.35.0
 
 - New: `kit add boards --items <feature> --wire` writes the wiring an app made by `kit init` needs (its README's blocks) at the
@@ -475,6 +480,13 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## people
 
+### Unreleased (after 1.35.0)
+
+- `kit add people --wire` now installs `@simplewebauthn/server` with the app's package manager (the one
+  `package.json` names, else its lockfile's), as `--install` does, so the gate passes without a step by hand; a failed
+  install exits 1 naming the whole chain left (`pnpm add … && pnpm format && pnpm test`), and a re-run that
+  changes no file installs again and prints `Next:` while the install is missing. `--no-install` keeps 1.35.0's way: the command starts `Next:`. Nothing to change.
+
 ### 1.35.0
 
 - New: `kit add people --wire` writes the wiring an app made by `kit init` needs (its README's blocks) at the
@@ -508,6 +520,14 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - A migration step indexes sessions by person; `registerPeople` applies it when the app starts.
 
 ## setup
+
+### Unreleased (after 1.35.0)
+
+- `--wire` lists `SETUP_CODE` in `.env.example` too on Node, each with how to make its value (and makes the file in a Node
+  app without one, and points an unchanged `dev` script at `.env`), and its `Next:` names the settings' files and
+  `npx @escalay/kit env --write`, which makes `.env` (Node) and `.dev.vars` (Workers) with a value for each, so
+  `pnpm dev` runs the part. A new Node app has `.env.example`, `.env` git-ignored, and `dev` reading it; in an older one, whose `.gitignore`
+  lacks `.env`, `--wire` and `kit env --write` add the line and say so. Nothing to change; an older app's `dev` reads `.env` once it is `tsx watch --env-file-if-exists=.env src/server.ts`.
 
 ### 1.35.0
 
@@ -560,6 +580,19 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 - `onSwitch` is guarded: a hook that throws is logged and never answered, so the switch stays made.
 
 ## sharing
+
+### Unreleased (after 1.35.0)
+
+- `--wire` says where the owner routes are once it has written (`/api/spaces/{shelf id}/invites` and `…/members`, not
+  under the spaces' own path), what an invite answers, and where the worked test of a friend's agent is: REFERENCE.md,
+  which the kit runs in a wired app. The README's Wire it says the same; a member's states moved to REFERENCE.md.
+  Nothing to change.
+
+- `--wire` lists its settings in `.env.example` too on Node, each with how to make its value (and makes the file in a Node
+  app without one, and points an unchanged `dev` script at `.env`), and its `Next:` names the settings' files and
+  `npx @escalay/kit env --write`, which makes `.env` (Node) and `.dev.vars` (Workers) with a value for each, so
+  `pnpm dev` runs the part. A new Node app has `.env.example`, `.env` git-ignored, and `dev` reading it; in an older one, whose `.gitignore`
+  lacks `.env`, `--wire` and `kit env --write` add the line and say so. Nothing to change; an older app's `dev` reads `.env` once it is `tsx watch --env-file-if-exists=.env src/server.ts`.
 
 ### 1.35.0
 

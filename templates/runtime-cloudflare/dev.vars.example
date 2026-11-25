@@ -1,3 +1,4 @@
-# Local secrets for `wrangler dev`: copy to .dev.vars (git-ignored). API_KEYS holds name:sha256 hashes, never keys.
+# Local secrets for `wrangler dev`: copy to .dev.vars (git-ignored), or `npx @escalay/kit env --write` makes it, a value
+# for each. API_KEYS holds name:sha256 hashes, never keys.
 API_KEYS=""
 PUBLIC_HOST="localhost"

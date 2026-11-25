@@ -24,7 +24,10 @@ Node and Workers.
 ## Wire it
 
 In an app made by `kit init` with shelves as spaces (`kit feature shelves --singular shelf --fields "name:string"`),
-`kit add sharing --wire --spaces shelves` writes it all. By hand (an older app), each block names its place:
+`kit add sharing --wire --spaces shelves` writes it all. Its owner routes are `/api/spaces/{shelf id}/invites` and
+`…/members` (`path`), not `/api/shelves`: an invite answers `code` (once), `address` and `message`, members
+`{ count, _embedded: { members } }`; their refusals in [REFERENCE.md](REFERENCE.md), with
+[a friend's agent, as a test](REFERENCE.md#a-friends-agent-as-a-test). By hand (an older app), each block names its place:
 
 ```ts
 // src/features/shelves/spaces.ts, new: the shelves as spaces, each shelf's id its space's name
@@ -124,8 +127,6 @@ export const chained = (sharing: Sharing, mine: Hooks): Hooks => ({
 | `states.ts` | `inviteStateOf`, `memberStateOf`, `memberListingOf`; `redeemByOf`, `memberExpiresAtOf`, `REDEEM_WITHIN` (a day), `UNSEEN_FOR` (30 days), `MAX_OPEN_INVITES` (100) |
 | `secrets.ts` | `sharingKeys`, `newLinkToken` (192 bits), `newInviteCode` (`BDKM-QXTW`, from `CODE_ALPHABET`), `normalisedCode`; what the tables keep instead: `linkHashOf`, `codeHashOf`; what the limits count by: `addressKeyOf` (an HMAC), `ticketHashOf` (SHA-256) |
 
-Owner routes and answers; which refusal is a 401, which a 403: [REFERENCE.md](REFERENCE.md).
-
 ## Flows
 
 Joining with a code: the invite is spent at the token exchange, never at the click.
@@ -163,15 +164,7 @@ stateDiagram-v2
   expired --> [*]: deleted 7 days later
 ```
 
-A member (`memberStateOf`). Past its lifetime or unseen for 30 days it reads as ended before `sweep` writes it.
-
-```mermaid
-stateDiagram-v2
-  [*] --> active: a claim, or the owner's approval
-  active --> ended: its grant revoked or replayed, its lifetime, 30 days unseen, removed, replaced, its space gone
-  active --> [*]: withdrawn (a veto, or a failed exchange), so deleted and its invite open again
-  ended --> [*]: 90 days
-```
+A member's states (`memberStateOf`): [REFERENCE.md](REFERENCE.md#a-members-states).
 
 ## Rules
 
@@ -183,8 +176,8 @@ stateDiagram-v2
   | a space, from the part's pages (`data.sharing`) | the claim writes the member, or no | its member's space only, while it lives |
   | any other (a space by a device grant or the kit's page, the app's own resource) | no: withdrawn | refused |
 
-- **The ladder** (`signInStepOf`), for a sign-in the part `handles`: what it asks for and whether the owner is signed in
-  pick the kit's consent page, the code page, the owner's page, or none ([REFERENCE.md](REFERENCE.md)).
+- **The ladder** (`signInStepOf`), for a sign-in the part `handles`: the kit's consent page, the code page, the
+  owner's page, or none, by what it asks for and whether the owner is signed in ([REFERENCE.md](REFERENCE.md)).
 - **The pages name the return**: an app on this computer (loopback http), a `knownReturns` name (exact), or else
   "This app returns to <host>" (a custom scheme by its scheme). Each that approves says "This connects the app signed
   in in this browser."; all are escaped, `no-store`, `noindex`, unframed, script-free, `form-action` here and the return.

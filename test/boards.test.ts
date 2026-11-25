@@ -48,6 +48,10 @@ describe('boards', () => {
     expect((await call(app, 'PUT', `/api/boards/${board.id}/items/logo:fox`, { note: 'the ears' })).status).toBe(201)
     expect((await call(app, 'PUT', `/api/boards/${board.id}/items/logo:fox`)).status).toBe(200)
     expect((await call(app, 'PUT', `/api/boards/${board.id}/items/logo:bird`)).status).toBe(201)
+    // No body, whether or not it says JSON: the note stays as it is
+    const empty = (type?: string) => app.request(`/api/boards/${board.id}/items/logo:fox`, { method: 'PUT', headers: { authorization: `Bearer ${KEY}`, ...(type ? { 'content-type': type } : {}) } })
+    for (const type of ['application/json', 'application/json; charset=utf-8', undefined]) expect((await empty(type)).status, type).toBe(200)
+    expect((await app.request(`/api/boards/${board.id}/items/logo:fox`, { method: 'PUT', headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json' }, body: '{"note":' })).status).toBe(400)
     const full = await (await call(app, 'GET', `/api/boards/${board.id}`)).json()
     expect(full._embedded.items.map((entry: { ref: string; note: string | null }) => [entry.ref, entry.note])).toEqual(expect.arrayContaining([['logo:fox', 'the ears'], ['logo:bird', null]]))
     expect(full._embedded.items[0].item._links.self.href).toMatch(/\/api\/logos\//)

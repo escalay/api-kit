@@ -89,10 +89,13 @@ A change with a name of its own (`POST /api/books/{id}/done`) is a route beside 
 ## A resource inside another
 
 Recipes on a shelf: `kit feature recipes --under shelves --fields "name:string"`, once `shelves` exists. Each recipe
-has a `shelfId` (`"shelf_id" text not null references shelves(id)`, set from the path, never the body); its list and
-making are `GET` and `POST /api/shelves/{shelf}/recipes`, a shelf that isn't there a 404 whose `detail` names
-`GET /api/shelves`; one recipe stays at `/api/recipes/{id}`. `list_recipes` and `create_recipe` take `shelf`, and
-`samples` and the tests make a shelf first, as the shelf's own samples do.
+has a `shelfId` (`"shelf_id" text not null references shelves(id) on delete cascade`, set from the path, never the
+body); its list and making are `GET` and `POST /api/shelves/{shelf}/recipes`, a shelf that isn't there a 404 whose
+`detail` names `GET /api/shelves`; one recipe stays at `/api/recipes/{id}`. `list_recipes` and `create_recipe` take
+`shelf`, and `samples` and the tests make a shelf first, as the shelf's own samples do. Deleting a shelf deletes its
+recipes (the test `deletes a shelf’s recipes with it`). A child made by kit 1.35.0 or earlier has no cascade, so deleting
+a parent with children answers 500: a migration step never changes, so have the parent's `remove` delete the children
+first (`db.delete(recipes).where(eq(recipes.shelfId, id))` before its own row).
 
 ## Tools
 

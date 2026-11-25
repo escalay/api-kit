@@ -14,7 +14,7 @@ an MCP tool.
 - `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:api --> <!-- runtime:workers -->
 - `pnpm migrations` after adding a migration step; `pnpm run deploy` (not `pnpm deploy`, which is pnpm's own command): guide, migrations, `vite build`, `wrangler d1 migrations apply`, `wrangler deploy` <!-- preset:app -->
 - `pnpm run deploy:env`: the same for a real deployment whose settings live outside the repository: `CLOUDFLARE_ACCOUNT_ID`, `D1_<BINDING>_ID`, every `vars` entry left `""` in `wrangler.jsonc`, optional `PUBLIC_HOST`, from the environment (a secret store's `run`). It writes the git-ignored `wrangler.deploy.jsonc`, makes missing queues and deploys. A repository that may go public keeps no account id or real domain: deploy it this way <!-- runtime:workers -->
-- `npx skills add escalay/api-kit -y` (`-y`, or the installer stops to ask): the kit's skills for your coding agent: `api-kit-build` (parts, who may see what, a newer kit), `api-kit-feature` (a feature, its switch), `api-kit-review` (is it ready for agents), `api-kit-cli` (the command line, every `kit` command), `api-kit-skills` (this product's own skills). It installs `api-kit-part` and `npm-release` too, which are for the kit's own repository: leave them be
+- `npx skills add escalay/api-kit -y` (`-y`, or the installer stops to ask): the kit's skills for your coding agent: `api-kit-build` (parts, who may see what, a newer kit), `api-kit-feature` (a feature, its switch), `api-kit-review` (is it ready for agents), `api-kit-cli` (the command line, every `kit` command), `api-kit-skills` (this product's own skills). It skips `api-kit-part` (for the kit's own repository); `npm-release` is for a repository that publishes to npm: leave it be otherwise
 
 A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string minutes:int tags:string[] notes:text?"`
 (its own fields in every file, `status:enum(to-read|done)` for fixed values; `kit feature --help` lists the types, `--singular`, `--no-remove` and `--under <parent>` for one inside another), then fill in what is its own. Removing one (the
@@ -24,11 +24,19 @@ A new feature: `npx @escalay/kit feature <plural-name> --fields "name:string min
 ## Try it
 
 Every route but discovery wants a key. `npx @escalay/kit key` prints one and its `API_KEYS=` line (the app keeps only
-the hash):
+the hash). Keep both from one run: each run makes a new pair, and a key with another run's line is a 401.
 
 - Node: `API_KEYS=dev:<hash> pnpm dev`, at http://localhost:4400 <!-- runtime:node -->
 - Workers: the line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm __worker_dev__`, at http://localhost:8787 <!-- preset:api --> <!-- runtime:workers -->
 - The line in `.dev.vars` (copy `.dev.vars.example`), then `pnpm dev`, at http://localhost:5173 <!-- preset:app -->
+
+A wired part (`kit add … --wire`) has settings of its own, each listed with how to make its value in:
+
+- `.env.example`, which `pnpm dev` reads as `.env` <!-- runtime:node -->
+- `.dev.vars.example`, which `wrangler dev` reads as `.dev.vars` <!-- runtime:workers -->
+
+`npx @escalay/kit env --write` makes those files, a value for each and a key it prints once (in place of `kit key`),
+then start the app as above. It never overwrites one: `kit env` prints the lines instead.
 
 ```bash
 KEY=dev_…   # the key it printed
@@ -100,7 +108,7 @@ your own features' paths and tools once it is gone.
 - On Workers, run `pnpm migrations` after adding a step (it refuses to rewrite a shipped one). On a fresh local D1, `wrangler d1 migrations apply DB --local` before the first `wrangler dev`: files replayed over steps `migrate()` already ran must be idempotent. <!-- runtime:workers -->
 - Nothing runs at global scope that Workers refuse there (random values, I/O, timers): do it in `createApp` or a handler. <!-- runtime:workers -->
 - A new secret: `wrangler secret put <NAME>`, and locally `.dev.vars` (copy `.dev.vars.example`). <!-- runtime:workers -->
-- A new env var the API reads goes into `Env` in `src/app.ts` and `container/entrypoint.sh` (`${NAME:+NAME="$NAME"}`): `test/env.test.ts` and `kit doctor` fail until both have it. <!-- runtime:node -->
+- A new env var the API reads goes into `Env` in `src/app.ts` and `container/entrypoint.sh` (`${NAME:+NAME="$NAME"}`): `test/env.test.ts` and `kit doctor` fail until both have it. Locally it goes in `.env` (`.env.example` lists it). <!-- runtime:node -->
 - The browser app owns `/app` and nothing else: `wrangler.jsonc` sends every other path to the Worker. It calls the API with same-origin `fetch` and holds no key. Import images and fonts from code (there is no `public/` folder), so they are built under `/app/assets/`. <!-- preset:app -->
 - `src/kit/` and generated files are left out of `pnpm lint` and `pnpm format`: the kit's copy must stay as the kit wrote it for `doctor` and `update`. What `init` and `feature` write is in the kit's long-line style, so run `pnpm format` after either.
 - The starter's text is the product's to replace: the product skill's description, `brand/brand.ts`'s description, and each feature's in `src/features/catalog.ts`. `npx @escalay/kit doctor` fails while any is left.

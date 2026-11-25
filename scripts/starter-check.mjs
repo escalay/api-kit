@@ -77,13 +77,13 @@ run('pnpm', ['--dir', 'sdk', 'exec', 'tsc', '-p', 'cli/tsconfig.json'], api)
 run(process.execPath, [cli, 'doctor'], api)
 run(process.execPath, ['sdk/dist/cli/bin.js', 'note', 'list', '--help'], api)
 // people, setup, boards and sharing wired with `add --wire` into an installed (so formatted) app, beside a feature made
-// --under another: its whole gate, then --wire again changes nothing
+// --under another (--wire installs people's dependency itself): its whole gate, then --wire again changes nothing
 const wired = join(parent, 'starter-wired')
 run(process.execPath, [create, 'starter-wired', '--preset', 'api', '--yes'], parent)
 run(process.execPath, [cli, 'feature', 'recipes', '--fields', 'name:string status:enum(new|done)'], wired)
 run(process.execPath, [cli, 'feature', 'shelves', '--singular', 'shelf', '--fields', 'name:string'], wired)
 run(process.execPath, [cli, 'feature', 'tips', '--under', 'recipes', '--fields', 'text:string'], wired)
-run(process.execPath, [cli, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves', '--install'], wired)
+run(process.execPath, [cli, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves'], wired)
 for (const args of [['format'], ['migrations'], ['gate']]) run('pnpm', args, wired)
 const again = spawnSync(process.execPath, [cli, 'add', 'people', 'setup', 'boards', 'sharing', '--wire', '--items', 'recipes', '--spaces', 'shelves'], { cwd: wired, encoding: 'utf8' })
 if (!again.stdout.includes('Wired already')) {

@@ -9,12 +9,14 @@
  *   kit <command> --help                      that command's lines from this list (-h too)
  *   kit list                                  parts, what they need, which are installed; then the root items
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
- *   kit add people setup boards sharing --wire [--items <feature>] [--spaces <feature>]
+ *   kit add people setup boards sharing --wire [--items <feature>] [--spaces <feature>] [--no-install]
  *                                             --wire also wires each part into an app made by init: its feature files,
  *                                             src/app.ts, server.ts, worker.ts, the settings' files, at the markers init
  *                                             leaves; twice changes nothing. An app without them (or with the kit's
  *                                             lines changed) is told the edits and nothing is written. boards takes
- *                                             --items (the feature on its boards), sharing --spaces (its spaces)
+ *                                             --items (the feature on its boards), sharing --spaces (its spaces). It
+ *                                             installs the parts' dependencies with the app's package manager, as
+ *                                             --install does (--no-install: the command starts Next instead)
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both; --patch: only the changed
  *                                             files, each from the app's (-, app/) to the kit's (+, kit/), as update goes
  *   kit update [part…] [--dir src/kit] [--force [--all]]
@@ -26,7 +28,8 @@
  *                                             this kit, and what to do: their notes from the kit's docs/upgrading.md, part by part;
  *                                             first, each edit the kit changed too in a part whose notes name a fix
  *   kit doctor [--dir src/kit] [--adopt] [--keep <file…>]
- *                                             missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it);
+ *                                             missing files, edited files, parts behind this kit; exits 1 with a fix per line (a note never fails it),
+ *                                             the count naming where they are; first, this kit's version when the copy is another's;
  *                                             --keep records those edited files as kept in kit.json: a note while they stay so
  *   kit adopt [--dir src/kit]                 write kit.json for parts copied without it (by the shadcn CLI)
  *   kit init <dir> [--preset api|app] [--title "My API"] [--runtime both|cloudflare|node] [--bare] [--no-git] [--no-install] [--yes]
@@ -42,7 +45,8 @@
  *                                             instead of a title and a body;
  *                                             --singular names one (shelves → shelf); --no-remove leaves out delete;
  *                                             --under shelves lists and makes them at /api/shelves/{shelf}/<plural-name>,
- *                                             each with its shelfId (a foreign key), 404 for a shelf that isn't there
+ *                                             each with its shelfId (a foreign key, on delete cascade: deleting a shelf
+ *                                             deletes its rows), 404 for a shelf that isn't there
  *   kit feature --remove <plural-name> [--app .]
  *                                             takes a feature out: its folder, its lines in src/features/index.ts and
  *                                             catalog.ts; then `pnpm migrations` drops its D1 files
@@ -68,7 +72,11 @@
  *                                             favicon, PNG icons and OG card, committed (needs @resvg/resvg-js in the app);
  *                                             --check exits 1 when brand/ changed since. `kit add brand` scaffolds brand/
  *   kit key [name]                            a key to try the app with (`dev` unless named) and its API_KEYS line: the
- *                                             key printed once, the line for .dev.vars or `API_KEYS=… pnpm dev`; kept nowhere
+ *                                             key printed once, the line for .dev.vars or `API_KEYS=… pnpm dev`; kept nowhere,
+ *                                             so keep both from one run (each run makes a new pair)
+ *   kit env [--app .] [--write]               a local value for every setting .env.example (Node) and .dev.vars.example
+ *                                             (Workers) list, and a dev key: printed, or --write makes .env and .dev.vars
+ *                                             (never over one); `pnpm dev` and `wrangler dev` read them
  *   kit license keys [--out <folder>]        a product's signing key pair: the private key into <folder>/license-private.jwk
  *                                             (0600, keep it in a secret store), the public JWK printed for the app's code
  *   kit license mint --private <file> --product <name> --licensee <who> --plan <plan> [--grants a,b] [--days 365] [--instance <id>]
@@ -224,15 +232,35 @@ const missingDependencies = (modules) => {
   return Object.entries(dependenciesOf(modules)).filter(([name, range]) => !meetsRange(declared[name], range))
 }
 
-const installCommand = (modules) => {
-  const deps = missingDependencies(modules).map(([name, range]) => `${name}@${range}`)
-  return deps.length ? `pnpm add ${deps.join(' ')}` : Object.keys(dependenciesOf(modules)).length ? 'package.json has them' : 'none'
+/** The app's package manager: the one package.json names, else the one its lockfile is from, else pnpm. */
+const packageManagerOf = (root) => {
+  const named = /^(pnpm|npm|yarn|bun)@/.exec(JSON.parse(textOf(join(root, 'package.json')) ?? '{}').packageManager ?? '')?.[1]
+  if (named) return named
+  const locks = [['pnpm-lock.yaml', 'pnpm'], ['package-lock.json', 'npm'], ['yarn.lock', 'yarn'], ['bun.lock', 'bun'], ['bun.lockb', 'bun']]
+  return locks.find(([file]) => existsSync(join(root, file)))?.[1] ?? 'pnpm'
 }
 
-const install = (modules) => {
-  if (!installCommand(modules).startsWith('pnpm add')) return
-  const result = spawnSync('pnpm', installCommand(modules).split(' ').slice(1), { stdio: 'inherit', cwd: process.cwd() })
-  if (result.status !== 0) fail('pnpm add failed; run it yourself: ' + installCommand(modules))
+/** The command that adds the parts' missing dependencies, with the app's package manager; null when none is missing. */
+const addCommandOf = (modules) => {
+  const deps = missingDependencies(modules).map(([name, range]) => `${name}@${range}`)
+  if (!deps.length) return null
+  const manager = packageManagerOf(appRootOf() ?? dir)
+  return [manager, manager === 'npm' ? 'install' : 'add', ...deps]
+}
+
+const installCommand = (modules) => addCommandOf(modules)?.join(' ') ?? (Object.keys(dependenciesOf(modules)).length ? 'package.json has them' : 'none')
+
+/**
+ * Adds the parts' missing dependencies in the app's folder (true when it ran), or fails naming the command and `then`,
+ * the commands still to run after it.
+ */
+const install = (modules, then = null) => {
+  const command = addCommandOf(modules)
+  if (!command) return false
+  const result = spawnSync(command[0], command.slice(1), { stdio: 'inherit', cwd: appRootOf() ?? process.cwd() })
+  const where = relative(process.cwd(), appRootOf() ?? process.cwd()) || '.'
+  if (result.status !== 0) fail(`\`${command.join(' ')}\` failed: run it in the app (${where})${then ? `, then the rest: \`${[command.join(' '), then].join(' && ')}\`` : ''}`)
+  return true
 }
 
 /** Each file's state against kit.json: did you edit it, did the kit change it. A file equal to the kit's is unchanged, whatever kit.json recorded. */
@@ -386,8 +414,10 @@ const WEB_DEV = Object.fromEntries(['@cloudflare/vite-plugin', '@tailwindcss/vit
 /** openapi-typescript, pinned: `kit sdk` turns the API's document into the client's types with it. */
 const OPENAPI_TYPESCRIPT = '7.13.0'
 const PRESETS = ['api', 'app', 'selfhosted']
+/** A Node app's dev script: .env holds its local settings (`kit env --write`). */
+const NODE_DEV = 'tsx watch --env-file-if-exists=.env src/server.ts'
 const scriptsFor = (runtime, preset) => {
-  const node = { dev: 'tsx watch src/server.ts', start: 'tsx src/server.ts' }
+  const node = { dev: NODE_DEV, start: 'tsx src/server.ts' }
   const workers = {
     migrations: 'tsx scripts/migrations.ts',
     deploy: 'pnpm guide && pnpm migrations && wrangler d1 migrations apply DB --remote && wrangler deploy',
@@ -591,6 +621,7 @@ const underVarsOf = (root, parent, name, fieldVars) => {
   const param = Singular[0].toLowerCase() + Singular.slice(1)
   const field = `${param}Id`
   return {
+    removable: /\bmethod: 'delete'/.test(routes),
     __parent__: parent,
     __parent_camel__: names.__camel__,
     __parent_param__: param,
@@ -599,7 +630,8 @@ const underVarsOf = (root, parent, name, fieldVars) => {
     __parent_snake__: names.__snake__,
     __parent_snake_singular__: names.__snake_singular__,
     __columns__: `  ${field}: text('${snakeOf(field)}').notNull(),\n${fieldVars.__columns__}`,
-    __sql_columns__: `"${snakeOf(field)}" text not null references ${names.__table__}(id), ${fieldVars.__sql_columns__}`,
+    // Deleting the parent deletes its rows here: node:sqlite and D1 both keep foreign keys
+    __sql_columns__: `"${snakeOf(field)}" text not null references ${names.__table__}(id) on delete cascade, ${fieldVars.__sql_columns__}`,
     __out_fields__: `${field}: z.string(), ${fieldVars.__out_fields__}`,
     __card_fields__: `${field}: string; ${fieldVars.__card_fields__}`,
   }
@@ -607,7 +639,8 @@ const underVarsOf = (root, parent, name, fieldVars) => {
 
 const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS, singular, remove = true, next = true, under } = {}) => {
   const fieldVars = fieldVarsOf(fieldsOf(fieldSpec))
-  const vars = { ...namesOf(name, singular), ...fieldVars, ...(under ? underVarsOf(root, under, name, fieldVars) : {}) }
+  const { removable: parentRemovable = false, ...underVars } = under ? underVarsOf(root, under, name, fieldVars) : {}
+  const vars = { ...namesOf(name, singular), ...fieldVars, ...underVars }
   const list = join(root, 'src/features/index.ts')
   if (!existsSync(list)) fail(`no src/features/index.ts in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
   const folder = join(root, 'src/features', name)
@@ -627,7 +660,7 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
   }
   copyTemplate(join(KIT, 'templates/feature'), folder, vars, (file) => (file === 'feature.test.ts' ? `${name}.test.ts` : file))
   // Delete is a route, a handler, a repo call, a tool and a sample: all or none
-  for (const file of readdirSync(folder)) writeFileSync(join(folder, file), keepMarked(readFileSync(join(folder, file), 'utf8'), { 'feature:remove': remove, 'feature:no-remove': !remove, 'feature:under': Boolean(under), 'feature:flat': !under }))
+  for (const file of readdirSync(folder)) writeFileSync(join(folder, file), keepMarked(readFileSync(join(folder, file), 'utf8'), { 'feature:remove': remove, 'feature:no-remove': !remove, 'feature:under': Boolean(under), 'feature:flat': !under, 'feature:parent-remove': parentRemovable }))
   writeFileSync(list, text.replace('// kit:imports', `import { feature as ${vars.__camel__} } from './${name}/index.js'\n// kit:imports`).replace('  // kit:features', `  ${vars.__camel__},\n  // kit:features`))
   if (switchable) {
     const catalog = join(root, 'src/features/catalog.ts')
@@ -638,7 +671,7 @@ const addFeature = (root, name, { switchable = false, fieldSpec = SAMPLE_FIELDS,
     writeFileSync(index, readFileSync(index, 'utf8').replace(`  name: '${name}',`, `  name: '${name}',\n  switch: '${name}',`))
   }
   console.log(`Made src/features/${name}/ (schema, repo, routes, handlers, tools, index, test${remove ? '' : '; no delete'}), each one a ${vars.__label__}${singular ? '' : ' (--singular names it otherwise)'}, and listed it in src/features/index.ts${switchable ? `; an owner can switch it off ('${name}' in src/features/catalog.ts: describe what that stops)` : ''}`)
-  if (under) console.log(`under ${under}: GET and POST /api/${under}/{${vars.__parent_param__}}/${name}, each ${vars.__label__} with its ${vars.__parent_id__}; one by its id at /api/${name}/{id}; a ${vars.__parent_label__} that isn't there is a 404, and the tools take ${vars.__parent_snake_singular__}`)
+  if (under) console.log(`under ${under}: GET and POST /api/${under}/{${vars.__parent_param__}}/${name}, each ${vars.__label__} with its ${vars.__parent_id__}; one by its id at /api/${name}/{id}; a ${vars.__parent_label__} that isn't there is a 404, deleting one deletes its ${vars.__labels__} (on delete cascade), and the tools take ${vars.__parent_snake_singular__}`)
   // init says its own Next line
   if (!next) return
   console.log("Next: pnpm format (what feature writes is in the kit's long-line style), then pnpm test")
@@ -843,9 +876,9 @@ const sharingNotes = (texts, modules) => {
  */
 const productSkills = (root) => (existsSync(join(root, 'guide/skills')) ? readdirSync(join(root, 'guide/skills'), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => `guide/skills/${entry.name}/SKILL.md`) : [])
 const STARTER_TEXT = [
-  { files: productSkills, text: 'Replace this line with', what: 'its description', instead: 'say when an agent should use the product, in its users’ words' },
-  { files: () => ['brand/brand.ts'], text: ', an agent-ready API.', what: 'its description', instead: 'say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`' },
-  { files: () => ['src/features/catalog.ts'], text: 'say here what switching it off stops', what: 'a description', instead: 'say what switching the feature off stops' },
+  { files: productSkills, text: 'Replace this line with', what: 'its description', instead: 'say when an agent should use the product, in its users’ words', said: 'its description' },
+  { files: () => ['brand/brand.ts'], text: ', an agent-ready API.', what: 'its description', instead: 'say what the product does, in at most 100 characters, then `pnpm add -D @resvg/resvg-js` && `kit brand`', said: 'its description' },
+  { files: () => ['src/features/catalog.ts'], text: 'say here what switching it off stops', what: 'a description', instead: 'say what switching the feature off stops', said: "each switch's description, once `feature --switch` writes one" },
 ]
 
 /**
@@ -1635,6 +1668,7 @@ const wireHint = (name) => {
 /** Where an app made by `init` lists a setting, each file named as the step says it. */
 const SETTING_FILES = [
   ['src/app.ts', 'Env in src/app.ts'],
+  ['.env.example', '.env.example'],
   ['.dev.vars.example', '.dev.vars.example'],
   ['container/entrypoint.sh', 'container/entrypoint.sh'],
   ['vitest.config.ts', "vitest.config.ts's miniflare bindings"],
@@ -1949,8 +1983,18 @@ const planWiring = (root, parts) => {
       } else conflicts.push('src/app.ts: no `export type Env =`')
       const entrypoint = read('container/entrypoint.sh')
       if (entrypoint !== null && !entrypoint.includes(`\${${key}:+`)) write('container/entrypoint.sh', withEntrypointLine(entrypoint, key))
-      const vars = read('.dev.vars.example')
-      if (vars !== null && !dotenvNames(vars).includes(key)) write('.dev.vars.example', `${vars.trimEnd()}\n${key}=""\n`)
+      // Where each runtime reads its local settings, each line with how to make its value; a Node app gets .env.example
+      const onNode = read('src/server.ts') !== null
+      for (const [path, made] of [['.dev.vars.example', null], ['.env.example', onNode ? readFileSync(join(KIT, 'templates/app/env.example'), 'utf8') : null]]) {
+        const text = read(path) ?? made
+        if (text === null || dotenvNames(text).includes(key)) continue
+        write(path, `${text.trimEnd()}\n# ${key}: ${what}\n${key}=""\n`)
+        // `kit env --write` makes the file beside the example: git must leave it out first
+        const ignore = gitignoreWith(root, path.replace(/\.example$/, ''), read('.gitignore') ?? '')
+        if (ignore !== null) write('.gitignore', ignore)
+      }
+      const scripts = JSON.parse(read('package.json') ?? '{}').scripts
+      if (onNode && scripts?.dev === 'tsx watch src/server.ts') write('package.json', read('package.json').replace('"dev": "tsx watch src/server.ts"', `"dev": "${NODE_DEV}"`))
       const pkg = JSON.parse(read('package.json') ?? '{}')
       if (pkg.cloudflare?.bindings && !pkg.cloudflare.bindings[key]) write('package.json', `${JSON.stringify({ ...pkg, cloudflare: { ...pkg.cloudflare, bindings: { ...pkg.cloudflare.bindings, [key]: { description: `${capital(what)}.` } } } }, null, 2)}\n`)
       const config = read('vitest.config.ts')
@@ -1971,7 +2015,12 @@ const planWiring = (root, parts) => {
   return { changed, said, missing: [...missing], conflicts }
 }
 
-/** `add --wire`: writes the plan, or, in an app without the markers or with code the kit did not write, prints it and writes nothing. `install` is the `pnpm add` its Next line starts with, if any. */
+/**
+ * `add --wire`: writes the plan, or, in an app without the markers or with code the kit did not write, prints it and
+ * writes nothing. `install` installs the parts' dependencies once the plan is written (true, returned, when given), told
+ * the rest of Next for its failure, or is the command Next starts with. A re-run that changes nothing still prints Next
+ * while the install is missing, since a failed one left the rest undone.
+ */
 const wireParts = (root, parts, install = null) => {
   const { changed, said, missing, conflicts } = planWiring(root, parts)
   if (missing.length || conflicts.length) {
@@ -1979,17 +2028,65 @@ const wireParts = (root, parts, install = null) => {
     console.log(`Wired nothing: ${why}. The edits, to make by hand:`)
     for (const [part, steps] of said) console.log(`\n${part}:\n${steps.map((step) => `  ${step}`).join('\n')}`)
     process.exitCode = 1
-    return
+    return false
   }
+  const ignore = changed.find(([path]) => path === '.gitignore')?.[1]
+  const ignoring = ignore ? ENV_FILES.map(({ file }) => file).filter((file) => ignoreTextCovers(ignore, file) && !ignoreTextCovers(textOf(join(root, '.gitignore')) ?? '', file)) : []
   for (const [path, text] of changed) {
     mkdirSync(dirname(join(root, path)), { recursive: true })
     writeFileSync(join(root, path), text)
   }
-  if (!changed.length) return console.log(`Wired already: ${parts.join(', ')}; nothing changed`)
-  console.log(`Wired ${parts.join(', ')}: ${changed.map(([path]) => path).join(', ')}`)
+  console.log(changed.length ? `Wired ${parts.join(', ')}: ${changed.map(([path]) => path).join(', ')}` : `Wired already: ${parts.join(', ')}; nothing changed`)
+  if (ignoring.length) console.log(`Added ${ignoring.join(' and ')} to .gitignore: \`kit env --write\` puts secrets in it`)
+  // What each part says once wired (registry.json's wire.after): where its routes are
+  for (const part of parts) {
+    const { after, over } = REGISTRY[part].wiring.wire
+    if (after) console.log(fillVars(after, wireVarsOf(root, over ? valueOf(over.flag) : undefined)))
+  }
+  const installs = typeof install === 'function'
   const workers = existsSync(join(root, 'scripts/migrations.ts'))
-  console.log(`Next: ${install ? `${install} && ` : ''}pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test (each part's README says what it does; its settings are in .dev.vars.example${existsSync(join(root, 'container/entrypoint.sh')) ? ' and container/entrypoint.sh' : ''})`)
+  const rest = `pnpm format${workers ? ' && pnpm migrations' : ''} && pnpm test`
+  const installed = installs && install(rest)
+  // Where the settings are, and the one command that makes a local value for each
+  const examples = ENV_FILES.filter(({ example }) => existsSync(join(root, example)))
+  const settingsIn = [...examples.map(({ example }) => example), ...(existsSync(join(root, 'container/entrypoint.sh')) ? ['container/entrypoint.sh'] : [])].join(', ').replace(/, ([^,]*)$/, ' and $1')
+  const making = examples.length ? `; \`npx @escalay/kit env --write\` makes ${examples.map(({ file }) => file).join(' and ')} from ${examples.length > 1 ? 'them' : 'it'}, a value for each` : ''
+  if (changed.length || installed || (!installs && install)) console.log(`Next: ${installs || !install ? '' : `${install} && `}${rest} (each part's README says what it does; its settings are in ${settingsIn}${making})`)
+  return installs
 }
+
+// ---- Local settings: `kit env` ----
+
+/** The files each runtime reads its local settings from, beside the examples that list them, and the origin it serves at. */
+const ENV_FILES = [
+  { example: '.env.example', file: '.env', origin: () => 'http://localhost:4400' },
+  { example: '.dev.vars.example', file: '.dev.vars', origin: (root) => (existsSync(join(root, 'vite.config.ts')) ? 'http://localhost:5173' : 'http://localhost:8787') },
+]
+/** How `kit env` makes each part's setting (registry.json, `meta.wiring.settings[].local`). */
+const LOCAL_SETTINGS = Object.fromEntries(ITEMS.flatMap((item) => item.meta?.wiring?.settings ?? []).filter((setting) => setting.local).map((setting) => [setting.name, setting.local]))
+/** A local value made as `local` says: `random:<bytes>` (base64), `es256` (a JWK, as generateOAuthKey makes), `origin`. */
+const localValueOf = (local, origin) => {
+  if (local === 'origin') return origin
+  if (local === 'es256') return JSON.stringify({ ...generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ format: 'jwk' }), alg: 'ES256' })
+  const bytes = /^random:(\d+)$/.exec(local)?.[1] ?? fail(`registry.json: a setting's local is random:<bytes>, es256 or origin, not ${local}`)
+  return randomBytes(Number(bytes)).toString('base64')
+}
+/** Whether a line of a .gitignore at the app's root matches `file` there (`*` and `?` globs; negations and folders aside). */
+const ignoreTextCovers = (text, file) =>
+  text.split('\n').map((line) => line.trim().replace(/^\//, '')).filter((line) => line && !/^[#!]/.test(line) && !line.endsWith('/'))
+    .some((line) => new RegExp(`^${line.replace(/^\*\*\//, '').replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')}$`).test(file))
+/**
+ * The app's .gitignore with `file` added, or null when it is ignored already: by a line of `text`, or, in a git
+ * repository, by what `git check-ignore` says (without the person's own global excludes, which no one else has).
+ */
+const gitignoreWith = (root, file, text = textOf(join(root, '.gitignore')) ?? '') => {
+  if (ignoreTextCovers(text, file)) return null
+  if (spawnSync('git', ['-c', 'core.excludesFile=', 'check-ignore', '-q', file], { cwd: root }).status === 0) return null
+  return `${text.trimEnd()}${text.trim() ? '\n' : ''}${file}\n`
+}
+
+/** A dotenv line Node's --env-file and wrangler both read: double quotes, or single ones around a value that has them. */
+const dotenvLine = (name, value) => `${name}=${value.includes('"') ? `'${value}'` : `"${value}"`}`
 
 const commands = {
   help: () => console.log(HELP),
@@ -2044,10 +2141,13 @@ const commands = {
       for (const line of ignored.todo) console.log(line)
       console.log(`Brand: ${RESVG_INSTALL} && \`kit brand\` renders ${BRAND_MODULE}, then createAgentApi({ …, brand: createBrand(BRAND, BRAND_ASSETS) }) (src/kit/brand/README.md)`)
     }
-    if (wiring) wireParts(wiring, names, !flags.has('--install') && installCommand(modules).startsWith('pnpm add') ? installCommand(modules) : null)
-    else for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
-    if (flags.has('--install')) install(modules)
-    else console.log(`Dependencies: ${installCommand(modules)}`)
+    // --wire installs too (--no-install leaves it to Next): a wired app whose gate fails on a missing module helps no one
+    const installing = flags.has('--install') || (wiring && !flags.has('--no-install'))
+    const wired = wiring ? wireParts(wiring, names, installing ? (rest) => install(modules, rest) : addCommandOf(modules)?.join(' ')) : false
+    if (!wiring) for (const line of wiringOf(names.filter((name) => !lock?.modules.includes(name)))) console.log(line)
+    if (installing && !wiring) install(modules)
+    // Wiring refused installs nothing: the app is told the edits first
+    else if (!wired) console.log(`Dependencies: ${installCommand(modules)}`)
     const entries = modules.filter((name) => REGISTRY[name].entry).map((name) => keyOf(name, REGISTRY[name].files.find((file) => file.endsWith('/index.ts')) ?? REGISTRY[name].files[0], webDir))
     const importOf = (key) => `'./${relative(process.cwd(), pathOf(key, webDir)).replace(/\.tsx?$/, '.js')}'`
     console.log(`Import from ${[...(expected['index.ts'] ? ['index.ts'] : []), ...entries].map(importOf).join(', ')}`)
@@ -2107,13 +2207,13 @@ const commands = {
     if (preset === 'app' && runtime !== 'cloudflare') fail('the app preset runs on Cloudflare Workers; leave --runtime out or use --runtime cloudflare')
     // __title_quoted__ sits inside a double-quoted YAML value (a skill's description), so its \ and " are escaped
     const vars = { __name__: name, __title__: title, __title_quoted__: title.replaceAll('\\', '\\\\').replaceAll('"', '\\"'), __kit__: VERSION, __date__: COMPATIBILITY_DATE }
-    copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (['gitignore', 'oxlintrc.json', 'oxfmtrc.json', 'github', 'githooks', 'node-version', 'gitleaks.toml'].includes(file) ? `.${file}` : file === 'agents-skills' ? '.agents/skills' : file))
+    copyTemplate(join(KIT, 'templates/app'), root, vars, (file) => (['gitignore', 'oxlintrc.json', 'oxfmtrc.json', 'github', 'githooks', 'node-version', 'gitleaks.toml', 'env.example'].includes(file) ? `.${file}` : file === 'agents-skills' ? '.agents/skills' : file))
     if (runtime !== 'node') {
       copyTemplate(join(KIT, 'templates/runtime-cloudflare'), root, vars, (file) => (file === 'dev.vars.example' ? '.dev.vars.example' : file))
       mkdirSync(join(root, 'migrations'), { recursive: true })
     }
     if (preset === 'app') copyTemplate(join(KIT, 'templates/preset-app'), root, vars)
-    if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container', 'test/env.test.ts']) rmSync(join(root, path), { recursive: true, force: true })
+    if (runtime === 'cloudflare') for (const path of ['src/server.ts', 'Dockerfile', 'container', 'test/env.test.ts', '.env.example']) rmSync(join(root, path), { recursive: true, force: true })
     // Lines marked for one runtime or preset stay only in apps that have it
     const keeps = { 'runtime:node': runtime !== 'cloudflare', 'runtime:workers': runtime !== 'node', 'runtime:cloudflare': runtime === 'cloudflare', 'runtime:node-only': runtime === 'node', 'preset:api': preset === 'api', 'preset:app': preset === 'app' }
     for (const file of ['AGENTS.md', 'README.md', 'src/app.ts', 'wrangler.jsonc', 'vitest.config.ts', '.github/workflows/ci.yml'].map((path) => join(root, path)).filter(existsSync))
@@ -2156,7 +2256,7 @@ const commands = {
     console.log(`Next: cd ${relative(process.cwd(), root)} && ${[...left.map((args) => `pnpm ${args.join(' ')}`), 'pnpm test', 'pnpm dev'].join(' && ')}`)
     console.log(`Brand: make brand/ yours, then ${RESVG_INSTALL} && \`npx @escalay/kit brand\` renders the favicon, PNG icons and OG card into ${BRAND_MODULE}`)
     // A new app's first doctor fails on the starter's text: said before it runs
-    console.log(`Doctor: \`npx @escalay/kit doctor\` fails on a new app until the starter's text is yours: the product skill's description (guide/skills/${name}/SKILL.md), brand/brand.ts's, and each switch's in src/features/catalog.ts; then ${RESVG_INSTALL} and \`npx @escalay/kit brand\` render the brand`)
+    console.log(`Doctor: \`npx @escalay/kit doctor\` fails on a new app until the starter's text is yours, in the files it names: ${STARTER_TEXT.flatMap(({ files, said }) => files(root).map((path) => `${path} (${said})`)).join(', ')}; then ${RESVG_INSTALL} and \`npx @escalay/kit brand\` render the brand`)
   },
 
   adopt,
@@ -2172,14 +2272,21 @@ const commands = {
     const starter = lock && root ? starterFindings(root) : []
     // The starter's lines last, under a heading of their own: a new app has them all
     const starterLines = starter.length ? [STARTER_HEADING, ...starter] : []
-    const findings = lock ? [...findingsOf(lock), ...cliFindings(), ...brand.findings, ...skills.findings, ...env.findings, ...starter] : [`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`]
+    // Each finding with where it is, so the count names the places: the copy, or the app's own files
+    const placed = lock
+      ? [...findingsOf(lock).map((line) => [line, dirArg]), ...cliFindings().map((line) => [line, 'src/features (cli)']), ...brand.findings.map((line) => [line, 'brand/']), ...skills.findings.map((line) => [line, 'guide/skills/']), ...env.findings.map((line) => [line, 'src/app.ts and container/entrypoint.sh']), ...starter.map((line) => [line, /^starter +([^:]+):/.exec(line)?.[1] ?? 'the starter'])]
+      : [[`no record  ${dirArg} has no kit.json: \`kit adopt --dir ${dirArg}\` writes it from the parts on disk, \`kit add <part> --dir ${dirArg}\` copies new ones`, dirArg]]
+    const findings = placed.map(([line]) => line)
+    const places = [...new Set(placed.map(([, place]) => place))]
+    // npx without a version runs the newest kit: said first when it is not the copy's
+    if (lock && lock.version !== VERSION) console.log(`Kit ${VERSION} (this command) checks ${dirArg}, a copy of kit ${lock.version}`)
     const texts = lock ? appTexts() : []
     const behindNotes = lock && isVersion(lock.version) && compareVersions(lock.version, VERSION) < 0 ? [`note     kit.json says kit ${lock.version}: ${upgradingCommand(lock.version)} prints what changed for its parts since, and what to do`] : []
     const kept = lock ? keptEditsOf(lock) : []
     const keptLines = kept.map((file) => `kept     ${file}: an edit kit.json records as kept; \`kit diff --dir ${dirArg} --patch\` shows it`)
     for (const line of [...(lock ? [...addressNotes(texts), ...oauthNotes(texts, lock.modules), ...sharingNotes(texts, lock.modules)] : []), ...brand.notes, ...skills.notes, ...env.notes, ...behindNotes, ...keptLines, ...findings.slice(0, findings.length - starter.length), ...starterLines]) console.log(line)
     const withKept = kept.length ? `, with ${kept.length} kept ${kept.length === 1 ? 'edit' : 'edits'}` : ''
-    console.log(findings.length ? `${findings.length} to fix in ${dirArg}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
+    console.log(findings.length ? `${findings.length} to fix in ${places.join(', ').replace(/, ([^,]*)$/, ' and $1')}` : `${dirArg} matches kit ${VERSION}${withKept}: ${lock.modules.join(', ')}`)
     process.exitCode = findings.length ? 1 : 0
   },
 
@@ -2321,7 +2428,47 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     // As core's mintApiKey makes one, and parseApiKeys reads the line
     const key = `${name}_${randomBytes(24).toString('base64url')}`
     const line = `API_KEYS=${name}:${sha(key)}`
-    console.log(`Key       ${key}\n${line}\nShown once and kept nowhere: the app holds only the hash. On Node: \`${line} pnpm dev\`; on Workers: the line in .dev.vars. Then send \`authorization: Bearer <the key>\` (the app's AGENTS.md › Try it)`)
+    console.log(`Key       ${key}\n${line}\nShown once and kept nowhere: the app holds only the hash. Keep the key and this line from this one run: each run makes a new pair, and a key with another run’s line is a 401. On Node: \`${line} pnpm dev\`; on Workers: the line in .dev.vars. Then send \`authorization: Bearer <the key>\` (the app's AGENTS.md › Try it)`)
+  },
+
+  env: () => {
+    const root = resolve(process.cwd(), valueOf('--app') ?? '.')
+    const files = ENV_FILES.filter(({ example }) => existsSync(join(root, example)))
+    if (!files.length) fail(`no .env.example or .dev.vars.example in ${relative(process.cwd(), root) || '.'}: run it inside an app made by init, or pass --app <dir>`)
+    // One key and one value per secret for every file, so Node and Workers take the same; the origin is each one's own
+    const key = `dev_${randomBytes(24).toString('base64url')}`
+    const secrets = new Map()
+    const texts = files.map(({ example, file, origin }) => {
+      const given = Object.fromEntries([...readFileSync(join(root, example), 'utf8').matchAll(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S*))/gm)].map(([, name, ...values]) => [name, values.find((value) => value !== undefined) ?? '']))
+      const valueFor = (name) => {
+        if (name === 'API_KEYS') return `dev:${sha(key)}`
+        const local = LOCAL_SETTINGS[name]
+        if (local === 'origin') return origin(root)
+        if (local && !secrets.has(name)) secrets.set(name, localValueOf(local))
+        return local ? secrets.get(name) : given[name]
+      }
+      return [file, `${Object.keys(given).map((name) => dotenvLine(name, valueFor(name))).join('\n')}\n`]
+    })
+    const keyLines = [`Key       ${key}`, 'Shown once and kept nowhere: the files hold only its hash. Send `authorization: Bearer <the key>` (the app\'s AGENTS.md › Try it)']
+    if (!flags.has('--write')) {
+      for (const [file, text] of texts) console.log(`# ${file}\n${text}`)
+      for (const line of keyLines) console.log(`# ${line}`)
+      return
+    }
+    const there = texts.filter(([file]) => existsSync(join(root, file))).map(([file]) => file)
+    if (there.length) fail(`${there.join(' and ')} exists: nothing written. \`kit env\` prints the lines; add the ones it lacks by hand, or delete it and run this again`)
+    // Secrets go only where git leaves them out: an app made by 1.35.0 or earlier ignores .dev.vars but not .env
+    for (const [file] of texts) {
+      const ignore = gitignoreWith(root, file)
+      if (ignore === null) continue
+      writeFileSync(join(root, '.gitignore'), ignore)
+      console.log(`Added ${file} to .gitignore: it holds secrets, and git would have committed it`)
+    }
+    for (const [file, text] of texts) writeFileSync(join(root, file), text, { mode: 0o600 })
+    console.log(`Wrote ${texts.map(([file]) => file).join(' and ')}: a value for each setting, made now`)
+    for (const line of keyLines) console.log(line)
+    const dev = JSON.parse(textOf(join(root, 'package.json')) ?? '{}').scripts?.dev
+    if (files.some(({ file }) => file === '.env') && dev && !dev.includes('--env-file')) console.log(`package.json's dev script reads no .env: make it \`${NODE_DEV}\``)
   },
 
   brand: async () => {

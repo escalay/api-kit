@@ -40,7 +40,7 @@ await registerSetup(app, { db, code: env.SETUP_CODE, guards, fixedKeys, steps })
 
 ### In an app made by `kit init`
 
-`npx @escalay/kit add people --wire` writes all of this (with `setup`: `add people setup --wire`); in an app made
+`npx @escalay/kit add people --wire` writes all of this and installs `@simplewebauthn/server` (with `setup`: `add people setup --wire`); in an app made
 before its markers it prints the edits instead and changes nothing. By hand: a feature of its own, so its tools reach
 MCP and `toolsRun` (its tables reach `migrations/` either way):
 
