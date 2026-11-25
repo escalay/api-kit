@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.36.0](https://github.com/escalay/api-kit/compare/v1.35.0...v1.36.0) (2026-11-25)
+
+
+### New
+
+* what fresh agents tripped on in the 1.35 trials ([#119](https://github.com/escalay/api-kit/issues/119)) ([15a9e22](https://github.com/escalay/api-kit/commit/15a9e2242a2eaa205dc55121be33fb4709ea724d))
+
 ## [1.35.0](https://github.com/escalay/api-kit/compare/v1.34.0...v1.35.0) (2026-11-25)
 
 
