@@ -197,6 +197,8 @@ export const partsMarkdown = (registry, cliSource) => {
     '',
     ...README_SHAPE.map(([heading, what], index) => `${index + 1}. **${heading}**: ${what}`),
     '',
+    'A part may ship one `REFERENCE.md` beside its README for tables and diagrams, linked from the README and under the same 20 KB ceiling (`test/one-source.test.mjs`).',
+    '',
   ].join('\n')
 }
 

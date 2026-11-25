@@ -28,6 +28,7 @@ apps copy in and own. Read the repository's `AGENTS.md` and `docs/STANDARD.md` f
 `test/readmes.test.mjs`. The `Standard:` line under its rules equals the registry's `meta.standard`, history stays in
 `docs/upgrading.md`, every option and hook is in it, and so is every value the part exports (the test fails on one it never names). Each `###` heading is given once, and a README stays under
 20 KB (`test/one-source.test.mjs`; oauth has its own cap, which only goes down: cut or move text, never raise it).
+Tables and diagrams that don't fit may go to one `REFERENCE.md` beside it, linked from the README, under the same 20 KB.
 
 ## 3. The registry item
 

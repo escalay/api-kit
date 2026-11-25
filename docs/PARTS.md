@@ -163,3 +163,5 @@ a README.
 10. **Limits**: scaling ceilings and runtimes: Node only, Workers, one writer
 11. **Tests**: the helpers that test it, and the kit’s own tests
 12. **Upgrading**: a link to its section of docs/upgrading.md, never history inline
+
+A part may ship one `REFERENCE.md` beside its README for tables and diagrams, linked from the README and under the same 20 KB ceiling (`test/one-source.test.mjs`).
