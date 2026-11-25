@@ -12,7 +12,8 @@
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
  *   kit update [part…] [--dir src/kit] [--force]
  *                                             --force takes the kit's file over your edit in the parts named (every part when
- *                                             none is), and names each edit it overwrites or keeps
+ *                                             none is; `kit` names the generated index.ts), and names each edit it
+ *                                             overwrites or keeps
  *   kit upgrading [--dir src/kit] [--from <version>]
  *                                             what changed for the parts in kit.json since its version (or --from), up to
  *                                             this kit, and what to do: their notes from the kit's docs/upgrading.md, part by part;
@@ -236,8 +237,8 @@ const statusOf = (lock, expected) =>
 
 /** What to do with files you edited that the kit changed too; `--force` names their parts, so it overwrites no other edit. */
 const keptFix = (parts) => `\`kit diff --dir ${dirArg} --patch\` shows both; \`${forceCommand(parts)}\` takes the kit's, then make your edits again`
-/** `kit update <parts> --force`; the generated index.ts belongs to no part, so naming it names every one. */
-const forceCommand = (parts) => ['kit update', ...(parts.includes('kit') ? [] : parts), '--dir', dirArg, '--force'].join(' ')
+/** `kit update <parts> --force`; `kit` names the generated index.ts, which belongs to no part. */
+const forceCommand = (parts) => ['kit update', ...parts, '--dir', dirArg, '--force'].join(' ')
 
 /** The part a recorded file came with (`index.ts` is the kit's own). */
 const partOf = (key, modules) => modules.find((name) => REGISTRY[name].files.includes(sourceOf(key))) ?? 'kit'
@@ -1859,7 +1860,8 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
 
   update: () => {
     const lock = readLock() ?? fail(`no kit.json in ${dirArg}; add modules first`)
-    const modules = withRequired([...lock.modules, ...names])
+    // `kit` names the generated index.ts (for --force), never a module
+    const modules = withRequired([...lock.modules, ...names.filter((name) => name !== 'kit')])
     const expected = expectedFiles(modules, lock.webDir)
     const hashes = { ...lock.files }
     const kept = []
@@ -1918,7 +1920,8 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const fixed = new Set(sections.filter(([, notes]) => notes.some((note) => /\*\*(Fixed|Security)\b/.test(note))).map(([folder]) => folder))
     // Only the parts this kit knows: a kit.json may name one a later kit added
     const known = lock.modules.filter((name) => REGISTRY[name])
-    const overFixes = fixed.size ? statusOf(lock, expectedFiles(known, lock.webDir)).filter(({ file, state }) => state === 'both changed' && fixed.has(notesFolderOf(partOf(file, known)))) : []
+    // The generated index.ts is no part's, so no part's notes name a fix in it
+    const overFixes = fixed.size ? statusOf(lock, expectedFiles(known, lock.webDir)).filter(({ file, state }) => state === 'both changed' && partOf(file, known) !== 'kit' && fixed.has(notesFolderOf(partOf(file, known)))) : []
     if (overFixes.length) console.log('')
     for (const { file } of overFixes) console.log(`fix      ${file}: your edit, and the kit changed it since; ${notesFolderOf(partOf(file, known))}'s notes below name a fix: ${keptFix([partOf(file, known)])}`)
     for (const [folder, notes] of sections) console.log(`\n## ${folder}\n\n${notes.join('\n\n')}`)

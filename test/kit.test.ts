@@ -516,6 +516,28 @@ describe('the copy-in CLI', () => {
     expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).toBe(await kitText('core/cache.ts'))
   })
 
+  it('names `kit` for the generated index.ts, so the command doctor prints for it overwrites no other part’s edit', async () => {
+    const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
+    cli(app, 'add', 'pagination', 'mcp', '--dir', 'kit')
+    const kitIndex = await readFile(join(app, 'kit/index.ts'), 'utf8')
+    const mcpIndex = await readFile(join(app, 'kit/mcp/index.ts'), 'utf8')
+    await writeFile(join(app, 'kit/index.ts'), `${kitIndex}// mine\n`)
+    await writeFile(join(app, 'kit/mcp/index.ts'), `${mcpIndex}// mine too\n`)
+    const doctor = cli(app, 'doctor', '--dir', 'kit')
+    expect(doctor.stdout).toContain("edited   index.ts: yours to keep; `kit diff --dir kit --patch` shows the change, `kit update kit --dir kit --force` takes the kit's")
+    const forced = cli(app, 'update', 'kit', '--dir', 'kit', '--force')
+    expect(forced.status, forced.stderr).toBe(0)
+    expect(forced.stdout).toContain('  overwrote     index.ts (your edit: --force names kit)')
+    expect(forced.stdout).toContain('  kept          mcp/index.ts: your edit; --force names kit, not mcp')
+    expect(await readFile(join(app, 'kit/index.ts'), 'utf8')).toBe(kitIndex)
+    expect(await readFile(join(app, 'kit/mcp/index.ts'), 'utf8')).toBe(`${mcpIndex}// mine too\n`)
+    expect(JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8')).modules).not.toContain('kit')
+    // With a part beside it, both
+    await writeFile(join(app, 'kit/index.ts'), `${kitIndex}// mine\n`)
+    expect(cli(app, 'update', 'kit', 'mcp', '--dir', 'kit', '--force').status).toBe(0)
+    expect([await readFile(join(app, 'kit/index.ts'), 'utf8'), await readFile(join(app, 'kit/mcp/index.ts'), 'utf8')]).toEqual([kitIndex, mcpIndex])
+  })
+
   it('checks a copy against its record: missing, edited and behind, each with its fix, and exits 1', async () => {
     const app = await mkdtemp(join(tmpdir(), 'kit-app-'))
     expect(cli(app, 'doctor').stdout).toContain('`kit adopt --dir src/kit`')

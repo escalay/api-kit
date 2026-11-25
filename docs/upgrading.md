@@ -19,8 +19,8 @@ When `kit.json` records an older kit, `doctor` prints a `note` line naming `kit 
 The app owns the copy, and nothing follows `main`: a version is taken on purpose. A file equal to the kit's counts as
 unchanged, whatever `kit.json` recorded. `update` keeps a file you edited; when the kit also changed that file since
 the version `kit.json` records, it exits 1 and leaves `kit.json` at that version, so `doctor` still names the file:
-`update <part> --force` takes the kit's for that part's files and no other part's (every part's when it names none),
-printing each edit it overwrites and each it keeps; then make your edits again. `kit upgrading` names first such a
+`update <part> --force` takes the kit's for that part's files and no other part's (every part's when it names none;
+`kit` names the generated `index.ts`, which is no part's), printing each edit it overwrites and each it keeps; then make your edits again. `kit upgrading` names first such a
 file in a part whose notes below name a fix (`**Fixed`, `**Security`): an edit kept over a fix still holds the bug,
 so take that one before the rest. An edit the team keeps is recorded with
 `doctor --keep <file>` (`kept` in `kit.json`, the file's hash): `doctor` then notes it instead of failing, until the

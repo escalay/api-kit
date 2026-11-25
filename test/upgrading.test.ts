@@ -120,9 +120,11 @@ describe('kit upgrading', () => {
     // Each edited here, and the kit changed each since 0.0.1; only core's notes name a fix
     await writeFile(join(app, 'src/kit/core/hal.ts'), '// mine\n')
     await writeFile(join(app, 'src/kit/pagination/index.ts'), '// mine\n')
+    // The generated index.ts too, which no part's notes cover
+    await writeFile(join(app, 'src/kit/index.ts'), '// mine\n')
     const lockPath = join(app, 'src/kit/kit.json')
     const lock = JSON.parse(await readFile(lockPath, 'utf8'))
-    await writeFile(lockPath, JSON.stringify({ ...lock, files: { ...lock.files, 'core/hal.ts': 'older', 'pagination/index.ts': 'older' } }))
+    await writeFile(lockPath, JSON.stringify({ ...lock, files: { ...lock.files, 'core/hal.ts': 'older', 'pagination/index.ts': 'older', 'index.ts': 'older' } }))
     const printed = run(join(kit, 'cli.mjs'), app, 'upgrading')
     expect(printed.status, printed.stderr).toBe(0)
     expect(printed.stdout.split('\n').filter((line) => line.startsWith('fix '))).toEqual([
