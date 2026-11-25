@@ -1610,6 +1610,20 @@ describe('the skills', () => {
     expect(unnamed).toEqual([])
   })
 
+  it('api-kit-build wires the sharing part as its README does, and api-kit-review checks the threats its tests hold', async () => {
+    const skills = await skillTexts()
+    const wiring = await readFile(join(kitDir, 'src/sharing/README.md'), 'utf8')
+    for (const fact of ['SHARING_SECRET', 'SHARING_OPEN_PATHS', 'sharing.relay', 'sharing.neverKept', 'sharing.sweep()', 'sharing.forget(', 'sharingSignInPaths(sharing)', 'publicOrigin', "address: { header: 'cf-connecting-ip' }", 'mountA2A']) {
+      expect(skills['api-kit-build'], fact).toContain(fact)
+      if (fact !== 'mountA2A' && !fact.startsWith('address')) expect(wiring, fact).toContain(fact)
+    }
+    const review = skills['api-kit-review']!
+    const signIns = review.slice(review.indexOf('## 5. Who may sign in'), review.indexOf('## 6.'))
+    for (const row of ['Typed codes', 'Known return', 'Owner’s one click', 'Withdrawn', 'Shown once', 'Never through A2A', 'Agent invites']) expect(signIns, row).toContain(`| ${row} |`)
+    // Rows a review would fail for: what the part does not build
+    expect(signIns).not.toMatch(/Ask to join|remembered invite/)
+  })
+
   it('api-kit-cli names every command of the kit\'s CLI and every preset', async () => {
     const text = (await skillTexts())['api-kit-cli']!
     expect(KIT_COMMANDS).toEqual(expect.arrayContaining(['init', 'repo', 'button', 'brand', 'license']))

@@ -456,8 +456,9 @@ fact, steps with checkable done-when criteria.
 12. Feature switches (§21): every additive feature in `src/features/catalog.ts` with a title and what switching it off
     stops, `switch:` on its feature (`kit feature <name> --switch`), and its work outside requests asking `isOn`.
 13. The brand (§22): `brand/brand.ts` and `brand/icon.svg`, rendered with `kit brand`, passed as `createAgentApi({ brand })`.
-14. Letting people into part of the app (§23): a resource per space, single-use invites, grants mirrored with
-    `onGrant` and `onRevoke`, and the same 404 for a space that exists and one that does not.
+14. Letting people into part of the app (§23): the `sharing` part, wired as its README says (`publicOrigin`, its open
+    paths, `sweep` in the scheduled handler, `forget` when a space goes, `sharingSignInPaths` through Access), its
+    tools on the owner's MCP only, and the same 404 for a space that exists and one that does not.
 
 ## 14. Discovery
 
@@ -730,9 +731,10 @@ every surface, so none of them can disagree.
 
 ## 23. Sharing
 
-An app that lets people into a part of it (a **space**: a project, a list, a household) and not the whole of it. No
-kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `complete`, `onGrant`, `onRevoke`,
-`resources`, `accepts`), and keeps these rules.
+An app that lets people into a part of it (a **space**: a project, a list, a household) and not the whole of it. The
+`sharing` part does this on the `oauth` hooks (§7: `approve`, `complete`, `onGrant`, `onRevoke`, `resources`,
+`accepts`), and the sharing README wires it; an app that builds its own keeps the same rules. Not built yet: an invite
+link the browser remembers, and asking to join (the owner deciding later, through `holdTicket`).
 
 - **A space is named by its resource.** Each space has its own address on the app's origin (`<origin>/s/<space>/mcp`),
   and every grant into it carries that audience. The app passes `resources` (a pure check of the path, never a
@@ -742,40 +744,49 @@ kit part does this yet; an app builds it on the `oauth` hooks (§7: `approve`, `
   counts (§9), but a caller can still forward any bare host, which would then name the root: a token for that host
   would read as a root token, everywhere.
 - **Invites are single-use, with a link and a typed code.** An invite is for one space and one person, must be used
-  within a day, and gives access for a set time or until revoked. Its link opens the app's own page (`approve`), and
-  the browser may remember it for a short while (a sealed cookie that holds no code). The invite is spent with the
-  grant's first token (`onGrant`), never at the click, so a second use is refused and junk cannot spend it. A revoke
-  is recorded whatever holds the invite (a member who joined by it keeps access), so a revoked invite never opens
-  again, even when the grant that held it is withdrawn.
-- **Known apps redeem in one click; any other app is warned and asks for the code.** The app keeps a list of
-  returns it knows (the exact callbacks of the agents it expects, and an app on this computer: an http loopback
-  redirect, never a custom scheme the app has not listed). For one of those, a remembered invite is one click. For any
-  other return, the page warns "This app returns to <host>" (the client's name is its own claim, never verified; the
-  return is what counts) and asks for the code from the invite, even when the link is remembered. Nothing is approved
-  without a click.
+  within a day, and gives access for 7 days, 30 days or until revoked. Its link opens the app's own page (`approve`),
+  where the person types the code. The invite is spent with the grant's first token (`onGrant`), never at the click,
+  so a second use is refused and junk cannot spend it. Typed codes are always limited (per address, per space, and
+  five wrong per sign-in), and links and codes are kept only as HMACs. A revoke is recorded whatever holds the invite
+  (a member who joined by it keeps access), so a revoked invite never opens again, even when the grant that held it
+  is withdrawn.
+- **Who may invite.** The owner signed in, a key from `API_KEYS`, or an agent with a root token from a known grant,
+  for 7 or 30 days only (until revoked is the owner's to give). Each invite names who made it, an agent's its client
+  and grant, and an agent's open invites are revoked when that grant or client ends; people who joined through them
+  keep access. A team member, a key made through the API and a space's own token may not invite.
+- **The page names where the app returns.** A known return is an exact callback the app lists, by the app's name for
+  it (custom schemes count only there), or an app on this computer (an http loopback redirect, nothing else). For any
+  other, the page warns "This app returns to <host>": the client's name is its own claim, never verified, and the
+  return is what counts. Nothing is approved without a click.
 - **The owner's approval makes a space-locked grant, never an owner token.** The owner, signed in, approves an app at
-  a space in one click, after the same warning for an unknown return. Asking to join waits on the owner (the asker's
-  page polls the app, then posts `complete` from the same browser: the ask's ticket held for its wait, `holdTicket`). The grant binds the space with
-  `complete`'s `resource`, even when the client asked for none. The default `accepts` takes a root token at every
-  space, so only the owner's own sign-ins at the root get the root.
+  a space in one click, and the page names the grant: what the app asked that the ticked boxes give (never more), for
+  30 days or until revoked. At a known return both boxes start ticked (what it asked, until revoked); at any other,
+  unticked (read for 30 days). The grant binds the space with `complete`'s `resource`, even when the client asked for
+  none, and its approver is `owner:<email>`, never the owner's own token. The default `accepts` takes a root token at
+  every space, so only the owner's own sign-ins at the root get the root.
 - **The page says which app account it connects.** The approval page always carries one line: this connects the app
   signed in in this browser. Someone signed in to the agent's site with another account in the same browser would
   otherwise hand the space to that account. (The kit's own pages already name the owner they approve as: "as you
   (…)", "You are signed in as …", from `owner(c)`.)
 - **A lost sign-in gets a fresh invite.** There is no reconnect that carries a grant over: the person gets a new
-  invite and a new grant. The app offers "Invite again" (same space, scope and lifetime) and revokes the old grant
-  when the new one signs in.
+  invite and a new grant. The app offers "Invite again" (same space, scope and lifetime, its earlier ones revoked)
+  and ends the old grant when the new one signs in.
 - **Revocation is mirrored.** The app keeps a row per grant (who is in a space, their agents): made when `onGrant`
-  says yes, dropped when `onRevoke` names the grant (every grant of a client on `client_revoked`), aged out by its
-  last use (`revokeGrant` after 30 days). `accepts` refuses a token whose grant has no row, so removing a member
-  stops their agents on the next request. A grant that got no token is told `withdrawn` (a veto, or anything failing
-  after `onGrant`'s yes): its row is deleted, not ended, so a failed exchange leaves its invite open. Only a withdraw
-  that cannot land (the store and `onRevoke` both failing, or the process dying between the claim and the answer)
-  keeps the row of a grant with no token: that invite stays spent, and the row lapses unused.
+  says yes, ended when `onRevoke` names the grant (every grant of a client on `client_revoked`), when the owner
+  removes it, and by its lifetime or 30 days unused (`sweep`, from a scheduled handler, then `revokeGrant`). An ended
+  row stays on the record, shown to the owner as signed out (a removed or replaced one hidden), until it is deleted.
+  `accepts` refuses a token whose grant has no live row, so removing a member stops their agents on the next request.
+  A grant that got no token is told `withdrawn` (a veto, or anything failing after `onGrant`'s yes): its row is
+  deleted, not ended, so a failed exchange leaves its invite open. Only a withdraw that cannot land (the store and
+  `onRevoke` both failing, or the process dying between the claim and the answer) keeps the row of a grant with no
+  token: that invite stays spent, and the row lapses unused.
 - **Nothing leaks whether a space exists.** A caller who may not see a space gets the same 404, with the same body,
   for a space that exists and one that does not; never a 403 that confirms it. Metadata is 404 only for a path
   `resources` refuses, and a wrong code is "not one of ours" whether or not the space is real. The code page is
   limited like the kit's own open endpoints.
+- **Shown once, and never through A2A.** An invite's link and code are answered once and never kept (`showOnce`: a
+  retry with the same Idempotency-Key is a 409 `shown_once`), nor are the sign-in pages' answers. The owner's sharing
+  tools go to the owner's MCP only, never to A2A, so a delegating agent cannot mint invites.
 - **Tested as a browser does it.** The owner's approval through `approveSignIn` (`testing`); the app's own page through
   its `form` option (the same ticket cookie and `Sec-Fetch-Site: same-origin`); then a space's token refused at another
   space, a spent invite refused, a removed member's token refused, and the 404 the same for an unknown and a hidden

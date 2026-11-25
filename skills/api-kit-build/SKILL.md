@@ -36,11 +36,18 @@ In this order; stop at the first that fits.
 2. A team: `people` (passkeys for the owner, Access members with roles) and `setup` (the first person with the
    deploy's `SETUP_CODE` becomes the owner); then `owner` is the people part's owner (`personOf`, the comment in
    `src/app.ts`). Keys made through the API: `keys`.
-3. Agents signing in for a person: `oauth`, the owner approving on the kit's page. Someone else decides (an invite,
-   an ask to join): the `approve` hook, `complete` with the space's `resource`, and `onGrant` / `onRevoke` to mirror
-   who holds access (`src/kit/oauth/README.md`, and the standard's "Sharing" section).
-4. The `sharing` part (invites to a space, asks to join, the owner's approval) is being built: until its README
-   says it wires into `createOAuth`, build on step 3.
+3. Agents signing in for a person: `oauth`, the owner approving on the kit's page. An app's own page deciding: the
+   `approve` hook, `complete` with a `resource`, and `onGrant` / `onRevoke` to mirror who holds access
+   (`src/kit/oauth/README.md`).
+4. Other people, and their agents, into one part of the app (a space): `sharing`, by single-use invite or the
+   owner's approval at the space (`npx @escalay/kit add sharing --dir src/kit --install`, then its README's Wire it).
+   - `SHARING_SECRET`: 32+ random bytes, its own entry in your secret store, never the OAuth signing key.
+   - `createOAuth` with `publicOrigin` and `...sharing.oauth`; `SHARING_OPEN_PATHS` in `auth.open`, `sharing.relay`
+     in `auth.relay`, `sharing.neverKept` in `guards.skip`; then `registerSharing`.
+   - `await sharing.sweep()` in the scheduled handler, `sharing.forget(id)` when a space is deleted (`kit doctor`
+     notes an app that never sweeps). On Workers, `address: { header: 'cf-connecting-ip' }`.
+   - Behind Cloudflare Access, let exactly `sharingSignInPaths(sharing)` through.
+   - `sharingTools` go to the owner's MCP only, never to `mountA2A`: a delegating agent must not mint invites.
 
 ## Parts beyond the core
 
@@ -58,6 +65,7 @@ part, what it needs and the order to add them: the kit's `docs/PARTS.md`):
 | A daily anonymous usage report | `telemetry` |
 | A public front page and a browser app under `/app` | `web` (Node only; on Workers the `app` preset serves `web/`) |
 | One name and icon on every surface | `brand`, then `npx @escalay/kit brand` |
+| Other people into one part of the app (invites, the owner's approval) | `sharing` (step 4 above) |
 
 Add one with `npx @escalay/kit add <part> --dir src/kit --install` (browser parts take `--web-dir`), then read its
 `src/kit/<part>/README.md` and wire it in `src/app.ts`. A new feature the owner can switch off:

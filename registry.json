@@ -732,7 +732,7 @@
       "name": "sharing",
       "type": "registry:item",
       "title": "Sharing",
-      "description": "Invites to a space, asks to join and the owner's approval, on the oauth part's hooks; so far its tables (`SHARING_MIGRATIONS`), `sharingRepo`, the named states of its rows, its secrets, the owner's routes and MCP tools for a space's settings and its invites, the oauth hooks that make members and hold a space's token to its space (`sharing.oauth`), and the sign-in pages where an invite's code is typed",
+      "description": "Invites to a space and the owner's approval at it, on the oauth part's hooks: single-use invites with a link and a typed code, members mirrored from grants and held to their space (`sharing.oauth`), the sign-in pages, the owner's routes and MCP tools for invites and members, and `sweep` and `forget`; no remembered invite link or asking to join yet",
       "registryDependencies": [
         "escalay/api-kit/db",
         "escalay/api-kit/mcp",
