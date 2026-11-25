@@ -63,11 +63,16 @@ const send = (c: Context, { brand, origin }: PageView, page: Page) => {
   })
 }
 
-/** Where the client returns, in words: a warning for a return the app does not know. */
-const returnLine = (back: Return) => {
+/** What the code page says lets an app at an unknown return in: the person's code. */
+const JOIN_WARNING = 'Join only if you know where that is: your code lets it in.'
+/** What the owner's page says lets it in: the owner types no code, so it is their approval. */
+const APPROVE_WARNING = 'Approve only if you know where that is: approving lets it in.'
+
+/** Where the client returns, in words: the page's warning for a return the app does not know. */
+const returnLine = (back: Return, warning: string) => {
   if (back.kind === 'this-computer') return '<p>It returns to an app on this computer.</p>'
   if (back.kind === 'known') return `<p>It returns to ${escape(back.name)}.</p>`
-  return `<p><strong>This app returns to <code>${escape(back.host)}</code>.</strong> Join only if you know where that is: your code lets it in.</p>`
+  return `<p><strong>This app returns to <code>${escape(back.host)}</code>.</strong> ${warning}</p>`
 }
 
 /** What the code page shows of a sign-in. */
@@ -102,7 +107,7 @@ export const sharingPages = (view: PageView) => {
       status: note ? 400 : 200,
       title: 'Join with your invite',
       returnsTo: ask.redirectUri,
-      body: `<h1>Join with your invite</h1>${returnLine(back)}${clientLine(ask)}${noteLine(note)}<p>Type the code from your invite.</p>
+      body: `<h1>Join with your invite</h1>${returnLine(back, JOIN_WARNING)}${clientLine(ask)}${noteLine(note)}<p>Type the code from your invite.</p>
 <form method="post" action="/sharing/join">${ticketField(ask)}<input name="code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="20" required aria-label="Invite code"><button>Join</button></form><p>${ACCOUNT_LINE}</p>${atSpace ? ownerHop(ask) : ''}`,
     })
 
@@ -115,7 +120,7 @@ export const sharingPages = (view: PageView) => {
       status: note ? 400 : 200,
       title: `Approve at ${offer.title}`,
       returnsTo: ask.redirectUri,
-      body: `<h1>Approve this app at ${escape(offer.title)}</h1>${returnLine(offer.back)}${clientLine(ask)}${noteLine(note)}${untickedLine(ask, offer.title)}
+      body: `<h1>Approve this app at ${escape(offer.title)}</h1>${returnLine(offer.back, APPROVE_WARNING)}${clientLine(ask)}${noteLine(note)}${untickedLine(ask, offer.title)}
 <form method="post" action="/sharing/owner">${ticketField(ask)}${ask.scopes.includes('write') ? box('write', 'Allow changes', offer.write) : ''}${box('untilRevoked', 'Until revoked, not 30 days', offer.untilRevoked)}<button name="decision" value="approve">Approve</button><button name="decision" value="deny" class="quiet">Refuse</button></form><p>${ACCOUNT_LINE}</p>`,
     })
 

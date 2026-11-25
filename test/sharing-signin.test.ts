@@ -209,6 +209,10 @@ describe('the owner at a space', () => {
     // No scope sent: an approval without scopes would grant all the kit has
     const opened = await open({ resource: SOUPS, redirect: 'https://evil.example.test/cb', scope: null, headers: asOwner })
     expect([opened.page.status, wordsOf(opened.html)]).toEqual([200, expect.stringContaining('This app returns to evil.example.test')])
+    expect(opened.html).toContain('<strong>This app returns to <code>evil.example.test</code>.</strong>')
+    // The owner types no code: approving is what lets it in
+    expect(wordsOf(opened.html)).toContain('Approve only if you know where that is: approving lets it in.')
+    expect(wordsOf(opened.html)).not.toContain('your code')
     expect(wordsOf(opened.html)).toContain('Soups')
     expect([checked(opened.html, 'write'), checked(opened.html, 'untilRevoked')]).toEqual([false, false])
     const answer = await postTo('/sharing/owner', opened, { decision: 'approve' }, asOwner)
