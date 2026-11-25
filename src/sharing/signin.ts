@@ -59,7 +59,7 @@ const CODE_STEPS: readonly SignInStep[] = ['code', 'owner', 'no-such-space']
 export const signInStepOf = (facts: SignInFacts): SignInStep => LADDER.find((row) => row.when(facts))!.step
 
 /** What a sign-in the part handles asks for. */
-export const askedOf = (config: SharingConfig, bound: Bound, ask: Pick<SignInAsk, 'resource' | 'named'>): Asked => {
+const askedOf = (config: SharingConfig, bound: Bound, ask: Pick<SignInAsk, 'resource' | 'named'>): Asked => {
   if (spaceOfResource(config, ask.resource, bound.root)) return 'space'
   return ask.named ? 'named-root' : 'unnamed-root'
 }
@@ -79,7 +79,7 @@ const returnOf = (config: SharingConfig, ask: Pick<SignInAsk, 'onThisComputer' |
 }
 
 /** What the code page shows of where a sign-in returns, and whether it asks for a space (only there may the owner step in). */
-export const codeViewOf = (config: SharingConfig, bound: Bound, ask: SignInAsk): CodeView => ({ back: returnOf(config, ask), atSpace: askedOf(config, bound, ask) === 'space' })
+const codeViewOf = (config: SharingConfig, bound: Bound, ask: SignInAsk): CodeView => ({ back: returnOf(config, ask), atSpace: askedOf(config, bound, ask) === 'space' })
 
 /**
  * What the owner's page starts with (decisions 16 and 24): at a known return what the app asked, until revoked; at any
@@ -94,19 +94,40 @@ export const ownerViewOf = (config: SharingConfig, ask: SignInAsk, space: Space)
   return { title: space.title, back, write: known && ask.scopes.includes('write'), untilRevoked: known }
 }
 
-/** What a member row keeps of where its client returns: `this computer`, or the host (the scheme, for a custom one). */
+/**
+ * What a member row keeps of where its client returns: `this computer`, or the host (the scheme, for a custom one).
+ *
+ * @example
+ * returnsToOf({ onThisComputer: false, redirectHost: 'evil-app:' })   // 'evil-app:'
+ */
 export const returnsToOf = (ask: Pick<SignInAsk, 'onThisComputer' | 'redirectHost'>) => (ask.onThisComputer ? 'this computer' : ask.redirectHost)
 
-/** A space's address, on the pinned origin: the resource every grant the pages make is bound to. */
+/**
+ * A space's address, on the pinned origin: the resource every grant the pages make is bound to.
+ *
+ * @example
+ * spaceResourceOf(config, bound, soups)   // 'https://sample.example.test/s/soups/mcp'
+ */
 export const spaceResourceOf = (config: SharingConfig, bound: Bound, space: Space) => bound.root + config.resourcePath.replace('{space}', space.name)
 
 /** The scopes each invite, or each answer of the owner, gives. */
 const GIVES: Record<Scope, string[]> = { read: ['read'], write: ['read', 'write'] }
 
-/** What the client asked for that the invite or the owner gives. */
+/**
+ * What the client asked for that the invite or the owner gives: never more than either.
+ *
+ * @example
+ * scopesFor(['read', 'write'], 'read')   // ['read']
+ * scopesFor(['write'], 'read')           // []: nothing to give
+ */
 export const scopesFor = (asked: string[], given: Scope) => asked.filter((scope) => GIVES[given].includes(scope))
 
-/** A form field as text: absent or a file is empty. */
+/**
+ * A form field as text: absent or a file is empty.
+ *
+ * @example
+ * textOf((await c.req.parseBody()).ticket)   // 'consent_…', or ''
+ */
 export const textOf = (value: unknown) => (typeof value === 'string' ? value : '')
 
 /** What `approve` works from: the options, and the server and brand once bound. */

@@ -32,6 +32,12 @@ type Owning = { config: SharingConfig; bound: Bound; brand?: AgentBrand; oauth: 
 /** A space sign-in a post names, or the page that answers instead. */
 type SpaceAsk = { ask: SignInAsk; name: string } | { page: Response }
 
+/**
+ * The owner's two posts, for one app: its options, the server it is bound to, its brand and OAuth server.
+ *
+ * @example
+ * app.post('/sharing/owner', ownerRoutesFor({ config, bound, brand, oauth }).answer)
+ */
 export const ownerRoutesFor = ({ config, bound, brand, oauth }: Owning) => {
   const pages = sharingPages({ brand, origin: bound.root, signInPath: config.signInPath })
   const handles = handlesFor({ config, binding: { bound } })
