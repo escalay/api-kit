@@ -439,7 +439,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## boards
 
-### Unreleased (after 1.34.0)
+### 1.35.0
 
 - New: `kit add boards --items <feature> --wire` writes the wiring an app made by `kit init` needs (its README's blocks) at the
   `// kit:*` markers a new app's `src/app.ts`, `server.ts`, `worker.ts`, `wrangler.jsonc` and `vitest.config.ts`
@@ -475,7 +475,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## people
 
-### Unreleased (after 1.34.0)
+### 1.35.0
 
 - New: `kit add people --wire` writes the wiring an app made by `kit init` needs (its README's blocks) at the
   `// kit:*` markers a new app's `src/app.ts`, `server.ts`, `worker.ts`, `wrangler.jsonc` and `vitest.config.ts`
@@ -509,7 +509,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## setup
 
-### Unreleased (after 1.34.0)
+### 1.35.0
 
 - New: `kit add setup --wire` writes the wiring an app made by `kit init` needs (its README's blocks, and
   `SETUP_CODE` in the container's allowlist) at the `// kit:*` markers a new app's `src/app.ts`, `server.ts`,
@@ -537,7 +537,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## switches
 
-### Unreleased (after 1.34.0)
+### 1.35.0
 
 - **`kit doctor` notes a setting the container never sees** (a `note     env` line): one `Env` in `src/app.ts` reads
   that `container/entrypoint.sh` never passes, and one it passes that neither `Env` nor `src/server.ts` reads. Every
@@ -561,7 +561,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## sharing
 
-### Unreleased (after 1.34.0)
+### 1.35.0
 
 - New: `kit add sharing --spaces <feature> --wire` writes the wiring an app made by `kit init` needs (its README's blocks) at the
   `// kit:*` markers a new app's `src/app.ts`, `server.ts`, `worker.ts`, `wrangler.jsonc` and `vitest.config.ts`
@@ -613,7 +613,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## testing
 
-### Unreleased (after 1.34.0)
+### 1.35.0
 
 - New: `callMcp(app, method, { path, params, bearer, headers })` (and its type `McpAnswer`), one MCP request over
   HTTP with every header and the `_meta` spec 2026-07-28 asks for, for a test of a space's MCP or the owner's.
