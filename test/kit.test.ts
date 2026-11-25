@@ -484,7 +484,7 @@ describe('the copy-in CLI', () => {
     cli(app, 'update', '--dir', 'kit')
     expect(await readFile(join(app, 'kit/core/hal.ts'), 'utf8')).toBe('// mine\n')
     expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).toBe('// mine too\n')
-    cli(app, 'update', '--dir', 'kit', '--force')
+    cli(app, 'update', '--dir', 'kit', '--force', '--all')
     expect(await readFile(join(app, 'kit/core/hal.ts'), 'utf8')).not.toBe('// mine\n')
     expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).not.toBe('// mine too\n')
     expect(cli(app, 'add', 'nope', '--dir', 'kit').stderr).toContain('no module "nope"')
@@ -508,11 +508,27 @@ describe('the copy-in CLI', () => {
     expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).toBe((await kitText('core/cache.ts')) + '// ours\n')
     // core/hal.ts still holds the older kit's code
     expect([named.status, JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8')).version]).toEqual([1, '0.0.1'])
-    // Naming no part, --force takes every edit, and says so for each
-    const all = cli(app, 'update', '--dir', 'kit', '--force')
+    // Naming no part, --force refuses while an edit would go, and writes nothing
+    const bare = cli(app, 'update', '--dir', 'kit', '--force')
+    expect([bare.status, bare.stdout]).toEqual([1, ''])
+    expect(bare.stderr.trim().split('\n')).toEqual([
+      'kit: update --force names no part, and would overwrite 2 edits:',
+      '  core/cache.ts (core)',
+      '  core/hal.ts (core)',
+      "Take the kit's part by part: `kit update core --dir kit --force`; or every part's, these edits too: `kit update --dir kit --force --all`",
+    ])
+    expect(await readFile(join(app, 'kit/core/hal.ts'), 'utf8')).toBe('// mine\n')
+    // --force --all takes every edit, and says so for each
+    const all = cli(app, 'update', '--dir', 'kit', '--force', '--all')
     expect(all.status).toBe(0)
-    expect(all.stdout).toContain('  overwrote     core/hal.ts (your edit: --force names every part)')
-    expect(all.stdout).toContain('  overwrote     core/cache.ts (your edit: --force names every part)')
+    expect(all.stdout).toContain('  overwrote     core/hal.ts (your edit: --force --all)')
+    expect(all.stdout).toContain('  overwrote     core/cache.ts (your edit: --force --all)')
+    // With no edit to overwrite (hal.ts is what an older kit wrote), a bare --force goes ahead
+    const taken = JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8'))
+    await writeFile(join(app, 'kit/core/hal.ts'), '// older\n')
+    await writeFile(join(app, 'kit/kit.json'), JSON.stringify({ ...taken, version: '0.0.1', files: { ...taken.files, 'core/hal.ts': hashOfText('// older\n') } }))
+    const clean = cli(app, 'update', '--dir', 'kit', '--force')
+    expect([clean.status, clean.stdout]).toEqual([0, expect.stringContaining('  updated       core/hal.ts')])
     expect(await readFile(join(app, 'kit/core/cache.ts'), 'utf8')).toBe(await kitText('core/cache.ts'))
   })
 
@@ -560,7 +576,7 @@ describe('the copy-in CLI', () => {
       `behind   pagination was copied from kit 0.0.1 and kit ${KIT_VERSION} changed it: \`kit diff --dir src/kit --patch\`, then \`kit update --dir src/kit\``,
       '3 to fix in src/kit',
     ])
-    cli(app, 'update', '--force')
+    cli(app, 'update', '--force', '--all')
     expect(cli(app, 'doctor').status).toBe(0)
     // Only the version is behind: update records it
     await writeFile(join(app, 'src/kit/kit.json'), JSON.stringify({ ...lock, version: '0.0.1' }))
@@ -586,7 +602,7 @@ describe('the copy-in CLI', () => {
     expect(cli(app, 'doctor').stdout).toContain('edited   core/hal.ts')
     expect(cli(app, 'doctor').status).toBe(1)
     // Taking the kit's file drops the record
-    cli(app, 'update', '--force')
+    cli(app, 'update', '--force', '--all')
     expect(JSON.parse(await readFile(join(app, 'src/kit/kit.json'), 'utf8')).kept).toBeUndefined()
   })
 
@@ -641,7 +657,7 @@ describe('the copy-in CLI', () => {
     expect(await readFile(join(app, 'kit/core/hal.ts'), 'utf8')).toBe(await kitText('core/hal.ts'))
     expect(JSON.parse(await readFile(join(app, 'kit/kit.json'), 'utf8'))).toMatchObject({ version: '0.0.1', files: { 'core/hal.ts': hashOfText(await kitText('core/hal.ts')), 'core/cache.ts': 'older' } })
     // Taking the kit's and making the edit again ends at the new version with the edit kept
-    expect(cli(app, 'update', '--dir', 'kit', '--force').status).toBe(0)
+    expect(cli(app, 'update', 'core', '--dir', 'kit', '--force').status).toBe(0)
     await writeFile(join(app, 'kit/core/cache.ts'), (await kitText('core/cache.ts')) + '// mine\n')
     const again = cli(app, 'update', '--dir', 'kit')
     expect(again.status).toBe(0)
@@ -855,7 +871,7 @@ describe('the copy-in CLI', () => {
     expect(lock).toMatchObject({ source: '@escalay/kit', version: KIT_VERSION, modules: ['core', 'pagination', 'mcp'] })
     expect(await readFile(join(app, 'src/kit/index.ts'), 'utf8')).toContain("export * from './pagination/index.js'")
     expect(cli(app, 'adopt').stderr).toContain('already has a kit.json')
-    cli(app, 'update', '--force')
+    cli(app, 'update', 'core', '--force')
     expect(cli(app, 'doctor').status).toBe(0)
     // A part whose required part is not on disk is recorded with it; doctor names the missing files
     const lone = await mkdtemp(join(tmpdir(), 'kit-app-'))

@@ -10,10 +10,10 @@
  *   kit list                                  parts, what they need, which are installed; then the root items
  *   kit add core guide mcp testing [--dir src/kit] [--web-dir ../web] [--install]
  *   kit diff [--dir src/kit] [--patch]        per file: unchanged, you edited, kit changed, both
- *   kit update [part…] [--dir src/kit] [--force]
- *                                             --force takes the kit's file over your edit in the parts named (every part when
- *                                             none is; `kit` names the generated index.ts), and names each edit it
- *                                             overwrites or keeps
+ *   kit update [part…] [--dir src/kit] [--force [--all]]
+ *                                             --force takes the kit's file over your edit in the parts named (`kit` names
+ *                                             the generated index.ts), and names each edit it overwrites or keeps; naming
+ *                                             no part, it refuses while it would overwrite an edit: --force --all takes them all
  *   kit upgrading [--dir src/kit] [--from <version>]
  *                                             what changed for the parts in kit.json since its version (or --from), up to
  *                                             this kit, and what to do: their notes from the kit's docs/upgrading.md, part by part;
@@ -1866,10 +1866,22 @@ writeFileSync(fileURLToPath(new URL('../sdk/cli/commands.json', import.meta.url)
     const expected = expectedFiles(modules, lock.webDir)
     const hashes = { ...lock.files }
     const kept = []
-    // --force takes the kit's file over an edit only in the parts it names (all of them when it names none)
+    // --force takes the kit's file over an edit only in the parts it names; naming none, only with --all or when no edit would go
     const forced = (file) => flags.has('--force') && (!names.length || names.includes(partOf(file, modules)))
-    const scope = names.length ? `--force names ${names.join(', ')}` : '--force names every part'
-    for (const { file, state } of statusOf(lock, expected)) {
+    const scope = names.length ? `--force names ${names.join(', ')}` : '--force --all'
+    const statuses = statusOf(lock, expected)
+    const edits = statuses.filter(({ state }) => state === 'both changed' || state === 'you edited').map(({ file }) => file)
+    if (flags.has('--force') && !names.length && !flags.has('--all') && edits.length) {
+      const parts = [...new Set(edits.map((file) => partOf(file, modules)))]
+      fail(
+        [
+          `update --force names no part, and would overwrite ${edits.length} ${edits.length === 1 ? 'edit' : 'edits'}:`,
+          ...edits.map((file) => `  ${file} (${partOf(file, modules)})`),
+          `Take the kit's part by part: ${parts.map((part) => `\`${forceCommand([part])}\``).join(', ')}; or every part's, these edits too: \`kit update --dir ${dirArg} --force --all\``,
+        ].join('\n'),
+      )
+    }
+    for (const { file, state } of statuses) {
       if (state === 'dropped by kit') {
         delete hashes[file]
         console.log(`  dropped       ${file} (no longer in the kit; delete it when nothing imports it)`)
