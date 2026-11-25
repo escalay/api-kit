@@ -195,6 +195,17 @@ describe('invite again', () => {
     expect([await inviteState(again.id), (await memberOfToken(old))?.endedReason]).toEqual(['open', 'replaced'])
     vetoing = false
     expect((await join(again)).status).toBe(200)
+
+    // Removing the hidden member it replaced then revokes the opened invite, so no one rejoins in its place
+    const hidden = (await join(await makeInvite())).tokens.access_token
+    const replacing = (await (await byKey(`/api/spaces/soups/members/${(await memberOfToken(hidden))!.id}/invite-again`, { method: 'POST' })).json()) as NewInvite
+    vetoing = true
+    expect((await join(replacing)).status).toBe(400)
+    vetoing = false
+    expect(await inviteState(replacing.id)).toBe('open')
+    expect((await byKey(`/api/spaces/soups/members/${(await memberOfToken(hidden))!.id}`, { method: 'DELETE' })).status).toBe(204)
+    expect(await inviteState(replacing.id)).toBe('revoked')
+    expect((await join(replacing)).status).toBe(400)
   })
 
   it('never answers the code twice: a retry with the same Idempotency-Key is a 409 shown_once', async () => {
