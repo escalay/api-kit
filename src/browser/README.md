@@ -1,10 +1,11 @@
 # browser
 
-The browser side, for the app's frontend (not the API): typed clients for the search, board and feature-switch routes, headless React hooks over them, and optional shadcn blocks; logic only, each app draws its own UI.
+The browser side, for the app's frontend (not the API): typed clients for the search, board, feature-switch and owner's sharing routes, headless React hooks over them, and optional shadcn blocks; logic only, each app draws its own UI.
 
 ## Use it when
 
-- A browser app (React, or none) calls a server part's routes: `vector-search`, `boards` or `switches`.
+- A browser app (React, or none) calls a server part's routes: `vector-search`, `boards`, `switches` or `sharing`
+  (the owner's side: invites and members).
 - The app wants the state handled (debounce, cancel, refresh on focus, a 403 `feature_disabled` heard once) and its own
   markup.
 
@@ -25,11 +26,14 @@ The browser side, for the app's frontend (not the API): typed clients for the se
 | `switches-client` | `switches-client.ts` | `createFeaturesClient`: the features for the person signed in (`isOn`, refresh on focus, `switch` with `dryRun`, `onDisabled` and `watchFetch` for every 403 `feature_disabled`); `FeaturesError` carries the problem; `isFeatureDisabled`, `whyOff` |
 | `switches-react` | `switches-react.tsx` | `FeaturesProvider`, `useFeature`, `<Feature>`, `useFeatures`, `useSwitchFeature`, `useFeatureDisabled`, `featureHooks<Key>()` |
 | `switches-ui` | `switches-block.tsx` | `FeatureSwitches` (the owner's panel) and `FeatureDisabledNotice` (shadcn `button` + `switch`) |
+| `sharing-client` | `sharing-client.ts` | `createSharingClient`: a space's sharing, invites (make, list a page at a time, read, revoke), members (list a page at a time, read, invite again, remove); `SharingError` carries the problem, `ShownOnceError` is a retried invite's 409 `shown_once` |
+| `sharing-react` | `sharing-react.ts` | `useSharing`: one space as its owner sees it, more by cursor, each change then a reload |
 
 ```bash
 npx @escalay/kit add search-client search-react vector-search-ui --dir apps/web/src/kit
 npx @escalay/kit add boards-client boards-react --dir apps/web/src/kit
 npx @escalay/kit add switches-client switches-react switches-ui --dir apps/web/src/kit
+npx @escalay/kit add sharing-client sharing-react --dir apps/web/src/kit
 # into the frontend, tracked by the API's kit.json
 npx @escalay/kit add boards-react --dir apps/api/src/kit --web-dir ../../web/src/kit
 # or one part with the shadcn CLI, into src/kit
@@ -62,6 +66,15 @@ const api = features.watchFetch(fetch)                       // the app's calls:
 useFeatureDisabled((problem) => toast.error(problem.detail)) // one alert for every switched-off call
 ```
 
+The owner's sharing of one space (the routes `registerSharing` serves; no asking to join, nor an invite's link):
+
+```tsx
+const sharing = useMemo(() => createSharingClient({ path: '/api/shelves' }), [])
+const { status, invites, members, moreInvites, loadMoreInvites, createInvite, revokeInvite, inviteAgain, removeMember } = useSharing(sharing, 'soups')
+const invite = await createInvite({ label: 'Sam', scope: 'read', lifetime: '30d' }, { idempotencyKey: crypto.randomUUID() })
+setShown(invite.message)                                     // the address and code: shown once, never kept by the hook
+```
+
 Search with the block:
 
 ```tsx
@@ -82,6 +95,9 @@ const search = createSearchClient<RecipeCard>({ path: '/api/search', similarPath
 | `usePictureInput({ paste })` | `'window'` \| `'scope'` \| false | `'window'` | where a pasted picture is heard |
 | `useSimilar(client, id, { by, limit, filters })` | | `look` | likeness for one id |
 | `createBoardsClient({ path, headers, fetchImpl })` | string | `/api/boards` | where the board routes live |
+| `createSharingClient({ path, headers, fetchImpl })` | string | `/api/spaces` | the sharing part's `path` |
+| `createInvite(…, { idempotencyKey })`, `inviteAgain(…, { idempotencyKey })` | string | none | sent as Idempotency-Key: a retry is a `ShownOnceError`, never a second invite |
+| `useSharing(client, space, { limit })` | number | the route's (50) | each page's size; without `space` it stays `idle` |
 | `createFeaturesClient({ path })` | string | `/api/features` | where the switch routes live |
 | `createFeaturesClient({ fetch })` | `fetch` | the window's | the fetch that carries the page's own sign-in |
 | `createFeaturesClient({ refreshOnFocus })` | boolean | true | refresh when the page comes back into view |
@@ -96,7 +112,10 @@ const search = createSearchClient<RecipeCard>({ path: '/api/search', similarPath
 The parts above, by file. `FeatureSwitches` shows everyone's switch per feature, confirming what else stops; paid
 features carry their plan as a badge and a card opens with where to get them; a status line shows only when the
 switch can't say it, such as who switched it off; a quiet line shows when a person or key has its own switch.
-`FeatureDisabledNotice` says "This feature is disabled.", why, and the app's own action.
+`FeatureDisabledNotice` says "This feature is disabled.", why, and the app's own action. `useSharing` answers
+`status` (`idle`, `loading`, `ready`, `error`), `error`, `sharing`, `invites`, `members`, `moreInvites` and
+`moreMembers`, `loadMoreInvites` and `loadMoreMembers`, `reload`, and the four changes; `createInvite` and
+`inviteAgain` answer the new invite with its code.
 
 ## Flows
 
@@ -137,7 +156,11 @@ sequenceDiagram
 - Typechecked with bundler resolution (`tsconfig.web.json`).
 - `useFeature` says `on: false` until the list arrived (`ready`), so a switchable screen never flashes in and out.
 - Build and read board refs with `boardRef` / `parseBoardRef` (copied with `boards-client`).
-- Standard: `docs/STANDARD.md` §16, §17, §21
+- An invite's code is in the answer that made it and nowhere else: the hook keeps it in no state, a list never
+  carries it, and a retry with the same Idempotency-Key is a `ShownOnceError` saying which invite was made.
+- A list follows only the cursor of its `next` link, on the client's own path and headers, never a host an answer
+  names. `useSharing` drops an answer for a space it has left.
+- Standard: `docs/STANDARD.md` §16, §17, §21, §23
 
 ## Failure modes
 
@@ -145,6 +168,10 @@ sequenceDiagram
 |---|---|
 | a search state with `status: 'error'` and the API's `detail` | the route answered a problem (no key 503, spend cap 429, a bad picture 400) |
 | `BoardsError` with the problem | a board route answered an error (a missing board, a bad ref) |
+| `SharingError` 404 `not_found` | no such space, or the caller may not share it (the same answer for both) |
+| `SharingError` 409 `conflict` | revoking a used invite (remove its member), or a space with 100 open invites |
+| `ShownOnceError` (409 `shown_once`) | a retry with an Idempotency-Key that already made an invite: revoke it and make another |
+| `useSharing` with `status: 'error'` | the space's first load failed; a change's failure is thrown to its caller |
 | a features state with `status: 'error'` | the first `GET /api/features` failed (the page is not signed in, the API is down); a later failed refresh keeps the list and sets `error` |
 | a feature off while it loads | `useFeature` is `on: false` until the list is `ready` |
 | an import of `@/components/ui/…` that doesn't resolve | the block needs the app's shadcn components: `npx shadcn add button input switch` |
@@ -158,7 +185,8 @@ sequenceDiagram
 ## Tests
 
 - `test/search-client.test.ts` (the client and controller), `test/search-ui.test.tsx` (the hooks and block in
-  happy-dom), `test/boards-ui.test.tsx`, `test/switches-ui.test.tsx` (against the real routes). The blocks' shadcn
+  happy-dom), `test/boards-ui.test.tsx`, `test/switches-ui.test.tsx`, `test/sharing-client.test.ts` and `test/sharing-ui.test.tsx`
+  (against the real routes). The blocks' shadcn
   imports resolve to `test/shadcn/` stand-ins.
 
 ## Upgrading

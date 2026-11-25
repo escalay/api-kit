@@ -582,4 +582,8 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## browser
 
-Nothing to do in any version recorded here.
+### Unreleased (after 1.33.0)
+
+- New parts for the owner's sharing in the browser, over the `sharing` part's routes: `sharing-client`
+  (`createSharingClient`, `SharingError`, `ShownOnceError`) and `sharing-react` (`useSharing`). Nothing to change; an app
+  adds them with `npx @escalay/kit add sharing-client sharing-react` (`--web-dir` for its frontend).

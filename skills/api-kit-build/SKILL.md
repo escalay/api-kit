@@ -68,7 +68,7 @@ part, what it needs and the order to add them: the kit's `docs/PARTS.md`):
 | A daily anonymous usage report | `telemetry` |
 | A public front page and a browser app under `/app` | `web` (Node only; on Workers the `app` preset serves `web/`) |
 | One name and icon on every surface | `brand`, then `npx @escalay/kit brand` |
-| Other people into one part of the app (invites, the owner's approval) | `sharing` (step 4 above) |
+| Other people into one part of the app (invites, the owner's approval) | `sharing` (step 4 above); in the browser `sharing-client`, `sharing-react` |
 
 Add one with `npx @escalay/kit add <part> --dir src/kit --install` (browser parts take `--web-dir`), then read its
 `src/kit/<part>/README.md` and wire it in `src/app.ts`. A new feature the owner can switch off:

@@ -35,7 +35,7 @@ export const GOALS = [
   { goal: 'One brand on every surface', parts: ['brand'], note: 'then `npx @escalay/kit brand` renders it' },
   { goal: 'Other agents delegate through A2A', parts: ['a2a'] },
   { goal: 'A public front page and the browser app under `/app`, on Node', parts: ['web'] },
-  { goal: 'Sharing: invites to a space, the owner’s approval at it', parts: ['sharing'], note: 'then `await sharing.sweep()` in the scheduled handler (its README, Wire it)' },
+  { goal: 'Sharing: invites to a space, the owner’s approval at it', parts: ['sharing', 'sharing-client', 'sharing-react'], note: 'then `await sharing.sweep()` in the scheduled handler (its README, Wire it); the browser layers go into the frontend (`--web-dir`)' },
 ]
 
 /**
