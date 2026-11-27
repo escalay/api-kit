@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.37.1](https://github.com/escalay/api-kit/compare/v1.37.0...v1.37.1) (2026-11-27)
+
+
+### Fixed
+
+* **mcp:** name the tool that polls a run in the still-working reply ([#125](https://github.com/escalay/api-kit/issues/125)) ([8f1551c](https://github.com/escalay/api-kit/commit/8f1551c704847fdcb4e4ec66b268d088e04b8e97))
+
 ## [1.37.0](https://github.com/escalay/api-kit/compare/v1.36.1...v1.37.0) (2026-11-27)
 
 
