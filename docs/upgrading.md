@@ -368,6 +368,12 @@ Tokens, codes, refresh rows and claims from before grants keep working.
 
 ## mcp
 
+### Unreleased (after 1.37.0)
+
+- **Fixed:** a tool still working names the tool that polls its run when one reads the run's address
+  (`Call get_run with {"id":"run_…"} until its status is done`), instead of a `GET` an agent with only the tools can't
+  make. Without such a tool it still names the `GET`. Nothing to change in an app.
+
 ### 1.33.0
 
 - New: `guideSkillProblems({ files })`, what the server would warn of reading the guide's skills (`[]` when each

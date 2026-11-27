@@ -3040,6 +3040,17 @@ describe('MCP (2026-07-28)', () => {
     expect(result._meta['api-kit/pending']).toEqual({ run: 'r1', location: '/api/v1/runs/r1' })
   })
 
+  it('names the tool that polls the run, when one reads its address, so an agent with only the tools can follow', async () => {
+    const api = new Hono()
+    api.post('/api/v1/reports', (c) => c.json({ status: 'running' }, 202, { location: '/api/v1/runs/r1' }))
+    const report = mcpTool({ name: 'make_report', title: 'Make a report', description: 'A slow report.', input: z.object({}), call: () => ({ method: 'POST', path: '/api/v1/reports' }), summarize: () => 'done' })
+    const getRun = mcpTool({ name: 'get_run', title: 'Get a run', description: 'One run.', input: z.object({ id: z.string() }), call: ({ id }) => ({ path: `/api/v1/runs/${id}` }), summarize: () => 'run' })
+    const app = new Hono()
+    mountMcp(app, { factory: mcpServerFactory({ info: { name: 'sample', version: '1.0.0' }, instructions: 'Reports.', tools: [report, getRun], callApi: inProcess(api), waitMs: 0 }), allowedHostnames: ['localhost'] })
+    const result = (await (await rpc(app as never, 'tools/call', { name: 'make_report', arguments: {} })).json()).result
+    expect(result.content[0].text).toBe('Still working: run r1. Call get_run with {"id":"r1"} until its status is done (the run is also in _meta["api-kit/pending"]), then call make_report again with the same arguments (it answers at once when done).')
+  })
+
   it('by default every JSON answer carries structuredContent', async () => {
     for (const { call } of [await twoTools(), await twoTools('always')]) {
       expect((await call('get_app', { id: 'a2' })).structuredContent).toMatchObject({ id: 'a2', name: 'Bravo' })
