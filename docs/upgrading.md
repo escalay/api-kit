@@ -368,7 +368,7 @@ Tokens, codes, refresh rows and claims from before grants keep working.
 
 ## mcp
 
-### Unreleased (after 1.37.0)
+### 1.37.1
 
 - **Fixed:** a tool still working names the tool that polls its run when one reads the run's address
   (`Call get_run with {"id":"run_…"} until its status is done`), instead of a `GET` an agent with only the tools can't
