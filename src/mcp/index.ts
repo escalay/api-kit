@@ -232,6 +232,20 @@ export const toolsHashOf = (tools: McpTool[], resources: McpResource[] = []) => 
   return hash
 }
 
+/** pollerOf finds the tool that reads a run's location (`GET /api/v1/runs/{id}` → `get_run`) and the arguments for it. */
+const pollerOf = (tools: McpTool[], location: string) => {
+  const path = location.replace(/^https?:\/\/[^/]+/, '').split('?')[0]!
+  for (const tool of tools) {
+    const route = routeOf(tool)
+    if (!route?.startsWith('GET ')) continue
+    const parts = route.slice(4).split('?')[0]!.split(/\{(\w+)\}/)
+    const names = parts.filter((_, i) => i % 2 === 1)
+    const match = new RegExp(`^${parts.map((part, i) => (i % 2 ? '([^/]+)' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('')}$`).exec(path)
+    if (match && names.length) return { tool: tool.name, args: Object.fromEntries(names.map((name, i) => [name, decodeURIComponent(match[i + 1]!)])) }
+  }
+  return undefined
+}
+
 /** A factory that also carries its server info and tools, so `mountMcp` can publish the card and the guide can list the tools. */
 export type AgentMcpFactory = McpServerFactory & { info: McpServerInfo; tools: McpTool[]; resources: McpResource[]; instructions?: string; prompts?: McpPrompt[]; brand?: AgentBrand }
 
@@ -266,7 +280,10 @@ export const mcpServerFactory = ({ info, instructions, tools, resources = [], pr
         const { response, pending, location } = await callWaiting(callApi, tool.call(args as never, callAtOf(ctx.http?.authInfo)), perCallAuth(ctx.http?.authInfo, ctx.mcpReq.id), waitMs)
         const json = await response.json().catch(() => null)
         if (pending) {
-          const text = `Still working: run ${pending}. GET ${location} until its status is done (the run is also in _meta["${PENDING_META}"]), then call ${tool.name} again with the same arguments (it answers at once when done).`
+          // An agent may have only the tools: name the one that polls, when there is one
+          const poller = location ? pollerOf(tools, location) : undefined
+          const poll = poller ? `Call ${poller.tool} with ${JSON.stringify(poller.args)}` : `GET ${location}`
+          const text = `Still working: run ${pending}. ${poll} until its status is done (the run is also in _meta["${PENDING_META}"]), then call ${tool.name} again with the same arguments (it answers at once when done).`
           return { content: [{ type: 'text', text }], _meta: { [PENDING_META]: { run: pending, location }, ...listed } }
         }
         if (!response.ok) return { isError: true, content: [{ type: 'text', text: problemText(json, response.status) }], _meta: { [PROBLEM_META]: problemOf(json, response.status), ...listed } }

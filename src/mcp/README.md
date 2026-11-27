@@ -198,7 +198,7 @@ sequenceDiagram
 | The caller sees | Why |
 |---|---|
 | a tool result with `isError` and `_meta["api-kit/problem"]` | the route answered an error: its problem (with `status`) and its text say what to do |
-| "Still working: run …" and `_meta["api-kit/pending"]` | the route's run was still working after `waitMs` |
+| "Still working: run …" and `_meta["api-kit/pending"]` | the route's run was still working after `waitMs`; the text names the tool that reads the run's address (`get_run`) when there is one, else the `GET` |
 | 403 from `/mcp` | a browser's `Origin` names a host not in `allowedHostnames` |
 | 401 from `/mcp` | no credentials: `/mcp` is guarded like every route; with OAuth on, the 401 points at the resource metadata |
 | 405 on `GET` or `DELETE /mcp` | the server is stateless: POST only, as the spec asks |
