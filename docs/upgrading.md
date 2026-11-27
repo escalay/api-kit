@@ -36,7 +36,7 @@ nothing to change there either.
 
 ## core
 
-### Unreleased (after 1.36.1)
+### 1.37.0
 
 - **Scopes gain `admin`.** `SCOPES` is now `read write admin`, with `DEFAULT_SCOPES` (`read write`) what an OAuth
   request that names no scope, or a key made without scopes, gets. New: `hasScope(caller, scope)` and `type Scope`.
@@ -133,7 +133,7 @@ nothing to change there either.
 
 ## oauth
 
-### Unreleased (after 1.36.1)
+### 1.37.0
 
 - A request with no `scope` (and an agent claim) gets `read write`, never `admin`; a client that asks for `admin` gets
   it only when the owner allows, and the consent page says it may manage the service. `scopes_supported` and the
@@ -494,7 +494,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## keys
 
-### Unreleased (after 1.36.1)
+### 1.37.0
 
 - **Keys have scopes.** A migration step adds `api_keys.scopes` (`read write` for every key made before). `POST
   /api/keys` and `create_key` take an optional `scopes`; the key, the list and `/api/me` show them. A key with `admin`
@@ -514,7 +514,7 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## people
 
-### Unreleased (after 1.36.1)
+### 1.37.0
 
 - `isAdmin(caller, fixedKeys)` is also true for a key or agent holding the `admin` scope.
 
