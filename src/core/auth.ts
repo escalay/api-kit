@@ -9,7 +9,8 @@
  * @example
  * const { key, hash } = mintApiKey('cli')                  // once per client: key → the secret store, `laptop:<hash>` → API_KEYS
  * app.use('*', authenticate({ realm: 'cookbook', keys: parseApiKeys(process.env.API_KEYS), access: { team: 'example', audience: process.env.ACCESS_AUD }, open: ['/llms.txt', '/api/health'] }))
- * c.get('caller') // { kind: 'key', name: 'laptop' } or { kind: 'person', email: '…' }
+ * c.get('caller') // { kind: 'key', name: 'laptop', scopes: ['read', 'write', 'admin'] } or { kind: 'person', email: '…' }
+ * hasScope(c.get('caller'), 'admin') // may this caller change the service itself
  */
 import { createHash, randomBytes } from 'node:crypto'
 import type { Context, Hono, MiddlewareHandler } from 'hono'
@@ -17,8 +18,16 @@ import { getCookie } from 'hono/cookie'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { problemResponse } from './problem.js'
 
-/** What an OAuth token can do: `read` for safe methods, `write` for the rest. */
-export const SCOPES = ['read', 'write'] as const
+/**
+ * What a key or an OAuth token can do: `read` for safe methods, `write` for the rest, `admin` for what the app marks
+ * admin (the service itself: its settings, team, providers). The kit enforces `read` and `write` on every request; a
+ * route that needs `admin` asks `hasScope`.
+ */
+export const SCOPES = ['read', 'write', 'admin'] as const
+export type Scope = (typeof SCOPES)[number]
+
+/** What a key made through the API, or an OAuth request that names no scope, gets: never `admin` unless asked for. */
+export const DEFAULT_SCOPES = ['read', 'write'] as const satisfies readonly Scope[]
 
 /** The paths an app with an OAuth server must leave open to anonymous callers: discovery, registration, the token endpoints, auth.md. */
 export const OAUTH_OPEN_PATHS = ['/.well-known/*', '/auth.md', '/oauth/*', '/agent/identity', '/agent/identity/claim']
@@ -37,8 +46,27 @@ export type OAuthServer = {
 /** A person's role, when the app keeps a team (`people` part): the owner may do everything, a member everything but admin. */
 export type Role = 'owner' | 'member'
 
-/** An OAuth agent's `resource` is the audience its token was issued for (none on tokens from before audiences). */
-export type Caller = { kind: 'key'; name: string } | { kind: 'person'; email: string; role?: Role } | { kind: 'agent'; name: string; client?: string; grant?: string; scopes: string[]; owner: string; resource?: string }
+/**
+ * An OAuth agent's `resource` is the audience its token was issued for (none on tokens from before audiences). A key's
+ * `scopes`: every scope for a key from `API_KEYS`, what it was made with for a stored key (`read` and `write` when the
+ * store names none).
+ */
+export type Caller = { kind: 'key'; name: string; scopes?: string[] } | { kind: 'person'; email: string; role?: Role } | { kind: 'agent'; name: string; client?: string; grant?: string; scopes: string[]; owner: string; resource?: string }
+
+/**
+ * hasScope says whether a caller may do what the scope covers. A key or an agent has its scopes (a key without any
+ * recorded, from before scopes, has `read` and `write`); the owner has all; a member and a person with no role have
+ * `read` and `write`.
+ *
+ * @example
+ * if (!hasScope(c.get('caller'), 'admin')) throw new ProblemError('forbidden', { detail: 'Needs the admin scope: ask the owner.' })
+ */
+export const hasScope = (caller: Caller | undefined, scope: Scope): boolean => {
+  if (!caller) return false
+  if (caller.kind === 'person') return caller.role === 'owner' || scope !== 'admin'
+  const scopes: readonly string[] = caller.scopes ?? DEFAULT_SCOPES
+  return scopes.includes(scope)
+}
 
 export const hashApiKey = (key: string) => createHash('sha256').update(key).digest('hex')
 
@@ -122,8 +150,8 @@ export type AccessOptions = {
 export type AuthOptions = {
   realm: string
   keys: Map<string, string>
-  /** Keys the service stores itself (made and revoked through its API): a key's hash → its name, or undefined. Asked after `keys`. */
-  storedKeys?: (hash: string) => Promise<string | undefined>
+  /** Keys the service stores itself (made and revoked through its API): a key's hash → its name (and scopes), or undefined. Asked after `keys`. */
+  storedKeys?: (hash: string) => Promise<string | { name: string; scopes: string[] } | undefined>
   access?: AccessOptions
   open?: string[]
   /**
@@ -157,30 +185,40 @@ export const authenticate = ({ realm, keys, storedKeys, access, open = [], token
     if (c.req.method === 'OPTIONS' || open.some((pattern) => matches(c.req.path, pattern))) return next()
     const key = bearerOf(c)
     const hash = key ? hashApiKey(key) : undefined
-    // An OAuth token is never a stored key: it skips the lookup
-    const name = hash ? (keys.get(hash) ?? (isJwt(key!) ? undefined : await storedKeys?.(hash))) : undefined
-    if (name) {
-      c.set('caller' as never, { kind: 'key', name } satisfies Caller as never)
+    const metadataOf = () => (typeof resourceMetadata === 'function' ? resourceMetadata(c) : resourceMetadata)
+    // read covers what a caller can look at; anything that changes state needs write
+    const neededOf = () => (SAFE.has(c.req.method) || relay.some((pattern) => matches(c.req.path, pattern)) ? 'read' : 'write')
+    const lacking = (needed: string, what: string) => {
+      const metadata = metadataOf()
+      const challenge = [`Bearer realm="${realm}"`, 'error="insufficient_scope"', `scope="${needed}"`, ...(metadata ? [`resource_metadata="${metadata}"`] : [])].join(', ')
+      return problemResponse(c, 'forbidden', { detail: `This ${what} lacks the ${needed} scope: ${what === 'token' ? 'authorize again asking for it' : 'ask the owner for a key that has it'}.`, headers: { 'www-authenticate': challenge } })
+    }
+    const fixed = hash ? keys.get(hash) : undefined
+    if (fixed) {
+      c.set('caller' as never, { kind: 'key', name: fixed, scopes: [...SCOPES] } satisfies Caller as never)
       return next()
     }
-    const metadataOf = () => (typeof resourceMetadata === 'function' ? resourceMetadata(c) : resourceMetadata)
+    // An OAuth token is never a stored key: it skips the lookup
+    const stored = hash && !isJwt(key!) ? await storedKeys?.(hash) : undefined
+    if (stored) {
+      const caller = typeof stored === 'string' ? { kind: 'key' as const, name: stored } : { kind: 'key' as const, name: stored.name, scopes: stored.scopes }
+      const needed = neededOf()
+      if (!hasScope(caller, needed)) return lacking(needed, 'key')
+      c.set('caller' as never, caller satisfies Caller as never)
+      return next()
+    }
     /** The Bearer challenge: the metadata pointer, and with OAuth on, the scopes to ask for. */
     const challengeOf = (params: string[]) => {
       const metadata = metadataOf()
-      return [`Bearer realm="${realm}"`, ...params, ...(metadata ? [`resource_metadata="${metadata}"`] : []), ...(tokens ? [`scope="${SCOPES.join(' ')}"`] : [])].join(', ')
+      return [`Bearer realm="${realm}"`, ...params, ...(metadata ? [`resource_metadata="${metadata}"`] : []), ...(tokens ? [`scope="${DEFAULT_SCOPES.join(' ')}"`] : [])].join(', ')
     }
     const agent = key && tokens && isJwt(key) ? await tokens(key, c) : null
     // A valid token for another resource: invalid_token with the reason, pointing at this request's metadata
     if (agent && 'refused' in agent)
       return problemResponse(c, 'unauthorized', { detail: agent.refused, headers: { 'www-authenticate': challengeOf(['error="invalid_token"', `error_description=${quoted(agent.refused)}`]) } })
     if (agent) {
-      // read covers what an agent can look at; anything that changes state needs write
-      const needed = SAFE.has(c.req.method) || relay.some((pattern) => matches(c.req.path, pattern)) ? 'read' : 'write'
-      if (!agent.scopes.includes(needed)) {
-        const metadata = metadataOf()
-        const challenge = [`Bearer realm="${realm}"`, 'error="insufficient_scope"', `scope="${needed}"`, ...(metadata ? [`resource_metadata="${metadata}"`] : [])].join(', ')
-        return problemResponse(c, 'forbidden', { detail: `This token lacks the ${needed} scope: authorize again asking for it.`, headers: { 'www-authenticate': challenge } })
-      }
+      const needed = neededOf()
+      if (!agent.scopes.includes(needed)) return lacking(needed, 'token')
       c.set('caller' as never, agent satisfies Caller as never)
       return next()
     }

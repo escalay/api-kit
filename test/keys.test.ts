@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { eq } from 'drizzle-orm'
 import { describe, expect, it, vi } from 'vitest'
-import { createAgentApi, dbGuardStore, hashApiKey, holderOf, KEYS_TAG, keyTools, kitGuards, memoryGuardStore, memoryStore, parseApiKeys, registerKeys, storedKeysOf, testDb, type Db, type GuardStore, type KeyChange, type StoredAnswer } from '../src/index.js'
+import { createAgentApi, dbGuardStore, hashApiKey, hasScope, holderOf, isAdmin, KEYS_TAG, keyTools, kitGuards, memoryGuardStore, memoryStore, parseApiKeys, registerKeys, storedKeysOf, testDb, type Db, type GuardStore, type KeyChange, type StoredAnswer } from '../src/index.js'
 import { mountA2A } from '../src/a2a/index.js'
 import { inProcess, mcpServerFactory, mountMcp } from '../src/mcp/index.js'
 import { cliSnapshot, lintOpenApi, toolRoutes, toolsRun } from '../src/testing/index.js'
@@ -121,6 +121,44 @@ describe('keys', () => {
     expect((await make('laptop')).status).toBe(409)
     expect((await make('owner')).status).toBe(409)
     expect((await make('Not A Name')).status).toBe(400)
+  })
+
+  it('gives a key read and write unless made with other scopes, and enforces them on every request', async () => {
+    const { owner, as } = await setup()
+    const make = async (body: object) => (await (await owner('/api/keys', { method: 'POST', body: JSON.stringify(body) })).json()) as { key: string; scopes: string[] }
+    const plain = await make({ name: 'plain' })
+    expect(plain.scopes).toEqual(['read', 'write'])
+    expect(await (await as(plain.key)('/api/me')).json()).toMatchObject({ scopes: ['read', 'write'] })
+
+    const reader = await make({ name: 'reader', scopes: ['read'] })
+    expect((await as(reader.key)('/api/me')).status).toBe(200)
+    const refused = await as(reader.key)('/api/keys/key_x', { method: 'DELETE' })
+    expect(refused.status).toBe(403)
+    expect(refused.headers.get('www-authenticate')).toContain('error="insufficient_scope", scope="write"')
+    expect(((await refused.json()) as { detail: string }).detail).toContain('ask the owner for a key that has it')
+
+    const admin = await make({ name: 'ops-agent', scopes: ['read', 'write', 'admin'] })
+    expect(await (await as(admin.key)('/api/me')).json()).toMatchObject({ scopes: ['read', 'write', 'admin'], canManageKeys: false })
+    // An admin key still cannot make keys: a leaked one can't make itself a spare
+    expect((await as(admin.key)('/api/keys', { method: 'POST', body: JSON.stringify({ name: 'spare' }) })).status).toBe(403)
+    // The deployment's own key holds every scope
+    expect(await (await owner('/api/me')).json()).toMatchObject({ scopes: ['read', 'write', 'admin'] })
+    expect((await owner('/api/keys', { method: 'POST', body: JSON.stringify({ name: 'bad', scopes: ['root'] }) })).status).toBe(400)
+  })
+
+  it('answers hasScope and isAdmin for every kind of caller', () => {
+    const caller = (value: unknown) => value as never
+    expect(hasScope(caller({ kind: 'key', name: 'old' }), 'write')).toBe(true)
+    expect(hasScope(caller({ kind: 'key', name: 'old' }), 'admin')).toBe(false)
+    expect(hasScope(caller({ kind: 'key', name: 'ops', scopes: ['read', 'admin'] }), 'admin')).toBe(true)
+    expect(hasScope(caller({ kind: 'person', email: 'o@x.test', role: 'owner' }), 'admin')).toBe(true)
+    expect(hasScope(caller({ kind: 'person', email: 'm@x.test', role: 'member' }), 'admin')).toBe(false)
+    expect(hasScope(caller({ kind: 'person', email: 'p@x.test' }), 'write')).toBe(true)
+    expect(hasScope(caller({ kind: 'agent', name: 'a', scopes: ['read'], owner: 'o' }), 'write')).toBe(false)
+    expect(hasScope(undefined, 'read')).toBe(false)
+    expect(isAdmin(caller({ kind: 'agent', name: 'a', scopes: ['read', 'admin'], owner: 'o' }))).toBe(true)
+    expect(isAdmin(caller({ kind: 'key', name: 'app', scopes: ['read', 'write'] }))).toBe(false)
+    expect(isAdmin(caller({ kind: 'person', email: 'm@x.test', role: 'member' }))).toBe(false)
   })
 
   it('lets only a deployment key or a signed-in person manage keys', () => {

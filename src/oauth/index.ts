@@ -37,7 +37,7 @@
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto'
 import type { Context, Hono } from 'hono'
 import { calculateJwkThumbprint, exportJWK, importJWK, jwtVerify, SignJWT, type JWK } from 'jose'
-import { OAUTH_OPEN_PATHS, SCOPES } from '../core/auth.js'
+import { DEFAULT_SCOPES, OAUTH_OPEN_PATHS, SCOPES } from '../core/auth.js'
 import { mountedOf, type AgentBrand } from '../core/discovery.js'
 import { addressOf, type AddressTrust, type GuardStore } from '../core/guards.js'
 import { originOf } from '../core/hal.js'
@@ -646,8 +646,8 @@ input{background:var(--bg);color:var(--fg);letter-spacing:.3em;width:9ch;text-al
       claim_uri: `${origin}/agent/identity/claim`,
       claim_endpoint: `${origin}/agent/identity/claim`,
       identity_types_supported: ['anonymous', 'service_auth'],
-      anonymous: { credential_types_supported: ['identity_assertion'], claim_uri: `${origin}/agent/identity/claim`, pre_claim_scopes: [], post_claim_scopes: [...SCOPES] },
-      service_auth: { credential_types_supported: ['identity_assertion'], claim_uri: `${origin}/agent/identity/claim`, post_claim_scopes: [...SCOPES] },
+      anonymous: { credential_types_supported: ['identity_assertion'], claim_uri: `${origin}/agent/identity/claim`, pre_claim_scopes: [], post_claim_scopes: [...DEFAULT_SCOPES] },
+      service_auth: { credential_types_supported: ['identity_assertion'], claim_uri: `${origin}/agent/identity/claim`, post_claim_scopes: [...DEFAULT_SCOPES] },
     },
     ...config.metadata,
   })
@@ -723,7 +723,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
     if (!(client.redirectUris as string[]).includes(params.redirect_uri ?? '')) return { error: 'The redirect_uri is not one this client registered.' }
     if (params.response_type !== 'code') return { error: 'Only response_type=code is supported.', redirect: true }
     if (!params.code_challenge || params.code_challenge_method !== 'S256') return { error: 'PKCE is required: code_challenge with code_challenge_method=S256.', redirect: true }
-    const scopes = (params.scope || SCOPES.join(' ')).split(' ').filter((scope) => (SCOPES as readonly string[]).includes(scope))
+    const scopes = (params.scope || DEFAULT_SCOPES.join(' ')).split(' ').filter((scope) => (SCOPES as readonly string[]).includes(scope))
     return { client, scopes }
   }
   type Checked = { client: Record<string, unknown>; scopes: string[] }
@@ -749,7 +749,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
 
   /** The kit's own consent page: who asks, for what, as whom, and where it returns. */
   const consentPage = (c: Context, ticket: string, checked: Checked, owner: string, audience: string, redirectUri: string) => {
-    const what = checked.scopes.includes('write') ? 'read everything and make changes' : 'read everything'
+    const what = [checked.scopes.includes('write') ? 'read everything and make changes' : 'read everything', ...(checked.scopes.includes('admin') ? ['manage the service itself (its settings and team)'] : [])].join(', and ')
     const path = pathOf(audience)
     const asked = path ? `<code>${escape(config.name)}: ${escape(path)}</code>` : `all of ${escape(config.name)}`
     const back = returnOf(redirectUri)
@@ -1038,7 +1038,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       await putUnused('registration', registrationId, { name, type: body.type, claimed: false, email: body.login_hint ?? null, family: newGrant(), audience: rootOf(c), resource: null, holds: sha(claimToken) }, expires)
       await putUnused('claim-token', sha(claimToken), { registration: registrationId }, expires)
       const assertion = await sign({ sub: registrationId, typ: 'agent_identity' }, REGISTRATION_TTL, origin)
-      const base = { registration_id: registrationId, registration_type: body.type, claim_url: `${origin}/agent/identity/claim`, claim_token: claimToken, claim_token_expires: new Date(expires * 1000).toISOString(), post_claim_scopes: [...SCOPES] }
+      const base = { registration_id: registrationId, registration_type: body.type, claim_url: `${origin}/agent/identity/claim`, claim_token: claimToken, claim_token_expires: new Date(expires * 1000).toISOString(), post_claim_scopes: [...DEFAULT_SCOPES] }
       if (body.type === 'anonymous') return c.json({ ...base, identity_assertion: assertion, assertion_expires: new Date(expires * 1000).toISOString(), pre_claim_scopes: [] }, 200, { 'cache-control': 'no-store' })
       return c.json({ ...base, claim: await startClaim(origin, registrationId, body.login_hint!) }, 200, { 'cache-control': 'no-store' })
     })
@@ -1110,7 +1110,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
       const body = await bodyOf(c)
       const client = body.client_id ? await store.get('client', body.client_id) : null
       if (!client) return oauthError(c, 401, 'invalid_client', 'This client is not registered here (or its registration expired). Register at /oauth/register first.')
-      const scopes = (body.scope || SCOPES.join(' ')).split(' ').filter((scope) => (SCOPES as readonly string[]).includes(scope))
+      const scopes = (body.scope || DEFAULT_SCOPES.join(' ')).split(' ').filter((scope) => (SCOPES as readonly string[]).includes(scope))
       if (!scopes.length) return oauthError(c, 400, 'invalid_scope', `Ask for any of: ${SCOPES.join(', ')}.`)
       if (await manyResources(c)) return oauthError(c, 400, 'invalid_target', ONE_RESOURCE)
       const bound = audienceFor(c, body.resource)
@@ -1329,7 +1329,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           // grant would outlive the marker and undo the revoke
           const [revokedGrant, revokedLate] = await Promise.all([store.get('revoked-family', grant), store.get('revoked-client', client)])
           if (revokedGrant || revokedLate) return oauthError(c, 400, 'invalid_grant', 'This sign-in is revoked: register again.')
-          const issued = { client, name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant, ...boundOf(registration) }
+          const issued = { client, name: String(registration.name), owner: String(registration.owner), scopes: [...DEFAULT_SCOPES], grant, ...boundOf(registration) }
           // Refused or failed, the grant ends, so the agent's identity assertion buys nothing either; heard, jwt-bearer may follow
           return firstTokens('claim', issued, undefined, async () => {
             if (config.onGrant) await store.put('registration', client, { ...registration, collected: true }, now() + REGISTRATION_TTL)
@@ -1388,7 +1388,7 @@ approves you** on a page behind their sign-in. There are three ways; pick the on
           const grant = String(registration.family ?? payload!.sub)
           // The assertion belongs to the claim's sign-in: once that grant is revoked it buys nothing, never a dead token
           if (await store.get('revoked-family', grant)) return oauthError(c, 400, 'invalid_grant', 'This sign-in is revoked (a used refresh token came back, or the owner ended it): register again.')
-          return c.json(await issue(origin, { client: String(payload!.sub), name: String(registration.name), owner: String(registration.owner), scopes: [...SCOPES], grant, ...boundOf(registration) }), 200, { 'cache-control': 'no-store' })
+          return c.json(await issue(origin, { client: String(payload!.sub), name: String(registration.name), owner: String(registration.owner), scopes: [...DEFAULT_SCOPES], grant, ...boundOf(registration) }), 200, { 'cache-control': 'no-store' })
         }
         default:
           return oauthError(c, 400, 'unsupported_grant_type', `grant_type must be one of: authorization_code, refresh_token, ${DEVICE_GRANT}, ${JWT_BEARER}, ${CLAIM_GRANT}.`)

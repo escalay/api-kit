@@ -1,7 +1,7 @@
 /** The key routes' handlers: request → repo → HAL answer. */
 import type { RouteHandler } from '@hono/zod-openapi'
 import type { Context } from 'hono'
-import { mintApiKey, type Caller } from '../core/auth.js'
+import { DEFAULT_SCOPES, hasScope, mintApiKey, SCOPES, type Caller } from '../core/auth.js'
 import { showOnce } from '../core/guards.js'
 import { linksOf, originOf } from '../core/hal.js'
 import { tellApp } from '../core/hooks.js'
@@ -28,7 +28,7 @@ export const holderOf = (caller: Caller | undefined, fixedKeys: string[]) => {
 export type KeyChange = { id: string; name: string; action: 'created' | 'deleted'; by: string }
 
 export const keyHandlers = (repo: KeysRepo, { path, mePath, fixedKeys, keyPrefix, onKeyChange }: { path: string; mePath: string; fixedKeys: string[]; keyPrefix: string; onKeyChange?: (change: KeyChange, c: Context) => void | Promise<void> }) => {
-  const cardOf = (origin: string, { hash: _hash, ...row }: KeyRow) => ({ ...row, _links: linksOf(origin, { self: `${path}/${row.id}`, list: path }) })
+  const cardOf = (origin: string, { hash: _hash, scopes, ...row }: KeyRow) => ({ ...row, scopes: scopes.split(' ').filter(Boolean) as (typeof SCOPES)[number][], _links: linksOf(origin, { self: `${path}/${row.id}`, list: path }) })
   const missing = (id: string) => new ProblemError('not_found', { detail: `No key ${id}. GET ${path} lists them.` })
 
   const list: RouteHandler<KeyRoutes['list']> = async (c) => {
@@ -48,17 +48,17 @@ export const keyHandlers = (repo: KeysRepo, { path, mePath, fixedKeys, keyPrefix
     const fixed = caller.kind === 'key' && fixedKeys.includes(name)
     const stored = caller.kind === 'key' && !fixed ? await repo.named(name) : undefined
     return c.json(
-      { kind: caller.kind, name, keyId: stored?.id ?? null, canManageKeys: fixed || (caller.kind === 'person' && caller.role !== 'member'), role: caller.kind === 'person' ? (caller.role ?? null) : null, _links: linksOf(originOf(c), { self: mePath, ...(stored ? { key: `${path}/${stored.id}` } : {}) }) },
+      { kind: caller.kind, name, keyId: stored?.id ?? null, canManageKeys: fixed || (caller.kind === 'person' && caller.role !== 'member'), role: caller.kind === 'person' ? (caller.role ?? null) : null, scopes: SCOPES.filter((scope) => hasScope(caller, scope)), _links: linksOf(originOf(c), { self: mePath, ...(stored ? { key: `${path}/${stored.id}` } : {}) }) },
       200,
       NO_STORE,
     )
   }
   const create: RouteHandler<KeyRoutes['create']> = async (c) => {
     const createdBy = holderOf(c.get('caller' as never), fixedKeys)
-    const { name } = c.req.valid('json')
+    const { name, scopes = [...DEFAULT_SCOPES] } = c.req.valid('json')
     if (fixedKeys.includes(name) || (await repo.named(name))) throw new ProblemError('conflict', { detail: `A key named ${name} already exists: pick another name.` })
     const { key, hash } = mintApiKey(keyPrefix)
-    const row: KeyRow = { id: newId('key'), name, hash, start: key.slice(0, keyPrefix.length + 5), createdAt: new Date().toISOString(), createdBy, lastUsedAt: null }
+    const row: KeyRow = { id: newId('key'), name, hash, start: key.slice(0, keyPrefix.length + 5), createdAt: new Date().toISOString(), createdBy, lastUsedAt: null, scopes: SCOPES.filter((scope) => scopes.includes(scope)).join(' ') }
     await repo.create(row)
     // The key is stored and shown once: a hook that throws must not hide it behind a 500
     await tellApp('onKeyChange', () => onKeyChange?.({ id: row.id, name, action: 'created', by: createdBy }, c))

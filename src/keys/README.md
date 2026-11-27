@@ -5,11 +5,12 @@ API keys the app makes and revokes through its own API, beside the ones it is st
 ## Use it when
 
 - The owner hands out keys per app, machine or person, and revokes one without a redeploy.
-- Callers need `GET /api/me`: who they are, and whether they may manage keys.
+- Callers need `GET /api/me`: who they are, what they may do (`scopes`), and whether they may manage keys.
+- Holders need different reach: a key is made with `scopes` (`read`, `write`, `admin`; `read write` when left out).
 
 ## Don't use it when
 
-- Keys must differ in what they may do: every key sees and changes what any key does; this is not a permission system.
+- Keys must differ in which records they reach (one customer's, not another's): scopes say what kind of thing a key may do, not which data; scope data in the app.
 - Agents should sign in by themselves: that is the oauth part, whose tokens expire.
 
 ## Add it

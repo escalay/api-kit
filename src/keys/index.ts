@@ -1,6 +1,6 @@
 /**
  * API keys an app makes and revokes through its own API, beside the ones it is started with (`API_KEYS`). Kept as
- * SHA-256 hashes with their first characters, maker and last use; every key sees what any key sees. Only a key from
+ * SHA-256 hashes with their first characters, maker, last use and scopes (`read write` unless made with others). Only a key from
  * `API_KEYS` or a signed-in person may make or revoke one, so a leaked app key cannot make itself a spare.
  *   GET    {path}        the keys made here, and the names of the deployment's (`fixedKeys`)
  *   POST   {path}        a new key → 201, the key shown this once
@@ -44,7 +44,7 @@ export type KeysConfig = {
   onKeyChange?: (change: KeyChange, c: Context) => void | Promise<void>
 }
 
-/** storedKeysOf is the lookup `createAgentApi`'s auth takes as `storedKeys`: a key's hash → its name, or undefined. */
+/** storedKeysOf is the lookup `createAgentApi`'s auth takes as `storedKeys`: a key's hash → its name and scopes, or undefined. */
 export const storedKeysOf = (db: Db) => keysRepo(db).nameOf
 
 /** Registers the key routes on the app, after migrating the keys table. Call it after `createAgentApi`. */
