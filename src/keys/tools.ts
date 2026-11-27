@@ -1,9 +1,10 @@
 /** The key routes as MCP tools. */
 import { z } from '@hono/zod-openapi'
+import { SCOPES } from '../core/auth.js'
 import { mcpTool, type McpTool } from '../mcp/index.js'
 
-type Card = { id: string; name: string; start: string; createdBy: string; lastUsedAt: string | null }
-const line = (row: Card) => `${row.name} · id ${row.id} · starts ${row.start} · made by ${row.createdBy} · last used ${row.lastUsedAt ?? 'never'}`
+type Card = { id: string; name: string; start: string; createdBy: string; lastUsedAt: string | null; scopes: string[] }
+const line = (row: Card) => `${row.name} · id ${row.id} · may ${row.scopes.join(', ')} · starts ${row.start} · made by ${row.createdBy} · last used ${row.lastUsedAt ?? 'never'}`
 
 /**
  * The MCP tools for the key routes: who am I, list, read, make and revoke.
@@ -22,7 +23,7 @@ export const keyTools = ({ path = '/api/keys', mePath = '/api/me' }: { path?: st
       annotations: { readOnlyHint: true, openWorldHint: false },
       cli: { name: 'auth status', examples: [{ run: 'auth status', about: 'Which key, person or agent you call as' }] },
       call: () => ({ path: mePath }),
-      summarize: (json: { kind: string; name: string; keyId: string | null; canManageKeys: boolean }) => `Calling as ${json.kind} ${json.name}${json.keyId ? ` (key id ${json.keyId})` : ''}. ${json.canManageKeys ? 'May' : 'May not'} make or revoke keys.`,
+      summarize: (json: { kind: string; name: string; keyId: string | null; canManageKeys: boolean; scopes: string[] }) => `Calling as ${json.kind} ${json.name}${json.keyId ? ` (key id ${json.keyId})` : ''}, with ${json.scopes.join(', ')}. ${json.canManageKeys ? 'May' : 'May not'} make or revoke keys.`,
     }),
     mcpTool({
       name: 'list_keys',
@@ -48,7 +49,10 @@ export const keyTools = ({ path = '/api/keys', mePath = '/api/me' }: { path?: st
       name: 'create_key',
       title: 'Make an API key',
       description: 'Makes an API key for one app, machine or person and returns it once: hand it to its holder, never keep it in a file or a message. Only a key set in the deployment or a signed-in person may make keys.',
-      input: z.object({ name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/).describe('Who or what holds it, e.g. `billing-app`: lowercase letters, digits and hyphens.') }),
+      input: z.object({
+        name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/).describe('Who or what holds it, e.g. `billing-app`: lowercase letters, digits and hyphens.'),
+        scopes: z.array(z.enum(SCOPES)).min(1).optional().describe('What it may do. Left out: read and write. Add admin only for a holder that manages the service itself.'),
+      }),
       annotations: { openWorldHint: false },
       cli: { name: 'key create', examples: [{ run: 'key create --name billing-app', about: 'A key for the billing app, shown once' }] },
       call: (body) => ({ method: 'POST', path, body }),

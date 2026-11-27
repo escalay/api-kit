@@ -3092,7 +3092,7 @@ describe('people through Cloudflare Access', () => {
     app.get('/api/v1/me', (c) => c.json(c.get('caller' as never)))
     const me = (key: string) => app.request('/api/v1/me', { headers: { authorization: `Bearer ${key}` } })
     expect(await (await me(stored.key)).json()).toEqual({ kind: 'key', name: 'made-by-api' })
-    expect(await (await me(key)).json()).toEqual({ kind: 'key', name: 'tester' })
+    expect(await (await me(key)).json()).toEqual({ kind: 'key', name: 'tester', scopes: ['read', 'write', 'admin'] })
     expect((await me('st_revoked')).status).toBe(401)
     // A key from the start list is never looked up, nor is anything shaped like a token
     asked.length = 0

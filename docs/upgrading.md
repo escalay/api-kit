@@ -36,6 +36,15 @@ nothing to change there either.
 
 ## core
 
+### Unreleased (after 1.36.1)
+
+- **Scopes gain `admin`.** `SCOPES` is now `read write admin`, with `DEFAULT_SCOPES` (`read write`) what an OAuth
+  request that names no scope, or a key made without scopes, gets. New: `hasScope(caller, scope)` and `type Scope`.
+  A key from `API_KEYS` now carries `scopes: ['read', 'write', 'admin']` on its caller; a stored key's caller carries
+  its scopes, and `authenticate` refuses it a write without `write` (403 `insufficient_scope`). `storedKeys` may answer
+  `{ name, scopes }` as well as a name (a name alone means `read write`). Nothing to change in an app unless it
+  compares a key caller with `toEqual` or uses `SCOPES` as a default; take core with keys, oauth and people.
+
 ### 1.32.0
 
 - A new app names where a caller's address comes from: `createApp({ db, env, address })`, `'socket'` in `server.ts`
@@ -123,6 +132,12 @@ nothing to change there either.
   file in `migrations/` (`pnpm check` and CI fail until it is there), and the deploy applies it.
 
 ## oauth
+
+### Unreleased (after 1.36.1)
+
+- A request with no `scope` (and an agent claim) gets `read write`, never `admin`; a client that asks for `admin` gets
+  it only when the owner allows, and the consent page says it may manage the service. `scopes_supported` and the
+  OpenAPI `oauth` scheme list `admin`.
 
 ### 1.36.1
 
@@ -479,6 +494,12 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
 
 ## keys
 
+### Unreleased (after 1.36.1)
+
+- **Keys have scopes.** A migration step adds `api_keys.scopes` (`read write` for every key made before). `POST
+  /api/keys` and `create_key` take an optional `scopes`; the key, the list and `/api/me` show them. A key with `admin`
+  still cannot make or revoke keys. `storedKeysOf(db)` now answers `{ name, scopes }`.
+
 ### 1.30.1
 
 - A made key is never kept by Idempotency-Key (core's `showOnce`): a create retried with the same key is a 409
@@ -492,6 +513,10 @@ where it can't read one. An app with its own Dockerfile adds `COPY brand brand` 
   its 201.
 
 ## people
+
+### Unreleased (after 1.36.1)
+
+- `isAdmin(caller, fixedKeys)` is also true for a key or agent holding the `admin` scope.
 
 ### 1.36.0
 

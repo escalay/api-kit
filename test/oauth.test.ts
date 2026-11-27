@@ -46,7 +46,7 @@ describe('OAuth for agents', () => {
   it('publishes the metadata the discovery specs ask for', async () => {
     const { app } = await sampleApi()
     const prm = await (await app.request('/.well-known/oauth-protected-resource')).json()
-    expect(prm).toMatchObject({ resource: ORIGIN, authorization_servers: [ORIGIN], scopes_supported: ['read', 'write'], bearer_methods_supported: ['header'] })
+    expect(prm).toMatchObject({ resource: ORIGIN, authorization_servers: [ORIGIN], scopes_supported: ['read', 'write', 'admin'], bearer_methods_supported: ['header'] })
     expect((await (await app.request('/.well-known/oauth-protected-resource/mcp')).json()).resource).toBe(`${ORIGIN}/mcp`)
     const as = await (await app.request('/.well-known/oauth-authorization-server')).json()
     expect(as).toMatchObject({ issuer: ORIGIN, jwks_uri: `${ORIGIN}/.well-known/jwks.json`, code_challenge_methods_supported: ['S256'], agent_auth: { skill: `${ORIGIN}/auth.md`, register_uri: `${ORIGIN}/agent/identity`, identity_types_supported: ['anonymous', 'service_auth'], anonymous: { credential_types_supported: ['identity_assertion'] } } })
@@ -63,7 +63,7 @@ describe('OAuth for agents', () => {
   it('names no example resource in the scopes of the OpenAPI document', async () => {
     const { app } = await sampleApi()
     const doc = await (await app.request('/openapi.json')).json()
-    expect(doc.components.securitySchemes.oauth.flows.authorizationCode.scopes).toEqual({ read: 'Read everything', write: 'Make changes' })
+    expect(doc.components.securitySchemes.oauth.flows.authorizationCode.scopes).toEqual({ read: 'Read everything', write: 'Make changes', admin: 'Manage the service itself: settings, team, providers' })
   })
 
   it('publishes a sitemap and a Personal Agent Protocol document bound to the issuer', async () => {
@@ -1204,7 +1204,7 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     const { app } = await oauthApp(memoryOAuthStore())
     const client_id = await registered(app)
     const owner = browserOf(app, { 'x-test-owner': OWNER })
-    const page = await owner.request(`/oauth/authorize?${authorizeQuery(client_id, { scope: 'admin' })}`)
+    const page = await owner.request(`/oauth/authorize?${authorizeQuery(client_id, { scope: 'delete' })}`)
     expect(page.status).toBe(200)
     const allowed = await owner.post('/oauth/authorize', { ticket: ticketIn(await page.text()), decision: 'allow' })
     expect([allowed.status, allowed.headers.get('location')]).toEqual([302, expect.stringContaining('code=')])
@@ -1212,6 +1212,24 @@ describe('OAuth approvals: the app decides who approves a sign-in', () => {
     expect(tokens.scope).toBe('')
     // A token with no scopes reads nothing
     expect((await callerWith(app, tokens.access_token)).status).toBe(403)
+  })
+
+  it('grants read and write when no scope is asked for, and admin only when asked for and allowed', async () => {
+    const { app } = await oauthApp(memoryOAuthStore())
+    const client_id = await registered(app)
+    const owner = browserOf(app, { 'x-test-owner': OWNER })
+    const signIn = async (scope?: string) => {
+      const page = await owner.request(`/oauth/authorize?${authorizeQuery(client_id, scope ? { scope } : {})}`)
+      const text = await page.text()
+      const allowed = await owner.post('/oauth/authorize', { ticket: ticketIn(text), decision: 'allow' })
+      return { text, tokens: await (await exchangeAt(app, allowed.headers.get('location'), client_id)).json() }
+    }
+    const plain = await signIn()
+    expect(plain.tokens.scope).toBe('read write')
+    expect(plain.text).not.toContain('manage the service')
+    const admin = await signIn('read write admin')
+    expect(admin.tokens.scope).toBe('read write admin')
+    expect(admin.text).toContain('manage the service itself')
   })
 
   it('hands onGrant the data, and false spends the code and issues nothing', async () => {

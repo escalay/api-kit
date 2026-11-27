@@ -1,7 +1,7 @@
 /** The browser session: a random token in an HttpOnly cookie, only its SHA-256 in the database. Also who counts as an admin, and enrolments. */
 import type { Context } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
-import { hashApiKey, type Caller, type Role } from '../core/auth.js'
+import { hashApiKey, hasScope, type Caller, type Role } from '../core/auth.js'
 import { showOnce } from '../core/guards.js'
 import type { Db } from '../db/index.js'
 import { peopleRepo } from './repo.js'
@@ -59,9 +59,12 @@ export const roleOf = (db: Db) => async (email: string): Promise<Role | null> =>
   return domain && (await repo.hasDomain(domain)) ? 'member' : null
 }
 
-/** isAdmin: the owner, or a key from the deployment's `API_KEYS`. Members, keys made through the API and agents are not. */
+/**
+ * isAdmin: the owner, a key from the deployment's `API_KEYS`, or a key or agent holding the `admin` scope. Members,
+ * other keys made through the API and other agents are not.
+ */
 export const isAdmin = (caller: Caller | undefined, fixedKeys: string[] = []) =>
-  (caller?.kind === 'person' && caller.role === 'owner') || (caller?.kind === 'key' && fixedKeys.includes(caller.name))
+  (caller?.kind === 'person' && caller.role === 'owner') || (caller?.kind === 'key' && fixedKeys.includes(caller.name)) || (caller?.kind !== 'person' && hasScope(caller, 'admin'))
 
 /** Why an enrolment was given: the deployment was claimed, or an owner is recovering it. */
 export type EnrolmentPurpose = 'claim' | 'recovery'

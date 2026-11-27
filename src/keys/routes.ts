@@ -1,5 +1,6 @@
 /** The key routes as OpenAPI contracts: list, make, read and revoke the keys that open the API, and who is calling. */
 import { createRoute, z } from '@hono/zod-openapi'
+import { DEFAULT_SCOPES, SCOPES } from '../core/auth.js'
 import { HAL_JSON, LinksSchema } from '../core/hal.js'
 import { problemResponses } from '../core/problem.js'
 
@@ -18,9 +19,10 @@ export const keySchemaOf = (keyPrefix = 'ak') =>
     createdAt: z.string(),
     createdBy: z.string().openapi({ description: 'The key or person that made it.' }),
     lastUsedAt: z.string().nullable().openapi({ description: 'When it was last used, to the hour. Null: never.' }),
+    scopes: z.array(z.enum(SCOPES)).openapi({ description: 'What it may do: `read`, `write` (change data), `admin` (manage the service itself).', example: ['read', 'write'] }),
     _links: LinksSchema,
   })
-  .openapi('Key', { description: 'A key that opens this API. Every key sees and changes everything any key can.' })
+  .openapi('Key', { description: 'A key that opens this API, with what it may do.' })
 
 export const keyRoutes = ({ path, mePath, tag, keyPrefix = 'ak' }: { path: string; mePath: string; tag: string; keyPrefix?: string }) => {
   const KeySchema = keySchemaOf(keyPrefix)
@@ -42,10 +44,16 @@ export const keyRoutes = ({ path, mePath, tag, keyPrefix = 'ak' }: { path: strin
       keyId: z.string().nullable().openapi({ description: 'For a key made through the API: its id, to revoke it.' }),
       canManageKeys: z.boolean().openapi({ description: 'Whether this caller may make and revoke keys.' }),
       role: z.enum(['owner', 'member']).nullable().openapi({ description: 'For a person on a team (the people part): `owner` or `member`; otherwise null.', example: 'owner' }),
+      scopes: z.array(z.enum(SCOPES)).openapi({ description: 'What this caller may do.', example: ['read', 'write'] }),
       _links: LinksSchema,
     })
     .openapi('Me', { description: 'Who is calling: the key, person or agent this request was made as.' })
-  const KeyInputSchema = z.object({ name }).openapi('KeyInput', { description: 'The name of the key to make.' })
+  const scopes = z
+    .array(z.enum(SCOPES))
+    .min(1)
+    .optional()
+    .openapi({ description: `What the key may do. Left out: ${DEFAULT_SCOPES.join(' and ')}. \`admin\` (manage the service itself) only when the holder needs it.`, example: ['read'] })
+  const KeyInputSchema = z.object({ name, scopes }).openapi('KeyInput', { description: 'The name of the key to make, and what it may do.' })
   const id = z.string().min(1).max(80).openapi({ description: 'The key’s id, from the list.', example: 'key_0mh2k1x9zabcdefghjk' })
   return {
     list: createRoute({
@@ -82,7 +90,7 @@ export const keyRoutes = ({ path, mePath, tag, keyPrefix = 'ak' }: { path: strin
       operationId: 'createKey',
       tags: [tag],
       summary: 'Make an API key',
-      description: 'Makes a key for one app, machine or person, and returns it once. Every key sees and changes everything any key can, so give each holder its own and revoke it when they are done. Only a key set in the deployment (`API_KEYS`) or a signed-in person can make keys: a key made here cannot make another, and neither can an OAuth token.',
+      description: 'Makes a key for one app, machine or person, and returns it once. It may read and change data unless made with fewer or more `scopes`; give each holder its own and revoke it when they are done. Only a key set in the deployment (`API_KEYS`) or a signed-in person can make keys: a key made here cannot make another, and neither can an OAuth token.',
       request: { body: { required: true, content: { 'application/json': { schema: KeyInputSchema } } } },
       responses: { 201: { content: { [HAL_JSON]: { schema: NewKeySchema } }, description: 'The key, shown this once.' }, ...problemResponses(400, 401, 403, 409, 422) },
     }),

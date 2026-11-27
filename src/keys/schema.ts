@@ -13,10 +13,13 @@ export const apiKeys = sqliteTable('api_keys', {
   createdBy: text('created_by').notNull(),
   /** When it was last used, to the hour. */
   lastUsedAt: text('last_used_at'),
+  /** What it may do, space-separated (`read write`, `read`, `read write admin`). */
+  scopes: text('scopes').notNull().default('read write'),
 })
 
 export const KEYS_MIGRATIONS = [
   'create table if not exists api_keys (id text primary key, name text not null unique, hash text not null unique, start text not null, created_at text not null, created_by text not null, last_used_at text)',
+  "alter table api_keys add column scopes text not null default 'read write'",
 ] as const
 
 export type KeyRow = typeof apiKeys.$inferSelect

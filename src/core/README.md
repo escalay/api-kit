@@ -141,7 +141,7 @@ connect: MCP clients through OAuth (the 401 names the resource metadata), others
 | `hooks.ts` | `tellApp(hook, call)`: tells an app's hook (`onKeyChange`, `onSwitch`, `onTeamChange`, …) once its change is made; one that throws is logged with `console.error`, never answered, so the request still succeeds |
 | `kv.ts` | `KeyValueStore` (values with expiry) and `memoryStore`, what OAuth and A2A keep |
 | `ids.ts` | `newId(prefix)`: `<prefix>_<time><random>` ids that sort by when they were made; `randomLetters` |
-| `wait.ts` | `waitFor(look, timeoutSeconds)`: long polling for a route that waits for something to happen (keep it under ~25 s); `POLL_MS`, how often it looks again |
+| `wait.ts` | `waitFor(look, timeoutSeconds)`: long polling for a route that waits for something to happen (keep it under ~25 s); `POLL_MS`, how often it looks |
 | `cli.ts` | the command line's names: `cliOf(tool)` and `resourceCli` (a tool's `<noun> <verb>`, positional arguments, examples), `fallbackCliName` (the route rule), `pathKeysOf` (the input keys a call puts in its path: the positional ones), `routeOf`, `hintsOf` (read-only only for a `GET`), `CallAt` (a call's mount parameters; `PLACEHOLDER_AT`, each as `{name}`, for the route readers), `CLI_BUILT_INS` and `CLI_AUTH_VERBS`, and the `_meta` keys `CLI_META`, `PROBLEM_META`, `PENDING_META`, `TOOLS_HASH_META`; the pieces of those names: `toolCli` (a tool's command and positional keys), `templateVariables` (an RFC 6570 template's path and query variables), `singularOf`, `CLI_GLOBAL_FLAGS` (the flags every command takes) and `CLI_RESOURCE_FLAGS` (the `--out` a resource's command adds). In core: `mcp` publishes these names and `testing` audits them without `mcp` |
 | `jobs.ts` | `Jobs<Job>`: work done later at a delay. `queueJobs(env.JOBS)` on Workers (a Cloudflare Queue, delay capped at 12 h), `memoryJobs()` in tests. One message per attempt: a job that must run again sends itself again. `MAX_DELAY_SECONDS`: the 12 h a Queue allows |
 
@@ -151,10 +151,9 @@ connect: MCP clients through OAuth (the 401 names the resource metadata), others
   revokes itself, looked up by hash after the start list.
 - Cloudflare Access: `accessVerifier`, `accessOwner(access)` (the signed-in email, for OAuth's `owner`).
 - `authenticate`: with OAuth on, the 401 names `resource_metadata` and `scope="read write"`; a token the OAuth server
-  refuses for another resource is a 401 `invalid_token` saying why; an agent's caller has the `resource` its token is
-  for.
-- `SCOPES`, `OAUTH_OPEN_PATHS` and the `OAuthServer` shape the oauth part fills (`mcpPath` sets the default relay).
-- `matches(path, pattern)`: the path patterns above. `Caller`, `Role`, `AuthOptions`, `AccessOptions`.
+  refuses for another resource is a 401 `invalid_token` saying why; an agent's caller has its token's `resource`.
+- `SCOPES`, `DEFAULT_SCOPES`, `OAUTH_OPEN_PATHS` and the `OAuthServer` shape the oauth part fills (`mcpPath` sets the default relay).
+- `matches(path, pattern)`: the path patterns above. `hasScope`, `Caller`, `Role`, `AuthOptions`, `AccessOptions`.
 
 ### Guards (`guards.ts`)
 

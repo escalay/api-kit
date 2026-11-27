@@ -115,6 +115,12 @@ for `bad_request` an `errors` list of `{ in, path, message }`.
   `registerKeys` adds `/api/keys` (make, list, revoke; the key shown once, only its hash kept, never kept by Idempotency-Key: §9) and `/api/me` (who is
   calling). `API_KEYS` keeps working beside them. Only a key from `API_KEYS` or a signed-in person may make or revoke
   keys: a key made through the API cannot make another, so a leaked one can't make itself a spare.
+- **Scopes:** `read` (safe methods), `write` (changes), `admin` (the service itself: settings, team, what the app marks
+  admin). Keys from `API_KEYS` and the owner hold all three; a key made through the API holds what it was made with
+  (`read write` unless asked); an OAuth token holds what the owner approved, `read write` when the request names
+  none, so `admin` is only ever given on purpose. The kit refuses a missing `read` or `write` with 403
+  `insufficient_scope`; an admin route asks `hasScope(caller, 'admin')` (`isAdmin` does). Scopes say what kind of
+  thing a caller may do, never which records: data stays scoped by the app.
 - **People:** Cloudflare Access SSO in front of the web pages; the app also verifies `Cf-Access-Jwt-Assertion` against
   the team's keys, so nothing reaches data without either a key or a verified person.
 - **A browser app on the same host:** on the bypassed paths Access sends no header, but the browser still sends Access's

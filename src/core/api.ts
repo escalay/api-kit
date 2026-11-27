@@ -19,7 +19,7 @@ import type { MiddlewareHandler } from 'hono'
 import { cors } from 'hono/cors'
 import { requestId } from 'hono/request-id'
 import { secureHeaders } from 'hono/secure-headers'
-import { authenticate, OAUTH_OPEN_PATHS, SCOPES, type OAuthServer } from './auth.js'
+import { authenticate, DEFAULT_SCOPES, OAUTH_OPEN_PATHS, SCOPES, type OAuthServer } from './auth.js'
 import { cacheControl, CACHE } from './cache.js'
 import { idempotency, type AddressTrust, type GuardStore, type IdempotencyOptions } from './guards.js'
 import { API_CATALOG_TYPE, apiCatalog, LINK_HEADER, markdownTokens, MARKDOWN_TYPE, poppyJson, publicOriginOf, recordMounted, robotsTxt, sendPublic, sitemapXml, WELL_KNOWN, wantsMarkdown, type AgentBrand, type DiscoveryConfig } from './discovery.js'
@@ -208,7 +208,7 @@ export const createAgentApi = (config: AgentApiConfig) => {
     app.openAPIRegistry.registerComponent('securitySchemes', 'oauth', {
       type: 'oauth2',
       description: 'An OAuth token the owner approved: authorization code with PKCE (clients register at `/oauth/register`), or agent registration as `/auth.md` describes.',
-      flows: { authorizationCode: { authorizationUrl: '/oauth/authorize', tokenUrl: '/oauth/token', refreshUrl: '/oauth/token', scopes: Object.fromEntries(SCOPES.map((scope) => [scope, scope === 'read' ? 'Read everything' : 'Make changes'])) } },
+      flows: { authorizationCode: { authorizationUrl: '/oauth/authorize', tokenUrl: '/oauth/token', refreshUrl: '/oauth/token', scopes: Object.fromEntries(SCOPES.map((scope) => [scope, { read: 'Read everything', write: 'Make changes', admin: 'Manage the service itself: settings, team, providers' }[scope]])) } },
     })
     config.oauth.mount(app)
   }
@@ -244,7 +244,7 @@ export const createAgentApi = (config: AgentApiConfig) => {
       openapi: '3.1.0',
       info: { title: config.title, version: config.version, description: config.description, ...(brand ? { 'x-logo': { url: originOf(c) + brand.logo, backgroundColor: brand.background, altText: brand.title }, ...(brand.termsUrl ? { termsOfService: brand.termsUrl } : {}) } : {}) },
       servers: [{ url: originOf(c), description: 'This server' }],
-      security: [{ [SECURITY_SCHEME]: [] }, ...(config.oauth ? [{ oauth: [...SCOPES] }] : [])],
+      security: [{ [SECURITY_SCHEME]: [] }, ...(config.oauth ? [{ oauth: [...DEFAULT_SCOPES] }] : [])],
       tags: [...config.tags, { name: 'Meta', description: 'Health and errors.' }],
       externalDocs: { url: `${originOf(c)}/llms.txt`, description: 'Agent guide: concepts, every endpoint with examples, trust and limits, and task playbooks.' },
     }) as unknown as OpenApiDocument
