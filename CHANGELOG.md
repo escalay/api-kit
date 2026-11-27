@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.37.0](https://github.com/escalay/api-kit/compare/v1.36.1...v1.37.0) (2026-11-27)
+
+
+### New
+
+* scopes for keys, with an admin scope ([#123](https://github.com/escalay/api-kit/issues/123)) ([7abcefe](https://github.com/escalay/api-kit/commit/7abcefe7b5d6bada2ee092b3ec71d93328ef04dc))
+
 ## [1.36.1](https://github.com/escalay/api-kit/compare/v1.36.0...v1.36.1) (2026-11-25)
 
 
